@@ -27,6 +27,7 @@ dependencies = [
     # Utilities
     "python-dotenv>=1.0",
     "click>=8.1",
+    "pytz>=2026.1.post1",
 ]
 
 [project.scripts]

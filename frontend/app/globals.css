@@ -1,44 +1,161 @@
 @import "tailwindcss";
 
 :root {
-  /* SHC color tokens */
-  --recovery-green:  oklch(0.72 0.18 145);
-  --recovery-amber:  oklch(0.75 0.18 75);
-  --recovery-red:    oklch(0.65 0.22 25);
-  --chart-baseline:  oklch(0.5 0.05 250);
-  --chart-grid:      oklch(1 0 0 / 0.06);
-  --chart-line:      oklch(0.72 0.12 250);
+  /* ── Surface ────────────────────────────── */
+  --bg:           oklch(0.105 0 0);
+  --bg-elevated: oklch(0.135 0 0);
+  --card:        oklch(0.155 0 0);
+  --card-hover:  oklch(0.18 0 0);
+  --hairline:    oklch(1 0 0 / 0.07);
+  --hairline-strong: oklch(1 0 0 / 0.12);
+  --background: var(--bg);
 
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.96 0 0);
-
-  --card:        oklch(0.18 0 0);
-  --card-border: oklch(1 0 0 / 0.06);
-
+  /* ── Text ───────────────────────────────── */
+  --foreground:    oklch(0.96 0 0);
+  --text-primary:  oklch(0.96 0 0);
+  --text-muted:    oklch(0.60 0 0);
+  --text-dim:      oklch(0.45 0 0);
+  --text-faint:    oklch(0.35 0 0);
   --muted:           oklch(0.22 0 0);
-  --muted-foreground: oklch(0.55 0 0);
+  --muted-foreground: var(--text-muted);
+
+  /* ── Semantic (recovery / performance) ──── */
+  --positive: oklch(0.72 0.18 145);
+  --neutral:  oklch(0.75 0.18 75);
+  --negative: oklch(0.65 0.22 25);
+  --recovery-green: var(--positive);
+  --recovery-amber: var(--neutral);
+  --recovery-red:   var(--negative);
+
+  --positive-soft: oklch(0.72 0.18 145 / 0.12);
+  --neutral-soft:  oklch(0.75 0.18 75 / 0.12);
+  --negative-soft: oklch(0.65 0.22 25 / 0.12);
+
+  /* ── Chart ──────────────────────────────── */
+  --chart-baseline:  oklch(0.50 0.05 250);
+  --chart-grid:      oklch(1 0 0 / 0.05);
+  --chart-line:      oklch(0.72 0.12 250);
+  --chart-line-2:    oklch(0.70 0.12 300);
+  --chart-band:      oklch(0.60 0.12 250 / 0.10);
+
+  /* ── Sleep stages ───────────────────────── */
+  --stage-deep:  oklch(0.55 0.18 280);
+  --stage-rem:   oklch(0.65 0.15 250);
+  --stage-light: oklch(0.45 0.06 250);
+  --stage-awake: oklch(0.38 0 0);
+
+  /* ── Radii ──────────────────────────────── */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+
+  /* ── Shadows ────────────────────────────── */
+  --shadow-card: 0 1px 0 oklch(1 0 0 / 0.02) inset, 0 8px 24px -12px oklch(0 0 0 / 0.5);
+  --shadow-pop:  0 12px 48px -12px oklch(0 0 0 / 0.6);
 }
 
 * { box-sizing: border-box; }
 
+html, body { height: 100%; }
+
 html {
-  background: var(--background);
+  background: var(--bg);
   color: var(--foreground);
   font-family: var(--font-geist-sans, system-ui, sans-serif);
+  font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.005em;
 }
 
 ::selection {
-  background: oklch(0.72 0.12 250 / 0.25);
+  background: oklch(0.72 0.12 250 / 0.28);
 }
 
-/* Tabular numbers on anything explicitly classed */
+/* ── Typographic utilities ───────────────── */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "ss01", "cv11", "tnum";
+  font-feature-settings: "tnum", "ss01", "cv11";
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; }
+.metric-xl {
+  font-family: var(--font-geist-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 44px;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  line-height: 1;
+}
+.metric-lg {
+  font-family: var(--font-geist-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.metric-md {
+  font-family: var(--font-geist-mono, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.eyebrow {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ── Card primitive ──────────────────────── */
+.shc-card {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--hairline);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color 180ms ease,
+    transform 180ms ease,
+    background 180ms ease;
+}
+.shc-card:hover {
+  border-color: var(--hairline-strong);
+  transform: translateY(-1px);
+}
+
+/* ── Scrollbar ───────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: oklch(0.3 0 0); border-radius: 3px; }
+::-webkit-scrollbar-thumb {
+  background: oklch(0.28 0 0);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: oklch(0.36 0 0); }
+
+/* ── Entry animation for cards ──────────── */
+@keyframes shc-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.shc-enter { animation: shc-fade-up 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* ── Shimmer skeleton ───────────────────── */
+@keyframes shc-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.shc-skeleton {
+  background: linear-gradient(
+    90deg,
+    oklch(0.20 0 0) 0%,
+    oklch(0.25 0 0) 50%,
+    oklch(0.20 0 0) 100%
+  );
+  background-size: 800px 100%;
+  animation: shc-shimmer 1.4s linear infinite;
+  border-radius: var(--r-sm);
+}

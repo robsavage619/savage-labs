@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from shc.api.middleware import HostOriginMiddleware
-from shc.api.routers import auth, dashboard
+from shc.api.routers import auth, chat, dashboard
 from shc.config import settings
 from shc.db.schema import init_db
 from shc.ingest.apple import start_watcher, stop_watcher
@@ -40,7 +40,7 @@ app = FastAPI(title="Savage Health Center", lifespan=lifespan)
 app.add_middleware(HostOriginMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,6 +48,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
 
 
 @app.get("/healthz")

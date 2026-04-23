@@ -5,12 +5,14 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Paths
-    data_dir: Path = Field(default=Path("data"))
+    # Paths — anchored to backend/ so cwd doesn't matter
+    data_dir: Path = Field(default=_BACKEND_ROOT / "data")
 
     @property
     def db_path(self) -> Path:

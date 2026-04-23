@@ -19,8 +19,10 @@ import { VolumeChart } from "@/components/volume-chart";
 import { PRTable } from "@/components/pr-table";
 import { CorrelationCards } from "@/components/correlation-cards";
 import { ClinicalOverview } from "@/components/clinical-overview";
+import { BodyPane } from "@/components/body-panel";
+import { NextWorkoutPane } from "@/components/next-workout";
 
-const TABS = ["Recovery", "Training", "Insights", "Clinical"] as const;
+const TABS = ["Workout", "Recovery", "Training", "Body", "Insights", "Clinical"] as const;
 type Tab = (typeof TABS)[number];
 
 function RecoveryTrendPane() {
@@ -156,7 +158,7 @@ function ClinicalPane() {
 
 
 export function TrendIntelligence() {
-  const [tab, setTab] = useState<Tab>("Recovery");
+  const [tab, setTab] = useState<Tab>("Workout");
 
   return (
     <div className="shc-card shc-enter p-5">
@@ -179,8 +181,10 @@ export function TrendIntelligence() {
         </div>
       </div>
       <div className="mt-2">
+        {tab === "Workout" && <NextWorkoutPane />}
         {tab === "Recovery" && <RecoveryTrendPane />}
         {tab === "Training" && <TrainingPane />}
+        {tab === "Body" && <BodyPane />}
         {tab === "Insights" && <InsightsPane />}
         {tab === "Clinical" && <ClinicalPane />}
       </div>

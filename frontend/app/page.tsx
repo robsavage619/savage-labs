@@ -1,45 +1,70 @@
-import { HeroRecovery } from "@/components/hero-recovery";
-import { HRVChart } from "@/components/hrv-chart";
-import { SleepCard } from "@/components/sleep-card";
+import { CommandBriefing } from "@/components/command-briefing";
+import { PillarRecovery } from "@/components/pillar-recovery";
+import { PillarSleep } from "@/components/pillar-sleep";
+import { PillarTrainingLoad } from "@/components/pillar-training-load";
+import { PillarReadiness } from "@/components/pillar-readiness";
+import { StrengthPanel } from "@/components/strength-panel";
+import { TrendIntelligence } from "@/components/trend-intelligence";
+import { RightRail } from "@/components/right-rail";
+import { AdvisorChat } from "@/components/advisor-chat";
 import { SyncStatus } from "@/components/sync-status";
 
 export default function Dashboard() {
+  const now = new Date();
+  const dayLabel = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+  const timeLabel = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
   return (
-    <main className="min-h-screen p-6 max-w-5xl mx-auto space-y-4">
-      {/* Header */}
-      <header className="flex items-baseline justify-between pb-2">
-        <h1 className="text-sm font-medium tracking-wide text-[oklch(0.55_0_0)] uppercase">
-          Savage Health Center
-        </h1>
-        <span className="text-[11px] text-[oklch(0.4_0_0)] tabular-nums">
-          {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
-        </span>
+    <main className="min-h-screen px-5 pb-20 pt-6 max-w-[1600px] mx-auto">
+      <header className="flex items-baseline justify-between pb-4 border-b border-[var(--hairline)] mb-5">
+        <div className="flex items-baseline gap-3">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--positive)] animate-pulse" />
+          <h1 className="text-[11px] font-medium tracking-[0.2em] uppercase text-[var(--text-muted)]">
+            Savage Health Center
+          </h1>
+          <span className="text-[10.5px] text-[var(--text-faint)] tabular-nums">v2 · personal</span>
+        </div>
+        <div className="text-[11px] text-[var(--text-dim)] tabular-nums flex gap-3">
+          <span>{dayLabel}</span>
+          <span className="text-[var(--text-faint)]">·</span>
+          <span>{timeLabel}</span>
+        </div>
       </header>
 
-      <SyncStatus />
+      <div className="mb-4">
+        <SyncStatus />
+      </div>
 
-      {/* Row 1 — Hero recovery + HRV */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <HeroRecovery />
-        <div className="md:col-span-2">
-          <HRVChart />
-        </div>
-      </section>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="space-y-4 min-w-0">
+          <CommandBriefing />
 
-      {/* Row 2 — Sleep */}
-      <section>
-        <SleepCard />
-      </section>
+          <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <PillarRecovery />
+            <PillarSleep />
+            <PillarTrainingLoad />
+            <PillarReadiness />
+          </section>
 
-      {/* Placeholder rows — P2 + P3 */}
-      <section className="grid grid-cols-2 gap-4">
-        <div className="rounded-xl border border-[oklch(1_0_0/0.06)] bg-[oklch(0.18_0_0)] p-6 flex items-center justify-center min-h-[120px]">
-          <p className="text-xs text-[oklch(0.35_0_0)]">Workout history — coming in P2</p>
+          <StrengthPanel />
+
+          <TrendIntelligence />
         </div>
-        <div className="rounded-xl border border-[oklch(1_0_0/0.06)] bg-[oklch(0.18_0_0)] p-6 flex items-center justify-center min-h-[120px]">
-          <p className="text-xs text-[oklch(0.35_0_0)]">AI advisor — coming in P3</p>
+
+        <div className="hidden xl:block">
+          <RightRail />
         </div>
-      </section>
+      </div>
+
+      <div className="xl:hidden mt-4">
+        <RightRail />
+      </div>
+
+      <AdvisorChat />
     </main>
   );
 }
