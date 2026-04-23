@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from shc.auth.keychain import load_token
 from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
 
@@ -22,9 +23,10 @@ _PAGE_SIZE = 10  # Hevy default page size
 
 
 def _api_key() -> str:
-    key = settings.hevy_api_key
+    # Keychain takes priority; env var (HEVY_API_KEY) is the fallback
+    key = load_token("hevy", "api_key") or settings.hevy_api_key
     if not key:
-        raise RuntimeError("hevy_api_key not set — add HEVY_API_KEY to .env or keychain")
+        raise RuntimeError("Hevy API key not found — run: shc auth hevy <key>")
     return key
 
 
