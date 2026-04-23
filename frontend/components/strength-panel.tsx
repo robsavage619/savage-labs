@@ -71,7 +71,7 @@ function Heatmap() {
                 {wk.map((day, di) => (
                   <div
                     key={di}
-                    title={day.sets > 0 ? `${day.date}: ${day.sets} sets · ${day.volume_kg.toLocaleString()}kg` : day.date}
+                    title={day.sets > 0 ? `${day.date}: ${day.sets} sets · ${(day.volume_kg ?? 0).toLocaleString()}kg` : day.date}
                     className="w-[11px] h-[11px] rounded-[2px] cursor-default hover:opacity-70 transition-opacity"
                     style={{ background: HEAT[day.intensity] }}
                   />
@@ -98,7 +98,7 @@ const VolumeTooltip = ({ active, payload, label }: any) => {
   return (
     <div className="rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: "var(--card-hover)", borderColor: "var(--hairline-strong)" }}>
       <p className="text-[var(--text-dim)] mb-1">{label}</p>
-      <p className="text-[var(--text-primary)]">{d.volume_kg.toLocaleString()} kg</p>
+      <p className="text-[var(--text-primary)]">{(d.volume_kg ?? 0).toLocaleString()} kg</p>
       <p className="text-[var(--text-muted)]">{d.sets} sets · {d.sessions} days</p>
     </div>
   );
@@ -243,7 +243,7 @@ function TopExercisesTable() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="text-[11.5px] truncate text-[var(--text-muted)]">{ex.exercise}</span>
-                    <span className="text-[10px] font-mono tabular-nums text-[var(--text-dim)] flex-shrink-0">{ex.total_sets.toLocaleString()} sets</span>
+                    <span className="text-[10px] font-mono tabular-nums text-[var(--text-dim)] flex-shrink-0">{(ex.total_sets ?? 0).toLocaleString()} sets</span>
                   </div>
                   <div className="h-[3px] rounded-full mt-1 bg-[oklch(1_0_0/0.06)]">
                     <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: "var(--chart-line)" }} />
@@ -415,7 +415,7 @@ function SessionHeader() {
           <span className="text-[11px] text-[var(--text-faint)]">sets</span>
         </div>
         {session && (
-          <p className="text-[10px] text-[var(--text-faint)] mt-1 tabular-nums">{session.week_volume_kg.toLocaleString()} kg lifted</p>
+          <p className="text-[10px] text-[var(--text-faint)] mt-1 tabular-nums">{(session.week_volume_kg ?? 0).toLocaleString()} kg lifted</p>
         )}
       </div>
 
