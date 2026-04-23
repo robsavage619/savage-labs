@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Query
 
 from shc.config import settings
-from shc.db.schema import get_read_conn
+from shc.db.schema import get_read_conn, write_ctx
 
 router = APIRouter(tags=["dashboard"])
 log = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def recovery_today() -> dict:
 
 
 @router.get("/recovery/trend")
-async def recovery_trend(days: int = 14) -> list[dict]:
+async def recovery_trend(days: int = Query(14, gt=0, le=365)) -> list[dict]:
     since = (date.today() - timedelta(days=days)).isoformat()
     conn = get_read_conn()
     try:
@@ -44,7 +44,7 @@ async def recovery_trend(days: int = 14) -> list[dict]:
 
 
 @router.get("/hrv/trend")
-async def hrv_trend(days: int = 28) -> list[dict]:
+async def hrv_trend(days: int = Query(28, gt=0, le=365)) -> list[dict]:
     conn = get_read_conn()
     try:
         rows = conn.execute(
@@ -62,7 +62,7 @@ async def hrv_trend(days: int = 28) -> list[dict]:
 
 
 @router.get("/sleep/recent")
-async def sleep_recent(days: int = 7) -> list[dict]:
+async def sleep_recent(days: int = Query(7, gt=0, le=365)) -> list[dict]:
     since = (date.today() - timedelta(days=days)).isoformat()
     conn = get_read_conn()
     try:
@@ -81,7 +81,7 @@ async def sleep_recent(days: int = 7) -> list[dict]:
 
 
 @router.get("/sleep/trend")
-async def sleep_trend(days: int = 30) -> list[dict]:
+async def sleep_trend(days: int = Query(30, gt=0, le=365)) -> list[dict]:
     since = (date.today() - timedelta(days=days)).isoformat()
     conn = get_read_conn()
     try:
@@ -512,7 +512,7 @@ async def training_last_session() -> dict:
 
 
 @router.get("/training/heatmap")
-async def training_heatmap(weeks: int = 104) -> list[dict]:
+async def training_heatmap(weeks: int = Query(104, gt=0, le=260)) -> list[dict]:
     since = (date.today() - timedelta(weeks=weeks)).isoformat()
     conn = get_read_conn()
     try:
@@ -545,7 +545,7 @@ async def training_heatmap(weeks: int = 104) -> list[dict]:
 
 
 @router.get("/training/weekly")
-async def training_weekly(weeks: int = 52) -> list[dict]:
+async def training_weekly(weeks: int = Query(52, gt=0, le=260)) -> list[dict]:
     since = (date.today() - timedelta(weeks=weeks)).isoformat()
     conn = get_read_conn()
     try:
@@ -573,7 +573,7 @@ async def training_weekly(weeks: int = 52) -> list[dict]:
 
 
 @router.get("/training/prs")
-async def training_prs(n: int = 15) -> list[dict]:
+async def training_prs(n: int = Query(15, gt=0, le=100)) -> list[dict]:
     conn = get_read_conn()
     try:
         rows = conn.execute(
@@ -607,7 +607,7 @@ async def training_prs(n: int = 15) -> list[dict]:
 
 
 @router.get("/training/top-exercises")
-async def training_top_exercises(n: int = 10) -> list[dict]:
+async def training_top_exercises(n: int = Query(10, gt=0, le=100)) -> list[dict]:
     conn = get_read_conn()
     try:
         rows = conn.execute(
@@ -818,7 +818,7 @@ async def body_vo2max() -> list[dict]:
 
 
 @router.get("/body/steps")
-async def body_steps(days: int = 90) -> list[dict]:
+async def body_steps(days: int = Query(90, gt=0, le=365)) -> list[dict]:
     since = (date.today() - timedelta(days=days)).isoformat()
     conn = get_read_conn()
     try:
@@ -838,7 +838,7 @@ async def body_steps(days: int = 90) -> list[dict]:
 
 
 @router.get("/body/rhr-trend")
-async def body_rhr_trend(days: int = 90) -> list[dict]:
+async def body_rhr_trend(days: int = Query(90, gt=0, le=365)) -> list[dict]:
     since = (date.today() - timedelta(days=days)).isoformat()
     conn = get_read_conn()
     try:
@@ -1168,8 +1168,8 @@ EXERCISES TO AVOID/SUBSTITUTE:
             return _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today)
 
         plan = json.loads(call.function.arguments)
-        _log_llm_call(request_id=request_id, model=model, route_reason="workout_next", usage=response.usage)
-        result = {"generated_at": today, "source": model, **plan}
+        await _log_llm_call(request_id=request_id, model=model, route_reason="workout_next", usage=response.usage)
+        result = {"generated_at": today, "source": "claude", **plan}
         _WORKOUT_CACHE[today] = result
         return result
 
@@ -1178,17 +1178,16 @@ EXERCISES TO AVOID/SUBSTITUTE:
         return _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today)
 
 
-def _log_llm_call(*, request_id: str, model: str, route_reason: str, usage) -> None:
+async def _log_llm_call(*, request_id: str, model: str, route_reason: str, usage) -> None:
     try:
         # OpenAI usage: prompt_tokens / completion_tokens; Anthropic: input_tokens / output_tokens
         input_tok = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None)
         output_tok = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None)
-        conn = get_read_conn()
-        conn.execute(
-            "INSERT INTO llm_calls (ts, request_id, model, route_reason, input_tok, output_tok, cached_tok) VALUES (now(), ?, ?, ?, ?, ?, ?)",
-            [request_id, model, route_reason, input_tok, output_tok, 0],
-        )
-        conn.close()
+        async with write_ctx() as conn:
+            conn.execute(
+                "INSERT INTO llm_calls (ts, request_id, model, route_reason, input_tok, output_tok, cached_tok) VALUES (now(), $1, $2, $3, $4, $5, 0)",
+                [request_id, model, route_reason, input_tok, output_tok],
+            )
     except Exception as exc:
         log.warning("Failed to log LLM call: %s", exc)
 

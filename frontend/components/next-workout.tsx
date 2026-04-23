@@ -261,7 +261,7 @@ export function NextWorkoutPane() {
           <Eyebrow>Next workout</Eyebrow>
           {data && (
             <p className="text-[10.5px] text-[var(--text-faint)] mt-0.5">
-              {new Date(data.generated_at).toLocaleDateString("en-US", {
+              {new Date(data.generated_at + "T00:00:00").toLocaleDateString("en-US", {
                 weekday: "short", month: "short", day: "numeric",
               })}
               {data.source !== "fallback" && ` · ${data.source}`}
@@ -278,8 +278,8 @@ export function NextWorkoutPane() {
             border: "1px solid var(--hairline)",
             color: "var(--text-dim)",
           }}
-          onMouseEnter={(e) => { (e.target as HTMLElement).style.color = "var(--text-muted)"; }}
-          onMouseLeave={(e) => { (e.target as HTMLElement).style.color = "var(--text-dim)"; }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-dim)"; }}
         >
           <span className={isFetching ? "animate-spin inline-block" : ""}>⟳</span>
           {isFetching ? "Generating…" : "Regenerate"}

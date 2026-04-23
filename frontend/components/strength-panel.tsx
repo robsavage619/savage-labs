@@ -48,7 +48,7 @@ function buildGrid(days: HDay[]): HDay[][] {
 
 function Heatmap() {
   const { data = [], isLoading } = useQuery({
-    queryKey: ["heatmap-52"],
+    queryKey: ["heatmap-104"],
     queryFn: () => api.trainingHeatmap(104),
     refetchInterval: 600_000,
   });
@@ -106,8 +106,8 @@ const VolumeTooltip = ({ active, payload, label }: any) => {
 
 function VolumeTrend() {
   const { data: weeks = [], isLoading: wLoading } = useQuery({
-    queryKey: ["weekly-volume-16"],
-    queryFn: () => api.trainingWeekly(52),
+    queryKey: ["weekly-volume"],
+    queryFn: () => api.trainingWeekly(104),
     refetchInterval: 600_000,
   });
   const { data: signal } = useQuery({
@@ -162,7 +162,7 @@ function VolumeTrend() {
 function PRTable() {
   const today = new Date();
   const { data = [], isLoading } = useQuery({
-    queryKey: ["prs-15"],
+    queryKey: ["prs"],
     queryFn: () => api.trainingPRs(15),
     refetchInterval: 600_000,
   });

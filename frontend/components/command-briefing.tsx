@@ -161,7 +161,7 @@ export function CommandBriefing() {
 
         <Slot
           label="Recovery"
-          value={String(Math.round(score ?? 0))}
+          value={score != null ? String(Math.round(score)) : "—"}
           sub={s.recovery_trend_slope_7d >= 0 ? "↑ 7d" : "↓ 7d"}
           tone={t}
           range={{ min: 0, max: 100, cur: score ?? 0 }}

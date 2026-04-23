@@ -8,16 +8,9 @@ import { TrendIntelligence } from "@/components/trend-intelligence";
 import { RightRail } from "@/components/right-rail";
 import { AdvisorChat } from "@/components/advisor-chat";
 import { SyncStatus } from "@/components/sync-status";
+import { DashboardClock } from "@/components/dashboard-clock";
 
 export default function Dashboard() {
-  const now = new Date();
-  const dayLabel = now.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
-  const timeLabel = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-
   return (
     <main className="min-h-screen px-5 pb-20 pt-6 max-w-[1600px] mx-auto">
       <header className="flex items-baseline justify-between pb-4 border-b border-[var(--hairline)] mb-5">
@@ -28,11 +21,7 @@ export default function Dashboard() {
           </h1>
           <span className="text-[10.5px] text-[var(--text-faint)] tabular-nums">v2 · personal</span>
         </div>
-        <div className="text-[11px] text-[var(--text-dim)] tabular-nums flex gap-3">
-          <span>{dayLabel}</span>
-          <span className="text-[var(--text-faint)]">·</span>
-          <span>{timeLabel}</span>
-        </div>
+        <DashboardClock />
       </header>
 
       <div className="mb-4">

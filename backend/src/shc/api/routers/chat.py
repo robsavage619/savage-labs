@@ -34,7 +34,7 @@ async def _stream_response(messages: list[dict]):
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     queue: asyncio.Queue[str | None] = asyncio.Queue()
 
     def _run_stream():
@@ -50,7 +50,6 @@ async def _stream_response(messages: list[dict]):
                     }
                 ],
                 messages=messages,
-                thinking={"type": "adaptive"},
             ) as stream:
                 for text in stream.text_stream:
                     asyncio.run_coroutine_threadsafe(queue.put(text), loop)
@@ -61,7 +60,7 @@ async def _stream_response(messages: list[dict]):
         finally:
             asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-    thread = asyncio.get_event_loop().run_in_executor(None, _run_stream)
+    thread = loop.run_in_executor(None, _run_stream)
 
     while True:
         chunk = await queue.get()

@@ -120,7 +120,7 @@ function RecoveryTrendPane() {
                 .map(([k, v]) => {
                   const avgRec = v.scores.length ? v.scores.reduce((a, b) => a + b, 0) / v.scores.length : null;
                   const avgHrv = v.hrvs.length ? v.hrvs.reduce((a, b) => a + b, 0) / v.hrvs.length : null;
-                  const label = new Date(k + "-01").toLocaleDateString("en-US", { month: "long", year: "numeric" });
+                  const label = new Date(k + "-01T12:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" });
                   return (
                     <tr key={k} className="border-b border-[var(--hairline)] last:border-b-0 hover:bg-[oklch(1_0_0/0.02)]">
                       <td className="px-3 py-2 text-[var(--text-muted)]">{label}</td>

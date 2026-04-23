@@ -12,14 +12,14 @@ function toneFor(score: number | null | undefined) {
   return { color: "var(--negative)", token: "negative" as const };
 }
 
-function RecoveryArc({ score, color }: { score: number; color: string }) {
+function RecoveryArc({ score, color }: { score: number | null; color: string }) {
   const size = 168;
   const r = 66;
   const cx = size / 2;
   const cy = size / 2 + 14;
   const startAngle = -220;
   const sweepAngle = 260;
-  const pct = Math.min(100, Math.max(0, score)) / 100;
+  const pct = score != null ? Math.min(100, Math.max(0, score)) / 100 : 0;
 
   const arc = (deg: number) => {
     const rad = (deg * Math.PI) / 180;
@@ -70,7 +70,7 @@ function RecoveryArc({ score, color }: { score: number; color: string }) {
         fontFamily="var(--font-geist-mono, monospace)"
         style={{ fontVariantNumeric: "tabular-nums", letterSpacing: "-0.02em" }}
       >
-        {score}
+        {score ?? "—"}
       </text>
       <text
         x={cx}
@@ -91,7 +91,7 @@ export function PillarRecovery() {
   const trend = useQuery({ queryKey: ["recovery-trend-14"], queryFn: () => api.recoveryTrend(14) });
   const stats = useQuery({ queryKey: ["stats-summary"], queryFn: api.statsSummary });
 
-  const score = readiness.data?.recovery_score ?? 0;
+  const score = readiness.data?.recovery_score ?? null;
   const t = toneFor(score);
 
   const sparkData = trend.data?.map((p) => ({ date: p.date.slice(5), score: p.score })) ?? [];
@@ -134,12 +134,12 @@ export function PillarRecovery() {
         <Eyebrow>Recovery intelligence</Eyebrow>
         <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">
           {delta >= 0 ? "+" : ""}
-          {delta.toFixed(0)} · 7d
+          {delta.toFixed(0)} · 14d
         </span>
       </div>
 
       <div className="flex items-center gap-5 mt-3">
-        <RecoveryArc score={Math.round(score)} color={t.color} />
+        <RecoveryArc score={score != null ? Math.round(score) : 0} color={t.color} />
         <div className="flex-1 min-w-0">
           <div className="h-[72px] -mx-2">
             <ResponsiveContainer width="100%" height="100%">

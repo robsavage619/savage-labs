@@ -78,10 +78,12 @@ export function PillarTrainingLoad() {
 
   const weekly = trend.data
     ? Array.from({ length: 14 }, (_, i) => {
-        const start = trend.data.length - (14 - i) * 7 - 7;
-        const slice = trend.data.slice(Math.max(0, start), Math.max(0, start + 7));
-        const avg = slice.length ? slice.reduce((a, b) => a + (b.score ?? 0), 0) / slice.length : 0;
-        return { wk: i + 1, load: 100 - avg };
+        // i=0 is oldest week, i=13 is most recent; each window is 7 days from the end
+        const end = trend.data.length - (13 - i) * 7;
+        const start = end - 7;
+        const slice = trend.data.slice(Math.max(0, start), Math.max(0, end));
+        const avg = slice.length ? slice.reduce((a, b) => a + (b.score ?? 0), 0) / slice.length : null;
+        return { wk: i + 1, load: avg != null ? 100 - avg : null };
       })
     : [];
 

@@ -6,10 +6,8 @@ from datetime import date, timedelta
 
 import anthropic
 
-import duckdb
-
 from shc.config import settings
-from shc.db.schema import get_read_conn
+from shc.db.schema import get_read_conn, write_ctx
 
 log = logging.getLogger(__name__)
 
@@ -185,7 +183,6 @@ def generate_briefing() -> dict | None:
             }
         ],
         messages=[{"role": "user", "content": context}],
-        thinking={"type": "adaptive"},
     )
 
     raw = ""
@@ -232,9 +229,8 @@ def _estimate_cost(usage) -> float:
     return (inp * 5 + out * 25 + cache_read * 0.5) / 1_000_000
 
 
-def store_briefing(briefing: dict) -> None:
-    conn = duckdb.connect(str(settings.db_path))
-    try:
+async def store_briefing(briefing: dict) -> None:
+    async with write_ctx() as conn:
         conn.execute(
             """
             INSERT INTO ai_briefing
@@ -260,21 +256,18 @@ def store_briefing(briefing: dict) -> None:
             """,
             briefing,
         )
-        conn.commit()
-        log.info(
-            "briefing stored — call=%s cost=$%.4f",
-            briefing["training_call"],
-            briefing.get("cost_usd", 0),
-        )
-    finally:
-        conn.close()
+    log.info(
+        "briefing stored — call=%s cost=$%.4f",
+        briefing["training_call"],
+        briefing.get("cost_usd", 0),
+    )
 
 
 async def run_daily_briefing() -> None:
     """APScheduler entry point — generate and persist today's briefing."""
     import asyncio
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     briefing = await loop.run_in_executor(None, generate_briefing)
     if briefing:
-        await loop.run_in_executor(None, store_briefing, briefing)
+        await store_briefing(briefing)

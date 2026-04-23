@@ -38,15 +38,17 @@ export function PillarReadiness() {
   const t = tone(current);
 
   const points =
-    trend.data?.map((p, i, arr) => {
-      const synth = computeReadiness(readiness.data, stats.data, p) ?? 0;
-      return { date: p.date.slice(5), score: p.score, readiness: synth, idx: i };
-    }) ?? [];
+    trend.data?.map((p, i) => ({
+      date: p.date.slice(5),
+      score: p.score,
+      readiness: p.score,
+      idx: i,
+    })) ?? [];
 
   const weekAgo = points.slice(-14, -7);
   const thisWeek = points.slice(-7);
-  const weekAvg = weekAgo.length ? weekAgo.reduce((a, p) => a + p.readiness, 0) / weekAgo.length : 0;
-  const thisAvg = thisWeek.length ? thisWeek.reduce((a, p) => a + p.readiness, 0) / thisWeek.length : 0;
+  const weekAvg = weekAgo.length ? weekAgo.reduce((a, p) => a + p.score, 0) / weekAgo.length : 0;
+  const thisAvg = thisWeek.length ? thisWeek.reduce((a, p) => a + p.score, 0) / thisWeek.length : 0;
   const wow = thisAvg - weekAvg;
 
   const slope = stats.data?.recovery_trend_slope_7d ?? 0;

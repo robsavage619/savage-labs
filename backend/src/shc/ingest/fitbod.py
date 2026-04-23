@@ -9,19 +9,18 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_FITBOD_CSV = Path(
-    "/Users/robsavage/Library/Mobile Documents/"
-    "com~apple~CloudDocs/Health Data/Fitness Data/WorkoutExport.csv"
-)
-
 
 def _content_hash(*parts: str) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
-def ingest_fitbod(csv_path: Path = _FITBOD_CSV) -> dict[str, int]:
+def ingest_fitbod(csv_path: Path | None = None) -> dict[str, int]:
     """Parse WorkoutExport.csv and upsert into workouts + workout_sets + working_weights."""
+    from shc.config import settings
     from shc.db.schema import get_read_conn
+
+    if csv_path is None:
+        csv_path = settings.fitbod_csv_path
 
     if not csv_path.exists():
         raise FileNotFoundError(f"Fitbod CSV not found at {csv_path}")

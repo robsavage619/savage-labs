@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # ── startup ──
     init_db()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     start_watcher(loop)
     scheduler = get_scheduler()
     register_jobs(scheduler)

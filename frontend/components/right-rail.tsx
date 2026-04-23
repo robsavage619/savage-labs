@@ -50,8 +50,10 @@ function PersonalBestsCard() {
     <div className="shc-card shc-enter p-4">
       <Eyebrow>Personal bests</Eyebrow>
       <div className="mt-2.5 space-y-1.5">
-        {rows.length === 0
+        {pb.isLoading
           ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="shc-skeleton h-[18px]" />)
+          : rows.length === 0
+          ? <p className="text-[11px] text-[var(--text-faint)]">No data yet</p>
           : rows.map((r, i) => (
               <div key={i} className="flex items-baseline justify-between text-[11.5px]">
                 <span className="text-[var(--text-muted)]">{r.label}</span>
@@ -120,17 +122,8 @@ function WeekStripCard() {
 function GoalsCard() {
   return (
     <div className="shc-card shc-enter p-4">
-      <Eyebrow>Goal · 30d HRV &gt; 70</Eyebrow>
-      <div className="mt-2.5">
-        <div className="flex items-baseline justify-between">
-          <span className="metric-md tabular-nums text-[var(--text-primary)]">12<span className="text-[10px] text-[var(--text-dim)] ml-1">/30</span></span>
-          <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">40%</span>
-        </div>
-        <div className="mt-2 h-1.5 rounded-full bg-[oklch(1_0_0/0.06)]">
-          <div className="h-full rounded-full" style={{ width: "40%", background: "var(--positive)" }} />
-        </div>
-        <p className="text-[10.5px] text-[var(--text-dim)] mt-2">Edit in Onboarding (P3)</p>
-      </div>
+      <Eyebrow>Goals</Eyebrow>
+      <p className="text-[11px] text-[var(--text-faint)] mt-2.5">No goals configured.</p>
     </div>
   );
 }

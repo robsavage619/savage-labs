@@ -280,7 +280,8 @@ export async function* streamChat(messages: ChatMessage[]): AsyncGenerator<strin
       if (!line.startsWith("data: ")) continue;
       const payload = JSON.parse(line.slice(6));
       if (payload.type === "text") yield payload.text as string;
-      if (payload.type === "done" || payload.type === "error") return;
+      if (payload.type === "error") throw new Error(payload.text as string);
+      if (payload.type === "done") return;
     }
   }
 }
