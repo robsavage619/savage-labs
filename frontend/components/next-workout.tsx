@@ -264,8 +264,8 @@ export function NextWorkoutPane() {
               {new Date(data.generated_at).toLocaleDateString("en-US", {
                 weekday: "short", month: "short", day: "numeric",
               })}
-              {data.source === "claude" && " · AI coach"}
-              {data.source === "fallback" && " · fallback (add Anthropic API key for full plan)"}
+              {data.source !== "fallback" && ` · ${data.source}`}
+              {data.source === "fallback" && " · fallback"}
             </p>
           )}
         </div>
@@ -295,7 +295,7 @@ export function NextWorkoutPane() {
         >
           <p className="text-sm text-[var(--negative)]">Could not generate workout plan</p>
           <p className="text-[11px] text-[var(--text-dim)] mt-1">
-            Ensure backend is running and Anthropic API key is set
+            Ensure backend and Ollama are running
           </p>
         </div>
       )}

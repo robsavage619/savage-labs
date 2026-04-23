@@ -20,17 +20,18 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 export function VolumeChart() {
   const { data = [], isLoading } = useQuery({
     queryKey: ["weekly-volume"],
-    queryFn: () => api.trainingWeekly(16),
+    queryFn: () => api.trainingWeekly(104),
     refetchInterval: 600_000,
   });
 
-  const formatted = data.map(d => ({ ...d, label: d.week.slice(5) }));
+  // Show last 52 weeks for the chart; use all data for avg
+  const formatted = data.slice(-52).map(d => ({ ...d, label: d.week.slice(5) }));
   const avg = data.length ? data.reduce((s, d) => s + d.volume_kg, 0) / data.length : 0;
 
   return (
     <div className="space-y-3">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>Weekly volume · 16 weeks</Eyebrow>
+        <Eyebrow>Weekly volume · 52 weeks</Eyebrow>
         {avg > 0 && (
           <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">avg {Math.round(avg / 1000)}k kg/wk</span>
         )}

@@ -277,9 +277,10 @@ async def insights() -> list[dict]:
         delta = sum(long_sleep_next_hrv) / len(long_sleep_next_hrv) - sum(
             short_sleep_next_hrv
         ) / len(short_sleep_next_hrv)
+        verb = "lifts" if delta > 0 else "lowers"
         items.append(
             {
-                "headline": f"Long sleep lifts HRV by {delta:+.1f}ms next day",
+                "headline": f"Long sleep {verb} next-day HRV by {abs(delta):.1f}ms",
                 "body": (
                     f"When you sleep ≥7.5h, next-day HRV averages "
                     f"{sum(long_sleep_next_hrv) / len(long_sleep_next_hrv):.1f}ms vs "
@@ -1143,14 +1144,14 @@ EXERCISES TO AVOID/SUBSTITUTE:
 {excl_lines}
 """
 
-    from openai import OpenAI
+    from openai import AsyncOpenAI
 
     model = settings.ollama_model
-    client = OpenAI(base_url=f"{settings.ollama_base_url}/v1", api_key="ollama")
+    client = AsyncOpenAI(base_url=f"{settings.ollama_base_url}/v1", api_key="ollama", timeout=300.0)
     request_id = str(uuid.uuid4())
 
     try:
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=model,
             max_tokens=2048,
             tools=[_WORKOUT_TOOL],
