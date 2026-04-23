@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_base_url: str = Field(default="http://127.0.0.1:11434")
-    ollama_model: str = Field(default="llama3.3:70b")
+    ollama_model: str = Field(default="llama3.2:3b")
 
     # Server
     host: str = "127.0.0.1"
