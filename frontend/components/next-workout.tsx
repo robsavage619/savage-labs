@@ -384,6 +384,7 @@ export function NextWorkoutPane() {
   const [regenKey, setRegenKey] = useState(0);
   const [push, setPush] = useState<PushState>({ kind: "idle" });
   const [copied, setCopied] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
   const [sync, setSync] = useState<SyncState>({ kind: "idle" });
 
@@ -420,13 +421,33 @@ export function NextWorkoutPane() {
     handleRegen();
   }
 
-  async function handleCopyPrompt() {
-    try {
-      await navigator.clipboard.writeText(CLAUDE_CODE_PROMPT);
+  function handleCopyPrompt() {
+    // Preferred path: async Clipboard API
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(CLAUDE_CODE_PROMPT).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
+      }).catch(() => fallbackCopy());
+    } else {
+      fallbackCopy();
+    }
+  }
+
+  function fallbackCopy() {
+    const el = document.createElement("textarea");
+    el.value = CLAUDE_CODE_PROMPT;
+    el.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(el);
+    if (ok) {
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* clipboard refused */
+      setTimeout(() => setCopied(false), 2500);
+    } else {
+      // Both paths failed — show the text so the user can copy manually.
+      setShowPrompt(true);
     }
   }
 
@@ -564,6 +585,36 @@ export function NextWorkoutPane() {
           </button>
         </div>
       </div>
+
+      {showPrompt && (
+        <div
+          className="rounded-[var(--r-md)] p-3 space-y-2"
+          style={{ background: "oklch(0.72 0.12 250 / 0.08)", border: "1px solid oklch(0.72 0.12 250 / 0.3)" }}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--chart-line)]">
+              Paste this into Claude Code
+            </span>
+            <button
+              onClick={() => setShowPrompt(false)}
+              className="text-[var(--text-faint)] text-[11px] hover:text-[var(--text-dim)]"
+            >
+              ✕
+            </button>
+          </div>
+          <pre
+            className="text-[11px] text-[var(--text-muted)] leading-relaxed whitespace-pre-wrap break-words select-all cursor-text font-mono"
+            onClick={(e) => {
+              const range = document.createRange();
+              range.selectNodeContents(e.currentTarget);
+              window.getSelection()?.removeAllRanges();
+              window.getSelection()?.addRange(range);
+            }}
+          >
+            {CLAUDE_CODE_PROMPT}
+          </pre>
+        </div>
+      )}
 
       {push.kind === "err" && (
         <div

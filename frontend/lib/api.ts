@@ -256,7 +256,7 @@ export interface WorkoutBlock {
 
 export interface WorkoutPlan {
   generated_at: string;
-  source: "claude" | "fallback";
+  source: "claude" | "claude_code" | "fallback" | string;
   readiness_tier: "green" | "yellow" | "red";
   readiness_summary: string;
   recommendation: {
