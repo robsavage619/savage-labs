@@ -208,3 +208,7 @@ __marimo__/
 
 # SHC overrides
 !frontend/lib/
+
+# SHC database (lives in canonical worktree, symlinked at runtime)
+backend/data/
+
