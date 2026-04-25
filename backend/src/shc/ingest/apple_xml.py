@@ -33,6 +33,36 @@ _WANTED: dict[str, tuple[str, str | None]] = {
 _KG_TYPES = {"HKQuantityTypeIdentifierBodyMass"}
 _LB_TO_KG = 0.453592
 
+# Apple workout type suffix → cardio modality. Strength types deliberately absent — skip those.
+_WORKOUT_MODALITY: dict[str, str] = {
+    "Walking": "walk",
+    "Running": "run",
+    "Cycling": "bike",
+    "Hiking": "hike",
+    "Swimming": "swim",
+    "Pickleball": "pickleball",
+    "Tennis": "tennis",
+    "Yoga": "yoga",
+    "Dance": "other",
+    "MixedCardio": "other",
+    "CrossTraining": "other",
+    "Rowing": "other",
+    "Elliptical": "other",
+    "StairClimbing": "other",
+    "PaddleSports": "other",
+    "Barre": "yoga",
+    "Pilates": "yoga",
+}
+# Types to silently skip — don't log them as cardio
+_SKIP_WORKOUT_TYPES = {
+    "TraditionalStrengthTraining",
+    "FunctionalStrengthTraining",
+    "CoreTraining",
+    "Flexibility",
+    "Mindfulness",
+    "Meditation",
+}
+
 
 def _h(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:16]
@@ -49,12 +79,34 @@ def _to_kg(value: float, unit: str) -> float:
     return value
 
 
+def _workout_modality(activity_type: str) -> str | None:
+    """Return cardio modality for a HKWorkoutActivityType string, or None to skip."""
+    # Strip prefix: 'HKWorkoutActivityTypeWalking' → 'Walking'
+    suffix = activity_type.removeprefix("HKWorkoutActivityType")
+    if suffix in _SKIP_WORKOUT_TYPES:
+        return None
+    return _WORKOUT_MODALITY.get(suffix, "other")
+
+
+def _workout_avg_hr(elem) -> int | None:
+    """Extract average heart rate from WorkoutStatistics child elements."""
+    for stat in elem.findall("WorkoutStatistics"):
+        if stat.get("type") == "HKQuantityTypeIdentifierHeartRate":
+            avg = stat.get("average")
+            try:
+                return round(float(avg)) if avg else None
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
 async def ingest_export(path: Path, batch_size: int = 500) -> dict[str, int]:
-    """Stream Apple Health export.xml and import wanted metric types."""
+    """Stream Apple Health export.xml and import wanted metric types + workouts."""
     counts: dict[str, int] = {}
     batch: list[dict] = []
+    workout_rows: list[dict] = []
 
-    async def _flush(conn) -> None:
+    async def _flush_measurements(conn) -> None:
         for row in batch:
             conn.execute(
                 """
@@ -67,11 +119,60 @@ async def ingest_export(path: Path, batch_size: int = 500) -> dict[str, int]:
             )
         batch.clear()
 
+    async def _flush_workouts(conn) -> None:
+        for row in workout_rows:
+            conn.execute(
+                """
+                INSERT INTO cardio_sessions
+                    (id, date, modality, duration_min, avg_hr, rpe, zone_distribution_json, content_hash)
+                VALUES ($id, $date, $modality, $dur, $hr, NULL, NULL, $hash)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                row,
+            )
+        workout_rows.clear()
+
     log.info("streaming Apple Health XML from %s (this may take several minutes)", path)
     context = iterparse(str(path), events=("end",))
 
     async with write_ctx() as conn:
         for _event, elem in context:
+            if elem.tag == "Workout":
+                activity_type = elem.get("workoutActivityType", "")
+                modality = _workout_modality(activity_type)
+                if modality is not None:
+                    start = _norm_ts(elem.get("startDate", ""))
+                    date_part = start[:10]  # 'YYYY-MM-DD'
+                    dur_raw = elem.get("duration")
+                    dur_unit = elem.get("durationUnit", "min")
+                    try:
+                        dur_f = float(dur_raw) if dur_raw else None
+                        # Apple usually stores minutes, but handle seconds just in case
+                        if dur_f and dur_unit == "s":
+                            dur_f = dur_f / 60
+                        dur_min = round(dur_f) if dur_f else None
+                    except (ValueError, TypeError):
+                        dur_min = None
+
+                    avg_hr = _workout_avg_hr(elem)
+                    ext_id = f"apple_workout:{activity_type}:{start}"
+                    row = {
+                        "id": _h(ext_id),
+                        "date": date_part,
+                        "modality": modality,
+                        "dur": dur_min,
+                        "hr": avg_hr,
+                        "hash": _h(ext_id),
+                    }
+                    workout_rows.append(row)
+                    counts["_workouts"] = counts.get("_workouts", 0) + 1
+
+                    if len(workout_rows) >= batch_size:
+                        await _flush_workouts(conn)
+
+                elem.clear()
+                continue
+
             if elem.tag != "Record":
                 elem.clear()
                 continue
@@ -108,12 +209,14 @@ async def ingest_export(path: Path, batch_size: int = 500) -> dict[str, int]:
             counts[metric_name] = counts.get(metric_name, 0) + 1
 
             if len(batch) >= batch_size:
-                await _flush(conn)
+                await _flush_measurements(conn)
 
             elem.clear()
 
         if batch:
-            await _flush(conn)
+            await _flush_measurements(conn)
+        if workout_rows:
+            await _flush_workouts(conn)
 
     log.info("Apple Health XML import complete: %s", counts)
     return counts
