@@ -13,9 +13,10 @@ type PushState =
   | { kind: "ok"; routineId: string; focus: string }
   | { kind: "err"; msg: string };
 
-type GenState =
+type SyncState =
   | { kind: "idle" }
-  | { kind: "generating" }
+  | { kind: "syncing" }
+  | { kind: "ok" }
   | { kind: "err"; msg: string };
 
 const CLAUDE_CODE_PROMPT = `Read the live training context at GET http://127.0.0.1:8000/api/workout/context, then generate today's workout plan as a single JSON object. Optimize for two simultaneous goals: get stronger and burn fat (body recomposition). Use real exercise names and weights from Rob's history. Apply the GREEN/YELLOW/RED intensity matrix based on his recovery score. Always include a metabolic finisher (or Z2 walk on red days). Then POST the resulting plan to http://127.0.0.1:8000/api/workout/plan with body { "plan": <plan>, "source": "claude_code", "push_to_hevy": false }. Confirm success.`;
@@ -382,9 +383,9 @@ export function NextWorkoutPane() {
   const queryClient = useQueryClient();
   const [regenKey, setRegenKey] = useState(0);
   const [push, setPush] = useState<PushState>({ kind: "idle" });
-  const [gen, setGen] = useState<GenState>({ kind: "idle" });
   const [copied, setCopied] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
+  const [sync, setSync] = useState<SyncState>({ kind: "idle" });
 
   const { data, isLoading, isError, isFetching } = useQuery({
     queryKey: ["workout-next", regenKey],
@@ -419,19 +420,6 @@ export function NextWorkoutPane() {
     handleRegen();
   }
 
-  async function handleGenerate() {
-    setGen({ kind: "generating" });
-    try {
-      // Try direct Claude API generation first.
-      await api.workoutGenerate();
-      handleRegen();
-      setGen({ kind: "idle" });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "generate failed";
-      setGen({ kind: "err", msg });
-    }
-  }
-
   async function handleCopyPrompt() {
     try {
       await navigator.clipboard.writeText(CLAUDE_CODE_PROMPT);
@@ -439,6 +427,20 @@ export function NextWorkoutPane() {
       setTimeout(() => setCopied(false), 2000);
     } catch {
       /* clipboard refused */
+    }
+  }
+
+  async function handleSync() {
+    setSync({ kind: "syncing" });
+    try {
+      await api.syncAll();
+      // Invalidate everything so the whole dashboard refreshes.
+      await queryClient.invalidateQueries();
+      setSync({ kind: "ok" });
+      setTimeout(() => setSync({ kind: "idle" }), 3000);
+    } catch (e) {
+      setSync({ kind: "err", msg: e instanceof Error ? e.message : "sync failed" });
+      setTimeout(() => setSync({ kind: "idle" }), 4000);
     }
   }
 
@@ -483,54 +485,74 @@ export function NextWorkoutPane() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={handleGenerate}
-            disabled={gen.kind === "generating"}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-[11.5px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{
-              background: "oklch(0.72 0.12 250 / 0.16)",
-              border: "1px solid oklch(0.72 0.12 250 / 0.4)",
-              color: "var(--chart-line)",
-            }}
-            title="Generate via Claude API"
-          >
-            <span className={gen.kind === "generating" ? "animate-spin inline-block" : ""}>
-              {gen.kind === "generating" ? "⟳" : "✦"}
-            </span>
-            {gen.kind === "generating" ? "Claude is thinking…" : "Generate via Claude"}
-          </button>
+          {/* Step 1 — copy prompt for Claude Code */}
           <button
             onClick={handleCopyPrompt}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--r-sm)] text-[11px] font-medium transition-all"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-[11.5px] font-semibold transition-all"
             style={{
-              background: "oklch(1 0 0 / 0.05)",
-              border: "1px solid var(--hairline)",
-              color: "var(--text-dim)",
+              background: copied
+                ? "var(--positive-soft)"
+                : "oklch(0.72 0.12 250 / 0.16)",
+              border: `1px solid ${copied ? "oklch(0.72 0.18 145 / 0.4)" : "oklch(0.72 0.12 250 / 0.5)"}`,
+              color: copied ? "var(--positive)" : "var(--chart-line)",
             }}
-            title="Copy a one-shot prompt for Claude Code (CLI)"
+            title="Step 1 — copy prompt, paste into Claude Code to generate today's plan"
           >
-            {copied ? "✓ Copied" : "⌘ Copy CC prompt"}
+            <span className="text-[9px] font-bold opacity-60 mr-0.5">1</span>
+            {copied ? "✓ Prompt copied" : "✦ Copy CC prompt"}
           </button>
+
+          {/* Step 2 — sync WHOOP + Hevy to refresh data */}
+          <button
+            onClick={handleSync}
+            disabled={sync.kind === "syncing"}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-[11.5px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{
+              background: sync.kind === "ok"
+                ? "var(--positive-soft)"
+                : sync.kind === "err"
+                  ? "oklch(0.65 0.22 25 / 0.1)"
+                  : "oklch(0.75 0.18 75 / 0.12)",
+              border: `1px solid ${sync.kind === "ok" ? "oklch(0.72 0.18 145 / 0.4)" : sync.kind === "err" ? "oklch(0.65 0.22 25 / 0.35)" : "oklch(0.75 0.18 75 / 0.4)"}`,
+              color: sync.kind === "ok"
+                ? "var(--positive)"
+                : sync.kind === "err"
+                  ? "var(--negative)"
+                  : "var(--neutral)",
+            }}
+            title="Step 2 — pull latest WHOOP + Hevy data and refresh the dashboard"
+          >
+            <span className="text-[9px] font-bold opacity-60 mr-0.5">2</span>
+            <span className={sync.kind === "syncing" ? "animate-spin inline-block" : ""}>
+              {sync.kind === "ok" ? "✓" : sync.kind === "err" ? "✗" : "↻"}
+            </span>
+            {sync.kind === "syncing" ? "Syncing…" : sync.kind === "ok" ? "Synced" : sync.kind === "err" ? "Failed" : "Sync"}
+          </button>
+
+          {/* Step 3 — push plan to Hevy */}
           <button
             onClick={handlePushHevy}
             disabled={push.kind === "pushing" || !data}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--r-sm)] text-[11px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-[11.5px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             style={{
-              background: push.kind === "ok" ? "var(--positive-soft)" : "oklch(1 0 0 / 0.05)",
-              border: `1px solid ${push.kind === "ok" ? "var(--positive)" : "var(--hairline)"}`,
-              color: push.kind === "ok" ? "var(--positive)" : "var(--text-dim)",
+              background: push.kind === "ok" ? "var(--positive-soft)" : "oklch(0.72 0.18 145 / 0.12)",
+              border: `1px solid ${push.kind === "ok" ? "oklch(0.72 0.18 145 / 0.6)" : "oklch(0.72 0.18 145 / 0.35)"}`,
+              color: push.kind === "ok" ? "var(--positive)" : "oklch(0.72 0.18 145 / 1)",
             }}
-            title="Push this plan to Hevy as a routine"
+            title="Step 3 — push today's plan to Hevy as a routine"
           >
+            <span className="text-[9px] font-bold opacity-60 mr-0.5">3</span>
             <span className={push.kind === "pushing" ? "animate-spin inline-block" : ""}>
               {push.kind === "pushing" ? "⟳" : push.kind === "ok" ? "✓" : "→"}
             </span>
             {push.kind === "pushing" ? "Pushing…" : push.kind === "ok" ? "In Hevy" : "Hevy"}
           </button>
+
+          {/* Discard */}
           <button
             onClick={handleDiscard}
             disabled={isFetching || !data}
-            className="flex items-center gap-1.5 px-2.5 py-2 rounded-[var(--r-sm)] text-[11px] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center px-2.5 py-2 rounded-[var(--r-sm)] text-[11px] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             style={{
               background: "transparent",
               border: "1px solid var(--hairline)",
@@ -542,20 +564,6 @@ export function NextWorkoutPane() {
           </button>
         </div>
       </div>
-
-      {gen.kind === "err" && (
-        <div
-          className="rounded-[var(--r-sm)] px-3 py-2.5 text-[11.5px] flex items-start gap-2"
-          style={{ background: "var(--neutral-soft)", border: "1px solid oklch(0.75 0.18 75 / 0.25)", color: "var(--neutral)" }}
-        >
-          <span className="font-semibold">Direct generation unavailable.</span>
-          <span className="text-[var(--text-muted)]">
-            {gen.msg.includes("ANTHROPIC")
-              ? "Set ANTHROPIC_API_KEY in backend/.env, or click \"Copy CC prompt\" and paste into Claude Code."
-              : gen.msg}
-          </span>
-        </div>
-      )}
 
       {push.kind === "err" && (
         <div

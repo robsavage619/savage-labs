@@ -326,6 +326,16 @@ export const api = {
     if (!r.ok) throw new Error(`workoutDelete ${r.status}`);
     return r.json() as Promise<{ status: string; date: string }>;
   },
+  syncAll: async () => {
+    const [whoop, hevy] = await Promise.allSettled([
+      fetch(`${BASE}/api/whoop/sync`, { method: "POST" }).then((r) => r.json()),
+      fetch(`${BASE}/api/hevy/sync`, { method: "POST" }).then((r) => r.json()),
+    ]);
+    return {
+      whoop: whoop.status === "fulfilled" ? whoop.value : { error: String((whoop as PromiseRejectedResult).reason) },
+      hevy: hevy.status === "fulfilled" ? hevy.value : { error: String((hevy as PromiseRejectedResult).reason) },
+    };
+  },
   hevyPushRoutine: async (regen = false) => {
     const r = await fetch(
       `${BASE}/api/hevy/push-routine${regen ? "?regen=true" : ""}`,
