@@ -231,6 +231,127 @@ export interface ChatMessage {
   content: string;
 }
 
+// ── DailyState — single source of truth from /api/state/today ────────────────
+
+export interface DailyStateRecovery {
+  score: number | null;
+  score_date: string | null;
+  hrv_ms: number | null;
+  hrv_baseline_28d: number | null;
+  hrv_sd_28d: number | null;
+  hrv_sigma: number | null;
+  rhr: number | null;
+  rhr_7d_avg: number | null;
+  rhr_baseline_28d: number | null;
+  rhr_elevated_pct: number | null;
+  skin_temp: number | null;
+  skin_temp_baseline_28d: number | null;
+  skin_temp_delta: number | null;
+}
+
+export interface DailyStateSleep {
+  last_hours: number | null;
+  avg_7d: number | null;
+  consistency_stdev_7d: number | null;
+  debt_7d_h: number | null;
+  deep_pct_last: number | null;
+  deep_min_last: number | null;
+  rem_min_last: number | null;
+  spo2_avg_last: number | null;
+  score: number | null;
+}
+
+export interface DailyStateLoad {
+  acute_load_7d: number | null;
+  chronic_load_28d: number | null;
+  acwr: number | null;
+  last_session_date: string | null;
+  days_since_last: number | null;
+  days_since_legs: number;
+  days_since_push: number;
+  days_since_pull: number;
+  push_pull_ratio_28d: number | null;
+  push_sets_28d: number;
+  pull_sets_28d: number;
+  legs_sets_28d: number;
+  cardio_min_28d: number;
+  cardio_z2_min_7d: number;
+}
+
+export interface DailyStateCheckin {
+  date: string | null;
+  propranolol_taken: boolean | null;
+  body_weight_kg: number | null;
+  body_weight_trend_4wk: number | null;
+  soreness_overall: number | null;
+  sleep_quality: number | null;
+  energy: number | null;
+  stress: number | null;
+  motivation: number | null;
+  illness_flag: boolean;
+  travel_flag: boolean;
+}
+
+export interface DailyStateReadiness {
+  score: number | null;
+  tier: "green" | "yellow" | "red" | null;
+  weights: { hrv: number; sleep: number; rhr: number; subj: number };
+  components: {
+    hrv: number | null;
+    sleep: number | null;
+    rhr: number | null;
+    subj: number | null;
+  };
+  beta_blocker_adjusted: boolean;
+}
+
+export interface DailyStateGates {
+  max_intensity: "high" | "moderate" | "low" | "rest";
+  forbid_muscle_groups: string[];
+  deload_required: boolean;
+  deload_reason: string | null;
+  hr_zone_shift_bpm: number;
+  kcal_multiplier: number;
+  e1rm_regression_4wk_pct: number | null;
+  reasons: string[];
+}
+
+export interface DailyStateFreshness {
+  whoop_age_days: number | null;
+  sleep_age_days: number | null;
+  hevy_age_days: number | null;
+  cardio_age_days: number | null;
+  gaps: string[];
+}
+
+export interface DailyState {
+  as_of: string;
+  recovery: DailyStateRecovery;
+  sleep: DailyStateSleep;
+  training_load: DailyStateLoad;
+  checkin: DailyStateCheckin;
+  readiness: DailyStateReadiness;
+  gates: DailyStateGates;
+  freshness: DailyStateFreshness;
+}
+
+export interface CheckinPayload {
+  propranolol_taken?: boolean | null;
+  body_weight_kg?: number | null;
+  soreness_overall?: number | null;
+  sleep_quality_1_10?: number | null;
+  energy_1_10?: number | null;
+  stress_1_10?: number | null;
+  motivation_1_10?: number | null;
+  illness_flag?: boolean | null;
+  travel_flag?: boolean | null;
+  notes?: string | null;
+}
+
+export interface CheckinToday extends CheckinPayload {
+  date: string;
+}
+
 export interface WarmupItem {
   name: string;
   sets?: number;
@@ -361,6 +482,25 @@ export const api = {
         weekly_sets: number;
       }[];
     }>(`/api/training/muscle-balance?weeks=${weeks}`),
+  dailyState: () => get<DailyState>("/api/state/today"),
+  checkinToday: () => get<CheckinToday>("/api/checkin/today"),
+  checkinSubmit: async (body: CheckinPayload) => {
+    const r = await fetch(`${BASE}/api/checkin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `checkinSubmit ${r.status}`);
+    }
+    return r.json() as Promise<{ status: string; date: string }>;
+  },
+  adherenceRecompute: async () => {
+    const r = await fetch(`${BASE}/api/training/adherence/recompute`, { method: "POST" });
+    if (!r.ok) throw new Error(`adherenceRecompute ${r.status}`);
+    return r.json();
+  },
   cardioRecent: (days = 60) => get<CardioRecent>(`/api/cardio/recent?days=${days}`),
   cardioLog: async (body: {
     date?: string;

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
+import { CheckinCard } from "@/components/checkin-card";
 
 function StreakCard() {
   const stats = useQuery({ queryKey: ["stats-summary"], queryFn: api.statsSummary });
@@ -119,22 +120,13 @@ function WeekStripCard() {
   );
 }
 
-function GoalsCard() {
-  return (
-    <div className="shc-card shc-enter p-4">
-      <Eyebrow>Goals</Eyebrow>
-      <p className="text-[11px] text-[var(--text-faint)] mt-2.5">No goals configured.</p>
-    </div>
-  );
-}
-
 export function RightRail() {
   return (
     <aside className="space-y-3 w-full">
+      <CheckinCard />
       <WeekStripCard />
       <StreakCard />
       <PersonalBestsCard />
-      <GoalsCard />
     </aside>
   );
 }
