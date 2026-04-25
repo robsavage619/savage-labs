@@ -217,6 +217,8 @@ function StepsPanel() {
       </div>
       {isLoading ? (
         <div className="h-[100px] shc-skeleton rounded" />
+      ) : data.length === 0 ? (
+        <p className="text-[12px] text-[var(--text-faint)] py-6 text-center">No step data — Apple Health export not yet ingested</p>
       ) : (
         <ResponsiveContainer width="100%" height={100}>
           <ComposedChart data={formatted} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
