@@ -1149,20 +1149,124 @@ async def body_trend() -> list[dict]:
 
 @router.get("/body/vo2max")
 async def body_vo2max() -> list[dict]:
+    """Estimate VO2 max from WHOOP RHR using the Uth-Sørensen formula.
+
+    VO2max ≈ 15.3 × HRmax / HRrest  (Uth et al., 2004)
+    HRmax = 220 − 39 (Rob's age) = 181 bpm.
+    Note: propranolol PRN blunts HRmax → treat values as floor estimates
+    on days the beta-blocker was taken.
+    """
+    HR_MAX = 181  # 220 - 39
     conn = get_read_conn()
     try:
         rows = conn.execute(
             """
-            SELECT ts::DATE AS day, AVG(value_num) AS v
-            FROM measurements
-            WHERE metric = 'vo2_max'
-            GROUP BY day
-            ORDER BY day
+            SELECT date, AVG(rhr) AS rhr
+            FROM recovery
+            WHERE rhr IS NOT NULL AND rhr > 30
+            GROUP BY date
+            ORDER BY date
             """
         ).fetchall()
     finally:
         conn.close()
-    return [{"date": str(r[0]), "vo2max": round(r[1], 1)} for r in rows]
+    return [
+        {"date": str(r[0]), "vo2max": round(15.3 * HR_MAX / r[1], 1)}
+        for r in rows
+        if r[1]
+    ]
+
+
+@router.get("/whoop/patterns")
+async def whoop_patterns() -> dict:
+    """Recovery patterns derived from WHOOP data: day-of-week, distributions, correlations."""
+    conn = get_read_conn()
+    try:
+        # Day-of-week average recovery (0=Mon … 6=Sun)
+        dow_rows = conn.execute(
+            """
+            SELECT dayofweek(date) AS dow, AVG(score) AS avg_score, COUNT(*) AS n
+            FROM recovery
+            WHERE score IS NOT NULL
+            GROUP BY dow
+            ORDER BY dow
+            """
+        ).fetchall()
+
+        # Recovery score distribution
+        dist_rows = conn.execute(
+            """
+            SELECT
+                CASE
+                    WHEN score < 34 THEN 'Red (0–33)'
+                    WHEN score < 67 THEN 'Yellow (34–66)'
+                    ELSE 'Green (67–100)'
+                END AS bucket,
+                COUNT(*) AS n
+            FROM recovery
+            WHERE score IS NOT NULL
+            GROUP BY bucket
+            """
+        ).fetchall()
+
+        # Sleep vs recovery scatter (90d)
+        scatter_rows = conn.execute(
+            """
+            SELECT
+                r.date,
+                r.score AS recovery,
+                r.hrv,
+                r.rhr,
+                (EPOCH(sl.ts_out) - EPOCH(sl.ts_in)) / 3600.0 AS sleep_h
+            FROM recovery r
+            JOIN sleep sl ON sl.night_date = r.date
+            WHERE r.score IS NOT NULL
+              AND sl.ts_in IS NOT NULL AND sl.ts_out IS NOT NULL
+              AND r.date >= current_date - INTERVAL 90 DAY
+            ORDER BY r.date DESC
+            LIMIT 90
+            """
+        ).fetchall()
+
+        # Rolling 7d average for trend
+        trend_rows = conn.execute(
+            """
+            SELECT date, score, hrv, rhr
+            FROM recovery
+            WHERE score IS NOT NULL
+              AND date >= current_date - INTERVAL 90 DAY
+            ORDER BY date
+            """
+        ).fetchall()
+
+    finally:
+        conn.close()
+
+    DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    return {
+        "by_day_of_week": [
+            {"day": DOW_LABELS[int(r[0]) % 7], "avg_recovery": round(r[1], 1), "n": r[2]}
+            for r in dow_rows
+        ],
+        "distribution": [
+            {"bucket": r[0], "n": r[1]}
+            for r in dist_rows
+        ],
+        "sleep_vs_recovery": [
+            {
+                "date": str(r[0]),
+                "recovery": round(r[1], 0),
+                "hrv": round(r[2], 1) if r[2] else None,
+                "rhr": r[3],
+                "sleep_h": round(r[4], 2) if r[4] else None,
+            }
+            for r in scatter_rows
+        ],
+        "trend_90d": [
+            {"date": str(r[0]), "recovery": r[1], "hrv": round(r[2], 1) if r[2] else None, "rhr": r[3]}
+            for r in trend_rows
+        ],
+    }
 
 
 @router.get("/body/steps")

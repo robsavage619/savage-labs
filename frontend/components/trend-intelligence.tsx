@@ -17,8 +17,9 @@ import { Eyebrow, Metric } from "@/components/ui/metric";
 import { CorrelationCards } from "@/components/correlation-cards";
 import { ClinicalOverview } from "@/components/clinical-overview";
 import { BodyPane } from "@/components/body-panel";
+import { PatternsPane } from "@/components/patterns-pane";
 
-const TABS = ["Recovery", "Body", "Insights", "Clinical"] as const;
+const TABS = ["Recovery", "Body", "Patterns", "Insights", "Clinical"] as const;
 type Tab = (typeof TABS)[number];
 
 function RecoveryTrendPane() {
@@ -169,6 +170,7 @@ export function TrendIntelligence() {
       <div className="mt-2">
         {tab === "Recovery" && <RecoveryTrendPane />}
         {tab === "Body" && <BodyPane />}
+        {tab === "Patterns" && <PatternsPane />}
         {tab === "Insights" && <InsightsPane />}
         {tab === "Clinical" && <ClinicalPane />}
       </div>

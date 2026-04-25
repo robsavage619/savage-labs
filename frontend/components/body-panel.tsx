@@ -120,7 +120,7 @@ function VO2MaxPanel() {
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>VO₂ max · Apple Health</Eyebrow>
+        <Eyebrow>VO₂ max · estimated from WHOOP RHR</Eyebrow>
         {latest && zone && (
           <span className="text-[10.5px] font-medium" style={{ color: zone.color }}>{zone.label} for age (39)</span>
         )}
@@ -128,7 +128,7 @@ function VO2MaxPanel() {
       {isLoading ? (
         <div className="h-[140px] shc-skeleton rounded" />
       ) : data.length === 0 ? (
-        <p className="text-[12px] text-[var(--text-faint)] py-6 text-center">No VO₂ max data</p>
+        <p className="text-[12px] text-[var(--text-faint)] py-6 text-center">No RHR data to estimate VO₂ max</p>
       ) : (
         <div className="space-y-3">
           <div className="flex items-end gap-6">
@@ -164,6 +164,9 @@ function VO2MaxPanel() {
               ⚠ Decline is ~4× expected age-related rate. Priority: zone 2 cardio 3×/wk.
             </p>
           )}
+          <p className="text-[10px] text-[var(--text-faint)] leading-snug">
+            Uth-Sørensen formula: 15.3 × 181 / RHR. Propranolol PRN suppresses RHR → values are floor estimates on dosing days.
+          </p>
           <ResponsiveContainer width="100%" height={80}>
             <ComposedChart data={formatted} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
               <XAxis dataKey="label" tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} tickLine={false} axisLine={false} interval={Math.floor(formatted.length / 5) || 1} />

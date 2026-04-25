@@ -405,6 +405,19 @@ export const api = {
         exercise,
       )}&sessions=${sessions}`,
     ),
+  whoopPatterns: () =>
+    get<{
+      by_day_of_week: { day: string; avg_recovery: number; n: number }[];
+      distribution: { bucket: string; n: number }[];
+      sleep_vs_recovery: {
+        date: string;
+        recovery: number;
+        hrv: number | null;
+        rhr: number | null;
+        sleep_h: number | null;
+      }[];
+      trend_90d: { date: string; recovery: number; hrv: number | null; rhr: number | null }[];
+    }>("/api/whoop/patterns"),
 };
 
 export async function* streamChat(messages: ChatMessage[]): AsyncGenerator<string> {
