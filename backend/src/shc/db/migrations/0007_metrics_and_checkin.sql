@@ -10,6 +10,16 @@ CREATE TABLE IF NOT EXISTS workout_plans (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS workout_retrospectives (
+    workout_id                    VARCHAR PRIMARY KEY,
+    generated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    summary                       VARCHAR NOT NULL,
+    progressive_overload_achieved BOOLEAN,
+    rpe_vs_target                 VARCHAR,
+    flags                         VARCHAR NOT NULL DEFAULT '[]',
+    vault_insights                VARCHAR NOT NULL DEFAULT '[]'
+);
+
 -- Extend daily_checkin with the inputs the auto-regulation gate needs.
 -- DuckDB ALTER TABLE ADD COLUMN IF NOT EXISTS is supported.
 -- DuckDB doesn't support CHECK / DEFAULT in ADD COLUMN; constraints are

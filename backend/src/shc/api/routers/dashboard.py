@@ -11,9 +11,16 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from shc.ai.briefing import build_daily_context, store_briefing
-from shc.ai.workout_planner import build_training_context, load_plan, save_plan, validate_plan
+from shc.ai.workout_planner import (
+    GateViolation,
+    build_training_context,
+    load_plan,
+    save_plan,
+    validate_plan,
+)
 from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
+from shc.metrics import compute_daily_state, muscle_group as _mg
 
 router = APIRouter(tags=["dashboard"])
 log = logging.getLogger(__name__)
@@ -138,24 +145,232 @@ async def sleep_trend(days: int = Query(30, gt=0, le=365)) -> list[dict]:
 
 @router.get("/readiness/today")
 async def readiness_today() -> dict:
+    """Today's readiness — thin reader of the canonical DailyState.
+
+    Kept for backwards compat. Prefer `/api/state/today` for new clients.
+    """
+    conn = get_read_conn()
+    try:
+        state = compute_daily_state(conn)
+    finally:
+        conn.close()
+    return {
+        "date": state["as_of"],
+        "recovery_score": state["recovery"]["score"],
+        "hrv": state["recovery"]["hrv_ms"],
+        "rhr": state["recovery"]["rhr"],
+        "sleep_hours": state["sleep"]["last_hours"],
+        "energy": state["checkin"]["energy"],
+        "stress": state["checkin"]["stress"],
+        "readiness_score": state["readiness"]["score"],
+        "readiness_tier": state["readiness"]["tier"],
+        "beta_blocker_adjusted": state["readiness"]["beta_blocker_adjusted"],
+    }
+
+
+@router.get("/state/today")
+async def state_today() -> dict:
+    """Single source of truth — today's complete DailyState.
+
+    Replaces ad-hoc aggregation in dashboard / briefing / planner with one
+    canonical view. Includes recovery, sleep, training-load (true Gabbett
+    ACWR), check-in inputs, β-blocker-aware readiness composite, deterministic
+    auto-regulation gates, and data freshness.
+    """
+    conn = get_read_conn()
+    try:
+        return compute_daily_state(conn)
+    finally:
+        conn.close()
+
+
+# ── Daily check-in (β-blocker, soreness, body weight, illness/travel flags) ──
+
+class CheckinSubmission(BaseModel):
+    propranolol_taken: bool | None = None
+    body_weight_kg: float | None = None
+    soreness_overall: int | None = None         # 1-10
+    sleep_quality_1_10: int | None = None
+    energy_1_10: int | None = None
+    stress_1_10: int | None = None
+    motivation_1_10: int | None = None
+    illness_flag: bool | None = None
+    travel_flag: bool | None = None
+    notes: str | None = None
+
+    @staticmethod
+    def _validate_1_10(v: int | None, name: str) -> int | None:
+        if v is None:
+            return None
+        if not 1 <= v <= 10:
+            raise ValueError(f"{name} must be 1-10")
+        return v
+
+
+@router.get("/checkin/today")
+async def get_checkin_today() -> dict:
     conn = get_read_conn()
     try:
         row = conn.execute(
-            "SELECT date, recovery_score, hrv, rhr, sleep_hours, "
-            "energy_1_10, stress_1_10 FROM v_readiness LIMIT 1"
+            """
+            SELECT date, propranolol_taken, body_weight_kg, soreness_overall,
+                   sleep_quality_1_10, energy_1_10, stress_1_10, motivation_1_10,
+                   illness_flag, travel_flag, notes
+            FROM daily_checkin WHERE date = current_date
+            """
         ).fetchone()
     finally:
         conn.close()
     if not row:
-        return {}
+        return {"date": date.today().isoformat()}
     return {
         "date": str(row[0]),
-        "recovery_score": row[1],
-        "hrv": row[2],
-        "rhr": row[3],
-        "sleep_hours": row[4],
-        "energy": row[5],
-        "stress": row[6],
+        "propranolol_taken": row[1],
+        "body_weight_kg": row[2],
+        "soreness_overall": row[3],
+        "sleep_quality_1_10": row[4],
+        "energy_1_10": row[5],
+        "stress_1_10": row[6],
+        "motivation_1_10": row[7],
+        "illness_flag": row[8],
+        "travel_flag": row[9],
+        "notes": row[10],
+    }
+
+
+@router.post("/checkin")
+async def post_checkin(body: CheckinSubmission) -> dict:
+    """Upsert today's daily check-in. Drives the auto-regulation gates."""
+    for k, v in (
+        ("soreness_overall", body.soreness_overall),
+        ("sleep_quality_1_10", body.sleep_quality_1_10),
+        ("energy_1_10", body.energy_1_10),
+        ("stress_1_10", body.stress_1_10),
+        ("motivation_1_10", body.motivation_1_10),
+    ):
+        if v is not None and not 1 <= v <= 10:
+            raise HTTPException(status_code=422, detail=f"{k} must be 1-10")
+
+    async with write_ctx() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_checkin
+                (date, propranolol_taken, body_weight_kg, soreness_overall,
+                 sleep_quality_1_10, energy_1_10, stress_1_10, motivation_1_10,
+                 illness_flag, travel_flag, notes)
+            VALUES (current_date, $prop, $wt, $sor, $sq, $en, $st, $mo, $ill, $tr, $no)
+            ON CONFLICT (date) DO UPDATE SET
+                propranolol_taken = COALESCE(EXCLUDED.propranolol_taken, daily_checkin.propranolol_taken),
+                body_weight_kg    = COALESCE(EXCLUDED.body_weight_kg, daily_checkin.body_weight_kg),
+                soreness_overall  = COALESCE(EXCLUDED.soreness_overall, daily_checkin.soreness_overall),
+                sleep_quality_1_10 = COALESCE(EXCLUDED.sleep_quality_1_10, daily_checkin.sleep_quality_1_10),
+                energy_1_10       = COALESCE(EXCLUDED.energy_1_10, daily_checkin.energy_1_10),
+                stress_1_10       = COALESCE(EXCLUDED.stress_1_10, daily_checkin.stress_1_10),
+                motivation_1_10   = COALESCE(EXCLUDED.motivation_1_10, daily_checkin.motivation_1_10),
+                illness_flag      = COALESCE(EXCLUDED.illness_flag, daily_checkin.illness_flag),
+                travel_flag       = COALESCE(EXCLUDED.travel_flag, daily_checkin.travel_flag),
+                notes             = COALESCE(EXCLUDED.notes, daily_checkin.notes)
+            """,
+            {
+                "prop": body.propranolol_taken,
+                "wt": body.body_weight_kg,
+                "sor": body.soreness_overall,
+                "sq": body.sleep_quality_1_10,
+                "en": body.energy_1_10,
+                "st": body.stress_1_10,
+                "mo": body.motivation_1_10,
+                "ill": body.illness_flag,
+                "tr": body.travel_flag,
+                "no": body.notes,
+            },
+        )
+    return {"status": "ok", "date": date.today().isoformat()}
+
+
+# ── Plan adherence (closed-loop tracking) ────────────────────────────────────
+
+@router.post("/training/adherence/recompute")
+async def recompute_adherence() -> dict:
+    """Recompute yesterday's plan-vs-execution adherence row.
+
+    Compares the plan stored for yesterday against the actual workout (Hevy
+    or WHOOP) that landed on the same date — sets prescribed vs sets
+    completed, target vs actual RPE. Closes the prescription→execution loop
+    so today's planner sees what really happened.
+    """
+    async with write_ctx() as conn:
+        prior = conn.execute(
+            "SELECT date, plan_json FROM workout_plans "
+            "WHERE date < current_date ORDER BY date DESC LIMIT 1"
+        ).fetchone()
+        if not prior:
+            return {"status": "no_prior_plan"}
+        plan_date = prior[0]
+        try:
+            plan = json.loads(prior[1])
+        except (json.JSONDecodeError, TypeError):
+            return {"status": "plan_json_invalid"}
+        prescribed_sets = sum(
+            int(ex.get("sets", 0) or 0)
+            for block in plan.get("blocks", [])
+            for ex in block.get("exercises", [])
+        )
+        rec = plan.get("recommendation", {})
+        target_rpe = float(rec.get("target_rpe", 0) or 0) or None
+
+        actual = conn.execute(
+            """
+            SELECT
+                w.id,
+                COUNT(*) FILTER (WHERE NOT ws.is_warmup) AS sets_done,
+                AVG(ws.rpe) FILTER (WHERE ws.rpe IS NOT NULL) AS avg_rpe
+            FROM workouts w
+            LEFT JOIN workout_sets ws ON ws.workout_id = w.id
+            WHERE w.started_at::DATE = $d
+            GROUP BY w.id
+            ORDER BY w.started_at DESC LIMIT 1
+            """,
+            {"d": plan_date.isoformat() if hasattr(plan_date, "isoformat") else str(plan_date)},
+        ).fetchone()
+
+        wid = actual[0] if actual else None
+        sets_done = int(actual[1]) if actual and actual[1] else 0
+        actual_rpe = float(actual[2]) if actual and actual[2] else None
+        completion_pct = (
+            round(sets_done / prescribed_sets * 100, 1)
+            if prescribed_sets > 0 else None
+        )
+
+        conn.execute(
+            """
+            INSERT INTO plan_adherence
+                (date, plan_date, workout_id, completion_pct,
+                 avg_rpe_actual, avg_rpe_target, notes)
+            VALUES ($d, $pd, $wid, $cp, $rpe, $tgt, NULL)
+            ON CONFLICT (date) DO UPDATE SET
+                plan_date = EXCLUDED.plan_date,
+                workout_id = EXCLUDED.workout_id,
+                completion_pct = EXCLUDED.completion_pct,
+                avg_rpe_actual = EXCLUDED.avg_rpe_actual,
+                avg_rpe_target = EXCLUDED.avg_rpe_target
+            """,
+            {
+                "d": str(plan_date),
+                "pd": str(plan_date),
+                "wid": wid,
+                "cp": completion_pct,
+                "rpe": actual_rpe,
+                "tgt": target_rpe,
+            },
+        )
+    return {
+        "status": "ok",
+        "plan_date": str(plan_date),
+        "prescribed_sets": prescribed_sets,
+        "sets_done": sets_done,
+        "completion_pct": completion_pct,
+        "avg_rpe_actual": actual_rpe,
+        "avg_rpe_target": target_rpe,
     }
 
 
@@ -1389,36 +1604,8 @@ async def get_briefing() -> dict:
 
 # ── Next Workout ─────────────────────────────────────────────────────────────
 
-_PUSH = {
-    "bench press", "chest press", "push press", "overhead press", "ohp", "incline press",
-    "decline press", "shoulder press", "dumbbell press", "chest fly", "cable fly", "push-up",
-    "dip", "lateral raise", "front raise", "tricep", "skull crusher", "close grip bench",
-    "pushdown", "overhead extension",
-}
-_PULL = {
-    "row", "pull-up", "pullup", "chin-up", "chinup", "lat pulldown", "cable row", "face pull",
-    "rear delt", "shrug", "deadlift", "rdl", "rack pull", "curl", "hammer curl", "preacher",
-    "concentration curl", "reverse curl",
-}
-_LEGS = {
-    "squat", "leg press", "lunge", "split squat", "bulgarian", "step-up", "hip thrust",
-    "glute bridge", "leg curl", "leg extension", "calf raise", "hack squat", "goblet squat",
-    "romanian deadlift", "sumo deadlift",
-}
-_CORE = {"plank", "crunch", "sit-up", "ab wheel", "pallof", "wood chop", "dead bug", "bird dog"}
-
-
-def _muscle_group(exercise: str) -> str:
-    e = exercise.lower()
-    if any(k in e for k in _LEGS):
-        return "legs"
-    if any(k in e for k in _PUSH):
-        return "push"
-    if any(k in e for k in _PULL):
-        return "pull"
-    if any(k in e for k in _CORE):
-        return "core"
-    return "other"
+# `_muscle_group` lives in `shc.metrics` — single source of truth.
+_muscle_group = _mg
 
 
 _WORKOUT_CACHE: dict[str, dict] = {}
@@ -1591,6 +1778,7 @@ async def workout_generate() -> dict:
     conn = get_read_conn()
     try:
         context = build_training_context(conn)
+        state = compute_daily_state(conn)
     finally:
         conn.close()
 
@@ -1625,7 +1813,10 @@ async def workout_generate() -> dict:
         raise HTTPException(status_code=502, detail=f"Claude returned non-JSON: {exc}") from exc
 
     try:
-        validate_plan(plan)
+        validate_plan(plan, state=state)
+    except GateViolation as exc:
+        log.warning("Auto-regulation gate violated: %s", exc)
+        raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=f"Invalid plan: {exc}") from exc
 
@@ -1672,9 +1863,18 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     optionally push it to Hevy as a routine.
 
     This endpoint is the write-path used by the Claude chat interface.
+    Auto-regulation gates from today's `DailyState` are enforced — plans
+    that violate them are rejected with HTTP 409.
     """
+    conn = get_read_conn()
     try:
-        validate_plan(body.plan)
+        state = compute_daily_state(conn)
+    finally:
+        conn.close()
+    try:
+        validate_plan(body.plan, state=state)
+    except GateViolation as exc:
+        raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -7,8 +7,10 @@ Generation happens externally — either through the Claude chat interface
 directly; it only:
 
   1. Loads Obsidian vault research for use in system prompts / chat context.
-  2. Builds the per-request dynamic training context from the live DB.
-  3. Validates plan dicts against the required schema.
+  2. Builds the per-request dynamic training context from the live DB
+     (delegates all numerics to `shc.metrics.compute_daily_state`).
+  3. Validates plan dicts against the schema AND the deterministic
+     auto-regulation gates from `DailyState.gates`.
   4. Saves / loads plans to / from the workout_plans table.
 """
 
@@ -20,6 +22,7 @@ from typing import Any
 
 from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
+from shc.metrics import compute_daily_state, muscle_group
 
 log = logging.getLogger(__name__)
 
@@ -106,79 +109,51 @@ def get_vault_research() -> str:
 
 # ── Training context builder ──────────────────────────────────────────────────
 
-def _muscle_group(exercise: str) -> str:
-    e = exercise.lower()
-    _PUSH = ("press", "fly", "dip", "pushup", "push-up", "tricep", "shoulder", "overhead", "chest")
-    _PULL = ("row", "pull", "curl", "lat", "deadlift", "shrug", "face pull", "rear delt")
-    _LEGS = ("squat", "leg", "lunge", "hip", "glute", "hamstring", "quad", "calf", "rdl", "step-up")
-    _CORE = ("plank", "crunch", "ab ", "core", "oblique", "sit-up", "rotation")
-    if any(k in e for k in _PUSH):
-        return "push"
-    if any(k in e for k in _PULL):
-        return "pull"
-    if any(k in e for k in _LEGS):
-        return "legs"
-    if any(k in e for k in _CORE):
-        return "core"
-    return "other"
-
 
 def build_training_context(conn) -> str:
-    """Build the per-request dynamic context string from the live DB.
+    """Build the per-request dynamic context string for plan generation.
 
-    Args:
-        conn: An open DuckDB read connection.
+    Numeric facts come from `compute_daily_state` (single source of truth).
+    Exercise lists, working weights, and plan-prior history are queried here
+    since they are content the LLM must see verbatim.
 
     Returns:
-        Multi-section text covering readiness, muscle group rest, training
-        history, working weights, and volume trend.
+        Multi-section text covering readiness, gates, muscle group rest,
+        training history, working weights, volume trend, and yesterday's
+        adherence (closed-loop feedback).
     """
-    today = date.today().isoformat()
-    since_7 = (date.today() - timedelta(days=7)).isoformat()
-    since_28 = (date.today() - timedelta(days=28)).isoformat()
-    since_30 = (date.today() - timedelta(days=30)).isoformat()
+    today = date.today()
+    state = compute_daily_state(conn)
+    rec = state["recovery"]
+    sleep = state["sleep"]
+    load = state["training_load"]
+    chk = state["checkin"]
+    readiness = state["readiness"]
+    gates = state["gates"]
+    fresh = state["freshness"]
 
-    rec = conn.execute(
-        "SELECT date, score, hrv, rhr FROM recovery ORDER BY date DESC LIMIT 1"
-    ).fetchone()
-    hrv_base = conn.execute(
-        "SELECT hrv, hrv_28d_avg, hrv_28d_sd FROM v_hrv_baseline_28d ORDER BY date DESC LIMIT 1"
-    ).fetchone()
-    sleep_recent = conn.execute(
-        "SELECT night_date, epoch(ts_out-ts_in)/3600.0 AS hrs FROM sleep ORDER BY night_date DESC LIMIT 7"
-    ).fetchall()
-    sleep_7d_avg = conn.execute(
-        "SELECT AVG(epoch(ts_out-ts_in)/3600.0) FROM sleep WHERE night_date >= $s",
-        {"s": since_7},
-    ).fetchone()
-    rhr_7d = conn.execute(
-        "SELECT AVG(rhr) FROM recovery WHERE date >= $s", {"s": since_7}
-    ).fetchone()
-    scores_7 = conn.execute(
-        "SELECT AVG(score) FROM recovery WHERE date >= $s", {"s": since_7}
-    ).fetchone()
-    scores_28 = conn.execute(
-        "SELECT AVG(score) FROM recovery WHERE date >= $s", {"s": since_28}
-    ).fetchone()
+    # Content-only queries (exercise names, working weights, prefs, prior plan).
     workout_rows = conn.execute(
         """
         SELECT w.started_at::DATE AS day,
                STRING_AGG(DISTINCT ws.exercise, ', ') AS exercises,
                COUNT(*) AS sets,
-               SUM(ws.weight_kg * ws.reps) AS volume_kg
+               SUM(ws.weight_kg * ws.reps) AS volume_kg,
+               AVG(ws.rpe) AS avg_rpe
         FROM workout_sets ws
         JOIN workouts w ON w.id = ws.workout_id
         WHERE ws.is_warmup = FALSE AND w.started_at::DATE >= $since
         GROUP BY day ORDER BY day DESC
         """,
-        {"since": since_30},
+        {"since": (today - timedelta(days=30)).isoformat()},
     ).fetchall()
     ww_rows = conn.execute(
         "SELECT exercise, weight_kg, source FROM working_weights ORDER BY updated_at DESC"
     ).fetchall()
     top_exercises = conn.execute(
         """
-        SELECT ws.exercise, COUNT(*) AS sets, MAX(ws.weight_kg) AS max_kg
+        SELECT ws.exercise, COUNT(*) AS sets, MAX(ws.weight_kg) AS max_kg,
+               AVG(ws.rpe) AS avg_rpe
         FROM workout_sets ws
         JOIN workouts w ON w.id = ws.workout_id
         WHERE ws.is_warmup = FALSE
@@ -186,7 +161,7 @@ def build_training_context(conn) -> str:
           AND ws.weight_kg IS NOT NULL
         GROUP BY ws.exercise ORDER BY sets DESC LIMIT 20
         """,
-        {"since": (date.today() - timedelta(days=90)).isoformat()},
+        {"since": (today - timedelta(days=90)).isoformat()},
     ).fetchall()
     prefs = conn.execute(
         "SELECT exercise, status, notes FROM exercise_preferences WHERE status IN ('no', 'sub')"
@@ -201,48 +176,27 @@ def build_training_context(conn) -> str:
         WHERE ws.is_warmup = FALSE AND w.started_at::DATE >= $since
         GROUP BY week ORDER BY week
         """,
-        {"since": (date.today() - timedelta(days=56)).isoformat()},
+        {"since": (today - timedelta(days=56)).isoformat()},
     ).fetchall()
 
-    # Compute derived values
-    rec_score = rec[1] if rec else None
-    rec_date = str(rec[0]) if rec else None
-    hrv_today = hrv_base[0] if hrv_base else None
-    hrv_avg = hrv_base[1] if hrv_base else None
-    hrv_sd = hrv_base[2] if hrv_base else None
-    hrv_sigma = (
-        round((hrv_today - hrv_avg) / hrv_sd, 2)
-        if (hrv_today and hrv_avg and hrv_sd and hrv_sd > 0)
-        else None
-    )
-    sleep_hrs = round(float(sleep_recent[0][1]), 1) if sleep_recent and sleep_recent[0][1] else None
-    sleep_7d = round(float(sleep_7d_avg[0]), 1) if sleep_7d_avg and sleep_7d_avg[0] else None
-    acwr_acute = float(scores_7[0]) if scores_7 and scores_7[0] else None
-    acwr_chronic = float(scores_28[0]) if scores_28 and scores_28[0] else None
-    acwr = round(acwr_acute / acwr_chronic, 2) if (acwr_acute and acwr_chronic) else None
+    # ── Closed loop: yesterday's plan + adherence ──────────────────────────
+    prior_plan_row = conn.execute(
+        "SELECT date, plan_json FROM workout_plans "
+        "WHERE date < current_date ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    prior_plan: dict | None = None
+    if prior_plan_row:
+        try:
+            prior_plan = json.loads(prior_plan_row[1])
+            prior_plan["_date"] = str(prior_plan_row[0])
+        except (json.JSONDecodeError, TypeError):
+            prior_plan = None
+    adherence_row = conn.execute(
+        "SELECT plan_date, completion_pct, avg_rpe_actual, avg_rpe_target "
+        "FROM plan_adherence ORDER BY date DESC LIMIT 1"
+    ).fetchone()
 
-    data_gap_days = (date.today() - date.fromisoformat(rec_date)).days if rec_date else None
-    data_gap_flag = (
-        f"⚠ WHOOP data is {data_gap_days}d stale — reduce reliance on recovery score"
-        if data_gap_days and data_gap_days > 2
-        else ""
-    )
-
-    group_last: dict[str, str] = {}
-    for row in workout_rows:
-        for ex in (row[1] or "").split(", "):
-            g = _muscle_group(ex)
-            day_str = str(row[0])
-            if g not in group_last or day_str > group_last[g]:
-                group_last[g] = day_str
-    days_since: dict[str, int] = {
-        g: (date.today() - date.fromisoformat(last)).days
-        for g, last in group_last.items()
-    }
-    for g in ("legs", "push", "pull"):
-        if g not in days_since:
-            days_since[g] = 99
-
+    # Volume trend.
     vols = [float(r[2] or 0) for r in vol_rows]
     half = len(vols) // 2
     prior_vol = sum(vols[:half]) / max(half, 1) if half else 0
@@ -254,45 +208,123 @@ def build_training_context(conn) -> str:
         else f"{vol_trend_pct}% (decreasing)"
     )
 
-    lines: list[str] = [f"TODAY: {today}\n"]
+    lines: list[str] = [f"TODAY: {today.isoformat()}\n"]
 
-    lines.append("## READINESS SNAPSHOT")
-    if rec_score is not None:
-        tier = "🟢 GREEN" if rec_score >= 67 else ("🟡 YELLOW" if rec_score >= 34 else "🔴 RED")
-        lines.append(f"- Recovery score: {rec_score:.0f} ({tier}) — measured {rec_date}")
-    else:
-        lines.append("- Recovery score: no data")
-    if hrv_today and hrv_avg and hrv_sigma is not None:
+    # ── Hard gates first — the LLM must respect these ──
+    lines.append("## ⚠ AUTO-REGULATION GATES (HARD CONSTRAINTS)")
+    lines.append(f"- Max intensity: **{gates['max_intensity'].upper()}**")
+    if gates["forbid_muscle_groups"]:
+        lines.append(f"- Forbidden muscle groups: {', '.join(gates['forbid_muscle_groups'])}")
+    if gates["deload_required"]:
+        lines.append(f"- DELOAD WEEK REQUIRED — {gates['deload_reason']}")
+    if gates["hr_zone_shift_bpm"]:
         lines.append(
-            f"- HRV (rMSSD): {hrv_today:.1f}ms · 28d baseline {hrv_avg:.1f}ms ± {hrv_sd:.1f}ms"
-            f" · deviation {hrv_sigma:+.2f}σ"
+            f"- HR zones: shift −{gates['hr_zone_shift_bpm']} bpm "
+            f"(propranolol day; HR-derived kcal ×{gates['kcal_multiplier']})"
         )
-    else:
-        lines.append("- HRV: no data")
-    if sleep_hrs:
-        lines.append(f"- Sleep last night: {sleep_hrs}h · 7d avg {sleep_7d}h")
-    else:
-        lines.append("- Sleep: no data")
-    if acwr:
-        zone = "safe" if 0.8 <= acwr <= 1.3 else ("⚠ HIGH" if acwr > 1.3 else "low")
-        lines.append(f"- ACWR: {acwr} ({zone}) — acute {acwr_acute:.0f} / chronic {acwr_chronic:.0f}")
-    else:
-        lines.append("- ACWR: insufficient data")
-    if rhr_7d and rhr_7d[0]:
-        lines.append(f"- RHR 7d avg: {float(rhr_7d[0]):.0f} bpm")
-    if data_gap_flag:
-        lines.append(f"- {data_gap_flag}")
+    for r in gates["reasons"]:
+        lines.append(f"  · {r}")
+    if not gates["reasons"]:
+        lines.append("  · all clear — no overrides")
 
+    lines.append("\n## READINESS SNAPSHOT")
+    if readiness["score"] is not None:
+        adj = " (β-blocker reweighted)" if readiness["beta_blocker_adjusted"] else ""
+        lines.append(
+            f"- Composite readiness: {readiness['score']:.0f}/100 ({readiness['tier']}){adj}"
+        )
+    if rec["score"] is not None:
+        tier = "🟢 GREEN" if rec["score"] >= 67 else ("🟡 YELLOW" if rec["score"] >= 34 else "🔴 RED")
+        lines.append(f"- WHOOP recovery: {rec['score']:.0f} ({tier}) — {rec['score_date']}")
+    if rec["hrv_sigma"] is not None:
+        lines.append(
+            f"- HRV: {rec['hrv_ms']:.1f}ms · 28d {rec['hrv_baseline_28d']:.1f}±{rec['hrv_sd_28d']:.1f}"
+            f" · deviation {rec['hrv_sigma']:+.2f}σ"
+        )
+    if sleep["last_hours"] is not None:
+        deep = f", deep {sleep['deep_pct_last']*100:.0f}%" if sleep["deep_pct_last"] else ""
+        spo2 = f", SpO₂ {sleep['spo2_avg_last']:.1f}%" if sleep["spo2_avg_last"] else ""
+        avg = f" · 7d avg {sleep['avg_7d']:.1f}h" if sleep["avg_7d"] else ""
+        lines.append(f"- Sleep last night: {sleep['last_hours']:.1f}h{deep}{spo2}{avg}")
+    if load["acwr"] is not None:
+        zone = "safe" if 0.8 <= load["acwr"] <= 1.3 else ("⚠ HIGH" if load["acwr"] > 1.3 else "low")
+        lines.append(
+            f"- ACWR (true Gabbett): {load['acwr']} ({zone}) — "
+            f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_28d']:.1f}"
+        )
+    if rec["rhr_7d_avg"] is not None:
+        lines.append(
+            f"- RHR: 7d avg {rec['rhr_7d_avg']:.0f} bpm "
+            f"(28d {rec['rhr_baseline_28d']:.0f}, {rec['rhr_elevated_pct']:+.1f}%)"
+        )
+    if rec["skin_temp_delta"] is not None:
+        lines.append(f"- Skin temp Δ {rec['skin_temp_delta']:+.2f}°C vs 28d baseline")
+
+    # Daily check-in inputs.
+    chk_parts: list[str] = []
+    if chk["propranolol_taken"] is True:
+        chk_parts.append("propranolol TAKEN")
+    elif chk["propranolol_taken"] is False:
+        chk_parts.append("no propranolol")
+    if chk["soreness_overall"] is not None:
+        chk_parts.append(f"soreness {chk['soreness_overall']}/10")
+    if chk["sleep_quality"] is not None:
+        chk_parts.append(f"sleep quality {chk['sleep_quality']}/10")
+    if chk["body_weight_kg"] is not None:
+        chk_parts.append(f"weight {chk['body_weight_kg']:.1f} kg")
+    if chk["illness_flag"]:
+        chk_parts.append("ILLNESS")
+    if chk["travel_flag"]:
+        chk_parts.append("travel")
+    if chk_parts:
+        lines.append(f"- Daily check-in: {' · '.join(chk_parts)}")
+    if chk["body_weight_trend_4wk"] is not None:
+        lines.append(f"- Body weight trend (4wk): {chk['body_weight_trend_4wk']:+.2f}%")
+    if fresh["gaps"]:
+        for g in fresh["gaps"]:
+            lines.append(f"- ⚠ {g}")
+
+    # ── Closed loop: yesterday's plan vs reality ─────────────────────────
+    if prior_plan or adherence_row:
+        lines.append("\n## YESTERDAY'S PRESCRIPTION → EXECUTION")
+        if prior_plan:
+            rec_obj = prior_plan.get("recommendation", {})
+            lines.append(
+                f"- Prescribed ({prior_plan.get('_date', '?')}): "
+                f"{rec_obj.get('intensity', '?')} intensity, "
+                f"{rec_obj.get('focus', '?')}, target RPE {rec_obj.get('target_rpe', '?')}"
+            )
+        if adherence_row:
+            comp = adherence_row[1]
+            actual_rpe = adherence_row[2]
+            target_rpe = adherence_row[3]
+            lines.append(
+                f"- Adherence: {comp:.0f}% sets completed"
+                if comp is not None else "- Adherence: not yet logged"
+            )
+            if actual_rpe and target_rpe:
+                delta = actual_rpe - target_rpe
+                lines.append(f"- RPE delivered: {actual_rpe:.1f} vs target {target_rpe:.1f} ({delta:+.1f})")
+
+    # Muscle-group rest status.
     lines.append("\n## MUSCLE GROUP REST STATUS")
-    for g, d_val in sorted(days_since.items(), key=lambda x: -x[1]):
-        flag = " ← MOST RESTED" if d_val == max(days_since.values()) else ""
-        lines.append(f"- {g}: {d_val}d since last session{flag}")
+    grp_rest = {
+        "legs": load["days_since_legs"],
+        "push": load["days_since_push"],
+        "pull": load["days_since_pull"],
+    }
+    most = max(grp_rest.values())
+    for g, d_val in sorted(grp_rest.items(), key=lambda x: -x[1]):
+        flag = " ← MOST RESTED" if d_val == most else ""
+        forbid = " ← FORBIDDEN BY GATE" if g in gates["forbid_muscle_groups"] else ""
+        lines.append(f"- {g}: {d_val}d since last session{flag}{forbid}")
 
     lines.append(f"\n## TRAINING HISTORY (last 30 days — {len(workout_rows)} sessions)")
     for row in workout_rows[:14]:
         vol_str = f"{row[3] / 1000:.1f} tonnes" if row[3] else "bw/machine"
+        rpe_str = f" @RPE {row[4]:.1f}" if row[4] else ""
         ex_preview = (row[1] or "")[:120]
-        lines.append(f"- {row[0]}: {row[2]} sets | {vol_str} | {ex_preview}")
+        lines.append(f"- {row[0]}: {row[2]} sets | {vol_str}{rpe_str} | {ex_preview}")
 
     lines.append(f"\n## WORKING WEIGHTS ({len(ww_rows)} exercises on record)")
     for ex, wkg, src in ww_rows[:40]:
@@ -302,13 +334,34 @@ def build_training_context(conn) -> str:
         lines.append(f"  ... and {len(ww_rows) - 40} more")
 
     lines.append("\n## TOP EXERCISES (last 90d by frequency)")
-    for ex, sets, max_kg in top_exercises:
+    for ex, sets, max_kg, avg_rpe in top_exercises:
         lbs = round(max_kg * 2.20462, 1) if max_kg else "bw"
-        lines.append(f"- {ex}: {sets} sets, max {lbs} lbs")
+        rpe_str = f" @RPE {avg_rpe:.1f}" if avg_rpe else ""
+        lines.append(f"- {ex}: {sets} sets, max {lbs} lbs{rpe_str}")
 
     lines.append(f"\n## VOLUME TREND (8-week): {vol_trend_label}")
+    if gates["e1rm_regression_4wk_pct"] is not None:
+        lines.append(
+            f"- e1RM regression on primary lift (4wk): {gates['e1rm_regression_4wk_pct']:+.1f}%"
+        )
 
-    # ── Cardio mix (fat-loss lever) ──────────────────────────────────────
+    # Push:pull balance commentary.
+    if load["push_pull_ratio_28d"] is not None:
+        ratio = load["push_pull_ratio_28d"]
+        if ratio > 1.4:
+            balance_note = f"⚠ PUSH-DOMINANT ({ratio:.2f}) — bias today toward pull"
+        elif ratio < 0.7:
+            balance_note = f"⚠ PULL-DOMINANT ({ratio:.2f}) — bias today toward push"
+        else:
+            balance_note = f"balanced ({ratio:.2f})"
+        lines.append(
+            f"\n## MUSCLE BALANCE (28d sets): "
+            f"push {load['push_sets_28d']} | pull {load['pull_sets_28d']} | "
+            f"legs {load['legs_sets_28d']}"
+        )
+        lines.append(f"- Status: {balance_note}")
+
+    # Cardio mix.
     cardio_rows = conn.execute(
         """
         SELECT modality, SUM(duration_min) AS minutes, COUNT(*) AS sessions, AVG(avg_hr) AS avg_hr
@@ -317,62 +370,17 @@ def build_training_context(conn) -> str:
         GROUP BY modality ORDER BY minutes DESC
         """
     ).fetchall()
-    total_cardio_min = sum(int(r[1] or 0) for r in cardio_rows)
     if cardio_rows:
-        lines.append("\n## CARDIO MIX (last 28 days)")
-        lines.append(f"- Total minutes: {total_cardio_min} ({total_cardio_min // 4}/wk avg)")
+        lines.append(f"\n## CARDIO MIX (last 28 days — {load['cardio_min_28d']} min total, {load['cardio_z2_min_7d']} Z2 min in last 7d)")
         for mod, mins, sess, avg_hr in cardio_rows:
             hr_str = f", avg HR {int(avg_hr)}" if avg_hr else ""
             lines.append(f"- {mod}: {int(mins or 0)} min over {sess} sessions{hr_str}")
     else:
-        lines.append("\n## CARDIO MIX (last 28 days): none logged — fat-loss programming should add Z2 + finisher")
-
-    # ── Push:pull balance (last 4 weeks) ─────────────────────────────────
-    bal_rows = conn.execute(
-        """
-        SELECT ws.exercise, COUNT(*) AS sets
-        FROM workout_sets ws
-        JOIN workouts w ON w.id = ws.workout_id
-        WHERE ws.is_warmup = FALSE
-          AND w.started_at::DATE >= (current_date - INTERVAL '28 days')
-        GROUP BY ws.exercise
-        """
-    ).fetchall()
-    bal: dict[str, int] = {"push": 0, "pull": 0, "legs": 0, "core": 0, "other": 0}
-    for ex, sets in bal_rows:
-        bal[_muscle_group(ex)] += int(sets or 0)
-    push, pull = bal["push"], bal["pull"]
-    if push and pull:
-        ratio = push / pull
-        if ratio > 1.4:
-            balance_note = f"⚠ PUSH-DOMINANT (push:pull = {ratio:.2f}) — bias today toward pull"
-        elif ratio < 0.7:
-            balance_note = f"⚠ PULL-DOMINANT (push:pull = {ratio:.2f}) — bias today toward push"
-        else:
-            balance_note = f"balanced (push:pull = {ratio:.2f})"
         lines.append(
-            f"\n## MUSCLE BALANCE (28d sets): push {push} | pull {pull} | legs {bal['legs']} | core {bal['core']}"
+            "\n## CARDIO MIX (last 28 days): none logged — fat-loss programming should add Z2 + finisher"
         )
-        lines.append(f"- Status: {balance_note}")
 
-    # ── Skin temperature (illness signal) ────────────────────────────────
-    skin = conn.execute(
-        """
-        SELECT skin_temp,
-               (SELECT AVG(skin_temp) FROM recovery WHERE skin_temp IS NOT NULL AND date >= (current_date - INTERVAL '28 days')) AS base
-        FROM recovery WHERE skin_temp IS NOT NULL ORDER BY date DESC LIMIT 1
-        """
-    ).fetchone()
-    if skin and skin[0] is not None and skin[1] is not None:
-        delta = float(skin[0]) - float(skin[1])
-        flag = ""
-        if abs(delta) >= 0.5:
-            flag = " ← ILLNESS POSSIBLE — recommend rest / Z2 only"
-        elif abs(delta) >= 0.3:
-            flag = " (watch)"
-        lines.append(f"\n## SKIN TEMP: {skin[0]:.2f}°C, Δ {delta:+.2f}°C vs 28d baseline{flag}")
-
-    # ── Goals reminder ───────────────────────────────────────────────────
+    # Goals.
     lines.append("\n## GOALS")
     lines.append("- Primary: get stronger (preserve/build lean mass)")
     lines.append("- Secondary: burn fat (body recomposition)")
@@ -386,20 +394,35 @@ def build_training_context(conn) -> str:
     return "\n".join(lines)
 
 
-# ── Validation ────────────────────────────────────────────────────────────────
+# ── Validation + auto-regulation gate ────────────────────────────────────────
 
-def validate_plan(plan: dict[str, Any]) -> bool:
-    """Validate a plan dict against the required schema.
+class GateViolation(ValueError):
+    """Raised when a plan violates a hard auto-regulation gate."""
+
+
+def _exercise_targets_group(exercise: str, group: str) -> bool:
+    return muscle_group(exercise) == group
+
+
+def validate_plan(plan: dict[str, Any], state: dict[str, Any] | None = None) -> bool:
+    """Validate a plan dict against the schema AND the deterministic gates.
+
+    The schema check verifies shape (intensity enum, blocks present, etc.).
+    The gate check verifies the plan respects today's hard auto-regulation
+    constraints — max intensity, forbidden muscle groups, deload requirement.
+    Pass `state` (a `DailyState` dict) to enable gate enforcement; omitting
+    it falls back to schema-only validation for backwards compatibility.
 
     Raises:
-        ValueError: on any schema violation.
+        ValueError: on schema violation.
+        GateViolation: on auto-regulation gate violation.
     """
     if plan.get("readiness_tier") not in {"green", "yellow", "red"}:
         raise ValueError(f"Invalid readiness_tier: {plan.get('readiness_tier')!r}")
     rec = plan.get("recommendation", {})
     if rec.get("intensity") not in {"high", "moderate", "low", "rest"}:
         raise ValueError(
-            f"Invalid intensity: {rec.get('intensity')!r} — must be string enum, not number"
+            f"Invalid intensity: {rec.get('intensity')!r} — must be string enum"
         )
     if not rec.get("focus"):
         raise ValueError("recommendation.focus is empty")
@@ -413,6 +436,37 @@ def validate_plan(plan: dict[str, Any]) -> bool:
         raise ValueError("clinical_notes is empty — must include medication context")
     if not plan.get("vault_insights"):
         raise ValueError("vault_insights is empty — must cite research")
+
+    # Auto-regulation gate enforcement.
+    if state is not None:
+        gates = state.get("gates", {})
+        order = ("rest", "low", "moderate", "high")
+        max_allowed = gates.get("max_intensity", "high")
+        if rec["intensity"] not in order:
+            raise ValueError(f"Invalid intensity: {rec['intensity']!r}")
+        if order.index(rec["intensity"]) > order.index(max_allowed):
+            raise GateViolation(
+                f"Plan intensity {rec['intensity']!r} exceeds gate {max_allowed!r}. "
+                f"Reasons: {'; '.join(gates.get('reasons', [])) or 'see DailyState.gates'}"
+            )
+        forbid = set(gates.get("forbid_muscle_groups", []))
+        if forbid:
+            for block in blocks:
+                for ex in block.get("exercises", []):
+                    g = muscle_group(ex.get("name", ""))
+                    if g in forbid:
+                        raise GateViolation(
+                            f"Exercise {ex.get('name')!r} targets {g}, which is "
+                            f"forbidden today (gate: {sorted(forbid)})."
+                        )
+        if gates.get("deload_required"):
+            # Deload weeks must use moderate-or-lower intensity AND target_rpe <= 7.
+            target_rpe = rec.get("target_rpe", 10)
+            if order.index(rec["intensity"]) > order.index("moderate") or target_rpe > 7:
+                raise GateViolation(
+                    f"Deload required ({gates.get('deload_reason')}) but plan is "
+                    f"{rec['intensity']} @ RPE {target_rpe} — must be ≤moderate @ RPE ≤7."
+                )
     return True
 
 

@@ -9,14 +9,17 @@ then POSTs it to /api/briefing.  This module provides:
   2. build_daily_context() — per-request dynamic health snapshot injected
      into every chat message so Claude always has live data.
   3. store_briefing() — persists a generated briefing dict.
+
+All numeric facts in `build_daily_context` are derived from the canonical
+`shc.metrics.DailyState`. Adding a new metric here means adding it once in
+`shc/metrics.py` and rendering it as text here — never recomputing.
 """
 
 import json
 import logging
-import statistics as _st
-from datetime import date, timedelta
 
-from shc.db.schema import get_read_conn, write_ctx
+from shc.db.schema import write_ctx
+from shc.metrics import compute_daily_state
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +39,9 @@ Male, born May 1986 (39 yo), 6'1" / ~239 lbs.
 - **Fluoxetine 40 mg daily** (SSRI): also suppresses HRV.
 - **Propranolol 10 mg PRN** (beta-blocker for anxiety): when taken, artificially
   lowers RHR and blunts HR response — WHOOP recovery/strain scores are lower than
-  true physiology on those days. RPE > HR.
+  true physiology on those days. RPE > HR. The daily check-in records whether it
+  was taken — when `propranolol_taken=true`, HR zones shift down ~20 bpm and
+  HR-derived kcal estimates under-count by ~25%.
 - **Alvesco** (inhaled corticosteroid, asthma): use before high-intensity sessions;
   monitor for wheeze; SpO2 < 95% is a flag.
 
@@ -44,7 +49,7 @@ Male, born May 1986 (39 yo), 6'1" / ~239 lbs.
 - GAD + OCD (active): psychological stress spikes can suppress HRV/recovery
   independently of physical load.
 - OSA (off CPAP since Apr 2026): sleep quality may be variable; prioritise
-  deep sleep % and total duration over composite scores.
+  deep sleep % (target ≥18%) and SpO2 ≥95% over composite scores.
 - Left shoulder: fully resolved as of Apr 2026 — no restrictions.
 - Forefoot overload risk (bilateral 2nd/3rd metatarsal heads, pickleball);
   gait asymmetry (right heel-strike dominant). Avoid high-impact jumping.
@@ -58,10 +63,13 @@ Male, born May 1986 (39 yo), 6'1" / ~239 lbs.
 ## Coaching principles (always apply)
 1. HRV interpretation: σ deviation from 28d rolling mean. Green ≥ −0.5σ;
    Yellow −1.5 to −0.5σ; Red < −1.5σ.
-2. ACWR safe zone: 0.8–1.3. Above 1.3 → reduce volume. Above 1.5 → rest only.
+2. ACWR safe zone: 0.8–1.3 (true Gabbett — acute training load ÷ chronic
+   load, NOT a recovery-score ratio). Above 1.3 → reduce volume. Above 1.5 → rest only.
 3. Muscle group recovery: 48h minimum, 72h preferred for compound lower body.
 4. Data gaps > 3 days: reduce reliance on that metric, note it explicitly.
 5. Exercise naming: use names from the user's Hevy history, not generic terms.
+6. Auto-regulation gates (in `daily_state.gates`) are HARD constraints — the
+   plan must respect `max_intensity` and `forbid_muscle_groups`.
 """
 
 CHAT_SYSTEM = HEALTH_SYSTEM + """
@@ -80,103 +88,114 @@ request — you always have today's metrics, recent sessions, and working weight
 def build_daily_context(conn) -> str:
     """Build a dynamic daily health + training snapshot from the live DB.
 
-    Injected into the chat system prompt on every request so Claude always has
-    current data without round-tripping to the frontend.
+    All numeric values are pulled from `compute_daily_state` so the chat
+    advisor sees the same readiness score, ACWR, and gates that the dashboard
+    and the workout planner see.
 
     Args:
         conn: An open DuckDB read connection.
     """
-    today = date.today().isoformat()
-    since_7 = (date.today() - timedelta(days=7)).isoformat()
-    since_28 = (date.today() - timedelta(days=28)).isoformat()
+    state = compute_daily_state(conn)
+    rec = state["recovery"]
+    sleep = state["sleep"]
+    load = state["training_load"]
+    chk = state["checkin"]
+    readiness = state["readiness"]
+    gates = state["gates"]
+    fresh = state["freshness"]
 
-    rec = conn.execute(
-        "SELECT date, score, hrv, rhr FROM recovery ORDER BY date DESC LIMIT 1"
-    ).fetchone()
+    lines: list[str] = [f"\n## Live data — {state['as_of']}"]
 
-    hrv_rows = conn.execute(
-        "SELECT hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL ORDER BY date",
-        {"s": since_28},
-    ).fetchall()
-    hrv_vals = [r[0] for r in hrv_rows if r[0]]
-    hrv_baseline = _st.mean(hrv_vals) if len(hrv_vals) >= 3 else None
-    hrv_sd = _st.stdev(hrv_vals) if len(hrv_vals) >= 3 else None
-    hrv_sigma = (
-        round((rec[2] - hrv_baseline) / hrv_sd, 2)
-        if (rec and rec[2] and hrv_baseline and hrv_sd and hrv_sd > 0)
-        else None
-    )
-
-    rec_rows = conn.execute(
-        "SELECT date, score FROM recovery WHERE date >= $s ORDER BY date",
-        {"s": since_28},
-    ).fetchall()
-    since_7_date = date.today() - timedelta(days=7)
-    acute_scores = [r[1] for r in rec_rows if r[0] >= since_7_date and r[1]]
-    chronic_scores = [r[1] for r in rec_rows if r[1]]
-    acwr = None
-    if acute_scores and chronic_scores:
-        acute = 100 - _st.mean(acute_scores)
-        chronic = 100 - _st.mean(chronic_scores)
-        acwr = round(acute / chronic, 2) if chronic > 0 else None
-
-    sleep_rows = conn.execute(
-        "SELECT epoch(ts_out-ts_in)/3600.0 AS hrs FROM sleep "
-        "WHERE night_date >= $s AND ts_in IS NOT NULL AND ts_out IS NOT NULL",
-        {"s": since_7},
-    ).fetchall()
-    sleep_hrs = [r[0] for r in sleep_rows if r[0] and 2 < r[0] < 14]
-    avg_sleep = round(_st.mean(sleep_hrs), 1) if sleep_hrs else None
-
-    last_train = conn.execute(
-        """
-        SELECT w.started_at::DATE AS d, COUNT(*) AS sets,
-               SUM(CASE WHEN ws.weight_kg IS NOT NULL AND ws.reps IS NOT NULL
-                        THEN ws.weight_kg * ws.reps ELSE 0 END) AS vol
-        FROM workout_sets ws
-        JOIN workouts w ON w.id = ws.workout_id
-        WHERE ws.is_warmup = FALSE
-        GROUP BY d ORDER BY d DESC LIMIT 1
-        """
-    ).fetchone()
-
-    ww_rows = conn.execute(
-        "SELECT exercise, weight_kg FROM working_weights ORDER BY updated_at DESC LIMIT 20"
-    ).fetchall()
-
-    lines = [f"\n## Live data — {today}"]
-
-    if rec:
-        score_str = f"{round(rec[1])}" if rec[1] else "—"
-        hrv_str = f"{round(rec[2], 1)} ms" if rec[2] else "—"
-        lines.append(f"Recovery: {score_str}/100 · HRV: {hrv_str} · RHR: {rec[3] or '—'} bpm")
-    else:
-        lines.append("Recovery: no data")
-
-    if hrv_baseline and hrv_sigma is not None:
-        tier = "🟢" if hrv_sigma >= -0.5 else ("🟡" if hrv_sigma >= -1.5 else "🔴")
+    # Readiness composite — single canonical number.
+    if readiness["score"] is not None:
+        tier = readiness["tier"]
+        emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(tier, "")
+        adj = " (β-blocker reweighted)" if readiness["beta_blocker_adjusted"] else ""
         lines.append(
-            f"HRV 28d baseline: {round(hrv_baseline, 1)} ms ± {round(hrv_sd, 1)} ms"
-            f" · deviation: {hrv_sigma:+.2f}σ {tier}"
+            f"Readiness: {readiness['score']:.0f}/100 {emoji} {tier}{adj}"
         )
 
-    if acwr:
-        zone = "safe" if 0.8 <= acwr <= 1.3 else ("⚠ HIGH" if acwr > 1.3 else "low")
-        lines.append(f"ACWR: {acwr} ({zone})")
-
-    if avg_sleep:
-        lines.append(f"Sleep 7d avg: {avg_sleep}h")
-
-    if last_train and last_train[0]:
-        days_ago = (date.today() - last_train[0]).days
-        vol_str = f"{round(last_train[2] / 1000, 1)}t vol" if last_train[2] else "bw"
-        lines.append(f"Last session: {days_ago}d ago · {last_train[1]} sets · {vol_str}")
-
-    if ww_rows:
-        ww_str = " | ".join(
-            f"{ex}: {round(wkg * 2.20462, 0):.0f} lbs" for ex, wkg in ww_rows[:10]
+    # Recovery vitals.
+    if rec["score"] is not None:
+        hrv_str = f"{rec['hrv_ms']:.1f} ms" if rec["hrv_ms"] else "—"
+        rhr_str = f"{rec['rhr']} bpm" if rec["rhr"] else "—"
+        lines.append(f"WHOOP recovery: {rec['score']:.0f}/100 · HRV {hrv_str} · RHR {rhr_str}")
+    if rec["hrv_sigma"] is not None:
+        lines.append(
+            f"HRV deviation: {rec['hrv_sigma']:+.2f}σ "
+            f"(28d baseline {rec['hrv_baseline_28d']:.1f} ± {rec['hrv_sd_28d']:.1f} ms)"
         )
-        lines.append(f"Working weights (top 10): {ww_str}")
+    if rec["skin_temp_delta"] is not None:
+        lines.append(f"Skin temp: {rec['skin_temp']:.2f}°C (Δ {rec['skin_temp_delta']:+.2f}°C vs 28d)")
+
+    # Sleep.
+    if sleep["last_hours"] is not None:
+        deep = f", deep {sleep['deep_pct_last']*100:.0f}%" if sleep["deep_pct_last"] else ""
+        spo2 = f", SpO₂ {sleep['spo2_avg_last']:.1f}%" if sleep["spo2_avg_last"] else ""
+        avg = f" · 7d avg {sleep['avg_7d']:.1f}h" if sleep["avg_7d"] else ""
+        lines.append(f"Sleep: {sleep['last_hours']:.1f}h{deep}{spo2}{avg}")
+
+    # Training load — TRUE ACWR from session strain.
+    if load["acwr"] is not None:
+        zone = "safe" if 0.8 <= load["acwr"] <= 1.3 else ("⚠ HIGH" if load["acwr"] > 1.3 else "low")
+        lines.append(
+            f"ACWR (true Gabbett): {load['acwr']} ({zone}) — "
+            f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_28d']:.1f}"
+        )
+    if load["last_session_date"]:
+        lines.append(
+            f"Last session: {load['days_since_last']}d ago "
+            f"(legs {load['days_since_legs']}d, push {load['days_since_push']}d, pull {load['days_since_pull']}d)"
+        )
+    if load["push_pull_ratio_28d"] is not None:
+        lines.append(
+            f"28d sets: push {load['push_sets_28d']} | pull {load['pull_sets_28d']} | "
+            f"legs {load['legs_sets_28d']} (P:P ratio {load['push_pull_ratio_28d']:.2f})"
+        )
+
+    # Daily check-in (only what's filled in).
+    chk_parts: list[str] = []
+    if chk["propranolol_taken"] is True:
+        chk_parts.append("propranolol TAKEN today")
+    elif chk["propranolol_taken"] is False:
+        chk_parts.append("no propranolol today")
+    if chk["soreness_overall"] is not None:
+        chk_parts.append(f"soreness {chk['soreness_overall']}/10")
+    if chk["sleep_quality"] is not None:
+        chk_parts.append(f"sleep quality {chk['sleep_quality']}/10")
+    if chk["energy"] is not None:
+        chk_parts.append(f"energy {chk['energy']}/10")
+    if chk["body_weight_kg"] is not None:
+        chk_parts.append(f"weight {chk['body_weight_kg']:.1f} kg")
+    if chk["illness_flag"]:
+        chk_parts.append("ILLNESS flag")
+    if chk["travel_flag"]:
+        chk_parts.append("travel flag")
+    if chk_parts:
+        lines.append(f"Today's check-in: {' · '.join(chk_parts)}")
+    if chk["body_weight_trend_4wk"] is not None:
+        lines.append(f"Body weight trend (4wk): {chk['body_weight_trend_4wk']:+.2f}%")
+
+    # Auto-regulation gates — surface to the LLM so it knows the constraints.
+    if gates["reasons"]:
+        lines.append("\n## AUTO-REG GATES (must respect)")
+        lines.append(f"Max intensity allowed: {gates['max_intensity'].upper()}")
+        if gates["forbid_muscle_groups"]:
+            lines.append(f"Forbidden muscle groups today: {', '.join(gates['forbid_muscle_groups'])}")
+        if gates["deload_required"]:
+            lines.append(f"DELOAD WEEK REQUIRED: {gates['deload_reason']}")
+        if gates["hr_zone_shift_bpm"]:
+            lines.append(
+                f"HR zones: shift −{gates['hr_zone_shift_bpm']} bpm (propranolol day)"
+            )
+        for r in gates["reasons"]:
+            lines.append(f"- {r}")
+
+    # Data gaps.
+    if fresh["gaps"]:
+        lines.append("\n## DATA GAPS")
+        for g in fresh["gaps"]:
+            lines.append(f"- {g}")
 
     return "\n".join(lines)
 
