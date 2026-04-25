@@ -25,9 +25,14 @@ class HostOriginMiddleware(BaseHTTPMiddleware):
 
         if request.method not in _SAFE_METHODS:
             origin = request.headers.get("origin", "")
-            allowed_origins = {settings.frontend_origin, f"http://{expected_host}"}
-            if origin and origin not in allowed_origins:
-                log.warning("rejected request with Origin: %s", origin)
-                return Response("Forbidden", status_code=403)
+            if origin:
+                # Allow any localhost / 127.0.0.1 origin — the dev preview server
+                # uses a random port, so port-exact matching would block it.
+                # DNS-rebinding protection is satisfied by requiring localhost/127.0.0.1.
+                from urllib.parse import urlparse
+                parsed = urlparse(origin)
+                if parsed.hostname not in ("localhost", "127.0.0.1"):
+                    log.warning("rejected request with Origin: %s", origin)
+                    return Response("Forbidden", status_code=403)
 
         return await call_next(request)  # type: ignore[arg-type]
