@@ -158,11 +158,7 @@ export function CommandBriefing() {
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={scrollToPlan}
-          className="shrink-0 px-3 py-2 rounded-sm border border-[var(--text-primary)] text-[12px] font-medium hover:bg-[var(--text-primary)] hover:text-[var(--surface-0)] transition-colors"
-        >
+        <button type="button" onClick={scrollToPlan} className="btn btn-secondary shrink-0">
           Today's plan ↓
         </button>
       </div>

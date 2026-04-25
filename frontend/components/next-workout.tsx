@@ -509,17 +509,10 @@ export function NextWorkoutPane() {
           {/* Step 1 — copy prompt for Claude Code */}
           <button
             onClick={handleCopyPrompt}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-[11.5px] font-semibold transition-all"
-            style={{
-              background: copied
-                ? "var(--positive-soft)"
-                : "oklch(0.72 0.12 250 / 0.16)",
-              border: `1px solid ${copied ? "oklch(0.72 0.18 145 / 0.4)" : "oklch(0.72 0.12 250 / 0.5)"}`,
-              color: copied ? "var(--positive)" : "var(--chart-line)",
-            }}
+            className={copied ? "btn btn-primary" : "btn btn-secondary"}
             title="Step 1 — copy prompt, paste into Claude Code to generate today's plan"
           >
-            <span className="text-[9px] font-bold opacity-60 mr-0.5">1</span>
+            <span className="btn-step">1</span>
             {copied ? "✓ Prompt copied" : "✦ Copy CC prompt"}
           </button>
 
@@ -527,24 +520,14 @@ export function NextWorkoutPane() {
           <button
             onClick={handleSync}
             disabled={sync.kind === "syncing"}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-[11.5px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{
-              background: sync.kind === "ok"
-                ? "var(--positive-soft)"
-                : sync.kind === "err"
-                  ? "oklch(0.65 0.22 25 / 0.1)"
-                  : "oklch(0.75 0.18 75 / 0.12)",
-              border: `1px solid ${sync.kind === "ok" ? "oklch(0.72 0.18 145 / 0.4)" : sync.kind === "err" ? "oklch(0.65 0.22 25 / 0.35)" : "oklch(0.75 0.18 75 / 0.4)"}`,
-              color: sync.kind === "ok"
-                ? "var(--positive)"
-                : sync.kind === "err"
-                  ? "var(--negative)"
-                  : "var(--neutral)",
-            }}
+            className={sync.kind === "ok" ? "btn btn-primary" : "btn btn-secondary"}
             title="Step 2 — pull latest WHOOP + Hevy data and refresh the dashboard"
           >
-            <span className="text-[9px] font-bold opacity-60 mr-0.5">2</span>
-            <span className={sync.kind === "syncing" ? "animate-spin inline-block" : ""}>
+            <span className="btn-step">2</span>
+            <span
+              className={sync.kind === "syncing" ? "animate-spin inline-block" : ""}
+              style={sync.kind === "err" ? { color: "var(--negative)" } : undefined}
+            >
               {sync.kind === "ok" ? "✓" : sync.kind === "err" ? "✗" : "↻"}
             </span>
             {sync.kind === "syncing" ? "Syncing…" : sync.kind === "ok" ? "Synced" : sync.kind === "err" ? "Failed" : "Sync"}
@@ -554,15 +537,10 @@ export function NextWorkoutPane() {
           <button
             onClick={handlePushHevy}
             disabled={push.kind === "pushing" || !data}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-[var(--r-sm)] text-[11.5px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{
-              background: push.kind === "ok" ? "var(--positive-soft)" : "oklch(0.72 0.18 145 / 0.12)",
-              border: `1px solid ${push.kind === "ok" ? "oklch(0.72 0.18 145 / 0.6)" : "oklch(0.72 0.18 145 / 0.35)"}`,
-              color: push.kind === "ok" ? "var(--positive)" : "oklch(0.72 0.18 145 / 1)",
-            }}
+            className={push.kind === "ok" ? "btn btn-primary" : "btn btn-secondary"}
             title="Step 3 — push today's plan to Hevy as a routine"
           >
-            <span className="text-[9px] font-bold opacity-60 mr-0.5">3</span>
+            <span className="btn-step">3</span>
             <span className={push.kind === "pushing" ? "animate-spin inline-block" : ""}>
               {push.kind === "pushing" ? "⟳" : push.kind === "ok" ? "✓" : "→"}
             </span>
@@ -573,12 +551,8 @@ export function NextWorkoutPane() {
           <button
             onClick={handleDiscard}
             disabled={isFetching || !data}
-            className="flex items-center px-2.5 py-2 rounded-[var(--r-sm)] text-[11px] font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--hairline)",
-              color: "var(--text-faint)",
-            }}
+            className="btn btn-ghost"
+            style={{ padding: "8px 10px" }}
             title="Delete today's plan"
           >
             ✕

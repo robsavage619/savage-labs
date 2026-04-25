@@ -53,8 +53,9 @@
   --r-xl: 18px;
 
   /* ── Shadows ────────────────────────────── */
-  --shadow-card: 0 1px 0 oklch(1 0 0 / 0.02) inset, 0 8px 24px -12px oklch(0 0 0 / 0.5);
-  --shadow-pop:  0 12px 48px -12px oklch(0 0 0 / 0.6);
+  --shadow-card:       inset 0 1px 0 oklch(1 0 0 / 0.06), 0 1px 2px oklch(0 0 0 / 0.4), 0 8px 24px -12px oklch(0 0 0 / 0.5);
+  --shadow-card-hover: inset 0 1px 0 oklch(1 0 0 / 0.08), 0 2px 4px oklch(0 0 0 / 0.5), 0 14px 36px -10px oklch(0 0 0 / 0.6);
+  --shadow-pop:        0 12px 48px -12px oklch(0 0 0 / 0.6);
 }
 
 * { box-sizing: border-box; }
@@ -65,7 +66,8 @@ html {
   background: var(--bg);
   color: var(--foreground);
   font-family: var(--font-geist-sans, system-ui, sans-serif);
-  font-feature-settings: "ss01", "cv11";
+  font-feature-settings: "ss01", "cv11", "tnum";
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   letter-spacing: -0.005em;
 }
@@ -122,11 +124,68 @@ html {
   transition:
     border-color 180ms ease,
     transform 180ms ease,
+    box-shadow 180ms ease,
     background 180ms ease;
 }
 .shc-card:hover {
   border-color: var(--hairline-strong);
   transform: translateY(-1px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+/* ── Button system (3 variants) ──────────── */
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: var(--r-sm);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
+    user-select: none;
+  }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn:not(:disabled):active { transform: translateY(0.5px); }
+
+  .btn-primary {
+    background: var(--positive);
+    color: oklch(0.12 0 0);
+    border-color: var(--positive);
+  }
+  .btn-primary:not(:disabled):hover {
+    background: oklch(0.78 0.18 145);
+    border-color: oklch(0.78 0.18 145);
+  }
+
+  .btn-secondary {
+    background: oklch(1 0 0 / 0.025);
+    border-color: var(--hairline-strong);
+    color: var(--text-primary);
+  }
+  .btn-secondary:not(:disabled):hover {
+    background: oklch(1 0 0 / 0.05);
+    border-color: oklch(1 0 0 / 0.18);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--hairline);
+    color: var(--text-faint);
+  }
+  .btn-ghost:not(:disabled):hover {
+    background: oklch(1 0 0 / 0.03);
+    border-color: var(--hairline-strong);
+    color: var(--text-muted);
+  }
+
+  .btn-step { font-size: 9px; font-weight: 700; opacity: 0.55; margin-right: 2px; }
 }
 
 /* ── Scrollbar ───────────────────────────── */
