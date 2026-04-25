@@ -165,7 +165,9 @@ function VO2MaxPanel() {
             </p>
           )}
           <p className="text-[10px] text-[var(--text-faint)] leading-snug">
-            Uth-Sørensen formula: 15.3 × 181 / RHR. Propranolol PRN suppresses RHR → values are floor estimates on dosing days.
+            {latest && (latest as any).source === "apple_watch"
+              ? "Direct Apple Watch measurement (cardiorespiratory fitness test)."
+              : "Uth-Sørensen: 15.3 × HRmax/RHR · HRmax = 208 − (0.7 × age) = 180.7 (Tanaka). Propranolol PRN suppresses RHR → floor estimate on dosing days."}
           </p>
           <ResponsiveContainer width="100%" height={80}>
             <ComposedChart data={formatted} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>

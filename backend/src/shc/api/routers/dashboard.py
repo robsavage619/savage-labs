@@ -1151,16 +1151,37 @@ async def body_trend() -> list[dict]:
 
 @router.get("/body/vo2max")
 async def body_vo2max() -> list[dict]:
-    """Estimate VO2 max from WHOOP RHR using the Uth-Sørensen formula.
+    """VO2 max time series.
 
-    VO2max ≈ 15.3 × HRmax / HRrest  (Uth et al., 2004)
-    HRmax = 220 − 39 (Rob's age) = 181 bpm.
-    Note: propranolol PRN blunts HRmax → treat values as floor estimates
-    on days the beta-blocker was taken.
+    Priority order:
+    1. Direct Apple Watch readings (HKQuantityTypeIdentifierVO2Max) from measurements table.
+    2. Uth-Sørensen estimate from WHOOP RHR: VO2max ≈ 15.3 × HRmax / HRrest
+       HRmax = 208 − (0.7 × 39) = 180.7 bpm  (Tanaka et al., 2001 — more accurate than 220−age).
+
+    Propranolol PRN blunts resting HR → estimated values are floor estimates on dosing days.
     """
-    HR_MAX = 181  # 220 - 39
+    AGE = 39
+    HR_MAX = round(208 - 0.7 * AGE, 1)  # Tanaka formula: 180.7 for age 39
     conn = get_read_conn()
     try:
+        # Check for direct Apple Health VO2Max readings
+        apple_rows = conn.execute(
+            """
+            SELECT ts::DATE AS day, AVG(value_num) AS vo2max
+            FROM measurements
+            WHERE metric = 'vo2_max' AND value_num IS NOT NULL AND value_num > 20
+            GROUP BY day
+            ORDER BY day
+            """
+        ).fetchall()
+
+        if apple_rows:
+            return [
+                {"date": str(r[0]), "vo2max": round(float(r[1]), 1), "source": "apple_watch"}
+                for r in apple_rows if r[1]
+            ]
+
+        # Fall back to Uth-Sørensen estimation from WHOOP RHR
         rows = conn.execute(
             """
             SELECT date, AVG(rhr) AS rhr
@@ -1173,7 +1194,7 @@ async def body_vo2max() -> list[dict]:
     finally:
         conn.close()
     return [
-        {"date": str(r[0]), "vo2max": round(15.3 * HR_MAX / r[1], 1)}
+        {"date": str(r[0]), "vo2max": round(15.3 * HR_MAX / r[1], 1), "source": "estimated"}
         for r in rows
         if r[1]
     ]
