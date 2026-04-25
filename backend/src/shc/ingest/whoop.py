@@ -195,11 +195,110 @@ async def sync_sleep() -> int:
     return len(records)
 
 
+_SPORT_NAMES: dict[int, str] = {
+    -1: "activity",
+    0: "running",
+    1: "cycling",
+    16: "baseball",
+    17: "basketball",
+    18: "rowing",
+    19: "fencing",
+    20: "field hockey",
+    21: "football",
+    22: "golf",
+    24: "ice hockey",
+    25: "lacrosse",
+    27: "martial arts",
+    28: "mountain biking",
+    29: "obstacle course racing",
+    30: "powerlifting",
+    31: "rock climbing",
+    32: "rowing",
+    33: "rugby",
+    34: "skiing",
+    35: "snowboarding",
+    36: "soccer",
+    37: "softball",
+    38: "squash",
+    39: "swimming",
+    40: "tennis",
+    41: "track & field",
+    42: "volleyball",
+    43: "water polo",
+    44: "wrestling",
+    45: "yoga",
+    47: "weightlifting",
+    48: "cross country skiing",
+    49: "functional fitness",
+    50: "duathlon",
+    51: "gymnastics",
+    52: "hiking/rucking",
+    53: "horseback riding",
+    55: "triathlon",
+    56: "walking",
+    57: "surfing",
+    58: "elliptical",
+    59: "stairmaster",
+    63: "meditation",
+    64: "other",
+    65: "pickleball",
+    66: "padel",
+    67: "boxing",
+    68: "dance",
+    69: "pilates",
+    70: "kickboxing",
+    71: "pickleball",
+    101: "pickleball",
+    126: "pickleball",
+}
+
+
+async def sync_workout() -> int:
+    """Fetch WHOOP workout activities and upsert into the workouts table."""
+    records = await _paginate("/v2/activity/workout")
+    async with write_ctx() as conn:
+        for r in records:
+            score = r.get("score") or {}
+            sport_id = r.get("sport_id", -1)
+            kind = _SPORT_NAMES.get(sport_id, f"sport_{sport_id}")
+            kcal_kj = score.get("kilojoule")
+            kcal = round(kcal_kj / 4.184, 1) if kcal_kj else None
+            row = {
+                "id": f"whoop_w_{r['id']}",
+                "source": "whoop",
+                "started_at": r.get("start"),
+                "ended_at": r.get("end"),
+                "kind": kind,
+                "strain": score.get("strain"),
+                "avg_hr": score.get("average_heart_rate"),
+                "max_hr": score.get("max_heart_rate"),
+                "kcal": kcal,
+                "notes": None,
+                "content_hash": _hash(r),
+            }
+            conn.execute(
+                """
+                INSERT INTO workouts (id, source, started_at, ended_at, kind, strain,
+                                      avg_hr, max_hr, kcal, notes, content_hash)
+                VALUES ($id, $source, $started_at, $ended_at, $kind, $strain,
+                        $avg_hr, $max_hr, $kcal, $notes, $content_hash)
+                ON CONFLICT (id) DO UPDATE SET
+                    kind = EXCLUDED.kind, strain = EXCLUDED.strain,
+                    avg_hr = EXCLUDED.avg_hr, max_hr = EXCLUDED.max_hr,
+                    kcal = EXCLUDED.kcal, content_hash = EXCLUDED.content_hash
+                """,
+                row,
+            )
+    log.info("synced %d WHOOP workout records", len(records))
+    return len(records)
+
+
 async def sync_all() -> None:
     """Full sync — called by APScheduler every 30 min."""
     try:
         await sync_recovery()
         await sync_sleep()
+        await sync_workout()
         async with write_ctx() as conn:
             conn.execute(
                 "INSERT INTO oauth_state (source, last_sync_at, needs_reauth) "

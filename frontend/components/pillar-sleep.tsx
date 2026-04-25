@@ -13,11 +13,22 @@ interface Stages {
 
 function parseStages(raw: string | null): Stages {
   if (!raw) return {};
+  let obj: Record<string, unknown>;
   try {
-    return JSON.parse(raw.replace(/'/g, '"'));
+    obj = JSON.parse(raw.replace(/'/g, '"'));
   } catch {
     return {};
   }
+  // Normalized format
+  if ("deep_min" in obj) return obj as Stages;
+  // Raw WHOOP millisecond format
+  const ms = (k: string) => typeof obj[k] === "number" ? Math.round((obj[k] as number) / 60000) : 0;
+  return {
+    deep_min: ms("total_slow_wave_sleep_time_milli"),
+    rem_min: ms("total_rem_sleep_time_milli"),
+    light_min: ms("total_light_sleep_time_milli"),
+    awake_min: ms("total_awake_time_milli"),
+  };
 }
 
 const STAGE_COLOR = {
