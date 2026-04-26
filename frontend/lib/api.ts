@@ -98,6 +98,17 @@ export interface PersonalBests {
   longest_sleep: { date: string; value: number }[];
 }
 
+export interface MomentumWeek {
+  recovery_avg: number | null;
+  sleep_avg_h: number | null;
+  sessions: number;
+}
+
+export interface MomentumData {
+  this_week: MomentumWeek;
+  last_week: MomentumWeek;
+}
+
 export interface HeatmapDay {
   date: string;
   intensity: number;
@@ -406,6 +417,7 @@ export const api = {
   insights: () => get<Insight[]>("/api/insights"),
   weekSummary: () => get<WeekDay[]>("/api/week/summary"),
   personalBests: () => get<PersonalBests>("/api/personal-bests"),
+  momentum: () => get<MomentumData>("/api/momentum"),
   trainingLastSession: () => get<LastSession>("/api/training/last-session"),
   trainingTopExercises: (n = 10) => get<TopExercise[]>(`/api/training/top-exercises?n=${n}`),
   trainingOverloadSignal: () => get<OverloadSignal>("/api/training/overload-signal"),

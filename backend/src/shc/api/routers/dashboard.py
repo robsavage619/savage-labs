@@ -496,6 +496,57 @@ async def stats_summary() -> dict:
     }
 
 
+@router.get("/momentum")
+async def momentum() -> dict:
+    """This-week vs last-week comparison: avg recovery, avg sleep, training sessions."""
+    today = date.today()
+    this_start = today - timedelta(days=6)
+    last_start = today - timedelta(days=13)
+    last_end = today - timedelta(days=7)
+    conn = get_read_conn()
+    try:
+        rec_rows = conn.execute(
+            "SELECT date, score FROM recovery WHERE date >= $since ORDER BY date",
+            {"since": last_start.isoformat()},
+        ).fetchall()
+        sleep_rows = conn.execute(
+            "SELECT night_date, epoch(ts_out - ts_in) / 3600.0 AS hours "
+            "FROM sleep WHERE night_date >= $since ORDER BY night_date",
+            {"since": last_start.isoformat()},
+        ).fetchall()
+        session_rows = conn.execute(
+            "SELECT started_at::DATE AS d FROM workouts "
+            "WHERE started_at::DATE >= $since "
+            "GROUP BY d ORDER BY d",
+            {"since": last_start.isoformat()},
+        ).fetchall()
+    finally:
+        conn.close()
+
+    def _avg(vals: list[float]) -> float | None:
+        return sum(vals) / len(vals) if vals else None
+
+    rec_this = [r[1] for r in rec_rows if r[0] >= this_start and r[1] is not None]
+    rec_last = [r[1] for r in rec_rows if last_start <= r[0] <= last_end and r[1] is not None]
+    slp_this = [float(r[1]) for r in sleep_rows if r[0] >= this_start and r[1] is not None]
+    slp_last = [float(r[1]) for r in sleep_rows if last_start <= r[0] <= last_end and r[1] is not None]
+    ses_this = len([r for r in session_rows if r[0] >= this_start])
+    ses_last = len([r for r in session_rows if last_start <= r[0] <= last_end])
+
+    return {
+        "this_week": {
+            "recovery_avg": round(_avg(rec_this), 1) if _avg(rec_this) is not None else None,
+            "sleep_avg_h": round(_avg(slp_this), 1) if _avg(slp_this) is not None else None,
+            "sessions": ses_this,
+        },
+        "last_week": {
+            "recovery_avg": round(_avg(rec_last), 1) if _avg(rec_last) is not None else None,
+            "sleep_avg_h": round(_avg(slp_last), 1) if _avg(slp_last) is not None else None,
+            "sessions": ses_last,
+        },
+    }
+
+
 @router.get("/insights")
 async def insights() -> list[dict]:
     """Auto-derived coach-style observations from the last 90 days."""
