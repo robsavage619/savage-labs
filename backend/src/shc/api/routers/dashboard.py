@@ -2272,6 +2272,58 @@ async def submit_briefing(body: BriefingSubmission) -> dict:
     return {"status": "ok"}
 
 
+# ── Health story (chat-driven narrative briefing) ────────────────────────────
+
+class HealthStorySubmission(BaseModel):
+    narrative: str
+    sources: list[str] = []
+    model: str | None = None
+
+
+@router.get("/health-story")
+async def get_health_story() -> dict:
+    """Return the latest persisted narrative health story."""
+    conn = get_read_conn()
+    try:
+        row = conn.execute(
+            "SELECT story_date, generated_at, model, narrative, sources "
+            "FROM ai_health_story ORDER BY story_date DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {}
+    return {
+        "story_date": str(row[0]),
+        "generated_at": str(row[1]),
+        "model": row[2],
+        "narrative": row[3],
+        "sources": json.loads(row[4]) if row[4] else [],
+    }
+
+
+@router.post("/health-story")
+async def post_health_story(body: HealthStorySubmission) -> dict:
+    """Accept a Claude-generated narrative health story and persist it."""
+    if not body.narrative.strip():
+        raise HTTPException(status_code=422, detail="narrative is empty")
+    today = date.today().isoformat()
+    async with write_ctx() as conn:
+        conn.execute(
+            """
+            INSERT INTO ai_health_story (story_date, generated_at, model, narrative, sources)
+            VALUES ($d, now(), $m, $n, $s)
+            ON CONFLICT (story_date) DO UPDATE SET
+                generated_at = now(),
+                model = EXCLUDED.model,
+                narrative = EXCLUDED.narrative,
+                sources = EXCLUDED.sources
+            """,
+            {"d": today, "m": body.model, "n": body.narrative, "s": json.dumps(body.sources)},
+        )
+    return {"status": "ok", "story_date": today}
+
+
 # ── Lift progression ──────────────────────────────────────────────────────────
 
 @router.get("/training/progression")
