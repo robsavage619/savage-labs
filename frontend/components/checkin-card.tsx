@@ -21,6 +21,7 @@ export function CheckinCard() {
   const [sleepQ, setSleepQ] = useState<number | null>(null);
   const [illness, setIllness] = useState<boolean>(false);
   const [travel, setTravel] = useState<boolean>(false);
+  const [editing, setEditing] = useState<boolean>(false);
 
   useEffect(() => {
     const t = today.data;
@@ -52,6 +53,26 @@ export function CheckinCard() {
     const v = parseFloat(weightLbs);
     if (!Number.isFinite(v) || v <= 0) return;
     send({ body_weight_kg: v / 2.20462 });
+  }
+
+  const complete =
+    propranolol !== null &&
+    weightLbs.trim() !== "" &&
+    soreness !== null &&
+    sleepQ !== null;
+
+  if (complete && !editing) {
+    return (
+      <CheckinLogged
+        propranolol={propranolol}
+        weightLbs={weightLbs}
+        soreness={soreness}
+        sleepQ={sleepQ}
+        illness={illness}
+        travel={travel}
+        onEdit={() => setEditing(true)}
+      />
+    );
   }
 
   return (
@@ -124,6 +145,85 @@ export function CheckinCard() {
           {submit.error instanceof Error ? submit.error.message : "save failed"}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function CheckinLogged({
+  propranolol,
+  weightLbs,
+  soreness,
+  sleepQ,
+  illness,
+  travel,
+  onEdit,
+}: {
+  propranolol: boolean | null;
+  weightLbs: string;
+  soreness: number | null;
+  sleepQ: number | null;
+  illness: boolean;
+  travel: boolean;
+  onEdit: () => void;
+}) {
+  const stats: { label: string; value: string }[] = [
+    { label: "Propranolol", value: propranolol ? "Yes" : "No" },
+    { label: "Weight", value: `${weightLbs} lbs` },
+    { label: "Soreness", value: `${soreness}/10` },
+    { label: "Sleep", value: `${sleepQ}/10` },
+  ];
+  const flags: string[] = [];
+  if (illness) flags.push("Sick");
+  if (travel) flags.push("Traveling");
+
+  return (
+    <div className="shc-card shc-enter p-4 space-y-3">
+      <div className="flex items-baseline justify-between">
+        <Eyebrow>Today's check-in</Eyebrow>
+        <button
+          type="button"
+          onClick={onEdit}
+          className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+        >
+          Edit
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span
+          className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold"
+          style={{ background: "var(--positive)", color: "var(--bg)" }}
+        >
+          ✓
+        </span>
+        <span className="text-[12.5px] font-medium text-[var(--text-primary)]">
+          Check-in logged
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+        {stats.map((s) => (
+          <div key={s.label} className="flex items-baseline justify-between">
+            <span className="text-[10.5px] text-[var(--text-muted)]">{s.label}</span>
+            <span className="text-[11.5px] tabular-nums text-[var(--text-primary)]">
+              {s.value}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {flags.length > 0 && (
+        <div className="flex gap-1.5 pt-1">
+          {flags.map((f) => (
+            <span
+              key={f}
+              className="text-[10px] px-2 py-0.5 rounded-full border border-[var(--negative)] text-[var(--negative)]"
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
