@@ -142,9 +142,22 @@ export function PillarSleep() {
             tone={spo2Last == null ? "neutral" : spo2Last >= 95 ? "positive" : spo2Last >= 90 ? "neutral" : "negative"}
           />
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Consist.</p>
-          <Metric value={consistencyLabel} size="md" tone={consistencyTone} />
+          <p
+            className="text-[13px] font-medium leading-tight tracking-tight"
+            style={{
+              color:
+                consistencyTone === "positive"
+                  ? "var(--positive)"
+                  : consistencyTone === "negative"
+                  ? "var(--negative)"
+                  : "var(--text-primary)",
+            }}
+            title={consistencyLabel}
+          >
+            {consistencyLabel}
+          </p>
           {consistency != null && (
             <p className="text-[10px] text-[var(--text-muted)] tabular-nums mt-0.5">σ {consistency.toFixed(2)}h</p>
           )}
