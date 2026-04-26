@@ -8,12 +8,8 @@ import { Eyebrow } from "@/components/ui/metric";
 /**
  * Daily check-in card — drives the deterministic auto-regulation gates.
  *
- * Replaces the dead "Goals" card. The four highest-leverage inputs:
- *   propranolol_taken (β-blocker correction), body_weight_kg, soreness_overall,
- *   sleep_quality. Plus illness/travel toggles for explicit overrides.
- *
- * Updates land in /api/checkin and immediately reshape today's
- * DailyState (readiness composite + gates).
+ * Stacked layout with sliders for 1–10 ratings (replaces 10-button rows),
+ * pill toggle for propranolol, and inline state pills for sick/travel.
  */
 export function CheckinCard() {
   const qc = useQueryClient();
@@ -31,7 +27,7 @@ export function CheckinCard() {
     if (!t) return;
     setPropranolol(t.propranolol_taken ?? null);
     setWeightLbs(
-      t.body_weight_kg != null ? (t.body_weight_kg * 2.20462).toFixed(1) : "",
+      t.body_weight_kg != null ? Math.round(t.body_weight_kg * 2.20462).toString() : "",
     );
     setSoreness(t.soreness_overall ?? null);
     setSleepQ(t.sleep_quality_1_10 ?? null);
@@ -59,7 +55,7 @@ export function CheckinCard() {
   }
 
   return (
-    <div className="shc-card shc-enter p-4 space-y-3">
+    <div className="shc-card shc-enter p-4 space-y-4">
       <div className="flex items-baseline justify-between">
         <Eyebrow>Today's check-in</Eyebrow>
         {submit.isPending ? (
@@ -69,53 +65,57 @@ export function CheckinCard() {
         ) : null}
       </div>
 
-      {/* Propranolol — most important input for β-blocker corrections */}
-      <Row label="Propranolol today">
-        <Toggle
-          options={[
-            { v: true, label: "Yes" },
-            { v: false, label: "No" },
-          ]}
+      {/* Propranolol — pill toggle */}
+      <Field label="Propranolol today">
+        <PillToggle
           value={propranolol}
           onChange={(v) => {
             setPropranolol(v);
             send({ propranolol_taken: v });
           }}
         />
-      </Row>
+      </Field>
 
-      <Row label="Weight (lbs)">
+      {/* Weight — small inline input */}
+      <Field label="Weight" suffix="lbs">
         <input
           type="number"
-          step="0.1"
-          inputMode="decimal"
-          className="bg-[var(--surface-1)] border border-[var(--hairline)] rounded-sm px-2 py-1 w-[80px] text-[12px] tabular-nums text-right"
+          step="1"
+          inputMode="numeric"
+          className="bg-transparent border border-[var(--hairline)] rounded-sm px-2 py-1 w-[64px] text-[12.5px] tabular-nums text-right text-[var(--text-primary)] focus:border-[var(--hairline-strong)] focus:outline-none"
           value={weightLbs}
           onChange={(e) => setWeightLbs(e.target.value)}
           onBlur={commitWeight}
           onKeyDown={(e) => e.key === "Enter" && commitWeight()}
         />
-      </Row>
+      </Field>
 
-      <Row label="Soreness 1–10">
-        <Stepper value={soreness} onChange={(v) => { setSoreness(v); send({ soreness_overall: v }); }} />
-      </Row>
+      {/* Soreness slider */}
+      <Slider
+        label="Soreness"
+        value={soreness}
+        onChange={(v) => { setSoreness(v); send({ soreness_overall: v }); }}
+      />
 
-      <Row label="Sleep quality 1–10">
-        <Stepper value={sleepQ} onChange={(v) => { setSleepQ(v); send({ sleep_quality_1_10: v }); }} />
-      </Row>
+      {/* Sleep quality slider */}
+      <Slider
+        label="Sleep quality"
+        value={sleepQ}
+        onChange={(v) => { setSleepQ(v); send({ sleep_quality_1_10: v }); }}
+      />
 
-      <div className="flex items-center gap-3 pt-1">
-        <Toggle
-          options={[{ v: true, label: "Sick" }]}
-          value={illness ? true : null}
-          onChange={(v) => { setIllness(!!v); send({ illness_flag: !!v }); }}
+      {/* Sick / Traveling state pills */}
+      <div className="flex items-center gap-2 pt-1">
+        <StatePill
+          label="Sick"
+          active={illness}
           tone="warn"
+          onClick={() => { const v = !illness; setIllness(v); send({ illness_flag: v }); }}
         />
-        <Toggle
-          options={[{ v: true, label: "Traveling" }]}
-          value={travel ? true : null}
-          onChange={(v) => { setTravel(!!v); send({ travel_flag: !!v }); }}
+        <StatePill
+          label="Traveling"
+          active={travel}
+          onClick={() => { const v = !travel; setTravel(v); send({ travel_flag: v }); }}
         />
       </div>
 
@@ -128,44 +128,87 @@ export function CheckinCard() {
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, suffix, children }: { label: string; suffix?: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-[11.5px] text-[var(--text-muted)]">{label}</span>
+      <span className="text-[11.5px] text-[var(--text-muted)]">
+        {label}
+        {suffix ? <span className="text-[10px] text-[var(--text-faint)] ml-1">{suffix}</span> : null}
+      </span>
       {children}
     </div>
   );
 }
 
-function Toggle<T>({
-  options,
+function Slider({
+  label,
   value,
   onChange,
-  tone,
 }: {
-  options: { v: T; label: string }[];
-  value: T | null;
-  onChange: (v: T | null) => void;
-  tone?: "warn";
+  label: string;
+  value: number | null;
+  onChange: (v: number) => void;
+}) {
+  const display = value ?? 0;
+  const pct = value != null ? ((value - 1) / 9) * 100 : 0;
+  // Color shifts: low = soft green (good for soreness=low / quality=high is opposite, but visually we just want a clear scale)
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11.5px] text-[var(--text-muted)]">{label}</span>
+        <span className="text-[12.5px] tabular-nums font-medium text-[var(--text-primary)]">
+          {value != null ? value : "—"}
+          <span className="text-[9.5px] text-[var(--text-faint)] ml-0.5">/10</span>
+        </span>
+      </div>
+      <div className="relative h-[18px] flex items-center">
+        {/* track */}
+        <div className="absolute inset-x-0 h-[3px] rounded-full bg-[var(--hairline-strong)]" />
+        {/* fill */}
+        {value != null && (
+          <div
+            className="absolute h-[3px] rounded-full bg-[var(--text-primary)]"
+            style={{ width: `${pct}%`, transition: "width 140ms ease" }}
+          />
+        )}
+        <input
+          type="range"
+          min={1}
+          max={10}
+          step={1}
+          value={display}
+          onChange={(e) => onChange(parseInt(e.target.value, 10))}
+          className="relative w-full appearance-none bg-transparent cursor-pointer slider-input"
+          style={{ height: "18px" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PillToggle({
+  value,
+  onChange,
+}: {
+  value: boolean | null;
+  onChange: (v: boolean | null) => void;
 }) {
   return (
-    <div className="flex gap-1">
-      {options.map((o) => {
+    <div className="inline-flex rounded-full border border-[var(--hairline-strong)] overflow-hidden">
+      {[
+        { v: true, label: "Yes" },
+        { v: false, label: "No" },
+      ].map((o) => {
         const active = value === o.v;
-        const accent =
-          tone === "warn"
-            ? "var(--negative)"
-            : "var(--text-primary)";
         return (
           <button
             key={String(o.v)}
             type="button"
             onClick={() => onChange(active ? null : o.v)}
-            className="px-2 py-1 text-[11px] rounded-sm border tabular-nums transition-colors"
+            className="px-2.5 py-0.5 text-[11px] font-medium transition-colors"
             style={{
-              background: active ? accent : "transparent",
-              color: active ? "var(--surface-0)" : "var(--text-muted)",
-              borderColor: active ? accent : "var(--hairline)",
+              background: active ? "var(--text-primary)" : "transparent",
+              color: active ? "var(--bg)" : "var(--text-muted)",
             }}
           >
             {o.label}
@@ -176,33 +219,31 @@ function Toggle<T>({
   );
 }
 
-function Stepper({
-  value,
-  onChange,
+function StatePill({
+  label,
+  active,
+  onClick,
+  tone,
 }: {
-  value: number | null;
-  onChange: (v: number | null) => void;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  tone?: "warn";
 }) {
+  const accent = tone === "warn" ? "var(--negative)" : "var(--text-primary)";
   return (
-    <div className="flex gap-0.5">
-      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => {
-        const active = value === n;
-        return (
-          <button
-            key={n}
-            type="button"
-            onClick={() => onChange(active ? null : n)}
-            className="w-[18px] h-[18px] text-[10px] rounded-sm border tabular-nums transition-colors"
-            style={{
-              background: active ? "var(--text-primary)" : "transparent",
-              color: active ? "var(--surface-0)" : "var(--text-muted)",
-              borderColor: active ? "var(--text-primary)" : "var(--hairline)",
-            }}
-          >
-            {n}
-          </button>
-        );
-      })}
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      className="px-2.5 py-1 text-[11px] rounded-full border transition-colors"
+      style={{
+        background: active ? `${accent}` : "transparent",
+        color: active ? "var(--bg)" : "var(--text-muted)",
+        borderColor: active ? accent : "var(--hairline)",
+        opacity: active ? 1 : 0.85,
+      }}
+    >
+      {label}
+    </button>
   );
 }

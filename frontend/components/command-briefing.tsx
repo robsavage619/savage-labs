@@ -113,13 +113,37 @@ export function CommandBriefing() {
   const briefing =
     briefingQ.data && "training_call" in briefingQ.data ? (briefingQ.data as Briefing) : null;
 
-  // The "why" — one sentence, real numbers, gates inline.
-  const whyParts: string[] = [];
-  if (rec.hrv_sigma != null) whyParts.push(`HRV ${rec.hrv_sigma >= 0 ? "+" : ""}${rec.hrv_sigma.toFixed(1)}σ`);
-  if (rec.score != null) whyParts.push(`recovery ${Math.round(rec.score)}`);
-  if (load.acwr != null) whyParts.push(`ACWR ${load.acwr.toFixed(2)}`);
-  if (sleep.last_hours != null) whyParts.push(`sleep ${sleep.last_hours.toFixed(1)}h`);
-  const why = whyParts.join(" · ");
+  // The "why" — structured chips, not a punctuation-delimited string.
+  type Chip = { label: string; value: string; tone?: "positive" | "neutral" | "negative" };
+  const whyChips: Chip[] = [];
+  if (rec.hrv_sigma != null) {
+    whyChips.push({
+      label: "HRV",
+      value: `${rec.hrv_sigma >= 0 ? "+" : ""}${rec.hrv_sigma.toFixed(1)}σ`,
+      tone: rec.hrv_sigma >= 0 ? "positive" : rec.hrv_sigma < -1 ? "negative" : "neutral",
+    });
+  }
+  if (rec.score != null) {
+    whyChips.push({
+      label: "Recovery",
+      value: String(Math.round(rec.score)),
+      tone: rec.score >= 67 ? "positive" : rec.score >= 34 ? "neutral" : "negative",
+    });
+  }
+  if (load.acwr != null) {
+    whyChips.push({
+      label: "ACWR",
+      value: load.acwr.toFixed(2),
+      tone: load.acwr >= 0.8 && load.acwr <= 1.3 ? "positive" : load.acwr > 1.5 ? "negative" : "neutral",
+    });
+  }
+  if (sleep.last_hours != null) {
+    whyChips.push({
+      label: "Sleep",
+      value: `${sleep.last_hours.toFixed(1)}h`,
+      tone: sleep.last_hours >= 7 ? "positive" : sleep.last_hours >= 6 ? "neutral" : "negative",
+    });
+  }
 
   return (
     <div className="shc-card shc-enter overflow-hidden">
@@ -140,20 +164,28 @@ export function CommandBriefing() {
 
         <div className="flex-1 min-w-0">
           <Eyebrow>Why</Eyebrow>
-          <p className="mt-0.5 text-[14px] text-[var(--text-primary)] leading-snug tabular-nums">
-            {why || "Insufficient data for a verdict — sync sources to populate."}
-          </p>
+          {whyChips.length > 0 ? (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {whyChips.map((c) => (
+                <WhyChip key={c.label} chip={c} />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-0.5 text-[13px] text-[var(--text-muted)] leading-snug">
+              Insufficient data — sync sources to populate.
+            </p>
+          )}
           {r.beta_blocker_adjusted && (
             <span
-              className="inline-block mt-1 text-[9.5px] font-medium uppercase tracking-wider px-1.5 py-px rounded-sm"
-              style={{
-                color: "var(--neutral)",
-                background: "var(--neutral-soft)",
-                border: "1px solid oklch(0.75 0.18 75 / 0.25)",
-              }}
+              className="inline-flex items-center gap-1.5 mt-1.5 text-[10px] tracking-wide"
+              style={{ color: "var(--text-muted)" }}
               title="HRV signal blunted by beta-blocker; readiness composite re-weighted toward sleep + RHR + subjective"
             >
-              β-blocker adj
+              <span
+                className="inline-block w-1 h-1 rounded-full"
+                style={{ background: "var(--neutral)" }}
+              />
+              β-blocker adjusted
             </span>
           )}
         </div>
@@ -294,5 +326,30 @@ export function CommandBriefing() {
         </div>
       )}
     </div>
+  );
+}
+
+function WhyChip({ chip }: { chip: { label: string; value: string; tone?: "positive" | "neutral" | "negative" } }) {
+  const dotColor =
+    chip.tone === "positive"
+      ? "var(--positive)"
+      : chip.tone === "negative"
+      ? "var(--negative)"
+      : "var(--neutral)";
+  return (
+    <span
+      className="inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded-full border text-[11.5px] tabular-nums"
+      style={{
+        borderColor: "var(--hairline)",
+        background: "oklch(1 0 0 / 0.02)",
+      }}
+    >
+      <span
+        className="inline-block w-1 h-1 rounded-full self-center"
+        style={{ background: dotColor }}
+      />
+      <span className="text-[var(--text-dim)] text-[10px] uppercase tracking-wider">{chip.label}</span>
+      <span className="text-[var(--text-primary)] font-medium">{chip.value}</span>
+    </span>
   );
 }

@@ -18,10 +18,16 @@ export default function Dashboard() {
       <header className="flex items-baseline justify-between pb-4 border-b border-[var(--hairline)] mb-5">
         <div className="flex items-baseline gap-3">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--positive)] animate-pulse" />
-          <h1 className="text-[11px] font-medium tracking-[0.2em] uppercase text-[var(--text-muted)]">
+          <h1
+            className="text-[14px] tracking-[0.22em] uppercase"
+            style={{
+              fontFamily: "var(--font-orbitron)",
+              color: "oklch(0.88 0.18 145)",
+              textShadow: "0 0 8px oklch(0.88 0.18 145), 0 0 24px oklch(0.72 0.22 145 / 0.7), 0 0 48px oklch(0.6 0.25 145 / 0.35)",
+            }}
+          >
             Savage Health Center
           </h1>
-          <span className="text-[10.5px] text-[var(--text-faint)] tabular-nums">v2 · personal</span>
         </div>
         <DashboardClock />
       </header>

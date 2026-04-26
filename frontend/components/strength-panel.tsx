@@ -296,12 +296,14 @@ const TARGET_WEEKLY: Record<string, number> = {
   other: 0,
 };
 
+// Neutral bars — status (on-target / high / below / neglected) carries the semantic
+// color, not the muscle group identity. Avoids red Push looking like a danger signal.
 const MUSCLE_COLOR: Record<string, string> = {
-  push: "oklch(0.72 0.18 25)",
-  pull: "oklch(0.72 0.12 250)",
-  legs: "oklch(0.72 0.18 145)",
-  core: "oklch(0.78 0.18 75)",
-  other: "oklch(0.55 0.05 230)",
+  push: "oklch(0.55 0.04 250)",
+  pull: "oklch(0.55 0.04 250)",
+  legs: "oklch(0.55 0.04 250)",
+  core: "oklch(0.55 0.04 250)",
+  other: "oklch(0.45 0.02 250)",
 };
 
 function MuscleBalance() {
@@ -389,7 +391,11 @@ function MuscleBalance() {
                 <div className="flex-1 h-[14px] rounded-sm bg-[oklch(1_0_0/0.04)] relative overflow-hidden">
                   <div
                     className="absolute inset-y-0 left-0 rounded-sm"
-                    style={{ width: `${pct}%`, background: MUSCLE_COLOR[g.group], opacity: 0.7 }}
+                    style={{
+                      width: `${pct}%`,
+                      background: status === "neglected" ? "var(--negative)" : status === "on target" ? "var(--positive)" : MUSCLE_COLOR[g.group],
+                      opacity: status === "on target" ? 0.55 : status === "neglected" ? 0.55 : 0.7,
+                    }}
                   />
                   <div className="absolute inset-y-0 flex items-center px-2 text-[9.5px] font-mono tabular-nums text-[var(--text-primary)]">
                     {g.weekly_sets.toFixed(1)} / {target} sets·wk

@@ -188,6 +188,44 @@ html {
   .btn-step { font-size: 9px; font-weight: 700; opacity: 0.55; margin-right: 2px; }
 }
 
+/* ── Range slider (check-in) ───────────── */
+.slider-input {
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+}
+.slider-input::-webkit-slider-runnable-track {
+  height: 18px;
+  background: transparent;
+}
+.slider-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--hairline-strong), 0 2px 6px oklch(0 0 0 / 0.5);
+  cursor: grab;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.slider-input:hover::-webkit-slider-thumb {
+  transform: scale(1.1);
+  box-shadow: 0 0 0 1px var(--text-primary), 0 4px 10px oklch(0 0 0 / 0.6);
+}
+.slider-input:active::-webkit-slider-thumb { cursor: grabbing; }
+.slider-input::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--hairline-strong), 0 2px 6px oklch(0 0 0 / 0.5);
+  cursor: grab;
+}
+.slider-input::-moz-range-track { background: transparent; height: 18px; }
+
 /* ── Scrollbar ───────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -13,26 +13,66 @@ function StreakCard() {
     <div className="shc-card shc-enter p-4 space-y-3">
       <Eyebrow>Streaks</Eyebrow>
       <div className="space-y-2.5">
-        <StreakRow label="Recovery >60" value={rec} tone={rec >= 7 ? "positive" : rec >= 3 ? "neutral" : "negative"} />
-        <StreakRow label="Sleep >7h" value={slp} tone={slp >= 5 ? "positive" : slp >= 2 ? "neutral" : "negative"} />
-        <StreakRow label="Training on plan" value={0} tone="neutral" ghost />
+        <StreakRow label="Recovery >60" value={rec} />
+        <StreakRow label="Sleep >7h" value={slp} />
+        <StreakRow
+          label="Training on plan"
+          ghost
+          ghostLabel="P2"
+          ghostTitle="Phase 2 — current training block"
+        />
       </div>
     </div>
   );
 }
 
-function StreakRow({ label, value, tone, ghost }: { label: string; value: number; tone: "positive" | "neutral" | "negative"; ghost?: boolean }) {
-  const color = tone === "positive" ? "var(--positive)" : tone === "negative" ? "var(--negative)" : "var(--neutral)";
+/**
+ * Streak colors:
+ *   0  → dim (no streak yet, neutral)
+ *   1+ → text-primary (any streak is fine)
+ *   7+ → positive green (week+ streak is celebrated)
+ */
+function streakColor(value: number): string {
+  if (value === 0) return "var(--text-faint)";
+  if (value >= 7) return "var(--positive)";
+  return "var(--text-primary)";
+}
+
+function StreakRow({
+  label,
+  value,
+  ghost,
+  ghostLabel,
+  ghostTitle,
+}: {
+  label: string;
+  value?: number;
+  ghost?: boolean;
+  ghostLabel?: string;
+  ghostTitle?: string;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3">
       <span className="text-[11.5px] text-[var(--text-muted)]">{label}</span>
       <div className="flex items-baseline gap-1.5">
         {ghost ? (
-          <span className="text-[11px] text-[var(--text-faint)]">P2</span>
+          <span
+            className="text-[11px] text-[var(--text-faint)] cursor-help"
+            title={ghostTitle}
+          >
+            {ghostLabel}
+          </span>
         ) : (
           <>
-            <span className="metric-md tabular-nums" style={{ color }}>{value}</span>
-            <span className="text-[10px] text-[var(--text-dim)]">days</span>
+            <span
+              className="metric-md tabular-nums"
+              style={{ color: streakColor(value ?? 0) }}
+            >
+              {value}
+            </span>
+            <span className="text-[10px] text-[var(--text-dim)]">
+              {value === 1 ? "day" : "days"}
+            </span>
           </>
         )}
       </div>
