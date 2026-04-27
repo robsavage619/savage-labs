@@ -16,6 +16,7 @@ directly; it only:
 
 import json
 import logging
+import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -28,15 +29,6 @@ log = logging.getLogger(__name__)
 
 # ── Vault research ────────────────────────────────────────────────────────────
 
-_VAULT_NOTES = [
-    "kiviniemi-2007-hrv-guided-endurance-training.md",
-    "plews-2013-hrv-monitoring-compliance.md",
-    "overreaching-detection.md",
-    "fitness-fatigue-theory.md",
-    "progressive-overload-strength.md",
-    "training-frequency-strength.md",
-]
-
 _KEEP_HEADINGS = {
     "## Summary",
     "## Prescription",
@@ -47,6 +39,27 @@ _KEEP_HEADINGS = {
     "## Recovery Time by Muscle Group",
     "## Boundary Conditions",
 }
+
+# Map vault tags / filename keywords → state signals they're relevant to.
+# A note's score is the count of (tag, signal) pairs that match today's state.
+_TAG_SIGNALS: dict[str, tuple[str, ...]] = {
+    "hrv": ("hrv_anomaly",),
+    "recovery": ("hrv_anomaly", "deload", "illness", "poor_sleep"),
+    "overreaching": ("hrv_anomaly", "deload", "high_acwr"),
+    "overtraining": ("deload", "high_acwr"),
+    "acwr": ("high_acwr",),
+    "load": ("high_acwr",),
+    "deload": ("deload",),
+    "illness": ("illness",),
+    "sleep": ("poor_sleep",),
+    "strength": ("default",),
+    "hypertrophy": ("default",),
+    "progressive-overload": ("default",),
+    "frequency": ("default",),
+    "fitness-fatigue": ("default",),
+}
+
+_DEFAULT_VAULT_LIMIT = 6
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -70,41 +83,119 @@ def _extract_sections(text: str) -> str:
     return "\n".join(output).strip()
 
 
-def load_vault_research() -> str:
-    """Load relevant vault notes and return them as a single formatted string."""
+def _parse_frontmatter_tags(raw: str) -> list[str]:
+    """Extract tags from YAML frontmatter without a yaml dep.
+
+    Handles both inline (`tags: [a, b]`) and block (`tags:\\n  - a`) forms.
+    """
+    if not raw.startswith("---"):
+        return []
+    end = raw.find("---", 3)
+    if end == -1:
+        return []
+    fm = raw[3:end]
+    tags: list[str] = []
+    inline = re.search(r"^tags:\s*\[([^\]]*)\]", fm, re.MULTILINE)
+    if inline:
+        tags.extend(t.strip().strip('"\'') for t in inline.group(1).split(","))
+    block = re.search(r"^tags:\s*\n((?:\s*-\s*\S+.*\n?)+)", fm, re.MULTILINE)
+    if block:
+        for line in block.group(1).splitlines():
+            t = line.strip().lstrip("-").strip().strip('"\'')
+            if t:
+                tags.append(t)
+    return [t.lower() for t in tags if t]
+
+
+def _state_signals(state: dict[str, Any] | None) -> set[str]:
+    """Derive vault-relevance signals from today's DailyState dict."""
+    signals: set[str] = {"default"}
+    if state is None:
+        return signals
+    rec = state.get("recovery") or {}
+    load = state.get("training_load") or {}
+    chk = state.get("checkin") or {}
+    gates = state.get("gates") or {}
+    sleep = state.get("sleep") or {}
+    if (rec.get("hrv_sigma") or 0) < -1.0:
+        signals.add("hrv_anomaly")
+    if (load.get("acwr") or 0) > 1.3:
+        signals.add("high_acwr")
+    if gates.get("deload_required"):
+        signals.add("deload")
+    if chk.get("illness_flag"):
+        signals.add("illness")
+    last_sleep = sleep.get("last_hours")
+    if last_sleep is not None and last_sleep < 6:
+        signals.add("poor_sleep")
+    return signals
+
+
+def load_vault_research(
+    state: dict[str, Any] | None = None,
+    limit: int = _DEFAULT_VAULT_LIMIT,
+) -> str:
+    """Load vault notes ranked by relevance to today's state.
+
+    All `wiki/*.md` files are scanned. Each note's frontmatter tags (and, as a
+    fallback, filename keywords) are scored against signals derived from the
+    `DailyState` dict. The top `limit` notes are returned as one formatted
+    string, with a header listing the active signals so the LLM understands
+    why these notes were chosen.
+
+    Returns an empty string when the vault directory is missing — callers
+    should treat that as "no vault available" rather than an error.
+    """
     wiki_dir = settings.vault_path / "wiki"
     if not wiki_dir.exists():
         log.warning("Vault wiki dir not found at %s", wiki_dir)
-        return "Vault not available."
+        return ""
 
-    sections: list[str] = []
-    for note_name in _VAULT_NOTES:
-        path = wiki_dir / note_name
-        if not path.exists():
-            log.warning("Vault note missing: %s", path)
+    signals = _state_signals(state)
+    scored: list[tuple[int, str, str]] = []  # (-score, name, formatted excerpt)
+
+    for path in sorted(wiki_dir.glob("*.md")):
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as e:
+            log.warning("Vault note unreadable %s: %s", path, e)
             continue
-        raw = path.read_text(encoding="utf-8")
+
+        tags = _parse_frontmatter_tags(raw)
+        score = 0
+        for tag in tags:
+            for sig in _TAG_SIGNALS.get(tag, ()):
+                if sig in signals:
+                    score += 2 if sig != "default" else 1
+        if score == 0:
+            stem = path.stem.lower().replace("-", "")
+            for sig in signals:
+                if sig != "default" and sig.replace("_", "") in stem:
+                    score += 1
+
         content = _strip_frontmatter(raw)
         excerpt = _extract_sections(content) or content[:1500]
-
-        title = note_name.replace(".md", "").replace("-", " ").title()
+        title = path.stem.replace("-", " ").title()
         for line in content.split("\n"):
             if line.startswith("# "):
                 title = line[2:].strip()
                 break
-        sections.append(f"#### {title}\n\n{excerpt}")
+        scored.append((-score, path.name, f"#### {title} ({path.name})\n\n{excerpt}"))
 
-    return "\n\n---\n\n".join(sections)
+    if not scored:
+        return ""
+
+    scored.sort()
+    relevant = [s for s in scored if -s[0] > 0]
+    chosen = (relevant or scored)[:limit]
+    sigs_str = ", ".join(sorted(signals))
+    header = f"## VAULT RESEARCH (top {len(chosen)} for signals: {sigs_str})\n"
+    return header + "\n\n---\n\n".join(c[2] for c in chosen)
 
 
-_VAULT_RESEARCH: str = ""
-
-
-def get_vault_research() -> str:
-    global _VAULT_RESEARCH
-    if not _VAULT_RESEARCH:
-        _VAULT_RESEARCH = load_vault_research()
-    return _VAULT_RESEARCH
+def get_vault_research(state: dict[str, Any] | None = None) -> str:
+    """Backwards-compatible accessor; no caching since selection is state-aware."""
+    return load_vault_research(state)
 
 
 # ── Training context builder ──────────────────────────────────────────────────
@@ -319,21 +410,34 @@ def build_training_context(conn) -> str:
         forbid = " ← FORBIDDEN BY GATE" if g in gates["forbid_muscle_groups"] else ""
         lines.append(f"- {g}: {d_val}d since last session{flag}{forbid}")
 
+    history_limit = 14
     lines.append(f"\n## TRAINING HISTORY (last 30 days — {len(workout_rows)} sessions)")
-    for row in workout_rows[:14]:
+    for row in workout_rows[:history_limit]:
         vol_str = f"{row[3] / 1000:.1f} tonnes" if row[3] else "bw/machine"
         rpe_str = f" @RPE {row[4]:.1f}" if row[4] else ""
         ex_preview = (row[1] or "")[:120]
         lines.append(f"- {row[0]}: {row[2]} sets | {vol_str}{rpe_str} | {ex_preview}")
+    if len(workout_rows) > history_limit:
+        lines.append(
+            f"  ... {len(workout_rows) - history_limit} older sessions truncated "
+            f"(showing {history_limit} most recent of {len(workout_rows)})"
+        )
 
+    ww_limit = 40
     lines.append(f"\n## WORKING WEIGHTS ({len(ww_rows)} exercises on record)")
-    for ex, wkg, src in ww_rows[:40]:
+    for ex, wkg, src in ww_rows[:ww_limit]:
         lbs = round(wkg * 2.20462, 1) if wkg else 0
         lines.append(f"- {ex}: {lbs} lbs ({wkg:.1f} kg) [{src}]")
-    if len(ww_rows) > 40:
-        lines.append(f"  ... and {len(ww_rows) - 40} more")
+    if len(ww_rows) > ww_limit:
+        lines.append(
+            f"  ... {len(ww_rows) - ww_limit} more truncated "
+            f"(showing {ww_limit} most-recently-updated of {len(ww_rows)})"
+        )
 
-    lines.append("\n## TOP EXERCISES (last 90d by frequency)")
+    lines.append(
+        f"\n## TOP EXERCISES (last 90d by frequency — top {len(top_exercises)}, "
+        f"capped at SQL LIMIT 20)"
+    )
     for ex, sets, max_kg, avg_rpe in top_exercises:
         lbs = round(max_kg * 2.20462, 1) if max_kg else "bw"
         rpe_str = f" @RPE {avg_rpe:.1f}" if avg_rpe else ""
@@ -390,6 +494,10 @@ def build_training_context(conn) -> str:
         lines.append("\n## EXERCISES TO AVOID/SUBSTITUTE")
         for ex, status, notes in prefs:
             lines.append(f"- {ex} ({status})" + (f": {notes}" if notes else ""))
+
+    vault = load_vault_research(state)
+    if vault:
+        lines.append("\n" + vault)
 
     return "\n".join(lines)
 

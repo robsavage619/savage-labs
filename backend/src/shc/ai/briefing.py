@@ -18,6 +18,7 @@ All numeric facts in `build_daily_context` are derived from the canonical
 import json
 import logging
 
+from shc.ai.workout_planner import load_vault_research
 from shc.db.schema import write_ctx
 from shc.metrics import compute_daily_state
 
@@ -191,11 +192,29 @@ def build_daily_context(conn) -> str:
         for r in gates["reasons"]:
             lines.append(f"- {r}")
 
-    # Data gaps.
+    # Data ages — concrete day counts so the LLM can weigh staleness itself.
+    age_parts: list[str] = []
+    if fresh["whoop_age_days"] is not None:
+        age_parts.append(f"WHOOP {fresh['whoop_age_days']}d")
+    if fresh["sleep_age_days"] is not None:
+        age_parts.append(f"sleep {fresh['sleep_age_days']}d")
+    if fresh["hevy_age_days"] is not None:
+        age_parts.append(f"Hevy {fresh['hevy_age_days']}d")
+    if fresh["cardio_age_days"] is not None:
+        age_parts.append(f"cardio {fresh['cardio_age_days']}d")
+    if age_parts:
+        lines.append("\n## DATA AGES (days since most recent record)")
+        lines.append("- " + " · ".join(age_parts))
+
+    # Data gaps (>2d staleness flagged by metrics layer).
     if fresh["gaps"]:
         lines.append("\n## DATA GAPS")
         for g in fresh["gaps"]:
             lines.append(f"- {g}")
+
+    vault = load_vault_research(state)
+    if vault:
+        lines.append("\n" + vault)
 
     return "\n".join(lines)
 

@@ -8,13 +8,13 @@ import { Eyebrow } from "@/components/ui/metric";
 const STORY_PROMPT = `Generate Rob's daily health story AND today's workout plan in a single pass.
 
 STEP 1 — Read context.
-- GET http://127.0.0.1:8000/api/briefing/context for live biometrics (recovery, HRV, sleep, gates).
-- GET http://127.0.0.1:8000/api/workout/context for training history.
-- Read relevant research notes from Rob's vault at ~/Vault/savage_vault/wiki/.
+- GET http://127.0.0.1:8000/api/briefing/context for live biometrics (recovery, HRV, sleep, gates) AND today's most-relevant vault notes (selected server-side based on signals like HRV anomaly, high ACWR, deload, illness).
+- GET http://127.0.0.1:8000/api/workout/context for training history (also includes the ranked vault notes).
+- Both responses already contain a "## VAULT RESEARCH" section — do not read files from disk.
 
 STEP 2 — Write the narrative health story.
-4–6 paragraphs of clear prose addressed to Rob in second person. Lead with the most important signal of the moment, not chronology. Cite specific numbers (recovery score, HRV deviation σ, ACWR, sleep totals) but anchor them to meaning, not just the number. Weave vault research in naturally by source name where relevant. End with one paragraph on near-term trajectory: what the next 1–2 weeks should look like.
-Constraints: no "as your AI advisor" framing. No motivational filler. Never imply chronic propranolol use — it is PRN/occasional, reference only if today's check-in shows it was taken. Never invent metrics not in the live context.
+4–6 paragraphs of clear prose addressed to Rob in second person. Lead with the most important signal of the moment, not chronology. Cite specific numbers (recovery score, HRV deviation σ, ACWR, sleep totals) but anchor them to meaning, not just the number. Weave vault research in naturally by source name (the filename in parentheses after each note title) where relevant. End with one paragraph on near-term trajectory: what the next 1–2 weeks should look like.
+Constraints: no "as your AI advisor" framing. No motivational filler. Never imply chronic propranolol use — it is PRN/occasional, reference only if today's check-in shows it was taken. Never invent metrics not in the live context. Note any "DATA AGES" / "DATA GAPS" entries before drawing strong conclusions from stale numbers.
 POST to http://127.0.0.1:8000/api/health-story with body { "narrative": "<text>", "sources": [<vault filenames cited>], "model": "claude-sonnet-4-6" }.
 
 STEP 3 — Generate today's workout plan.
