@@ -213,6 +213,9 @@ def build_training_context(conn) -> str:
         training history, working weights, volume trend, and yesterday's
         adherence (closed-loop feedback).
     """
+    # Local import to avoid the briefing → workout_planner → briefing cycle.
+    from shc.ai.briefing import build_clinical_context
+
     today = date.today()
     state = compute_daily_state(conn)
     rec = state["recovery"]
@@ -300,6 +303,10 @@ def build_training_context(conn) -> str:
     )
 
     lines: list[str] = [f"TODAY: {today.isoformat()}\n"]
+
+    clinical = build_clinical_context(conn)
+    if clinical:
+        lines.append(clinical + "\n")
 
     # ── Hard gates first — the LLM must respect these ──
     lines.append("## ⚠ AUTO-REGULATION GATES (HARD CONSTRAINTS)")

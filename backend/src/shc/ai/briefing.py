@@ -17,6 +17,7 @@ All numeric facts in `build_daily_context` are derived from the canonical
 
 import json
 import logging
+from datetime import date
 
 from shc.ai.workout_planner import load_vault_research
 from shc.db.schema import write_ctx
@@ -28,35 +29,33 @@ log = logging.getLogger(__name__)
 
 HEALTH_SYSTEM = """\
 You are the user's personal health and training advisor. Your role is to
-interpret his biometric data and provide daily coaching guidance. Always factor in
-the following clinical context when analysing any metric.
+interpret his biometric data and provide daily coaching guidance.
 
-## Clinical Profile
-Male, born May 1986 (39 yo), 6'1" / ~239 lbs.
+The patient-specific clinical context (active medications, active conditions,
+recent labs, age/weight) is provided in the dynamic live-data block below this
+prompt — read it there, do not assume it from prior knowledge. This system
+prompt only encodes drug-class interpretation rules and coaching principles
+that are stable over time.
 
-### Active medications — critical for interpreting ALL metrics
-- **Lexapro 10 mg daily** (SSRI): chronically suppresses HRV baseline.
-  Use σ deviation from 28-day rolling average, not absolute HRV value.
-- **Fluoxetine 40 mg daily** (SSRI): also suppresses HRV.
-- **Propranolol 10 mg PRN** (beta-blocker for anxiety): when taken, artificially
-  lowers RHR and blunts HR response — WHOOP recovery/strain scores are lower than
-  true physiology on those days. RPE > HR. The daily check-in records whether it
-  was taken — when `propranolol_taken=true`, HR zones shift down ~20 bpm and
-  HR-derived kcal estimates under-count by ~25%.
-- **Alvesco** (inhaled corticosteroid, asthma): use before high-intensity sessions;
-  monitor for wheeze; SpO2 < 95% is a flag.
+## Drug-class interpretation rules (apply when the live data shows a member of the class)
+- **SSRIs**: chronically suppress HRV
+  baseline. Always interpret HRV as σ deviation from a 28-day rolling mean,
+  never as an absolute number.
+- **Beta-blockers**: artificially lower RHR and blunt HR
+  response. WHOOP recovery/strain are lower than true physiology on dosed
+  days. Use RPE > HR. The daily check-in's `propranolol_taken` flag drives
+  the `hr_zone_shift_bpm` and `kcal_multiplier` values you see in the gates.
+- **Inhaled corticosteroids**: use before
+  high-intensity sessions in patients with asthma; SpO2 < 95% is a flag.
 
-### Conditions
-- GAD + OCD (active): psychological stress spikes can suppress HRV/recovery
-  independently of physical load.
-- OSA (off CPAP since Apr 2026): sleep quality may be variable; prioritise
-  deep sleep % (target ≥18%) and SpO2 ≥95% over composite scores.
-- Left shoulder: fully resolved as of Apr 2026 — no restrictions.
-- Forefoot overload risk (bilateral 2nd/3rd metatarsal heads, pickleball);
-  gait asymmetry (right heel-strike dominant). Avoid high-impact jumping.
-- LDL 154 mg/dL (borderline), HbA1c 5.5% (normal).
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
 
-#***REMOVED***
+***REMOVED***
 ***REMOVED***
 ***REMOVED***
 ## Personal context
@@ -84,6 +83,112 @@ request — you always have today's metrics, recent sessions, and working weight
 """
 
 
+# ── Clinical context (live from DB) ──────────────────────────────────────────
+
+_RESOLVED_STATUSES = {"resolved", "inactive", "remission"}
+
+
+def build_clinical_context(conn) -> str:
+    """Build a live clinical snapshot from the bitemporal source-of-truth tables.
+
+    Pulls active medications (started ≤ today, not yet stopped, record valid),
+    active conditions (status not in resolved/inactive/remission), and the most
+    recent lab value per analyte from the last 12 months.
+
+    Returns a markdown block. Empty string if all three queries return nothing,
+    so the caller can decide whether to skip the section entirely.
+    """
+    today = date.today().isoformat()
+
+    meds = conn.execute(
+        """
+        SELECT name, dose, frequency, started
+        FROM medications
+        WHERE valid_to IS NULL
+          AND (started IS NULL OR started <= $today)
+          AND (stopped IS NULL OR stopped > $today)
+        ORDER BY started DESC NULLS LAST
+        """,
+        {"today": today},
+    ).fetchall()
+
+    conditions = conn.execute(
+        """
+        SELECT name, status, onset
+        FROM conditions
+        WHERE valid_to IS NULL
+          AND (status IS NULL OR LOWER(status) NOT IN ('resolved', 'inactive', 'remission'))
+        ORDER BY onset DESC NULLS LAST
+        """
+    ).fetchall()
+
+    labs = conn.execute(
+        """
+        SELECT name, value, unit, ref_low, ref_high, collected_at
+        FROM (
+            SELECT name, value, unit, ref_low, ref_high, collected_at,
+                   ROW_NUMBER() OVER (PARTITION BY name ORDER BY collected_at DESC) AS rn
+            FROM labs
+            WHERE collected_at IS NOT NULL
+              AND collected_at >= (current_date - INTERVAL '365 days')
+        )
+        WHERE rn = 1
+        ORDER BY collected_at DESC
+        LIMIT 20
+        """
+    ).fetchall()
+
+    if not (meds or conditions or labs):
+        return ""
+
+    lines: list[str] = ["## CLINICAL PROFILE (live from DB)"]
+
+    if meds:
+        lines.append("\n### Active medications")
+        for name, dose, freq, started in meds:
+            parts = [name]
+            if dose:
+                parts.append(dose)
+            if freq:
+                parts.append(freq)
+            since = f" — since {started}" if started else ""
+            lines.append(f"- {' '.join(parts)}{since}")
+    else:
+        lines.append("\n### Active medications: none on record")
+
+    if conditions:
+        lines.append("\n### Active conditions")
+        for name, status, onset in conditions:
+            status_str = f" ({status})" if status else ""
+            onset_str = f", onset {onset}" if onset else ""
+            lines.append(f"- {name}{status_str}{onset_str}")
+    else:
+        lines.append("\n### Active conditions: none on record")
+
+    if labs:
+        lines.append("\n### Recent labs (most recent value per analyte, last 12 months)")
+        for name, value, unit, ref_low, ref_high, collected_at in labs:
+            v_str = f"{value:g}" if value is not None else "—"
+            unit_str = f" {unit}" if unit else ""
+            range_str = ""
+            flag = ""
+            if ref_low is not None and ref_high is not None:
+                range_str = f" (ref {ref_low:g}–{ref_high:g})"
+                if value is not None:
+                    if value < ref_low:
+                        flag = " ⬇ LOW"
+                    elif value > ref_high:
+                        flag = " ⬆ HIGH"
+            elif ref_high is not None and value is not None:
+                range_str = f" (ref ≤{ref_high:g})"
+                if value > ref_high:
+                    flag = " ⬆ HIGH"
+            date_str = str(collected_at)[:10]
+            lines.append(f"- {name}: {v_str}{unit_str}{range_str}{flag} — {date_str}")
+
+    return "\n".join(lines)
+
+
 # ── Context builder ───────────────────────────────────────────────────────────
 
 def build_daily_context(conn) -> str:
@@ -106,6 +211,10 @@ def build_daily_context(conn) -> str:
     fresh = state["freshness"]
 
     lines: list[str] = [f"\n## Live data — {state['as_of']}"]
+
+    clinical = build_clinical_context(conn)
+    if clinical:
+        lines.append("\n" + clinical)
 
     # Readiness composite — single canonical number.
     if readiness["score"] is not None:
