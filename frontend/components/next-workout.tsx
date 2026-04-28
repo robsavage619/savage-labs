@@ -13,6 +13,9 @@ type PushState =
   | { kind: "ok"; routineId: string; focus: string }
   | { kind: "err"; msg: string };
 
+const toStringArray = (v: unknown): string[] =>
+  Array.isArray(v) ? v : typeof v === "string" && v ? [v] : [];
+
 // ── Tier config ──────────────────────────────────────────────────────────────
 
 const TIER = {
@@ -534,8 +537,8 @@ export function NextWorkoutPane() {
           ))}
           <CooldownRow text={data.cooldown ?? ""} />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ClinicalCallout notes={data.clinical_notes ?? []} />
-            <VaultInsights insights={data.vault_insights ?? []} />
+            <ClinicalCallout notes={toStringArray(data.clinical_notes)} />
+            <VaultInsights insights={toStringArray(data.vault_insights)} />
           </div>
         </div>
       )}
