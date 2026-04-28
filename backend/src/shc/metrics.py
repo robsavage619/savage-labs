@@ -667,7 +667,7 @@ def compute_daily_state(conn) -> dict[str, Any]:
     chk = _checkin(conn, today)
 
     meds = get_active_medications(conn)
-    beta_blocker = _is_beta_blocker(meds)
+    beta_blocker = _is_beta_blocker(meds) and bool(chk.propranolol_taken)
 
     readiness = _readiness_snapshot(rec, sleep, chk, beta_blocker=beta_blocker)
     e1rm_pct = _e1rm_regression(conn, today)
