@@ -346,8 +346,11 @@ function VaultInsights({ insights }: { insights: string[] }) {
 
 // ── Cooldown ─────────────────────────────────────────────────────────────────
 
-function CooldownRow({ text }: { text: string }) {
-  if (!text) return null;
+function CooldownRow({ text }: { text: string | unknown }) {
+  const str = typeof text === "string" ? text : Array.isArray(text) ? (text as {name?:string}[]).map(i => i.name ?? "").filter(Boolean).join(" · ") : "";
+  if (!str) return null;
+  // rebind for JSX below
+  const text2 = str;
   return (
     <div
       className="flex gap-3 px-4 py-3 rounded-[var(--r-md)]"
@@ -356,7 +359,7 @@ function CooldownRow({ text }: { text: string }) {
       <span className="text-[var(--text-faint)] text-sm mt-0.5">↓</span>
       <div>
         <Eyebrow>Cool-down</Eyebrow>
-        <p className="text-[12px] text-[var(--text-dim)] mt-1 leading-snug">{text}</p>
+        <p className="text-[12px] text-[var(--text-dim)] mt-1 leading-snug">{text2}</p>
       </div>
     </div>
   );

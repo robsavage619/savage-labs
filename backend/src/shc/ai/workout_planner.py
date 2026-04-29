@@ -588,6 +588,8 @@ def validate_plan(plan: dict[str, Any], state: dict[str, Any] | None = None) -> 
                 raise ValueError(
                     f"Block {i} exercise {j} missing 'name' (got 'exercise'?)"
                 )
+    if not isinstance(plan.get("cooldown"), str):
+        raise ValueError("cooldown must be a plain string, not an array or object")
     if not plan.get("clinical_notes"):
         raise ValueError("clinical_notes is empty — must include medication context")
     if not plan.get("vault_insights"):
