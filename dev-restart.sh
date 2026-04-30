@@ -89,6 +89,14 @@ for orphan_wal in "$REPO"/.claude/worktrees/*/backend/data/shc.duckdb.wal; do
   rm -f "$orphan_wal"
 done
 
+# ── Clinical profile ingest ───────────────────────────────────────────────────
+# Idempotent: wipes the kaiser_summary rows and reloads from YAML on every
+# restart. Runs while the DB is unlocked (between API kill and uvicorn start).
+if [[ -f "$CANONICAL_DATA/clinical_profile.yml" ]]; then
+  (cd "$WT/backend" && uv run shc ingest-clinical-profile 2>&1 | sed 's/^/  /') || \
+    echo "  Clinical ingest failed (non-fatal)"
+fi
+
 # ── Frontend deps ─────────────────────────────────────────────────────────────
 if [[ ! -d "$WT/frontend/node_modules" ]]; then
   echo "▶ Installing frontend deps..."
