@@ -888,47 +888,64 @@ async def training_prs(n: int = Query(15, gt=0, le=1000)) -> list[dict]:
     """
     conn = get_read_conn()
     try:
+        # Canonical name: strip trailing "(Machine)", "(Barbell)", "(Cable)" etc.
+        # Hevy emits "Leg Press (Machine)"; Fitbod emits "Leg Press" — same lift.
+        # We aggregate on the canonical key but display the longest variant seen.
         rows = conn.execute(
             """
-            WITH pr AS (
+            WITH normalized AS (
                 SELECT
-                    ws.exercise,
-                    MAX(ws.weight_kg) AS pr_kg
+                    ws.exercise AS raw_exercise,
+                    trim(regexp_replace(ws.exercise, '\\s*\\([^)]*\\)\\s*$', '')) AS canon,
+                    ws.weight_kg,
+                    ws.reps,
+                    w.started_at
                 FROM workout_sets ws
                 JOIN workouts w ON w.id = ws.workout_id
                 WHERE ws.is_warmup = FALSE
-                  AND weight_kg IS NOT NULL
-                  AND weight_kg > 20
-                  AND weight_kg < 300
-                  AND reps IS NOT NULL AND reps > 0
-                  AND NOT regexp_matches(lower(exercise),
+                  AND ws.weight_kg IS NOT NULL
+                  AND ws.weight_kg > 20
+                  AND ws.weight_kg < 300
+                  AND ws.reps IS NOT NULL AND ws.reps > 0
+                  AND NOT regexp_matches(lower(ws.exercise),
                     'plank|push.?up|pull.?up|chin.?up|dip|crunch|sit.?up|burpee|'
                     'box.jump|jump|lunge|squat air|air squat|scissor|superman|'
                     'mountain.climb|bicycle|flutter|leg raise|hollow|bear crawl|'
                     'russian twist|oblique|twist|v.?up|tuck|hyperextension')
-                GROUP BY ws.exercise
+            ),
+            pr AS (
+                SELECT canon, MAX(weight_kg) AS pr_kg
+                FROM normalized
+                GROUP BY canon
                 HAVING COUNT(*) >= 5 AND STDDEV(weight_kg) > 2
+            ),
+            display_name AS (
+                -- Pick the most descriptive label per canonical group:
+                -- prefer the longest variant (usually the "(Machine)" form).
+                SELECT canon, ARG_MAX(raw_exercise, LENGTH(raw_exercise)) AS exercise
+                FROM normalized
+                GROUP BY canon
             ),
             pr_set AS (
                 SELECT
-                    pr.exercise,
+                    pr.canon,
                     pr.pr_kg,
-                    MAX(ws.reps) AS pr_reps,
-                    MAX(w.started_at::DATE) AS pr_date,
-                    MAX(w2.last) AS last_performed
+                    MAX(n.reps) AS pr_reps,
+                    MAX(n.started_at::DATE) AS pr_date,
+                    MAX(last.last_d) AS last_performed
                 FROM pr
-                JOIN workout_sets ws ON ws.exercise = pr.exercise AND ws.weight_kg = pr.pr_kg
-                JOIN workouts w ON w.id = ws.workout_id
+                JOIN normalized n ON n.canon = pr.canon AND n.weight_kg = pr.pr_kg
                 JOIN (
-                    SELECT exercise, MAX(started_at::DATE) AS last
-                    FROM workout_sets ws3 JOIN workouts w3 ON w3.id = ws3.workout_id
-                    GROUP BY exercise
-                ) w2 ON w2.exercise = pr.exercise
-                GROUP BY pr.exercise, pr.pr_kg
+                    SELECT canon, MAX(started_at::DATE) AS last_d
+                    FROM normalized
+                    GROUP BY canon
+                ) last ON last.canon = pr.canon
+                GROUP BY pr.canon, pr.pr_kg
             )
-            SELECT exercise, pr_kg, pr_reps, pr_date, last_performed
-            FROM pr_set
-            ORDER BY pr_kg DESC
+            SELECT d.exercise, ps.pr_kg, ps.pr_reps, ps.pr_date, ps.last_performed
+            FROM pr_set ps
+            JOIN display_name d ON d.canon = ps.canon
+            ORDER BY ps.pr_kg DESC
             LIMIT $n
             """,
             {"n": n},

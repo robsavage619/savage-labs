@@ -14,8 +14,13 @@ def _content_hash(*parts: str) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
-def ingest_fitbod(csv_path: Path | None = None) -> dict[str, int]:
-    """Parse WorkoutExport.csv and upsert into workouts + workout_sets + working_weights."""
+def ingest_fitbod(csv_path: Path | None = None, rebuild: bool = False) -> dict[str, int]:
+    """Parse WorkoutExport.csv and upsert into workouts + workout_sets + working_weights.
+
+    When ``rebuild=True``, all existing Fitbod workouts and sets are deleted first.
+    Use this when ingest logic changes (e.g. multiplier correction) and historical
+    rows must be reprocessed from scratch.
+    """
     from shc.config import settings
     from shc.db.schema import get_read_conn
 
@@ -26,6 +31,15 @@ def ingest_fitbod(csv_path: Path | None = None) -> dict[str, int]:
         raise FileNotFoundError(f"Fitbod CSV not found at {csv_path}")
 
     log.info("Parsing Fitbod CSV: %s", csv_path)
+
+    if rebuild:
+        conn = get_read_conn()
+        before = conn.execute(
+            "SELECT COUNT(*) FROM workout_sets ws JOIN workouts w ON w.id = ws.workout_id WHERE w.source = 'fitbod'"
+        ).fetchone()[0]
+        conn.execute("DELETE FROM workout_sets WHERE workout_id IN (SELECT id FROM workouts WHERE source = 'fitbod')")
+        conn.execute("DELETE FROM workouts WHERE source = 'fitbod'")
+        log.info("Rebuild: deleted %d existing Fitbod sets", before)
 
     # Group rows by session (same Date = same workout)
     sessions: dict[str, list[dict]] = {}
@@ -73,7 +87,14 @@ def ingest_fitbod(csv_path: Path | None = None) -> dict[str, int]:
 
         for idx, row in enumerate(rows):
             try:
-                weight_kg = float(row.get("Weight(kg)", 0) or 0)
+                # Fitbod's Weight(kg) is per-implement (e.g. one dumbbell).
+                # The `multiplier` column is 2.0 for paired dumbbells, 1.0 for
+                # barbells/machines/cables. Multiply to get total weight lifted,
+                # which is the convention used elsewhere in SHC (and what Hevy
+                # reports).
+                raw_weight = float(row.get("Weight(kg)", 0) or 0)
+                multiplier = float(row.get("multiplier", 1) or 1)
+                weight_kg = raw_weight * multiplier
                 reps = int(float(row.get("Reps", 0) or 0))
                 is_warmup = row.get("isWarmup", "false").strip().lower() == "true"
                 exercise = row.get("Exercise", "").strip()

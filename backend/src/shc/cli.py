@@ -74,15 +74,19 @@ async def _seed(days: int) -> None:
 
 @main.command("ingest-fitbod")
 @click.option("--csv", "csv_path", default=None, help="Path to WorkoutExport.csv (auto-detected if omitted)")
-def ingest_fitbod(csv_path: str | None) -> None:
+@click.option("--rebuild", is_flag=True, help="Wipe existing Fitbod data and re-ingest from scratch")
+def ingest_fitbod(csv_path: str | None, rebuild: bool) -> None:
     """Ingest Fitbod WorkoutExport.csv into workouts + workout_sets + working_weights."""
     from pathlib import Path
-    from shc.ingest.fitbod import ingest_fitbod as _ingest, _FITBOD_CSV
+    from shc.config import settings
+    from shc.ingest.fitbod import ingest_fitbod as _ingest
 
     init_db()
-    path = Path(csv_path) if csv_path else _FITBOD_CSV
+    path = Path(csv_path) if csv_path else settings.fitbod_csv_path
     click.echo(f"Loading Fitbod data from {path} ...")
-    result = _ingest(path)
+    if rebuild:
+        click.echo("Rebuild mode: wiping existing Fitbod rows before re-ingest.")
+    result = _ingest(path, rebuild=rebuild)
     click.echo(f"Done: {result['workouts_inserted']} new sessions, {result['sets_inserted']} new sets "
                f"({result['sessions']} total sessions in CSV, {result['skipped']} skipped)")
 
