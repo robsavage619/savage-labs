@@ -2368,22 +2368,34 @@ async def lift_progression(
     try:
         rows = conn.execute(
             """
-            WITH deduped AS (
+            -- For each (day, canonical exercise), pick one source's rows.
+            -- Hevy wins if present; Fitbod is the fallback. This avoids
+            -- double-counting workouts logged to both apps without losing
+            -- legitimate identical sets within a single session.
+            WITH labeled AS (
                 SELECT
                     ws.*,
                     w.source,
                     w.started_at::DATE AS day_d,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY w.started_at::DATE,
-                                     trim(regexp_replace(ws.exercise, '\\s*\\([^)]*\\)\\s*$', '')),
-                                     ROUND(ws.weight_kg / 0.5) * 0.5,
-                                     ws.reps,
-                                     ws.is_warmup
-                        ORDER BY CASE w.source WHEN 'hevy' THEN 0 WHEN 'fitbod' THEN 1 ELSE 2 END
-                    ) AS dup_rank
+                    trim(regexp_replace(ws.exercise, '\\s*\\([^)]*\\)\\s*$', '')) AS canon
                 FROM workout_sets ws
                 JOIN workouts w ON w.id = ws.workout_id
                 WHERE LOWER(ws.exercise) LIKE $pat
+            ),
+            best_source AS (
+                SELECT day_d, canon,
+                       CASE WHEN COUNT(*) FILTER (WHERE source = 'hevy') > 0 THEN 'hevy'
+                            WHEN COUNT(*) FILTER (WHERE source = 'fitbod') > 0 THEN 'fitbod'
+                            ELSE MIN(source) END AS chosen_source
+                FROM labeled
+                GROUP BY day_d, canon
+            ),
+            deduped AS (
+                SELECT l.*
+                FROM labeled l
+                JOIN best_source b ON b.day_d = l.day_d
+                                  AND b.canon = l.canon
+                                  AND b.chosen_source = l.source
             )
             SELECT
                 day_d AS day,
@@ -2394,7 +2406,6 @@ async def lift_progression(
                 SUM(weight_kg * reps) FILTER (WHERE NOT is_warmup) AS volume_kg,
                 AVG(rpe) FILTER (WHERE NOT is_warmup AND rpe IS NOT NULL) AS avg_rpe
             FROM deduped
-            WHERE dup_rank = 1
             GROUP BY day_d, exercise
             ORDER BY day_d DESC
             LIMIT $n
