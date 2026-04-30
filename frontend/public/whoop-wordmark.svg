@@ -4,7 +4,7 @@
     heavy uppercase mark; not a verbatim trademark. Single-color so it can
     be tinted via currentColor.
   -->
-  <g fill="currentColor">
+  <g fill="#ffffff">
     <!-- W -->
     <path d="M0 8 L14 8 L24 56 L34 8 L48 8 L58 56 L68 8 L82 8 L66 72 L52 72 L41 24 L30 72 L16 72 Z"/>
     <!-- H -->
