@@ -2358,24 +2358,45 @@ async def lift_progression(
     exercise: str = Query(..., description="Exercise name (partial match ok)"),
     sessions: int = Query(default=20, gt=0, le=100),
 ) -> dict:
-    """Return per-session weight/volume history for a specific exercise."""
+    """Return per-session weight/volume history for a specific exercise.
+
+    Dedupes sets that appear in both Fitbod and Hevy (same day + exercise +
+    weight + reps). Hevy wins as the canonical source when both are present,
+    since Hevy is the live API and Fitbod is a historical CSV.
+    """
     conn = get_read_conn()
     try:
         rows = conn.execute(
             """
+            WITH deduped AS (
+                SELECT
+                    ws.*,
+                    w.source,
+                    w.started_at::DATE AS day_d,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY w.started_at::DATE,
+                                     trim(regexp_replace(ws.exercise, '\\s*\\([^)]*\\)\\s*$', '')),
+                                     ROUND(ws.weight_kg / 0.5) * 0.5,
+                                     ws.reps,
+                                     ws.is_warmup
+                        ORDER BY CASE w.source WHEN 'hevy' THEN 0 WHEN 'fitbod' THEN 1 ELSE 2 END
+                    ) AS dup_rank
+                FROM workout_sets ws
+                JOIN workouts w ON w.id = ws.workout_id
+                WHERE LOWER(ws.exercise) LIKE $pat
+            )
             SELECT
-                w.started_at::DATE AS day,
-                ws.exercise,
-                COUNT(*) FILTER (WHERE NOT ws.is_warmup) AS work_sets,
-                MAX(ws.weight_kg) FILTER (WHERE NOT ws.is_warmup) AS max_kg,
-                SUM(ws.reps) FILTER (WHERE NOT ws.is_warmup) AS total_reps,
-                SUM(ws.weight_kg * ws.reps) FILTER (WHERE NOT ws.is_warmup) AS volume_kg,
-                AVG(ws.rpe) FILTER (WHERE NOT ws.is_warmup AND ws.rpe IS NOT NULL) AS avg_rpe
-            FROM workout_sets ws
-            JOIN workouts w ON w.id = ws.workout_id
-            WHERE LOWER(ws.exercise) LIKE $pat
-            GROUP BY day, ws.exercise
-            ORDER BY day DESC
+                day_d AS day,
+                exercise,
+                COUNT(*) FILTER (WHERE NOT is_warmup) AS work_sets,
+                MAX(weight_kg) FILTER (WHERE NOT is_warmup) AS max_kg,
+                SUM(reps) FILTER (WHERE NOT is_warmup) AS total_reps,
+                SUM(weight_kg * reps) FILTER (WHERE NOT is_warmup) AS volume_kg,
+                AVG(rpe) FILTER (WHERE NOT is_warmup AND rpe IS NOT NULL) AS avg_rpe
+            FROM deduped
+            WHERE dup_rank = 1
+            GROUP BY day_d, exercise
+            ORDER BY day_d DESC
             LIMIT $n
             """,
             {"pat": f"%{exercise.lower()}%", "n": sessions},
