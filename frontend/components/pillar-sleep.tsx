@@ -49,10 +49,15 @@ function SleepRow({ entry }: { entry: SleepEntry }) {
     { k: "light" as const, min: st.light_min ?? 0 },
     { k: "awake" as const, min: st.awake_min ?? 0 },
   ].filter((s) => s.min > 0);
-  const label = new Date(entry.date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" });
+  const d = new Date(entry.date + "T00:00:00");
+  const wk = d.toLocaleDateString("en-US", { weekday: "short" });
+  const md = d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
   return (
     <div className="flex items-center gap-3 group">
-      <span className="text-[10.5px] text-[var(--text-dim)] w-7">{label}</span>
+      <span className="text-[10.5px] text-[var(--text-dim)] w-14 tabular-nums shrink-0">
+        <span className="text-[var(--text-muted)]">{wk}</span>{" "}
+        <span className="text-[var(--text-faint)]">{md}</span>
+      </span>
       <div className="flex h-[8px] flex-1 rounded-full overflow-hidden gap-px bg-[oklch(1_0_0/0.04)]">
         {segs.map((s) => (
           <div
@@ -92,6 +97,7 @@ export function PillarSleep() {
   const avgRemPct = totalMinutes ? (parsed.reduce((a, { s }) => a + (s.rem_min ?? 0), 0) / totalMinutes) * 100 : 0;
   const avgHours = stats.data?.sleep.avg_7d ?? 0;
   const consistency = stats.data?.sleep.consistency_stdev ?? null;
+  const debt = stats.data?.sleep.debt_7d_hours ?? null;
 
   const best = parsed.reduce<{ e: SleepEntry; total: number } | null>((best, cur) => {
     const total = (cur.s.deep_min ?? 0) + (cur.s.rem_min ?? 0) + (cur.s.light_min ?? 0);
@@ -179,16 +185,32 @@ export function PillarSleep() {
         ))}
       </div>
 
-      {best && (
-        <div className="mt-auto pt-3 text-[11.5px] text-[var(--text-muted)]">
-          <span className="text-[var(--text-dim)]">Best night </span>
-          <span className="text-[var(--text-primary)] tabular-nums">
-            {new Date(best.e.date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+      <div className="mt-auto pt-3 flex items-baseline justify-between text-[11.5px] text-[var(--text-muted)] gap-3">
+        {best && (
+          <span>
+            <span className="text-[var(--text-dim)]">Best </span>
+            <span className="text-[var(--text-primary)] tabular-nums">
+              {new Date(best.e.date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+            </span>
+            <span className="text-[var(--text-dim)]"> · deep </span>
+            <span className="tabular-nums">{(((best.e ? parseStages(best.e.stages).deep_min ?? 0 : 0) / best.total) * 100).toFixed(0)}%</span>
           </span>
-          <span className="text-[var(--text-dim)]"> · deep </span>
-          <span className="tabular-nums">{(((best.e ? parseStages(best.e.stages).deep_min ?? 0 : 0) / best.total) * 100).toFixed(0)}%</span>
-        </div>
-      )}
+        )}
+        {debt != null && (
+          <span className="tabular-nums">
+            <span className="text-[var(--text-dim)]">7d debt </span>
+            <span style={{ color: debt > 5 ? "var(--negative)" : debt > 2 ? "var(--neutral)" : "var(--positive)" }}>
+              {debt > 0 ? "−" : ""}{Math.abs(debt).toFixed(1)}h
+            </span>
+          </span>
+        )}
+      </div>
+
+      <p className="mt-3 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        Aim 7.5h+ with 15–20% deep and 20–25% REM. Consistency &lt; 1.0σ keeps the circadian
+        clock tight. Debt &gt; 5h hits HRV and recovery within 48h — pay it back.
+      </p>
     </div>
   );
 }

@@ -616,9 +616,15 @@ export function StrengthPanel() {
   return (
     <div className="shc-card shc-enter p-5 space-y-6">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-[13px] font-semibold text-[var(--text-primary)] tracking-tight">Strength Training</h2>
+        <h2 className="shc-section-title">Strength Training</h2>
         <span className="text-[10.5px] text-[var(--text-faint)]">Fitbod · 2017 – present</span>
       </div>
+      <p className="shc-helptext -mt-3">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        Volume load (kg lifted/wk) drives hypertrophy &amp; strength; aim for slow-up trend.
+        Push:pull ratio 0.8–1.2 keeps shoulders balanced. PR staleness &gt; 12 mo means it&apos;s
+        time to revisit the lift.
+      </p>
 
       <SessionHeader />
       <Heatmap />

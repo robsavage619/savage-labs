@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 80" fill="none">
+  <!--
+    WHOOP-style geometric wordmark. Custom letterforms approximating the
+    heavy uppercase mark; not a verbatim trademark. Single-color so it can
+    be tinted via currentColor.
+  -->
+  <g fill="currentColor">
+    <!-- W -->
+    <path d="M0 8 L14 8 L24 56 L34 8 L48 8 L58 56 L68 8 L82 8 L66 72 L52 72 L41 24 L30 72 L16 72 Z"/>
+    <!-- H -->
+    <path d="M92 8 L106 8 L106 32 L130 32 L130 8 L144 8 L144 72 L130 72 L130 44 L106 44 L106 72 L92 72 Z"/>
+    <!-- O -->
+    <path d="M186 6 C170 6 158 20 158 40 C158 60 170 74 186 74 C202 74 214 60 214 40 C214 20 202 6 186 6 Z M186 18 C195 18 200 27 200 40 C200 53 195 62 186 62 C177 62 172 53 172 40 C172 27 177 18 186 18 Z"/>
+    <!-- O -->
+    <path d="M252 6 C236 6 224 20 224 40 C224 60 236 74 252 74 C268 74 280 60 280 40 C280 20 268 6 252 6 Z M252 18 C261 18 266 27 266 40 C266 53 261 62 252 62 C243 62 238 53 238 40 C238 27 243 18 252 18 Z"/>
+    <!-- P -->
+    <path d="M290 8 L320 8 C334 8 344 18 344 32 C344 46 334 56 320 56 L304 56 L304 72 L290 72 Z M304 20 L304 44 L318 44 C324 44 330 40 330 32 C330 24 324 20 318 20 Z"/>
+  </g>
+</svg>

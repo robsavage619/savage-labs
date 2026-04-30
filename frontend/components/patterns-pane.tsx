@@ -148,8 +148,8 @@ function SleepScatterChart({ data }: { data: { date: string; recovery: number; s
   );
 }
 
-function HrvScatterChart({ data }: { data: { date: string; recovery: number; hrv: number | null }[] }) {
-  const points = data.filter(d => d.hrv != null && d.hrv > 0);
+function HrvScatterChart({ data }: { data: { date: string; recovery: number | null; hrv: number | null }[] }) {
+  const points = data.filter((d): d is { date: string; recovery: number; hrv: number } => d.hrv != null && d.hrv > 0 && d.recovery != null);
   return (
     <div>
       <div className="flex items-baseline justify-between mb-2">
@@ -215,6 +215,12 @@ export function PatternsPane() {
 
   return (
     <div className="space-y-6">
+      <p className="shc-helptext">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        Patterns surface long-running tendencies — which day of week you recover best,
+        how often you land green vs red, and how sleep + HRV relate to recovery.
+        Use these to schedule hard sessions on your statistically-best days.
+      </p>
       <DayOfWeekChart data={data.by_day_of_week} />
       <DistributionChart data={data.distribution} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

@@ -12,6 +12,7 @@ import { SyncStatus } from "@/components/sync-status";
 import { DashboardClock } from "@/components/dashboard-clock";
 import { NextWorkoutCard } from "@/components/next-workout-card";
 import { CardioPanel } from "@/components/cardio-panel";
+import { WhoopVitals } from "@/components/whoop-vitals";
 import { ErrorBoundary } from "@/components/error-boundary";
 
 export default function Dashboard() {
@@ -50,6 +51,10 @@ export default function Dashboard() {
         <div className="space-y-4 min-w-0">
           <ErrorBoundary label="Command briefing">
             <CommandBriefing />
+          </ErrorBoundary>
+
+          <ErrorBoundary label="WHOOP vitals">
+            <WhoopVitals />
           </ErrorBoundary>
 
           <ErrorBoundary label="Health story">

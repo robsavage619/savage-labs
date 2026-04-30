@@ -49,6 +49,11 @@ function RecoveryTrendPane() {
 
   return (
     <div className="space-y-5">
+      <p className="shc-helptext">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        90-day recovery and HRV with ±1σ band — the band shows your individual normal range.
+        Dips below the band that last more than a few days warrant a closer look at sleep, illness, or load.
+      </p>
       <div>
         <div className="flex items-baseline justify-between mb-2">
           <Eyebrow>Recovery · 90d</Eyebrow>
@@ -149,18 +154,19 @@ export function TrendIntelligence() {
 
   return (
     <div className="shc-card shc-enter p-5">
-      <div className="flex items-baseline justify-between mb-4">
-        <Eyebrow>Trend intelligence</Eyebrow>
-        <div className="flex gap-1">
+      <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
+        <h2 className="shc-section-title">Trend Intelligence</h2>
+        <div className="flex gap-0.5 p-0.5 rounded-[var(--r-md)]" style={{ background: "oklch(1 0 0 / 0.025)", border: "1px solid var(--hairline)" }}>
           {TABS.map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-3 py-1 text-[11px] rounded-md transition-colors tabular-nums ${
+              className={`px-3 py-1.5 text-[10.5px] rounded-[6px] transition-colors uppercase tracking-[0.16em] ${
                 tab === t
-                  ? "bg-[oklch(1_0_0/0.08)] text-[var(--text-primary)]"
+                  ? "bg-[oklch(1_0_0/0.07)] text-[var(--text-primary)]"
                   : "text-[var(--text-dim)] hover:text-[var(--text-muted)]"
               }`}
+              style={{ fontFamily: "var(--font-orbitron)" }}
             >
               {t}
             </button>

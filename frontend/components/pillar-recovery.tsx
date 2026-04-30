@@ -280,8 +280,8 @@ export function PillarRecovery() {
         </div>
       </div>
 
-      <div className="mt-auto pt-4">
-        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider mb-2">What&apos;s driving this</p>
+      <div className="mt-4">
+        <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider mb-2" style={{ fontFamily: "var(--font-orbitron)", letterSpacing: "0.18em" }}>What&apos;s driving this</p>
         <ul className="space-y-1.5">
           {drivers.map((d) => (
             <li key={d.label} className="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
@@ -296,6 +296,13 @@ export function PillarRecovery() {
           ))}
         </ul>
       </div>
+
+      <p className="mt-auto pt-4 text-[10.5px] text-[var(--text-dim)] leading-snug">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        Recovery 67+ green-lights intensity, 34–66 favors moderate work, &lt;34 means rest. HRV σ shows
+        autonomic deviation from your 28-day baseline; β-blocker days blunt the signal so trust the
+        trend over a single day.
+      </p>
     </div>
   );
 }

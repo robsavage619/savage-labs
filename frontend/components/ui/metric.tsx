@@ -84,3 +84,21 @@ export function Dot({ tone = "neutral" }: { tone?: "positive" | "neutral" | "neg
   const color = tone === "positive" ? "var(--positive)" : tone === "negative" ? "var(--negative)" : "var(--neutral)";
   return <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color }} />;
 }
+
+export function SectionTitle({ children, hint }: { children: ReactNode; hint?: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <h2 className="shc-section-title">{children}</h2>
+      {hint && <span className="text-[10px] text-[var(--text-faint)] tabular-nums">{hint}</span>}
+    </div>
+  );
+}
+
+export function HowToRead({ children }: { children: ReactNode }) {
+  return (
+    <p className="shc-helptext mt-1.5 mb-3">
+      <span className="text-[var(--text-muted)] mr-1">How to read this.</span>
+      {children}
+    </p>
+  );
+}

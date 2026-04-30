@@ -146,7 +146,14 @@ export function PillarTrainingLoad() {
         </div>
       </div>
 
-      <div className="mt-auto pt-4 grid grid-cols-3 gap-3 text-[11px]">
+      <p className="mt-3 text-[10.5px] text-[var(--text-dim)] leading-snug">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        ACWR (acute ÷ chronic load) 0.8–1.3 is the adaptation sweet spot.
+        &gt; 1.5 spikes injury risk; &lt; 0.8 means undertraining.
+        Today&apos;s call combines ACWR with HRV σ.
+      </p>
+
+      <div className="mt-4 pt-4 grid grid-cols-3 gap-3 text-[11px] border-t border-[var(--hairline)]">
         <div className="border-l border-[var(--hairline)] pl-3">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Train streak</p>
           <p className="tabular-nums text-[var(--text-primary)] mt-0.5 text-[13px]">

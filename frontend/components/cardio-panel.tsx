@@ -180,6 +180,56 @@ function saveHidden(s: Set<string>) {
   localStorage.setItem(HIDDEN_KEY, JSON.stringify([...s]));
 }
 
+function TrendKpi({
+  label,
+  value,
+  unit,
+  delta,
+  deltaUnit,
+  higherIsBetter,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  delta: number | null;
+  deltaUnit: string;
+  higherIsBetter: boolean;
+}) {
+  const tone =
+    delta == null || Math.abs(delta) < 0.5
+      ? "neutral"
+      : (delta > 0) === higherIsBetter
+        ? "positive"
+        : "negative";
+  const color =
+    tone === "positive" ? "var(--positive)" : tone === "negative" ? "var(--negative)" : "var(--text-faint)";
+  const arrow = delta == null ? "·" : Math.abs(delta) < 0.5 ? "→" : delta > 0 ? "↑" : "↓";
+  return (
+    <div>
+      <p
+        className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
+        style={{ fontFamily: "var(--font-orbitron)" }}
+      >
+        {label}
+      </p>
+      <div className="flex items-baseline gap-1.5">
+        <span
+          className="text-[22px] leading-none font-light tabular-nums text-[var(--text-primary)]"
+          style={{ fontFamily: "var(--font-orbitron)" }}
+        >
+          {value}
+        </span>
+        {unit && <span className="text-[10px] text-[var(--text-faint)]">{unit}</span>}
+      </div>
+      <p className="text-[10px] tabular-nums mt-1" style={{ color }}>
+        {delta == null
+          ? <span className="text-[var(--text-faint)]">no prior data</span>
+          : <>{arrow} {Math.abs(delta) < 0.5 ? "flat" : `${delta > 0 ? "+" : ""}${delta.toFixed(deltaUnit === "%" ? 0 : 1)}${deltaUnit}`} <span className="text-[var(--text-faint)]">vs prior 14d</span></>}
+      </p>
+    </div>
+  );
+}
+
 function SessionRow({
   s,
   hrShift,
@@ -299,12 +349,57 @@ export function CardioPanel() {
     [summary],
   );
 
+  // ── 4-week trend windows (this fortnight vs prior fortnight) ─────────────
+  const [showAll, setShowAll] = useState(false);
+  const trends = useMemo(() => {
+    const allSessions = data?.sessions ?? [];
+    const now = Date.now();
+    const oneDay = 86_400_000;
+    const recent: typeof allSessions = [];
+    const prior: typeof allSessions = [];
+    for (const s of allSessions) {
+      const t = new Date(s.date + "T00:00:00").getTime();
+      const ageDays = (now - t) / oneDay;
+      if (ageDays <= 14) recent.push(s);
+      else if (ageDays <= 28) prior.push(s);
+    }
+    const sumMin = (arr: typeof allSessions) => arr.reduce((a, s) => a + (s.duration_min ?? 0), 0);
+    const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+    const hrPts = (arr: typeof allSessions) => arr.map((s) => s.avg_hr ?? null).filter((x): x is number => x != null);
+    const rpePts = (arr: typeof allSessions) => arr.map((s) => s.rpe ?? null).filter((x): x is number => x != null);
+    const kcalSum = (arr: typeof allSessions) => arr.reduce((a, s) => a + (s.kcal ?? 0), 0);
+
+    const minNow = sumMin(recent), minPrev = sumMin(prior);
+    const hrNow = avg(hrPts(recent)), hrPrev = avg(hrPts(prior));
+    const rpeNow = avg(rpePts(recent)), rpePrev = avg(rpePts(prior));
+    const kcalNow = kcalSum(recent), kcalPrev = kcalSum(prior);
+
+    const pctChange = (nowV: number | null, prev: number | null) =>
+      nowV != null && prev != null && prev > 0 ? ((nowV - prev) / prev) * 100 : null;
+
+    return {
+      minPerWeek: minNow / 2,
+      minPctChange: pctChange(minNow, minPrev),
+      avgHr: hrNow,
+      avgHrChange: hrNow != null && hrPrev != null ? hrNow - hrPrev : null,
+      avgRpe: rpeNow,
+      avgRpeChange: rpeNow != null && rpePrev != null ? rpeNow - rpePrev : null,
+      kcalPerWeek: kcalNow / 2,
+      kcalPctChange: pctChange(kcalNow, kcalPrev),
+    };
+  }, [data]);
+
   return (
     <div className="shc-card shc-enter p-5 space-y-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-[13px] font-semibold text-[var(--text-primary)] tracking-tight">Cardio &amp; Sports</h2>
+        <h2 className="shc-section-title">Cardio &amp; Sports</h2>
         <span className="text-[10.5px] text-[var(--text-faint)]">last 60 days · manual + WHOOP</span>
       </div>
+      <p className="shc-helptext -mt-2">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        Time in Z2 (60–70% HRmax) builds aerobic capacity. Avg HR drifting <em>down</em> at the same RPE = improving fitness.
+        Aim for ≥150 cardio min/wk with ≥45 min in Z2.
+      </p>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
         <div>
@@ -360,6 +455,40 @@ export function CardioPanel() {
         </div>
       </div>
 
+      {/* ── Trend KPIs · last 14d vs prior 14d ─────────────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
+        <TrendKpi
+          label="Cardio · min/wk"
+          value={trends.minPerWeek > 0 ? Math.round(trends.minPerWeek).toString() : "—"}
+          delta={trends.minPctChange}
+          deltaUnit="%"
+          higherIsBetter
+        />
+        <TrendKpi
+          label="Avg HR"
+          value={trends.avgHr != null ? Math.round(trends.avgHr).toString() : "—"}
+          unit="bpm"
+          delta={trends.avgHrChange}
+          deltaUnit=" bpm"
+          // Lower avg HR at same effort = improving fitness
+          higherIsBetter={false}
+        />
+        <TrendKpi
+          label="Avg RPE"
+          value={trends.avgRpe != null ? trends.avgRpe.toFixed(1) : "—"}
+          delta={trends.avgRpeChange}
+          deltaUnit=""
+          higherIsBetter={false}
+        />
+        <TrendKpi
+          label="kcal / wk"
+          value={trends.kcalPerWeek > 0 ? Math.round(trends.kcalPerWeek).toString() : "—"}
+          delta={trends.kcalPctChange}
+          deltaUnit="%"
+          higherIsBetter
+        />
+      </div>
+
       <LogForm onLogged={refresh} />
 
       <div className="rounded-[var(--r-md)] overflow-hidden" style={{ border: "1px solid var(--hairline)" }}>
@@ -389,10 +518,20 @@ export function CardioPanel() {
                 </td>
               </tr>
             ) : (
-              sessions.map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} onDelete={handleDelete} onHide={handleHide} />)
+              (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} onDelete={handleDelete} onHide={handleHide} />)
             )}
           </tbody>
         </table>
+        {sessions.length > 8 && (
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            className="w-full text-center py-2 text-[10.5px] uppercase tracking-wider text-[var(--text-dim)] hover:text-[var(--text-muted)] transition-colors border-t border-[var(--hairline)]"
+            style={{ fontFamily: "var(--font-orbitron)", letterSpacing: "0.18em" }}
+          >
+            {showAll ? `Show recent only` : `View all ${sessions.length} sessions`}
+          </button>
+        )}
       </div>
       <p className="text-[10px] text-[var(--text-faint)] leading-snug">
         HR zones use Tanaka formula (208 − 0.7×age ≈ {hrMax()} max

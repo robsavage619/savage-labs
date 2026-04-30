@@ -70,10 +70,28 @@ export function CorrelationCards() {
   }
 
   if (significant.length === 0) {
+    const days = data[0]?.sample_days ?? 0;
+    const remaining = Math.max(0, 14 - days);
     return (
-      <div className="rounded-lg border border-dashed border-[var(--hairline-strong)] p-6 text-center">
-        <p className="text-[13px] text-[var(--text-muted)]">Not enough journal data yet.</p>
-        <p className="text-[11.5px] text-[var(--text-dim)] mt-1">Correlations surface after ~14 paired days.</p>
+      <div className="space-y-3">
+        <p className="shc-helptext">
+          <span className="text-[var(--text-muted)]">How to read this. </span>
+          Each card shows the avg HRV difference between days where the journal answer
+          was Yes vs No. Bars are scaled to the largest effect; positive (green) means
+          higher HRV.
+        </p>
+        <div className="rounded-[var(--r-md)] border border-dashed border-[var(--hairline-strong)] p-6 text-center">
+          <p className="text-[13px] text-[var(--text-muted)]">Not enough journal data yet.</p>
+          <p className="text-[11.5px] text-[var(--text-dim)] mt-1">
+            {days > 0
+              ? `${days} paired days so far · ${remaining} more days unlock first correlations`
+              : "Log the WHOOP journal nightly. After ~14 paired days, factor effects appear here."}
+          </p>
+        </div>
+        <ul className="text-[11px] text-[var(--text-dim)] space-y-1 pt-1">
+          <li>• Sleep, hydration, alcohol, and screen time are the highest-signal factors.</li>
+          <li>• Effects ≥ 1ms HRV are surfaced; below that they&apos;re statistical noise.</li>
+        </ul>
       </div>
     );
   }
@@ -86,6 +104,11 @@ export function CorrelationCards() {
           {significant.length} factors · {data[0]?.sample_days ?? 0}+ days
         </span>
       </div>
+      <p className="shc-helptext">
+        <span className="text-[var(--text-muted)]">How to read this. </span>
+        Each bar is the average HRV difference (next-morning) between days when this
+        factor was on vs off. Green = HRV-positive, red = HRV-negative. Bigger bar = bigger effect.
+      </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {significant.map(c => {
           const label = QUESTION_LABELS[c.question] ?? c.question;
