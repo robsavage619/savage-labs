@@ -1380,28 +1380,352 @@ async def add_medication(body: MedicationIn) -> dict:
 
 @router.get("/clinical/overview")
 async def clinical_overview() -> dict:
+    """Comprehensive clinical snapshot — drives the Clinical pane.
+
+    Returns conditions (with ICD-10), medications (with start dates), latest
+    labs (with ref ranges, H/L flags, days since drawn), full lab history per
+    analyte, and current vitals. The frontend layers risk-stratification on top.
+    """
     conn = get_read_conn()
     try:
         conditions = conn.execute(
-            "SELECT name, onset, status FROM conditions WHERE valid_to IS NULL ORDER BY onset DESC"
+            """
+            SELECT name, onset, status, icd10
+            FROM conditions
+            ORDER BY (status = 'resolved'), onset DESC NULLS LAST
+            """
         ).fetchall()
         medications = conn.execute(
-            "SELECT name, dose, frequency, started FROM medications WHERE valid_to IS NULL ORDER BY started DESC"
-        ).fetchall()
-        key_labs = conn.execute(
             """
-            SELECT DISTINCT ON (name) name, value, unit, collected_at
+            SELECT name, dose, frequency, started, stopped
+            FROM medications
+            WHERE valid_to IS NULL AND stopped IS NULL
+            ORDER BY started DESC NULLS LAST
+            """
+        ).fetchall()
+        # Latest value per lab name
+        latest_labs = conn.execute(
+            """
+            SELECT DISTINCT ON (name)
+                name, value, unit, ref_low, ref_high, collected_at, loinc
             FROM labs
             WHERE value IS NOT NULL
             ORDER BY name, collected_at DESC
             """
         ).fetchall()
+        # Full history per lab name (for trends)
+        all_labs = conn.execute(
+            """
+            SELECT name, value, unit, ref_low, ref_high, collected_at
+            FROM labs
+            WHERE value IS NOT NULL
+            ORDER BY name, collected_at
+            """
+        ).fetchall()
+        # Vitals: latest per metric
+        vitals = conn.execute(
+            """
+            SELECT DISTINCT ON (metric) metric, value_num, unit, ts
+            FROM measurements
+            WHERE source = 'kaiser_summary'
+            ORDER BY metric, ts DESC
+            """
+        ).fetchall()
     finally:
         conn.close()
+
+    def _flag(value: float | None, low: float | None, high: float | None) -> str | None:
+        if value is None:
+            return None
+        if low is not None and value < low:
+            return "L"
+        if high is not None and value > high:
+            return "H"
+        return None
+
+    history_by_name: dict[str, list[dict]] = {}
+    for r in all_labs:
+        name, value, unit, rl, rh, ts = r
+        history_by_name.setdefault(name, []).append({
+            "value": round(float(value), 2),
+            "unit": unit,
+            "ref_low": rl,
+            "ref_high": rh,
+            "collected_at": str(ts) if ts else None,
+            "flag": _flag(float(value), rl, rh),
+        })
+
     return {
-        "conditions": [{"name": r[0], "onset": str(r[1]) if r[1] else None, "status": r[2]} for r in conditions],
-        "medications": [{"name": r[0], "dose": r[1], "frequency": r[2], "started": str(r[3]) if r[3] else None} for r in medications],
-        "key_labs": [{"name": r[0], "value": round(r[1], 2), "unit": r[2], "collected_at": str(r[3]) if r[3] else None} for r in key_labs],
+        "conditions": [
+            {
+                "name": r[0],
+                "onset": str(r[1]) if r[1] else None,
+                "status": r[2],
+                "icd10": r[3],
+            }
+            for r in conditions
+        ],
+        "medications": [
+            {
+                "name": r[0],
+                "dose": r[1],
+                "frequency": r[2],
+                "started": str(r[3]) if r[3] else None,
+                "stopped": str(r[4]) if r[4] else None,
+            }
+            for r in medications
+        ],
+        "key_labs": [
+            {
+                "name": r[0],
+                "value": round(float(r[1]), 2),
+                "unit": r[2],
+                "ref_low": r[3],
+                "ref_high": r[4],
+                "collected_at": str(r[5]) if r[5] else None,
+                "loinc": r[6],
+                "flag": _flag(float(r[1]), r[3], r[4]),
+            }
+            for r in latest_labs
+        ],
+        "lab_history": history_by_name,
+        "vitals": [
+            {
+                "metric": r[0],
+                "value": round(float(r[1]), 2),
+                "unit": r[2],
+                "ts": str(r[3]) if r[3] else None,
+            }
+            for r in vitals
+        ],
+    }
+
+
+# Lab follow-up cadences (months). Conservative defaults aligned with USPSTF /
+# ADA / AHA guidance for an adult with elevated cardiometabolic risk markers.
+_LAB_FOLLOWUP_MONTHS = {
+    "HbA1c": 12,
+    "Total Cholesterol": 12,
+    "LDL Cholesterol (calc)": 12,
+    "HDL Cholesterol": 12,
+    "Triglycerides": 12,
+    "TTG IgA": 36,
+}
+
+# Med safety advisories — keyed by medication-name substring, lowercase.
+_MED_ADVISORIES: dict[str, list[dict]] = {
+    "propranolol": [
+        {
+            "severity": "warning",
+            "text": "Non-selective β-blocker — monitor for bronchospasm in patients with asthma; albuterol response may be blunted. Confirm metoprolol/atenolol contraindicated before switching.",
+            "applies_when_condition": "asthma",
+        },
+        {
+            "severity": "info",
+            "text": "Blunts RHR & HR-zone response by ~15–20 bpm on dose days. Use RPE as ground truth for cardio intensity.",
+        },
+    ],
+    "escitalopram": [
+        {
+            "severity": "info",
+            "text": "SSRIs can suppress HRV (~5–10%). Read HRV trend, not absolute, while on therapy.",
+        },
+    ],
+    "ciclesonide": [
+        {
+            "severity": "info",
+            "text": "Inhaled corticosteroid — rinse mouth post-dose to reduce thrush risk.",
+        },
+    ],
+}
+
+
+@router.get("/clinical/risk")
+async def clinical_risk() -> dict:
+    """Cardiometabolic risk strip + overdue lab gaps + medication advisories.
+
+    A pragmatic informatics snapshot: BMI/BP/lipid/A1c clustered with
+    risk-zone classification, follow-up gaps surfaced per standard intervals,
+    and medication advisories cross-referenced with active conditions.
+    """
+    today = date.today()
+    conn = get_read_conn()
+    try:
+        labs = conn.execute(
+            """
+            SELECT DISTINCT ON (name) name, value, unit, ref_low, ref_high, collected_at
+            FROM labs WHERE value IS NOT NULL
+            ORDER BY name, collected_at DESC
+            """
+        ).fetchall()
+        vitals = conn.execute(
+            """
+            SELECT DISTINCT ON (metric) metric, value_num, unit, ts
+            FROM measurements
+            WHERE source = 'kaiser_summary'
+            ORDER BY metric, ts DESC
+            """
+        ).fetchall()
+        conditions = conn.execute(
+            "SELECT lower(name) FROM conditions WHERE valid_to IS NULL"
+        ).fetchall()
+        meds = conn.execute(
+            "SELECT name, started FROM medications WHERE valid_to IS NULL AND stopped IS NULL"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    lab_by_name = {r[0]: {"value": float(r[1]), "ref_high": r[4], "collected_at": r[5]} for r in labs}
+    vital_by_metric = {r[0]: {"value": float(r[1]), "ts": r[3]} for r in vitals}
+    active_conditions = [r[0] for r in conditions]
+
+    def _classify_bp(sbp: float, dbp: float) -> str:
+        if sbp >= 140 or dbp >= 90:
+            return "stage2"
+        if sbp >= 130 or dbp >= 80:
+            return "stage1"
+        if sbp >= 120:
+            return "elevated"
+        return "normal"
+
+    def _classify_bmi(bmi: float) -> str:
+        if bmi >= 30:
+            return "obese"
+        if bmi >= 25:
+            return "overweight"
+        if bmi >= 18.5:
+            return "normal"
+        return "underweight"
+
+    def _classify_ldl(ldl: float) -> str:
+        if ldl >= 190:
+            return "very_high"
+        if ldl >= 160:
+            return "high"
+        if ldl >= 130:
+            return "borderline"
+        if ldl >= 100:
+            return "near_optimal"
+        return "optimal"
+
+    def _classify_a1c(a1c: float) -> str:
+        if a1c >= 6.5:
+            return "diabetic"
+        if a1c >= 5.7:
+            return "prediabetic"
+        return "normal"
+
+    cardiometabolic: list[dict] = []
+    sbp = vital_by_metric.get("blood_pressure_systolic")
+    dbp = vital_by_metric.get("blood_pressure_diastolic")
+    if sbp and dbp:
+        cardiometabolic.append({
+            "key": "bp",
+            "label": "Blood pressure",
+            "value": f"{int(sbp['value'])}/{int(dbp['value'])}",
+            "unit": "mmHg",
+            "ts": str(sbp["ts"]),
+            "zone": _classify_bp(sbp["value"], dbp["value"]),
+        })
+
+    bmi = vital_by_metric.get("bmi")
+    if bmi:
+        cardiometabolic.append({
+            "key": "bmi",
+            "label": "BMI",
+            "value": f"{bmi['value']:.1f}",
+            "unit": "kg/m²",
+            "ts": str(bmi["ts"]),
+            "zone": _classify_bmi(bmi["value"]),
+        })
+
+    ldl = lab_by_name.get("LDL Cholesterol (calc)")
+    if ldl:
+        cardiometabolic.append({
+            "key": "ldl",
+            "label": "LDL-C",
+            "value": f"{ldl['value']:.0f}",
+            "unit": "mg/dL",
+            "ts": str(ldl["collected_at"]),
+            "zone": _classify_ldl(ldl["value"]),
+        })
+
+    a1c = lab_by_name.get("HbA1c")
+    if a1c:
+        cardiometabolic.append({
+            "key": "a1c",
+            "label": "HbA1c",
+            "value": f"{a1c['value']:.1f}",
+            "unit": "%",
+            "ts": str(a1c["collected_at"]),
+            "zone": _classify_a1c(a1c["value"]),
+        })
+
+    # Overdue labs
+    overdue: list[dict] = []
+    for name, months in _LAB_FOLLOWUP_MONTHS.items():
+        rec = lab_by_name.get(name)
+        if not rec or not rec["collected_at"]:
+            continue
+        last = rec["collected_at"]
+        if hasattr(last, "date"):
+            last = last.date()
+        days = (today - last).days
+        due_at_days = months * 30
+        if days > due_at_days:
+            overdue.append({
+                "name": name,
+                "last_value": rec["value"],
+                "last_date": str(last),
+                "days_overdue": days - due_at_days,
+                "interval_months": months,
+                "months_since": round(days / 30, 1),
+            })
+    overdue.sort(key=lambda x: -x["days_overdue"])
+
+    # Medication advisories — surface only when the condition trigger applies (or always for plain info).
+    advisories: list[dict] = []
+    for med_name, _started in meds:
+        lower = med_name.lower()
+        for key, items in _MED_ADVISORIES.items():
+            if key in lower:
+                for it in items:
+                    cond_trigger = it.get("applies_when_condition")
+                    if cond_trigger and not any(cond_trigger in c for c in active_conditions):
+                        continue
+                    advisories.append({
+                        "med": med_name.split("(")[0].strip(),
+                        "severity": it["severity"],
+                        "text": it["text"],
+                    })
+
+    # Adherence/onset-window chips for newer meds.
+    onset_windows: list[dict] = []
+    onset_thresholds_days = {"escitalopram": 28, "lexapro": 28, "grastek": 365, "grass pollen": 365}
+    for med_name, started in meds:
+        if not started:
+            continue
+        days = (today - started).days
+        lower = med_name.lower()
+        for key, full_effect_days in onset_thresholds_days.items():
+            if key in lower:
+                onset_windows.append({
+                    "med": med_name.split("(")[0].strip(),
+                    "days_since_start": days,
+                    "full_effect_days": full_effect_days,
+                    "phase": (
+                        "onset" if days < min(28, full_effect_days // 2) else
+                        "active" if days < full_effect_days else
+                        "established"
+                    ),
+                })
+                break
+
+    return {
+        "cardiometabolic": cardiometabolic,
+        "overdue_labs": overdue,
+        "med_advisories": advisories,
+        "onset_windows": onset_windows,
     }
 
 

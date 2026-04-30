@@ -180,10 +180,64 @@ export interface Correlation {
   hrv_delta: number | null;
 }
 
+export interface LabPoint {
+  value: number;
+  unit: string | null;
+  ref_low: number | null;
+  ref_high: number | null;
+  collected_at: string | null;
+  flag: "L" | "H" | null;
+}
+
 export interface ClinicalOverview {
-  conditions: { name: string; onset: string | null; status: string }[];
-  medications: { name: string; dose: string | null; frequency: string | null; started: string | null }[];
-  key_labs: { name: string; value: number; unit: string | null; collected_at: string | null }[];
+  conditions: { name: string; onset: string | null; status: string; icd10: string | null }[];
+  medications: {
+    name: string;
+    dose: string | null;
+    frequency: string | null;
+    started: string | null;
+    stopped: string | null;
+  }[];
+  key_labs: (LabPoint & { name: string; loinc: string | null })[];
+  lab_history: Record<string, LabPoint[]>;
+  vitals: { metric: string; value: number; unit: string | null; ts: string | null }[];
+}
+
+export type RiskZone =
+  | "normal" | "optimal" | "near_optimal"
+  | "elevated" | "borderline" | "overweight" | "prediabetic"
+  | "stage1" | "high"
+  | "stage2" | "very_high" | "obese" | "diabetic"
+  | "underweight";
+
+export interface ClinicalRisk {
+  cardiometabolic: {
+    key: "bp" | "bmi" | "ldl" | "a1c";
+    label: string;
+    value: string;
+    unit: string;
+    ts: string;
+    zone: RiskZone;
+  }[];
+  overdue_labs: {
+    name: string;
+    last_value: number;
+    last_date: string;
+    days_overdue: number;
+    interval_months: number;
+    months_since: number;
+  }[];
+  med_advisories: {
+    med: string;
+    severity: "warning" | "info";
+    text: string;
+  }[];
+  onset_windows: {
+    med: string;
+    days_since_start: number;
+    full_effect_days: number;
+    phase: "onset" | "active" | "established";
+  }[];
 }
 
 export interface TopExercise {
@@ -426,6 +480,7 @@ export const api = {
   trainingPRs: (n = 15) => get<PR[]>(`/api/training/prs?n=${n}`),
   insightsCorrelations: () => get<Correlation[]>("/api/insights/correlations"),
   clinicalOverview: () => get<ClinicalOverview>("/api/clinical/overview"),
+  clinicalRisk: () => get<ClinicalRisk>("/api/clinical/risk"),
   bodyTrend: () => get<WeightPoint[]>("/api/body/trend"),
   bodyVO2Max: () => get<VO2Point[]>("/api/body/vo2max"),
   bodySteps: (days = 90) => get<StepPoint[]>(`/api/body/steps?days=${days}`),

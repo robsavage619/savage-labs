@@ -91,6 +91,23 @@ def ingest_fitbod(csv_path: str | None, rebuild: bool) -> None:
                f"({result['sessions']} total sessions in CSV, {result['skipped']} skipped)")
 
 
+@main.command("ingest-clinical-profile")
+@click.option("--yaml", "yaml_path", default=None, help="Path to clinical_profile.yml")
+def ingest_clinical_profile_cmd(yaml_path: str | None) -> None:
+    """Load Rob's clinical profile (conditions, meds, labs, vitals) from YAML."""
+    from pathlib import Path
+    from shc.ingest.clinical_profile import ingest_clinical_profile as _ingest
+
+    init_db()
+    path = Path(yaml_path) if yaml_path else None
+    click.echo("Loading clinical profile ...")
+    result = _ingest(path)
+    click.echo(
+        f"Done: {result['conditions']} conditions, {result['medications']} meds, "
+        f"{result['labs']} labs, {result['vitals']} vitals."
+    )
+
+
 @main.command()
 @click.confirmation_option(prompt="This will delete and recreate the database. Are you sure?")
 def reset() -> None:
