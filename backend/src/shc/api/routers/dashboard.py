@@ -31,6 +31,7 @@ class WorkoutPlanSubmission(BaseModel):
     plan: dict[str, Any]
     source: str = "claude"
     push_to_hevy: bool = False
+    plan_date: str | None = None  # ISO date override; auto-detected from workout history if omitted
 
 
 class BriefingSubmission(BaseModel):
@@ -2178,13 +2179,13 @@ async def workout_generate() -> dict:
 
     conn = get_read_conn()
     try:
-        context = build_training_context(conn)
-        state = compute_daily_state(conn)
+        context, plan_date = build_training_context(conn)
+        state = compute_daily_state(conn, planning_date=plan_date if plan_date != date.today() else None)
     finally:
         conn.close()
 
     user_prompt = (
-        "Generate today's workout plan as JSON only. Use the live data below to "
+        "Generate the workout plan as JSON only. Use the live data below to "
         "make every prescription specific (real exercise names, real lbs, real RPE).\n\n"
         f"{context}"
     )
@@ -2221,19 +2222,19 @@ async def workout_generate() -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=f"Invalid plan: {exc}") from exc
 
-    today = date.today().isoformat()
+    plan_date_iso = plan_date.isoformat()
     plan_with_meta = {
-        "generated_at": today,
+        "generated_at": plan_date_iso,
         "source": "claude",
         **plan,
     }
-    await save_plan(plan_with_meta, source="claude")
-    _WORKOUT_CACHE[today] = plan_with_meta
+    await save_plan(plan_with_meta, source="claude", target_date=plan_date)
+    _WORKOUT_CACHE[plan_date_iso] = plan_with_meta
 
     # Log the LLM call for telemetry.
     try:
         await _log_llm_call(
-            request_id=f"workout-{today}",
+            request_id=f"workout-{plan_date_iso}",
             model="claude-opus-4-7",
             route_reason="workout_generate",
             usage=response.usage,
@@ -2252,10 +2253,10 @@ async def workout_context() -> dict:
     """
     conn = get_read_conn()
     try:
-        context = build_training_context(conn)
+        context, plan_date = build_training_context(conn)
     finally:
         conn.close()
-    return {"context": context}
+    return {"context": context, "plan_date": plan_date.isoformat()}
 
 
 @router.post("/workout/plan")
@@ -2269,7 +2270,13 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     """
     conn = get_read_conn()
     try:
-        state = compute_daily_state(conn)
+        if body.plan_date:
+            plan_date = date.fromisoformat(body.plan_date)
+        else:
+            from shc.ai.workout_planner import _workout_logged_today
+            real_today = date.today()
+            plan_date = (real_today + timedelta(days=1)) if _workout_logged_today(conn) else real_today
+        state = compute_daily_state(conn, planning_date=plan_date if plan_date != date.today() else None)
     finally:
         conn.close()
     try:
@@ -2279,18 +2286,18 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    today = date.today().isoformat()
-    plan_with_meta = {"generated_at": today, "source": body.source, **body.plan}
+    plan_date_iso = plan_date.isoformat()
+    plan_with_meta = {"generated_at": plan_date_iso, "source": body.source, **body.plan}
 
-    await save_plan(plan_with_meta, source=body.source)
-    _WORKOUT_CACHE[today] = plan_with_meta
+    await save_plan(plan_with_meta, source=body.source, target_date=plan_date)
+    _WORKOUT_CACHE[plan_date_iso] = plan_with_meta
 
     hevy_result = None
     if body.push_to_hevy:
         from shc.ingest.hevy import push_routine
         hevy_result = await push_routine(plan_with_meta)
 
-    return {"status": "ok", "date": today, "hevy": hevy_result}
+    return {"status": "ok", "date": plan_date_iso, "hevy": hevy_result}
 
 
 @router.delete("/workout/plan")

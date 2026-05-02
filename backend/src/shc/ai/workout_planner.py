@@ -307,23 +307,33 @@ def get_vault_research(state: dict[str, Any] | None = None) -> str:
 # ── Training context builder ──────────────────────────────────────────────────
 
 
-def build_training_context(conn) -> str:
+def _workout_logged_today(conn) -> bool:
+    """Return True if a strength workout has already been completed today."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM workouts WHERE started_at::DATE = current_date"
+    ).fetchone()
+    return bool(row and row[0] > 0)
+
+
+def build_training_context(conn, planning_date: date | None = None) -> tuple[str, date]:
     """Build the per-request dynamic context string for plan generation.
 
-    Numeric facts come from `compute_daily_state` (single source of truth).
-    Exercise lists, working weights, and plan-prior history are queried here
-    since they are content the LLM must see verbatim.
+    If `planning_date` is not supplied and a workout is already logged today,
+    the context is computed for tomorrow so the plan covers the next session
+    rather than forcing Active Recovery on the same day.
 
     Returns:
-        Multi-section text covering readiness, gates, muscle group rest,
-        training history, working weights, volume trend, and yesterday's
-        adherence (closed-loop feedback).
+        (context_str, target_date) — callers use target_date when saving the plan.
     """
     # Local import to avoid the briefing → workout_planner → briefing cycle.
     from shc.ai.briefing import build_clinical_context
 
-    today = date.today()
-    state = compute_daily_state(conn)
+    real_today = date.today()
+    if planning_date is None:
+        planning_date = (real_today + timedelta(days=1)) if _workout_logged_today(conn) else real_today
+
+    today = planning_date
+    state = compute_daily_state(conn, planning_date=planning_date if planning_date != real_today else None)
     rec = state["recovery"]
     sleep = state["sleep"]
     load = state["training_load"]
@@ -408,7 +418,10 @@ def build_training_context(conn) -> str:
         else f"{vol_trend_pct}% (decreasing)"
     )
 
-    lines: list[str] = [f"TODAY: {today.isoformat()}\n"]
+    planning_label = f"PLANNING FOR: {today.isoformat()}"
+    if today != real_today:
+        planning_label += f"  (tomorrow — workout already completed today {real_today.isoformat()})"
+    lines: list[str] = [f"{planning_label}\n"]
 
     clinical = build_clinical_context(conn)
     if clinical:
@@ -640,7 +653,7 @@ def build_training_context(conn) -> str:
     if vault:
         lines.append("\n" + vault)
 
-    return "\n".join(lines)
+    return "\n".join(lines), today
 
 
 # ── Validation + auto-regulation gate ────────────────────────────────────────
@@ -734,9 +747,9 @@ def validate_plan(plan: dict[str, Any], state: dict[str, Any] | None = None) -> 
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 
-async def save_plan(plan: dict[str, Any], source: str = "claude") -> None:
-    """Persist a validated plan to workout_plans for today."""
-    today = date.today().isoformat()
+async def save_plan(plan: dict[str, Any], source: str = "claude", target_date: date | None = None) -> None:
+    """Persist a validated plan to workout_plans for the target date (defaults to today)."""
+    today = (target_date or date.today()).isoformat()
     async with write_ctx() as conn:
         conn.execute(
             """

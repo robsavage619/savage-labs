@@ -649,18 +649,19 @@ def get_active_medications(conn) -> list[str]:
     return [r[0] for r in rows if r[0]]
 
 
-def compute_daily_state(conn) -> dict[str, Any]:
+def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, Any]:
     """Return the canonical `DailyState` for today as a JSON-serializable dict.
 
-    This is the SINGLE source of truth consumed by the frontend, the chat
-    advisor's system prompt, the workout planner's context, and the
-    auto-regulation gate.
+    Pass `planning_date` to compute gates/muscle-rest relative to a future date
+    (e.g. tomorrow when a workout was already completed today). Recovery, sleep,
+    and check-in are always anchored to real-world today.
     """
     today = date.today()
+    effective = planning_date or today
 
     rec = _recovery(conn, today)
     sleep = _sleep(conn, today)
-    load = _training_load(conn, today)
+    load = _training_load(conn, effective)
     chk = _checkin(conn, today)
 
     meds = get_active_medications(conn)
