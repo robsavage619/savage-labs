@@ -195,6 +195,9 @@ async def sync_sleep() -> int:
     return len(records)
 
 
+# Strength modalities already tracked by Hevy — skip mirroring to cardio_sessions.
+_STRENGTH_KINDS: frozenset[str] = frozenset({"powerlifting", "weightlifting"})
+
 _SPORT_NAMES: dict[int, str] = {
     -1: "activity",
     0: "running",
@@ -253,8 +256,19 @@ _SPORT_NAMES: dict[int, str] = {
 }
 
 
+def _duration_min(start: str | None, end: str | None) -> int | None:
+    if not start or not end:
+        return None
+    try:
+        t0 = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        t1 = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        return max(1, round((t1 - t0).total_seconds() / 60))
+    except ValueError:
+        return None
+
+
 async def sync_workout() -> int:
-    """Fetch WHOOP workout activities and upsert into the workouts table."""
+    """Fetch WHOOP workout activities and upsert into the workouts and cardio_sessions tables."""
     records = await _paginate("/v2/activity/workout")
     async with write_ctx() as conn:
         for r in records:
@@ -263,8 +277,10 @@ async def sync_workout() -> int:
             kind = _SPORT_NAMES.get(sport_id, f"sport_{sport_id}")
             kcal_kj = score.get("kilojoule")
             kcal = round(kcal_kj / 4.184, 1) if kcal_kj else None
+            wid = f"whoop_w_{r['id']}"
+            chash = _hash(r)
             row = {
-                "id": f"whoop_w_{r['id']}",
+                "id": wid,
                 "source": "whoop",
                 "started_at": r.get("start"),
                 "ended_at": r.get("end"),
@@ -274,7 +290,7 @@ async def sync_workout() -> int:
                 "max_hr": score.get("max_heart_rate"),
                 "kcal": kcal,
                 "notes": None,
-                "content_hash": _hash(r),
+                "content_hash": chash,
             }
             conn.execute(
                 """
@@ -289,6 +305,32 @@ async def sync_workout() -> int:
                 """,
                 row,
             )
+            # Mirror into cardio_sessions so cardio_age_days / cardio_min_28d stay fresh.
+            # Skip pure strength modalities already tracked by Hevy.
+            if kind not in _STRENGTH_KINDS:
+                conn.execute(
+                    """
+                    INSERT INTO cardio_sessions
+                        (id, date, modality, duration_min, avg_hr, rpe,
+                         zone_distribution_json, content_hash)
+                    VALUES ($id, $date, $modality, $duration_min, $avg_hr,
+                            NULL, NULL, $content_hash)
+                    ON CONFLICT (id) DO UPDATE SET
+                        modality    = EXCLUDED.modality,
+                        duration_min = EXCLUDED.duration_min,
+                        avg_hr      = EXCLUDED.avg_hr,
+                        content_hash = EXCLUDED.content_hash
+                    WHERE EXCLUDED.content_hash != cardio_sessions.content_hash
+                    """,
+                    {
+                        "id": wid,
+                        "date": (r.get("start") or "")[:10],
+                        "modality": kind,
+                        "duration_min": _duration_min(r.get("start"), r.get("end")),
+                        "avg_hr": score.get("average_heart_rate"),
+                        "content_hash": chash,
+                    },
+                )
     log.info("synced %d WHOOP workout records", len(records))
     return len(records)
 
