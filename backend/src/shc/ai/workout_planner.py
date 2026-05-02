@@ -34,6 +34,8 @@ _KEEP_HEADINGS = {
     "## Prescription",
     "## Practical Takeaways",
     "## Key Claims",
+    "## Key Concepts",
+    "## Evidence",
     "## Overtraining Continuum",
     "## Sequence of Impairments",
     "## Recovery Time by Muscle Group",
@@ -61,6 +63,7 @@ _TAG_SIGNALS: dict[str, tuple[str, ...]] = {
     "strength": ("default", "recomposition"),
     "hypertrophy": ("default", "recomposition"),
     "progressive-overload": ("default", "recomposition"),
+    "overload": ("default",),
     "frequency": ("default",),
     "fitness-fatigue": ("default",),
     "compound-training": ("default", "recomposition"),
@@ -69,8 +72,20 @@ _TAG_SIGNALS: dict[str, tuple[str, ...]] = {
     "fat-loss": ("recomposition",),
     "body-composition": ("recomposition",),
     "density": ("recomposition",),
-    "supersets": ("recomposition",),
+    "supersets": ("recomposition", "default"),
     "metabolic": ("recomposition",),
+    "bodybuilding": ("default", "recomposition"),
+    "individualization": ("default",),
+    "variation": ("default",),
+    "phase-potentiation": ("default",),
+    "sra": ("default",),
+    # ── Rest intervals (always relevant — drive rest_seconds prescription) ────
+    "rest-intervals": ("default",),
+    "rest-interval": ("default",),
+    "cluster-sets": ("default",),
+    # ── Fatigue / SRA ────────────────────────────────────────────────────────
+    "sfr": ("hrv_anomaly", "deload", "high_acwr"),
+    "fatigue-management": ("hrv_anomaly", "deload", "high_acwr", "default"),
     # ── Push/pull imbalance ───────────────────────────────────────────────────
     "push-pull-balance": ("push_pull_imbalance",),
     "muscle-balance": ("push_pull_imbalance",),
@@ -78,12 +93,13 @@ _TAG_SIGNALS: dict[str, tuple[str, ...]] = {
     "posterior-chain": ("push_pull_imbalance",),
     "pull": ("push_pull_imbalance",),
     # ── Volume spike / periodization ─────────────────────────────────────────
+    "volume": ("default", "volume_spike"),
     "volume-management": ("volume_spike",),
     "periodization": ("default", "volume_spike"),
     "deload-timing": ("volume_spike",),
     "fatigue-accumulation": ("volume_spike", "high_acwr"),
     "supercompensation": ("volume_spike",),
-    # ── Exercise-science notes (surfaced in workout context via exercise_selection signal) ──
+    # ── Exercise-science notes (surfaced via exercise_selection signal) ───────
     "strength-training": ("exercise_selection",),
     "resistance-training": ("exercise_selection",),
     "exercise-science": ("exercise_selection",),
@@ -93,18 +109,28 @@ _TAG_SIGNALS: dict[str, tuple[str, ...]] = {
     "muscle-hypertrophy": ("exercise_selection", "recomposition"),
     "exercise-physiology": ("exercise_selection",),
     "exercise-prescription": ("exercise_selection", "recomposition"),
+    "exercise-selection": ("exercise_selection",),
+    "exercise-variety": ("exercise_selection",),
+    "fiber-partitioning": ("exercise_selection",),
+    "weak-points": ("exercise_selection",),
+    "specificity": ("exercise_selection",),
+    "range-of-motion": ("exercise_selection",),
+    "eccentric": ("exercise_selection",),
 }
 
-# These three notes are loaded unconditionally in workout context.
+# These notes are loaded unconditionally in workout context.
 # They are not in the ranked vault so they never compete with situational notes
 # (overreaching, illness, etc.) that should still surface when relevant.
 _EXERCISE_SCIENCE_PINNED = [
-    "exercise-selection-strength.md",     # which movements & why (specificity, kinetic chain)
-    "exercise-order-strength.md",         # sequencing within a session
-    "schoenfeld-2010-hypertrophy-mechanisms.md",  # mechanical tension / metabolic stress / muscle damage
+    "exercise-selection-strength.md",       # which movements & why (specificity, kinetic chain)
+    "exercise-order-strength.md",           # sequencing within a session
+    "schoenfeld-2010-hypertrophy-mechanisms.md",   # mechanical tension / metabolic stress / muscle damage
+    "exercise-selection-hypertrophy.md",    # fiber partitioning, joint angles, variety, rotation
+    "rest-interval-hypertrophy.md",         # rest prescriptions: ≥2 min compound, 60–90 s isolation
+    "rest-interval-strength.md",            # rest by intensity zone; ATP-CP restoration kinetics
 ]
 
-_DEFAULT_VAULT_LIMIT = 5  # reduced from 6 — pinned section adds 3 notes, total = 8
+_DEFAULT_VAULT_LIMIT = 4  # pinned adds 6 notes; 4 ranked = ~10 total vault notes in context
 
 
 def load_exercise_science_notes() -> str:
@@ -582,6 +608,24 @@ def build_training_context(conn) -> str:
         for ex, status, notes in prefs:
             lines.append(f"- {ex} ({status})" + (f": {notes}" if notes else ""))
 
+    # ── Hevy exercise catalog ─────────────────────────────────────────────────
+    try:
+        hevy_tmpl_rows = conn.execute(
+            "SELECT title, primary_muscle_group FROM hevy_exercise_templates ORDER BY primary_muscle_group, title"
+        ).fetchall()
+        if hevy_tmpl_rows:
+            from collections import defaultdict
+            by_group: dict[str, list[str]] = defaultdict(list)
+            for title, pmg in hevy_tmpl_rows:
+                by_group[pmg or "Other"].append(title)
+            lines.append(f"\n## AVAILABLE HEVY EXERCISES ({len(hevy_tmpl_rows)} total — use VERBATIM names)")
+            for group in sorted(by_group):
+                lines.append(f"### {group}")
+                for ex in by_group[group]:
+                    lines.append(f"- {ex}")
+    except Exception as _e:
+        log.debug("hevy_exercise_templates not available: %s", _e)
+
     exercise_science = load_exercise_science_notes()
     if exercise_science:
         lines.append("\n" + exercise_science)
@@ -643,6 +687,10 @@ def validate_plan(plan: dict[str, Any], state: dict[str, Any] | None = None) -> 
             if not ex.get("name"):
                 raise ValueError(
                     f"Block {i} exercise {j} missing 'name' (got 'exercise'?)"
+                )
+            if ex.get("rest_seconds") is None:
+                raise ValueError(
+                    f"Block {i} exercise {j} ({ex.get('name')!r}) missing required 'rest_seconds'"
                 )
     if not isinstance(plan.get("cooldown"), str):
         raise ValueError("cooldown must be a plain string, not an array or object")

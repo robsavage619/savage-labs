@@ -432,6 +432,7 @@ export interface WorkoutExercise {
   weight_kg?: number;
   weight_lbs?: number;
   rpe_target: number;
+  rest_seconds?: number;
   notes?: string;
 }
 

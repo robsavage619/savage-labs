@@ -2036,7 +2036,7 @@ _PLAN_SCHEMA = {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "required": ["name", "sets", "reps", "rpe_target"],
+                            "required": ["name", "sets", "reps", "rpe_target", "rest_seconds"],
                             "properties": {
                                 "name": {"type": "string"},
                                 "sets": {"type": "integer"},
@@ -2044,6 +2044,7 @@ _PLAN_SCHEMA = {
                                 "weight_kg": {"type": "number"},
                                 "weight_lbs": {"type": "number"},
                                 "rpe_target": {"type": "number"},
+                                "rest_seconds": {"type": "integer"},
                                 "notes": {"type": "string"},
                             },
                         },
@@ -2110,20 +2111,35 @@ RED (recovery <34, HRV < −1.5σ, or sleep <5h):
   Total: 30–45 min — recovery work, not training stimulus
 
 ═══════════════════════════════════════════════════════════════
+REST INTERVALS (evidence-based — see vault: rest-interval-hypertrophy, rest-interval-strength)
+═══════════════════════════════════════════════════════════════
+Every exercise MUST include a rest_seconds field. Use the intensity zone to determine the value:
+• Supermax / near-1RM (RPE 9–10, ≤3 reps): 300–480 s
+• Max strength compound (RPE 8–9, 4–6 reps): 180–240 s  [3–4 min]
+• Heavy compound hypertrophy (RPE 7–8, 6–10 reps): 120–180 s  [2–3 min]
+• Medium compound / moderate isolation (RPE 6–7): 90–120 s
+• Single-joint / machine isolation (RPE 6–7): 60–90 s
+• Superset second exercise: 60 s after the pair
+• Metabolic finisher / circuit: 30–45 s between moves
+Longer rest preserves volume load and is superior for hypertrophy (Schoenfeld 2016, Helms 2018 Ch5).
+Shorter rest during isolation accessories is acceptable because volume loss is minimal and metabolic stress adds benefit.
+
+═══════════════════════════════════════════════════════════════
 SUPERSET / DENSITY GUIDANCE (fat-loss layer)
 ═══════════════════════════════════════════════════════════════
 • On green/yellow days, pair antagonist accessory exercises (e.g. row + press, curl + tricep) with 60s rest — this raises calorie burn ~25% vs straight sets without hurting strength.
-• Encode supersets as two consecutive exercises in the same block with notes: "Superset with previous — 60s rest after pair."
-• Primary compound lifts get full 2–3 min rest. Don't superset the strength work.
+• Encode supersets as two consecutive exercises in the same block with notes: "Superset with previous — 60s rest after pair." Set rest_seconds=60 on the second exercise.
+• Primary compound lifts get full 2–3 min rest (rest_seconds=180). Don't superset the strength work.
 
 ═══════════════════════════════════════════════════════════════
 FOR EVERY EXERCISE
 ═══════════════════════════════════════════════════════════════
-• SELECT by science first: use the VAULT RESEARCH in context to determine which movement best targets the intended muscle via the most effective mechanism (mechanical tension on the right fiber type, full ROM at the sticking point, kinetic chain coordination). Prefer compound free-weight movements; machines are supplementary unless injury risk or load continuity demands them.
-• THEN match to Hevy history: once the movement is chosen scientifically, find the closest name in WORKING WEIGHTS for load prescription. Use the VERBATIM Hevy exercise name so weight lookup succeeds. Do not confine selection to TOP EXERCISES frequency rank — that list reflects habit, not optimal stimulus.
-• Prescribe weight in lbs, rounded to 5 lbs, derived from working_weight × intensity %.
+• SELECT by science first: use the VAULT RESEARCH in context to determine which movement best targets the intended muscle via the most effective mechanism (mechanical tension on the right fiber type, full ROM at the sticking point, kinetic chain coordination, fiber partitioning across joint angles). Prefer compound free-weight movements; machines are supplementary unless injury risk or load continuity demands them. Apply exercise-selection-hypertrophy: rotate exercises every 4–6 weeks, prioritize movements that load the muscle at long length (stretched position), include variety across joint angles for complete muscular development.
+• THEN match to Hevy: once the movement is chosen scientifically, find the VERBATIM name from the AVAILABLE HEVY EXERCISES list in context. This is critical — exact name match is required for weight lookup and Hevy sync. Use the AVAILABLE HEVY EXERCISES list, not just WORKING WEIGHTS (which only covers exercises already logged).
+• Prescribe weight in lbs, rounded to 5 lbs, derived from working_weight × intensity %. If no working weight exists for an exercise in the Hevy catalog, use a reasonable starting estimate (bodyweight-relative or similar exercise).
+• rest_seconds: REQUIRED on every exercise. Use the REST INTERVALS table above. No exceptions.
 • Notes: 1 short cue (form/tempo) — not a paragraph.
-• vault_insights: for each exercise, name the vault source and mechanism that justified the selection (e.g., "Schoenfeld 2010 — mechanical tension on FT fibers via full ROM eccentric; exercise-selection-strength — compound kinetic chain preferred over isolation"). This is why the plan exists, not just a citation.
+• vault_insights: for each exercise, name the vault source and mechanism that justified the selection (e.g., "Schoenfeld 2010 — mechanical tension on FT fibers via full ROM eccentric; exercise-selection-strength — compound kinetic chain preferred over isolation; rest-interval-hypertrophy — 180 s rest to preserve volume load across sets"). This is why the plan exists, not just a citation.
 
 ═══════════════════════════════════════════════════════════════
 OUTPUT
@@ -2134,7 +2150,7 @@ Top-level keys (exactly):
   readiness_summary: 1–2 sentence read of today's body
   recommendation: {intensity, focus, rationale (2 sentences MAX, cite numbers), estimated_duration_min, target_rpe}
   warmup: [{name, sets?, reps?, duration_sec?, notes?}]
-  blocks: [{label, exercises:[{name, sets, reps, weight_lbs?, rpe_target, notes?}]}]
+  blocks: [{label, exercises:[{name, sets, reps, weight_lbs?, rpe_target, rest_seconds, notes?}]}]
   cooldown: string
   clinical_notes: array of strings (cite any active medications or conditions relevant to today's plan)
   vault_insights: array of strings (cite specific research from context)

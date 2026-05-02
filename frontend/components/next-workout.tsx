@@ -244,6 +244,17 @@ function ExerciseCard({
               <span className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider">RPE</span>
               <RPEBadge rpe={ex.rpe_target} />
             </div>
+
+            {ex.rest_seconds != null && (
+              <div className="flex items-baseline gap-1">
+                <span className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider">rest</span>
+                <span className="text-[14px] font-light tabular-nums text-[var(--text-dim)]">
+                  {ex.rest_seconds >= 60
+                    ? `${Math.round(ex.rest_seconds / 60)}m`
+                    : `${ex.rest_seconds}s`}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="ml-7">
