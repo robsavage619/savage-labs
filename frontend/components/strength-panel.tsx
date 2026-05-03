@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { ProgressionDrawer } from "@/components/progression-drawer";
 import {
   BarChart,
@@ -155,6 +155,150 @@ function VolumeTrend() {
         </ResponsiveContainer>
       )}
     </div>
+  );
+}
+
+// ── e1RM trajectories ────────────────────────────────────────────────────────
+
+function E1RMTrajectories({ onPick }: { onPick: (exercise: string) => void }) {
+  // Pick the top 5 most-frequently-trained exercises and render a small
+  // sparkline of estimated 1RM (Epley: w × (1 + reps/30)) over their last
+  // ~12 sessions. Reveals the same -6.8% regression the gates flag, in shape
+  // rather than just text.
+  const top = useQuery({
+    queryKey: ["top-exercises-5"],
+    queryFn: () => api.trainingTopExercises(5),
+    refetchInterval: 600_000,
+  });
+  const exercises = (top.data ?? []).map((e) => e.exercise);
+
+  const histories = useQueries({
+    queries: exercises.map((name) => ({
+      queryKey: ["progression-12", name],
+      queryFn: () => api.trainingProgression(name, 12),
+      enabled: !!name,
+      refetchInterval: 600_000,
+    })),
+  });
+
+  const rows = exercises.map((name, i) => {
+    const h = histories[i]?.data?.history ?? [];
+    // History is returned newest-first; reverse for left-to-right time order.
+    const points = [...h].reverse().map((s) => {
+      const reps = s.work_sets > 0 ? s.total_reps / s.work_sets : 0;
+      const e1rm = reps > 0 ? s.max_lbs * (1 + reps / 30) : s.max_lbs;
+      return { date: s.date, e1rm: +e1rm.toFixed(1), max: s.max_lbs };
+    });
+    return { name, points };
+  });
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between">
+        <Eyebrow>e1RM trajectory · top 5 lifts</Eyebrow>
+        <span className="text-[10.5px] text-[var(--text-dim)]">last ~12 sessions</span>
+      </div>
+      <div className="space-y-px">
+        {rows.map((r, i) => (
+          <E1RMRow key={r.name || i} name={r.name} points={r.points} onPick={onPick} index={i} />
+        ))}
+      </div>
+      <p className="text-[10px] text-[var(--text-faint)] leading-snug pt-1">
+        Epley estimated 1RM per session = top set × (1 + reps/30). A flat or
+        declining line on a primary lift = deload trigger (Israetel ch3).
+      </p>
+    </div>
+  );
+}
+
+function E1RMRow({
+  name,
+  points,
+  onPick,
+  index,
+}: {
+  name: string;
+  points: { date: string; e1rm: number; max: number }[];
+  onPick: (exercise: string) => void;
+  index: number;
+}) {
+  if (!points.length) {
+    return (
+      <div
+        className="px-2 py-[7px] rounded text-[11.5px] text-[var(--text-faint)]"
+        style={{ background: index % 2 === 0 ? "oklch(1 0 0 / 0.025)" : "transparent" }}
+      >
+        {name} <span className="text-[10px]">— no recent sessions</span>
+      </div>
+    );
+  }
+  const first = points[0].e1rm;
+  const last = points[points.length - 1].e1rm;
+  const deltaPct = first > 0 ? ((last - first) / first) * 100 : 0;
+  const deltaColor =
+    deltaPct >= 2
+      ? "var(--positive)"
+      : deltaPct <= -3
+        ? "var(--negative)"
+        : "var(--neutral)";
+
+  return (
+    <button
+      onClick={() => onPick(name)}
+      className="w-full flex items-center gap-3 px-2 py-[6px] rounded text-left hover:bg-[var(--card-hover)] transition-colors"
+      style={{ background: index % 2 === 0 ? "oklch(1 0 0 / 0.025)" : "transparent" }}
+      title={`${name}\n${points[0].date} → ${points[points.length - 1].date}\nfirst e1RM ${first} lbs · last ${last} lbs (${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%)`}
+    >
+      <span className="text-[11.5px] truncate text-[var(--text-muted)] flex-1 min-w-0">
+        {name}
+      </span>
+      <Sparkline points={points.map((p) => p.e1rm)} color={deltaColor} width={96} height={22} />
+      <span className="text-[11px] font-mono tabular-nums text-[var(--text-primary)] w-12 text-right">
+        ≈{last.toFixed(0)}
+      </span>
+      <span
+        className="text-[10px] font-mono tabular-nums w-12 text-right"
+        style={{ color: deltaColor }}
+      >
+        {deltaPct >= 0 ? "+" : ""}
+        {deltaPct.toFixed(1)}%
+      </span>
+    </button>
+  );
+}
+
+function Sparkline({
+  points,
+  color,
+  width,
+  height,
+}: {
+  points: number[];
+  color: string;
+  width: number;
+  height: number;
+}) {
+  if (points.length < 2) {
+    return (
+      <svg width={width} height={height} className="block flex-shrink-0">
+        <line x1={0} x2={width} y1={height / 2} y2={height / 2} stroke="var(--hairline)" />
+      </svg>
+    );
+  }
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const pad = 2;
+  const xs = points.map((_, i) => (i / (points.length - 1)) * (width - pad * 2) + pad);
+  const ys = points.map((p) => height - pad - ((p - min) / range) * (height - pad * 2));
+  const d = points.map((_, i) => `${i === 0 ? "M" : "L"}${xs[i].toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
+  const lastX = xs[xs.length - 1];
+  const lastY = ys[ys.length - 1];
+  return (
+    <svg width={width} height={height} className="block flex-shrink-0 overflow-visible">
+      <path d={d} fill="none" stroke={color} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={lastX} cy={lastY} r={2.2} fill={color} />
+    </svg>
   );
 }
 
@@ -644,7 +788,10 @@ export function StrengthPanel() {
       <RecoveryCorrelation />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <VolumeTrend />
+        <div className="space-y-6">
+          <VolumeTrend />
+          <E1RMTrajectories onPick={setPicked} />
+        </div>
         <PRTable onPick={setPicked} />
       </div>
 
