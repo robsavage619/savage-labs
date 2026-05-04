@@ -28,8 +28,18 @@ export function Metric({
       : tone === "negative"
       ? "text-[var(--negative)]"
       : "text-[var(--text-primary)]";
+  const glowClass =
+    size === "xl"
+      ? tone === "positive"
+        ? "shc-glow-positive"
+        : tone === "neutral"
+        ? "shc-glow-neutral"
+        : tone === "negative"
+        ? "shc-glow-negative"
+        : ""
+      : "";
   return (
-    <span className={cn(`metric-${size} tabular-nums`, toneClass, className)}>
+    <span className={cn(`metric-${size} tabular-nums`, toneClass, glowClass, className)}>
       {value}
       {unit && (
         <span className="ml-1 text-[11px] font-normal tracking-normal text-[var(--text-dim)] align-baseline">

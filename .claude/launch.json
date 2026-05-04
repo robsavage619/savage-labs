@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "SHC API",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "shc.api.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload", "--log-config", "../logging.yaml"],
+      "port": 8000,
+      "cwd": "backend"
+    },
+    {
+      "name": "SHC Web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000,
+      "cwd": "frontend"
+    }
+  ]
+}
