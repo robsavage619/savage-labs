@@ -37,7 +37,9 @@ function DayOfWeekChart({ data }: { data: { day: string; avg_recovery: number; n
             <YAxis tick={{ fontSize: 9, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} domain={[0, 100]} />
             <Tooltip
               cursor={{ fill: "oklch(1 0 0 / 0.03)" }}
-              contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11 }}
+              contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11, color: "var(--text-primary)" }}
+              labelStyle={{ color: "var(--text-muted)", fontSize: 10 }}
+              itemStyle={{ color: "var(--text-primary)" }}
               formatter={(v: number) => [v.toFixed(1), "Avg recovery"]}
             />
             <Bar dataKey="avg_recovery" radius={[3, 3, 0, 0]}>
@@ -120,7 +122,9 @@ function SleepScatterChart({ data }: { data: { date: string; recovery: number; s
             <ZAxis range={[28, 28]} />
             <Tooltip
               cursor={{ stroke: "var(--hairline)" }}
-              contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11 }}
+              contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11, color: "var(--text-primary)" }}
+              labelStyle={{ color: "var(--text-muted)", fontSize: 10 }}
+              itemStyle={{ color: "var(--text-primary)" }}
               formatter={(v: number, name: string) => [name === "Recovery" ? v.toFixed(0) : v.toFixed(1) + "h", name]}
             />
             <Scatter
@@ -172,7 +176,9 @@ function HrvScatterChart({ data }: { data: { date: string; recovery: number | nu
             <ZAxis range={[28, 28]} />
             <Tooltip
               cursor={{ stroke: "var(--hairline)" }}
-              contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11 }}
+              contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11, color: "var(--text-primary)" }}
+              labelStyle={{ color: "var(--text-muted)", fontSize: 10 }}
+              itemStyle={{ color: "var(--text-primary)" }}
               formatter={(v: number, name: string) => [name === "Recovery" ? v.toFixed(0) : v.toFixed(1) + "ms", name]}
             />
             <Scatter
