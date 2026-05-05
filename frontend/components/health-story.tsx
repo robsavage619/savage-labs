@@ -31,10 +31,10 @@ function HighlightFigures({ text }: { text: string }) {
 // Section labels inferred from paragraph position (narratives follow a consistent structure)
 const PARA_LABELS = [
   "Readiness",
-  "Training load",
-  "Today's focus",
-  "Goals & nutrition",
-  "Trajectory",
+  "What the numbers mean",
+  "Today's session",
+  "Fueling & recomp",
+  "Next 2 weeks",
 ];
 
 function StoryNarrative({
@@ -117,8 +117,23 @@ STEP 1 — Read context.
 - Both responses already contain a "## VAULT RESEARCH" section — do not read files from disk.
 
 STEP 2 — Write the narrative health story.
-4–6 paragraphs of clear prose addressed to Rob in second person. Lead with the most important signal of the moment, not chronology. Cite specific numbers (recovery score, HRV deviation σ, ACWR, sleep totals) but anchor them to meaning, not just the number. Weave vault research in naturally by source name (the filename in parentheses after each note title) where relevant. End with one paragraph on near-term trajectory: what the next 1–2 weeks should look like.
-Constraints: no "as your AI advisor" framing. No motivational filler. Never imply chronic propranolol use — it is PRN/occasional, reference only if today's check-in shows it was taken. Never invent metrics not in the live context. Note any "DATA AGES" / "DATA GAPS" entries before drawing strong conclusions from stale numbers.
+
+Tone: personal trainer who knows the science cold. Conversational, direct, no fluff. Explain what the numbers actually mean in plain language — not just "HRV is 127ms" but what that tells us about his body today. No academic phrasing, no parenthetical file citations, no motivational filler. Write like you're talking to someone smart who has 2 minutes before heading to the gym.
+
+Exactly 5 paragraphs, separated by blank lines, in this order:
+
+¶1 — RECOVERY SNAPSHOT. Lead with the single most important signal today (HRV deviation, sleep quality, skin temp anomaly, ACWR — whichever is loudest). Explain what it means physiologically, not just the number. If sleep data includes stage breakdown (deep %, REM), use it — raw hours alone miss the picture. Call out any DATA GAPS or stale data before drawing conclusions.
+
+¶2 — WHAT THE NUMBERS MEAN. Interpret the full picture together: how does HRV + RHR + sleep + skin temp combine? What's the body signaling? If there's tension (e.g. green recovery but deload gate fired), name it plainly and explain why. Cite training research by concept, not filename — e.g. "the science on deload timing" not "(fatigue-management-hypertrophy.md)".
+
+¶3 — TODAY'S SESSION. Tell him exactly what to do and why, as if briefing him at the gym door. What muscle group, what intensity, what the key lifts are, roughly how many sets. Include a subjective cue — what he'll feel during the session and why that's expected. If a deload is required, explain specifically what "deload" means in practice for today (it's not rest, it's precision).
+
+¶4 — FUELING & RECOMP. This paragraph must contain actual nutrition guidance. What should he eat today given the training type, recovery status, and recomp goal? Cover pre/post workout fueling, protein target if relevant, and any specific considerations (e.g. deload days = slight caloric reduction, high-recovery days = prioritize carb repletion). Ground it in his actual goal: simultaneous strength + fat loss.
+
+¶5 — NEXT 2 WEEKS. Where is this heading? What should the next block look like based on where he is in the training cycle? Be specific: if a deload ends next week, what does the return to accumulation look like? Any metrics to watch as leading indicators?
+
+Constraints: Never imply propranolol is taken daily — it is PRN/as-needed, reference only if today's check-in confirms it was taken. Never invent metrics. Address Rob as "you" throughout.
+
 POST to http://127.0.0.1:8000/api/health-story with body { "narrative": "<text>", "sources": [<vault filenames cited>], "model": "claude-sonnet-4-6" }.
 
 STEP 3 — Generate today's workout plan.
