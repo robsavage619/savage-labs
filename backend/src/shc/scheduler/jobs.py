@@ -93,7 +93,7 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
     scheduler.add_job(
         whoop.sync_all,
         "interval",
-        minutes=30,
+        hours=12,
         id="whoop_sync",
         replace_existing=True,
         misfire_grace_time=300,
