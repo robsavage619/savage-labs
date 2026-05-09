@@ -36,36 +36,33 @@
 
 ---
 
-## The Problem
+## Why I Built This
 
-Consumer health tools are siloed by design.
+I wear a WHOOP. I track every lift in Hevy. I get labs done regularly and export everything from Apple Health. I have a lot of data about myself — and for a long time, none of it talked to any of the rest of it.
 
-WHOOP scores your recovery but knows nothing about your medications. Apple Health collects thousands of data points that never inform your training. Workout trackers schedule sessions without knowing you slept five hours. No tool fuses all three signals into a single coherent decision.
+WHOOP would tell me my recovery score without knowing I'd taken a beta-blocker that morning, which suppresses heart rate and makes the score meaningless. My workout app had no idea how I slept. Apple Health was a black hole of numbers I never looked at. And when I asked any AI assistant about my training, I had to re-explain my full situation from scratch every single time.
 
-Savage Labs is the system built to fix that.
+I got frustrated enough to build something. Savage Labs pulls every data stream I have into one place, fuses them into a single daily readiness signal, and gives me an AI that already knows my full picture before I say a word. I open it in the morning, see a green/yellow/red, read a one-paragraph brief, and know exactly what to do that day.
 
-It ingests every available data stream — biometric wearables, workout logs, clinical labs, self-reported check-ins — fuses them server-side into a typed, versioned health contract, and runs that contract through a Claude Opus 4.7 reasoning layer that understands medication history, adjusts intensity recommendations accordingly, and delivers a single daily readiness decision.
-
-> [!IMPORTANT]
-> Everything is local. Everything is encrypted. Nothing leaves the machine.
+It runs entirely on my machine. Nothing goes to a cloud. It was never meant to be a product — it's just a tool I use every day.
 
 ---
 
-## What Makes This Non-Trivial
+## The Interesting Engineering Bits
 
-This isn't a CRUD app wrapping a few API calls. Four engineering decisions separate it from the category:
+It'd be easy to build a dashboard that shows you your WHOOP score and calls it done. The parts I'm actually proud of are the ones that required real thought:
 
-> **Signal fusion over raw display.**
-> Most dashboards surface raw numbers. Savage Labs computes *derived* signals: HRV σ-deviation relative to a 28-day medication-adjusted baseline, true Gabbett ACWR from composite load (wearable strain + strength tonnage), a weighted readiness composite that *shifts its own weights* based on whether a beta-blocker was taken. Raw numbers require interpretation. Derived signals make the decision.
+> **Computing derived signals instead of displaying raw ones.**
+> Raw HRV in milliseconds is nearly meaningless day-to-day — my baseline is mine, not the population's, and it shifts when I'm on medication. So instead of showing a number, I compute a σ-deviation from a rolling 28-day mean. Same idea with training load: instead of counting sessions, I compute a true Gabbett ACWR from fused wearable strain and lifting tonnage. These derived signals actually make decisions. The raw ones just inform anxiety.
 
-> **Clinical context in every LLM call.**
-> The briefing and workout planner don't call Claude with a health snapshot. They call Claude with a health snapshot *plus* active medications with dosing schedules, current diagnoses, recent lab results with reference ranges, and computed gates encoding hard constraints the model must respect. This separates a wellness chatbot from a medically-aware advisor.
+> **Giving Claude my full clinical context on every call.**
+> I don't just send today's metrics to the model. I send the metrics *plus* my active medications with dosing schedules, current diagnoses, recent labs with reference ranges, and a set of hard constraints it has to respect. That's what makes the difference between a generic wellness bot and something that actually understands my situation.
 
-> **Deterministic gates below the LLM.**
-> Claude generates the plan. `validate_plan()` enforces it. If the model produces a high-intensity leg session when the gates say legs are under 48h of rest, the plan is rejected and the model is called again — not patched, not warned, rejected. The LLM layer is for reasoning; the gate layer is for correctness.
+> **Keeping the AI honest with deterministic gates.**
+> Claude generates the workout plan. A separate validation layer enforces it. If the model writes a heavy leg day but my logs show I trained legs 30 hours ago, the plan gets rejected and regenerated — not adjusted, not warned, *rejected*. The LLM is for reasoning. The gate engine is for correctness. I don't want the model to be able to talk itself into ignoring recovery rules.
 
-> **One source of truth, computed once.**
-> `DailyState` is computed server-side at request time via `compute_daily_state()` and consumed by every downstream consumer — the dashboard, the briefing system, the workout planner. No component recomputes what another already owns.
+> **One computation feeding everything.**
+> All metrics flow through a single `DailyState` dataclass computed once per request. The dashboard reads it, the AI briefing gets injected with it, the workout planner extracts gates from it. Nothing recomputes what something else already owns.
 
 ---
 
@@ -132,11 +129,11 @@ This isn't a CRUD app wrapping a few API calls. Four engineering decisions separ
 
 ---
 
-## Engineering Highlights
+## How It Works — The Technical Detail
 
-### `DailyState` — The Health Contract
+### `DailyState` — One Contract for Everything
 
-Every metric the system produces flows through a single typed dataclass computed once per day:
+Everything flows through a single typed dataclass computed once per request. The dashboard reads it, the AI gets it injected, the workout planner pulls gates from it. I added this after realizing I had the same metric being computed three different ways in three different places and getting three slightly different answers.
 
 ```python
 @dataclass
@@ -151,13 +148,13 @@ class DailyState:
     freshness: DataFreshness       # staleness flags per source
 ```
 
-The frontend reads `/api/state/today`. The LLM briefing injects it as context. The workout planner extracts gates from it. One computation, N consumers, zero drift.
-
 ---
 
 ### HRV σ-Deviation
 
-Raw HRV in milliseconds is nearly useless for day-to-day decisions — population baselines don't account for medications, training phase, or individual physiology. The system computes a 28-day rolling mean and standard deviation via a materialized view, then expresses today's value as a σ-deviation:
+I'm on an SSRI and occasionally take a beta-blocker, both of which suppress HRV. Comparing my absolute HRV to a population norm or even my own old baseline would tell me nothing useful. What actually matters is how today compares to my recent self, medication-adjusted.
+
+So I compute a 28-day rolling mean and standard deviation and express today as a σ-deviation:
 
 ```
 hrv_sigma = (today_hrv_ms − 28d_mean) / 28d_stdev
@@ -170,13 +167,15 @@ subscore  = clamp(50 + sigma × 25, 0, 100)
 | `0.0` | Baseline | 50 |
 | `−2.0` | Suppressed | 0 |
 
-This makes the signal medication-invariant: SSRIs and beta-blockers shift the baseline, not the deviation. Two athletes with different HRV baselines get meaningful, comparable readiness signals.
+The baseline shifts when my medications shift. The deviation still means something.
 
 ---
 
 ### True Gabbett ACWR
 
-Most training load models count session count or subjective RPE. This system computes the true Gabbett acute:chronic workload ratio from a composite load that fuses WHOOP strain (cardiovascular load) with Hevy training tonnage (mechanical load):
+Most training apps track session count. I wanted to know whether my actual workload — cardiovascular *and* mechanical — was in the danger zone for injury or overtraining.
+
+WHOOP gives me strain (cardiovascular load). Hevy gives me tonnage (mechanical load). I fuse them into a composite and compute the true Gabbett acute:chronic workload ratio:
 
 ```
 composite_load_day = whoop_strain + (hevy_tonnes × 5000)
@@ -186,35 +185,35 @@ chronic_28d = mean(composite_load, last 28 days)
 acwr        = acute_7d / chronic_28d
 ```
 
-| ACWR | Zone | Action |
+| ACWR | Zone | What happens |
 |---|---|---|
-| `< 0.8` | Under-loaded | Insufficient stimulus |
-| `0.8 – 1.3` | ✅ Safe zone | Adaptive overload |
-| `1.3 – 1.5` | ⚠️ Elevated risk | Volume reduction gate |
-| `> 1.5` | 🚨 Critical overload | Rest mandated |
+| `< 0.8` | Under-loaded | Not enough stimulus |
+| `0.8 – 1.3` | ✅ Safe zone | Adapt and grow |
+| `1.3 – 1.5` | ⚠️ Elevated risk | Volume gate fires |
+| `> 1.5` | 🚨 Overload | Rest mandated |
 
 ---
 
-### Weighted Readiness with Beta-Blocker Adaptation
+### Readiness Score That Knows About My Medications
 
-The readiness composite isn't static. It shifts its own weight vector based on whether a beta-blocker was detected:
+The readiness composite weight vector isn't fixed. On days when I've taken a beta-blocker, HRV becomes a less reliable signal (the drug suppresses it pharmacologically), so the weights shift:
 
-| Signal | Default | Beta-Blocker Day | Reason |
+| Signal | Normal day | Beta-blocker day | Why |
 |---|---|---|---|
-| HRV σ | **40%** | 20% | Suppressed by medication, less reliable |
-| Sleep | 30% | **40%** | Becomes primary recovery indicator |
-| RHR | 20% | **25%** | Relative elevation still meaningful |
+| HRV σ | **40%** | 20% | Pharmacologically suppressed |
+| Sleep | 30% | **40%** | Better recovery indicator that day |
+| RHR | 20% | **25%** | Relative changes still meaningful |
 | Subjective | 10% | 15% | |
 
-Detection is dual-gated: the medications table must have an active entry *and* the morning check-in must have `propranolol_taken = true`. Both required — prevents phantom adjustments from stale records.
+Detection is dual-gated — the medications table needs an active entry *and* the morning check-in must flag it taken. Belt and suspenders, because I didn't want a stale medication record silently shifting my readiness score.
 
-**Tier thresholds:** ≥67 → 🟢 GREEN · 34–66 → 🟡 YELLOW · <34 → 🔴 RED
+**Tiers:** ≥67 → 🟢 GREEN · 34–66 → 🟡 YELLOW · <34 → 🔴 RED
 
 ---
 
-### Auto-Regulation Gate Engine
+### The Gate Engine
 
-`AutoRegGates` encodes 13 hard constraints derived from physiology literature. These are not LLM suggestions — they're deterministic rules enforced *after* generation:
+This was probably the most important design decision. Claude generates a workout plan. Before it gets shown to me, a separate deterministic layer validates it against 13 hard rules derived from physiology research. If anything fails, the plan gets rejected and Claude is called again — with the violations explained.
 
 ```python
 @dataclass
@@ -230,9 +229,9 @@ class AutoRegGates:
 ```
 
 <details>
-<summary>Selected gate logic (13 rules)</summary>
+<summary>All 13 gate rules</summary>
 
-| Condition | Gate Fired |
+| Condition | Gate |
 |---|---|
 | ACWR > 1.5 | `max_intensity = "rest"` |
 | Skin temp Δ ≥ 0.5°C | Z2 only — possible illness |
@@ -242,21 +241,21 @@ class AutoRegGates:
 | Beta-blocker dosed | HR zones −20 bpm, kcal ×1.25 |
 | ACWR > 1.3 | Cap to moderate |
 | Readiness RED | Cap to low |
-| Illness flag | Rest day — no training |
+| Illness flag | Rest day |
 | Travel flag | Cap to moderate |
 | Sleep < 5h | No PR attempts |
 | Acute soreness ≥ 3 on muscle | Group forbidden |
-| HRV σ < −1.5 | Cap intensity to low |
+| HRV σ < −1.5 | Cap to low |
 
 </details>
 
-If the LLM-generated plan violates any gate, `validate_plan()` rejects it and triggers a re-call with the violations appended to the prompt. The LLM never has unchecked authority over the training prescription.
+The AI gives me good plans. The gates make sure they're safe.
 
 ---
 
-### Clinical Context Injection
+### Injecting Clinical Context Into Every AI Call
 
-Every Claude invocation (chat, briefing, workout planning) includes a structured clinical context block built from live database state:
+Every time I call Claude — for a workout plan, a daily briefing, or a chat — it gets my full clinical picture assembled from the live database:
 
 ```
 MEDICATIONS (active)
@@ -272,219 +271,190 @@ RECENT LABS (last 20, with ref ranges)
 ...
 ```
 
-The `HEALTH_SYSTEM` prompt encodes drug-class interpretation rules that persist across all calls — beta-blockers require zone-shift, SSRIs shift the HRV baseline, inhaled corticosteroids flag for metabolic context. The model doesn't need to synthesize general pharmacology from training data; the system tells it what's relevant for this athlete today.
+On top of that, the system prompt encodes drug-class interpretation rules — what SSRIs do to HRV, what beta-blockers do to heart rate zones, what inhaled corticosteroids flag for. Claude doesn't have to figure out my situation from general pharmacology knowledge; I tell it exactly what's relevant.
 
 ---
 
-### Epley e1RM Tracking & Regression Detection
+### e1RM Tracking & Fatigue Detection
 
-Every strength set is stored with weight and rep count. The system computes an estimated 1RM via the Epley formula:
+Every set goes in with weight and reps. I compute estimated 1RM via the Epley formula:
 
 ```
 e1RM = weight_kg × (1 + reps / 30)
 ```
 
-A 4-week regression detector compares the top 50th percentile of e1RM over the most recent 56 days against the prior 56 days:
+Then I run a 4-week regression detector — if my top-percentile e1RM has dropped more than 3% over the last 56 days, I'm accumulating fatigue and a deload gets flagged before I actually get hurt:
 
 ```
 regression_pct = (mean(e1RM, days 0–27) − mean(e1RM, days 28–55))
                / mean(e1RM, days 28–55)
 ```
 
-If regression exceeds 3%, `deload_required = True` is injected into gates. The system detects accumulating fatigue before injury does.
-
 ---
 
-### Multi-Source Ingestion with Content-Hash Deduplication
+### Data Ingestion
 
-Four independent data pipelines converge into the same DuckDB tables:
+Four sources, one database. Every record gets a content hash so syncs are always idempotent — I can re-run them without fear of double-counting.
 
-| Source | Method | Parser |
+| Source | How it gets in | What I get |
 |---|---|---|
-| **WHOOP** | OAuth 2.0 + APScheduler (60 min) | Async HTTP, token refresh on 401 |
-| **Apple Health** | iCloud HealthAutoExport → CCDA XML | lxml + type-router to correct table |
-| **Hevy** | REST API + push routine export | Async client, set-level granularity |
-| **Manual** | FastAPI POST endpoints | Pydantic v2 validation |
-
-Every ingested record is fingerprinted:
+| **WHOOP** | OAuth 2.0, syncs every 60 min | Recovery, HRV, RHR, sleep stages, strain, SpO2, skin temp |
+| **Apple Health** | iCloud HealthAutoExport → CCDA XML parse | Everything — steps, HR, weight, glucose, blood pressure, sleep |
+| **Hevy** | REST API | Every lift, every set, every rep, back to 2015 |
+| **Morning check-in** | Dashboard form I fill out daily | Energy, stress, soreness, body weight, medication flags |
 
 ```python
 content_hash = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
 ```
 
-Upserts key on `(source, external_id, content_hash)`. Retries are idempotent. Sync is additive, never destructive.
-
-> [!NOTE]
-> OAuth tokens (WHOOP, Hevy) never touch disk — stored in and retrieved from macOS Keychain via `keyring`. The DuckDB file itself is encrypted at rest with a key fetched from Keychain at startup.
+OAuth tokens live in macOS Keychain. The database is encrypted at rest. Nothing touches disk unencrypted.
 
 ---
 
-### HR Zone Calculation with Medication Adjustment
+### HR Zones That Account for Medication
 
-HRmax uses the Tanaka formula (lower error than Fox 220−age for trained adults 30–60):
+I use the Tanaka formula for HRmax (lower error than Fox 220−age for trained adults):
 
 ```
 HRmax          = 208 − (0.7 × age)
 adjusted_HRmax = HRmax − hr_zone_shift_bpm    # -20 on beta-blocker days
 ```
 
-On beta-blocker days, the gate engine injects a −20 bpm shift before zone calculation. Without this, every cardio session would appear to be in a higher zone than it actually is — caloric and physiological interpretation would both be wrong.
+On days I take a beta-blocker, my HR peaks lower. Without this adjustment, every cardio session would look like it was in a higher zone than it actually was. The gate engine injects the shift automatically.
 
 ---
 
-## Obsidian Vault — Retrieval-Augmented Training Intelligence
+## The Obsidian Vault
 
-The system's third AI input — alongside live biometrics and clinical context — is a personal knowledge base of **405 research notes** built in Obsidian at `~/Vault/savage_vault/wiki/`. Every workout plan and daily briefing is grounded in this vault, not in the model's general training knowledge.
+The third input into every AI call — alongside live biometrics and clinical context — is a personal knowledge base of **405 research notes** I've built in Obsidian. Every workout plan Claude generates is grounded in this vault, not in whatever the model learned during pretraining.
 
-> [!NOTE]
-> **Why a personal vault over general LLM knowledge?** LLMs know exercise science in aggregate. The vault encodes *specific protocol decisions* — which exercise selection framework this athlete follows, what rest intervals are calibrated for this training phase, which meta-analyses are trusted over which guidelines. The model is told which evidence base to apply, not left to synthesize one from training data.
+The difference matters. Claude knows exercise science in aggregate from its training data. My vault encodes *my* specific protocol decisions — which periodization model I follow, which meta-analyses I trust on rest intervals, what the research actually says about training frequency for hypertrophy vs what gets repeated on the internet. When Claude writes me a plan, it's applying my evidence base, not a generic one.
 
 ### What's In It
 
-**405 notes across 10 domains.** Every note is ingested from primary sources — textbooks, meta-analyses, RCTs — then structured with YAML frontmatter tags and actionable prescription sections. The vault is a personal distillation of the research, not summaries of summaries.
+**405 notes across 10 domains** — all ingested from primary sources (textbooks, meta-analyses, RCTs), structured with YAML frontmatter tags, and condensed to actionable prescription sections.
 
 <details>
 <summary><strong>Strength & Hypertrophy — 147 notes</strong></summary>
 
-The largest domain. Built primarily from Schoenfeld's *Science and Development of Muscle Hypertrophy* (2021), Israetel's *Scientific Principles of Hypertrophy Training* (2020), Helms' *Muscle & Strength Pyramid* (Training vol., 2018), and Bompa/Zatsiorsky's periodization texts.
+The biggest chunk. Primarily Schoenfeld's *Science and Development of Muscle Hypertrophy* (2021), Israetel's *Scientific Principles of Hypertrophy Training* (2020), Helms' *Muscle & Strength Pyramid* (2018), and Bompa/Zatsiorsky on periodization.
 
-**Key prescriptions encoded:**
+**What's encoded:**
 
-- **Volume landmark (Schoenfeld 2016 meta-analysis, 15 studies):** ≥10 working sets per muscle group per week to maximize hypertrophy. +0.37% hypertrophy per additional weekly set across 2–30 set range.
-- **Hypertrophy mechanisms (Schoenfeld 2010):** Mechanical tension is primary driver; metabolic stress and muscle damage are secondary. Notes encode this hierarchy into exercise selection rules — ROM, load at stretch, time under tension weighting.
-- **Rest intervals:** 90–120s minimum between compound sets for hypertrophy; 180–300s for strength. Schoenfeld (2016): longer rest superior for both strength and hypertrophy vs the "metabolic stress" shorter-rest hypothesis.
-- **Exercise order:** Compound movements before isolation within a session; highest-priority muscle groups first within a training block.
-- **Range of motion:** Full ROM superior to partial ROM for hypertrophy; lengthened-position loading (e.g. deficit RDLs, stretched-position flies) produces greater hypertrophic stimulus per the Pedrosa (2022) and Maeo (2021) findings.
-- **DUP periodization structure:** Daily undulating periodization — distinct rep ranges across sessions within a week (strength day 3–5 reps, hypertrophy day 8–12, endurance day 15–20) — produces superior gains vs linear periodization for trained athletes.
-- **SRA curves by muscle group:** Stimulus-recovery-adaptation timelines encoded per muscle (quads 72h compound, biceps 48h, delts 36–48h) — these directly feed the `forbid_muscle_groups` gate logic.
-- **Supercompensation theory:** Volume landmarks → MEV (minimum effective volume) → MAV (maximum adaptive volume) → MRV (maximum recoverable volume). Training above MRV triggers deload signal.
-- **Concurrent training interference:** Cardio modality and timing relative to strength sessions. Low-interference: cycling Z2 post-strength. High-interference: running before strength, same-day HIIT.
+- **Volume threshold (Schoenfeld 2016 meta, 15 studies):** ≥10 working sets per muscle group per week to maximize hypertrophy. +0.37% per additional set across a 2–30 set range.
+- **Hypertrophy mechanisms (Schoenfeld 2010):** Mechanical tension is the primary driver. Metabolic stress and muscle damage are secondary. This hierarchy is encoded directly into exercise selection rules.
+- **Rest intervals:** 90–120s minimum between compound sets for hypertrophy; 180–300s for strength. Longer rest is actually superior (Schoenfeld 2016) — the "metabolic stress from short rest" hypothesis didn't hold up.
+- **Range of motion:** Full ROM beats partial. Lengthened-position loading (deficit RDLs, stretched-position flies) produces a greater stimulus per Pedrosa (2022) and Maeo (2021).
+- **DUP periodization:** Distinct rep ranges across sessions within the week (strength 3–5, hypertrophy 8–12, endurance 15–20) outperforms linear for trained athletes.
+- **SRA curves per muscle:** Stimulus-recovery-adaptation timelines per muscle group — quads 72h compound, biceps 48h, delts 36–48h — feed directly into the gate logic.
+- **Volume landmarks:** MEV → MAV → MRV per Israetel. Exceeding MRV triggers a deload.
+- **Cardio interference:** Low: cycling Z2 post-strength. High: running pre-strength, same-day HIIT.
 
-**Specific notes feeding the planner:**
-`exercise-selection-strength.md`, `exercise-selection-hypertrophy.md`, `exercise-order-strength.md`, `rest-interval-strength.md`, `rest-interval-hypertrophy.md`, `range-of-motion-hypertrophy.md`, `training-volume-hypertrophy.md`, `training-frequency-hypertrophy.md`, `schoenfeld-2016-rt-volume-hypertrophy.md`, `schoenfeld-2021-science-development-muscle-hypertrophy.md` (9 chapters), `sra-training-frequency.md`, `supercompensation-theory.md`, `fitness-fatigue-theory.md`, `overreaching-detection.md`, `concurrent-training-interference.md`
+**Notes:** `exercise-selection-strength.md`, `exercise-selection-hypertrophy.md`, `exercise-order-strength.md`, `rest-interval-strength.md`, `rest-interval-hypertrophy.md`, `range-of-motion-hypertrophy.md`, `training-volume-hypertrophy.md`, `schoenfeld-2016-rt-volume-hypertrophy.md`, `schoenfeld-2021-science-development-muscle-hypertrophy.md` (9 chapters), `sra-training-frequency.md`, `supercompensation-theory.md`, `fitness-fatigue-theory.md`, `overreaching-detection.md`, `concurrent-training-interference.md`
 
 </details>
 
 <details>
 <summary><strong>Sleep Science — 76 notes</strong></summary>
 
-Built from Walker's *Why We Sleep* (2017, 16 chapters) and Winter's *The Sleep Solution* (2017, 16 chapters), with primary research on HRV monitoring during sleep, OSA, and sleep × performance.
+Walker's *Why We Sleep* (2017) and Winter's *The Sleep Solution* (2017), both chapter by chapter, plus primary research on HRV during sleep, OSA, and sleep × athletic performance.
 
-**Key findings encoded:**
+**What's encoded:**
 
-- **6–7h sleep demolishes immune function** (Walker Ch1); 2× cancer risk vs 8h; ghrelin ↑ drives ~300 kcal/day excess intake on sleep-deprived days. This underpins the sleep debt accumulator in the dashboard.
-- **Sleep architecture targets:** N3 (slow-wave / deep) consolidates physical recovery and growth hormone release; REM consolidates motor learning and emotional regulation. Both tracked separately in the sleep pillar.
-- **SpO2 threshold:** <95% SpO2 average flags sleep-disordered breathing — weighted higher than duration in the composite sleep score for this specific use case.
-- **Sleep state misperception:** Subjective sleep quality often diverges from objective stage data. The morning check-in captures subjective quality (1–10) as a separate signal from WHOOP's objective staging.
-- **Circadian anchoring:** Consistent wake time > consistent bed time for circadian stability (Winter Ch7, Ch12).
-- **Stimulus control protocol:** Encoded from Winter Ch9 — bed is only for sleep; remove stimulus association. Feeds the sleep hygiene advisory in the AI advisor.
-- **Fatal Familial Insomnia (Walker Ch12):** Genetic progressive insomnia → death in 12–18 months. Encoded as context for why sleep monitoring is non-negotiable, not optional.
+- **Sleep deprivation effects (Walker Ch1):** 6–7h demolishes immune function, doubles cancer risk relative to 8h, and raises ghrelin enough to drive ~300 kcal/day of extra intake. This is why the sleep debt accumulator in the dashboard exists — I want to see when I'm accumulating a deficit.
+- **Stage targets:** N3 (deep/slow-wave) drives physical recovery and GH release. REM drives motor learning and emotional regulation. Both tracked separately rather than collapsed into a single "sleep score."
+- **SpO2 threshold:** <95% average flags sleep-disordered breathing — it's weighted more heavily than duration in my composite score, for obvious reasons.
+- **Sleep state misperception:** Subjective quality often diverges from objective stage data. That's why I log both — WHOOP's objective staging and my own morning 1–10 rating.
+- **Circadian anchoring (Winter):** Consistent wake time matters more than consistent bed time.
 
-**Notes in vault:** `walker-2017-why-we-sleep.md` (Ch1–16 individually), `winter-2017-sleep-solution.md` (Ch1–16), `sleep-spindles.md`, `sleep-learning-consolidation.md`, `obstructive-sleep-apnea.md`, `biphasic-sleep.md`, `napping-protocol.md`, `stimulus-control-protocol.md`, `rem-dreaming-mechanisms.md`, `dolezal-2017-sleep-exercise-review.md`
+**Notes:** `walker-2017-why-we-sleep.md` (Ch1–16), `winter-2017-sleep-solution.md` (Ch1–16), `obstructive-sleep-apnea.md`, `sleep-spindles.md`, `sleep-learning-consolidation.md`, `napping-protocol.md`, `rem-dreaming-mechanisms.md`, `dolezal-2017-sleep-exercise-review.md`
 
 </details>
 
 <details>
 <summary><strong>Nutrition — 55 notes</strong></summary>
 
-Built primarily from Israetel's *Renaissance Diet 2.0* (2020, 17 chapters) and Helms' *Muscle & Strength Pyramid: Nutrition* (2016), with Attia's *Outlive* (2023) for metabolic health context.
+Israetel's *Renaissance Diet 2.0* (2020) and Helms' *Muscle & Strength Pyramid: Nutrition* (2016), with Attia's *Outlive* (2023) for metabolic health context.
 
-**Key prescriptions encoded:**
+**What's encoded:**
 
-- **Diet priority pyramid (Israetel Ch1):** Adherence > calorie balance > macronutrients > nutrient timing > food choice > supplements. This ordering determines what the AI advisor emphasizes first.
-- **Body recomposition conditions:** Possible in three cases — new to resistance training, returning after layoff, or using PEDs. For a trained athlete in neither state, simultaneous gain and loss requires precise calorie cycling. Encoded as a constraint on what Claude will recommend.
-- **Protein targets:** 0.7–1.0g/lb body weight for muscle retention in a deficit; 1.0–1.2g/lb during a surplus. Minimum floor: 0.7g/lb at any calorie level.
-- **Calorie deficit rate:** 0.5–1.0% body weight per week for fat loss while preserving muscle. Faster than 1% → elevated lean mass loss risk.
-- **NEAT as primary TDEE lever:** Non-exercise activity thermogenesis accounts for the largest variable in TDEE. Encoded as the primary lever before adjusting food intake.
-- **Peri-workout nutrition:** 20–40g protein within 2h post-training; intra-workout carbs for sessions > 75 min. Pre-workout: protein 1–2h pre.
-- **Diet break / refeed protocol:** Planned maintenance phases every 4–12 weeks during deficit to restore leptin, reduce adaptive thermogenesis.
-- **Supplementation tier list:** Tier 1: creatine monohydrate (3–5g/day), caffeine (3–6mg/kg pre-workout). Tier 2: vitamin D3+K2, omega-3. Tier 3: everything else. Tier list encoded to gate AI supplement recommendations.
-- **Alcohol (Israetel Ch16):** Directly inhibits protein synthesis, reduces fat oxidation, disrupts sleep architecture. Flagged in the clinical notes when the check-in notes alcohol.
+- **Priority order (Israetel Ch1):** Adherence → calorie balance → macros → timing → food choice → supplements. This ordering determines what the AI advisor emphasizes when I ask nutrition questions.
+- **Recomposition conditions:** Possible if you're new to training, returning from a layoff, or enhanced. For a trained athlete in neither state, it requires deliberate calorie cycling — encoded as a constraint on what Claude will recommend.
+- **Protein floor:** 0.7g/lb minimum at any calorie level. 1.0–1.2g/lb in a surplus.
+- **Deficit rate:** 0.5–1.0% body weight per week to preserve lean mass. Faster → muscle loss risk.
+- **NEAT first:** Non-exercise activity thermogenesis is the biggest variable in TDEE. Increase output before cutting food.
+- **Supplement tier list:** Creatine and caffeine are Tier 1. Everything else is Tier 2 or lower. Encoded to gate what Claude recommends.
 
-**Notes in vault:** `israetel-2020-renaissance-diet.md` (Ch1–17), `helms-2016-muscle-strength-pyramid-nutrition.md` (Ch1–7), `protein-target.md`, `calorie-deficit-fat-loss-rate.md`, `calorie-surplus-muscle-gain-rate.md`, `diet-break-refeed-protocol.md`, `diet-priority-pyramid.md`, `peri-workout-nutrition.md`, `nutritional-periodization.md`, `supplements-tier-list.md`, `supplement-creatine.md`, `supplement-caffeine.md`, `hunger-management.md`, `alcohol-and-performance.md`
+**Notes:** `israetel-2020-renaissance-diet.md` (Ch1–17), `helms-2016-muscle-strength-pyramid-nutrition.md` (Ch1–7), `protein-target.md`, `calorie-deficit-fat-loss-rate.md`, `diet-break-refeed-protocol.md`, `diet-priority-pyramid.md`, `peri-workout-nutrition.md`, `supplements-tier-list.md`, `supplement-creatine.md`, `supplement-caffeine.md`
 
 </details>
 
 <details>
 <summary><strong>Longevity & Healthspan — 35 notes</strong></summary>
 
-Built from Attia's *Outlive* (2023, 17 chapters). Frames every health metric in terms of the four horsemen of chronic disease: cardiovascular disease, cancer, neurodegeneration, metabolic dysfunction.
+Attia's *Outlive* (2023) cover to cover, framing everything through the four horsemen: cardiovascular disease, cancer, neurodegeneration, metabolic dysfunction.
 
-**Key prescriptions encoded:**
+**What's encoded:**
 
-- **VO₂max as mortality predictor (Attia Ch11):** Bottom quartile → 4× all-cause mortality vs top quartile. No upper limit to benefit. The system tracks cardio zone distribution specifically to drive VO₂max improvement (Zone 2 base + Zone 5 intervals).
-- **Centenarian Decathlon:** VO₂max, grip strength, leg press, single-leg balance, stair climb, carry test, floor-rise test, overhead press, gait speed. Encoded as the long-term performance targets that inform training prioritization.
-- **Zone 2 training:** ~80% of aerobic volume at lactate threshold 1 (conversational pace). Mitochondrial density, fat oxidation capacity, metabolic flexibility. Encoded in cardio prescription logic.
-- **ApoB as primary lipid target:** ApoB > LDL-C as the causal CV risk marker (Attia Ch7). Encoded to ensure the AI advisor references ApoB when lab context is injected, not just LDL.
-- **APOE genotype:** APOE ε4 carriers have higher Alzheimer's risk, higher LDL absorption. Encoded as a condition interpretation rule — relevant if genetic testing is present in labs.
-- **Compression of morbidity:** Goal is extending the health span — years of full function — not just lifespan. Frames training not as aesthetics but as investment in the last decade of life.
-- **Grip strength (Attia Ch11):** Independent predictor of all-cause mortality; declines faster than VO₂max with age. Encoded as a non-negotiable training variable.
+- **VO₂max as the most important fitness metric (Attia Ch11):** Bottom quartile → 4× all-cause mortality vs top. No upper limit to the benefit. I track Zone 2 and Zone 5 minutes specifically because of this.
+- **Centenarian Decathlon:** VO₂max, grip strength, leg press, single-leg balance, stair climb, carry, floor-rise, overhead press, gait speed. These are my long-term training targets, not aesthetics.
+- **Zone 2:** ~80% of aerobic volume at conversational pace. Mitochondrial density, fat oxidation, metabolic flexibility.
+- **ApoB > LDL-C:** ApoB is the causal cardiovascular risk marker. When I ask Claude about my lipid labs, it references ApoB first.
+- **Compression of morbidity:** The goal is function in the last decade, not just survival. Everything I track is downstream of this framing.
 
-**Notes in vault:** `attia-2023-outlive.md` (Ch1–17), `four-horsemen-chronic-disease.md`, `centenarian-decathlon.md`, `vo2max-longevity.md`, `zone-2-training.md`, `compression-of-morbidity.md`, `grip-strength.md`, `apob.md`, `apoe.md`, `lp-a.md`, `medicine-3-0.md`, `cgm.md`
+**Notes:** `attia-2023-outlive.md` (Ch1–17), `four-horsemen-chronic-disease.md`, `centenarian-decathlon.md`, `vo2max-longevity.md`, `zone-2-training.md`, `compression-of-morbidity.md`, `grip-strength.md`, `apob.md`, `apoe.md`, `medicine-3-0.md`
 
 </details>
 
 <details>
 <summary><strong>HRV & Biometric Research — 15 notes</strong></summary>
 
-Primary research on HRV monitoring, wearable validation, and heart rate modelling.
+Primary papers on HRV monitoring, wearable validation, and HR modelling — the actual research behind the design decisions in this codebase.
 
-**Key papers encoded:**
+**Papers and what they drove:**
 
-- **Task Force (1996):** The foundational HRV standards paper. Time-domain (RMSSD, SDNN) and frequency-domain (LF/HF) metrics defined. Encoded to establish why RMSSD is the relevant metric for short-term vagal monitoring.
-- **Shaffer & Ginsberg (2017):** Normative HRV ranges by age and sex. Encoded so the AI advisor contextualizes absolute HRV values against population norms when they appear in labs.
-- **Kiviniemi et al. (2007):** HRV-guided training outperforms fixed-intensity programs in endurance athletes. The theoretical basis for why this system gates training intensity off HRV σ-deviation rather than a fixed schedule.
-- **Plews et al. (2013, 2014):** Practical HRV monitoring for compliance; HRV + training intensity distribution in elite rowers. 7-day rolling average superior to single-day readings for training decisions. Encoded in the 28-day baseline design decision.
-- **Tanaka et al. (2001):** 220−age HRmax formula underestimates HRmax in older trained adults. Tanaka formula (208 − 0.7 × age) is lower-error. Directly encoded in `cardio-panel.tsx` and the HR zone calculation.
-- **Buchheit (2014):** HR recovery as a training status indicator. Post-exercise HR drop at 60s correlates with parasympathetic reactivation speed. Encoded as interpretive context for WHOOP strain data.
-- **Dial et al. (2025):** WHOOP and Garmin validation study for RHR and HRV accuracy. Provides the confidence interval for treating WHOOP readings as ground truth.
+- **Task Force (1996):** The foundational HRV standards paper. Established why RMSSD is the right metric for short-term vagal monitoring, not LF/HF.
+- **Kiviniemi et al. (2007):** HRV-guided training outperforms fixed-intensity programs. The direct basis for gating training intensity off σ-deviation rather than a fixed weekly schedule.
+- **Plews et al. (2013, 2014):** 7-day rolling average is superior to single readings for training decisions. Drove the 28-day baseline window design.
+- **Tanaka et al. (2001):** 220−age underestimates HRmax in trained adults. Tanaka (208 − 0.7 × age) is lower error. Encoded directly in the HR zone calculation.
+- **Dial et al. (2025):** WHOOP and Garmin validation study. Establishes the confidence interval for treating WHOOP readings as ground truth.
 
-**Notes in vault:** `task-force-1996-hrv-standards.md`, `shaffer-2017-hrv-metrics-norms.md`, `kiviniemi-2007-hrv-guided-endurance-training.md`, `plews-2013-hrv-monitoring-compliance.md`, `plews-2014-hrv-training-intensity-rowers.md`, `tanaka-2001-hrmax-revisited.md`, `buchheit-2014-training-status-hr-monitoring.md`, `dial-2025-wearable-rhr-hrv-validation.md`
+**Notes:** `task-force-1996-hrv-standards.md`, `shaffer-2017-hrv-metrics-norms.md`, `kiviniemi-2007-hrv-guided-endurance-training.md`, `plews-2013-hrv-monitoring-compliance.md`, `tanaka-2001-hrmax-revisited.md`, `buchheit-2014-training-status-hr-monitoring.md`, `dial-2025-wearable-rhr-hrv-validation.md`
 
 </details>
 
 <details>
 <summary><strong>N-of-1 Methodology — 5 notes</strong></summary>
 
-The meta-framework that justifies the entire architecture: single-subject experimental design as rigorous science.
+The meta-framework that justifies treating my own data seriously — single-subject experimental design as rigorous science, not just self-tracking.
 
-**Key papers encoded:**
+- **Schork (2015, 2022):** Population RCTs tell you what works *on average*. N-of-1 trials tell you what works *for this person*. The philosophical backbone for why I treat my longitudinal data as an actual experiment.
+- **Daza (2018):** Counterfactual inference in single-subject designs. How to ask "did this protocol work?" without a control group — comparing windows of the same individual rather than against a population baseline.
+- **Piccininni et al. (2025):** Causal inference methods for N-of-1 designs. Grounds the correlation cards (sleep→recovery, HRV→readiness) in causal rather than purely associational framing.
 
-- **Schork (2015, 2022):** N-of-1 trials as the gold standard for personalized medicine. Population RCTs establish what works *on average*; N-of-1 trials establish what works *for this person*. The philosophical foundation for treating a single athlete's data as the experimental unit.
-- **Daza (2018):** Counterfactual inference in single-subject designs. Causal identification in the absence of a control group. Encoded to frame how the system interprets "did this protocol work?" — comparing the same individual across time windows, not against a population baseline.
-- **Piccininni et al. (2025):** Causal inference methods for N-of-1 designs. The most recent methodological development in the domain. Encoded to ground the correlation card logic (sleep→recovery, HRV→readiness) in causal rather than purely associational framing.
-- **Konigorski et al.:** Digital N-of-1 trials in experimental physiology. Connects wearable sensor data to the N-of-1 experimental framework — the direct theoretical basis for WHOOP + Apple Health as measurement instruments.
-
-**Notes in vault:** `schork-2015-personalized-medicine-one-person-trials.md`, `schork-2022-exploring-human-biology-nof1.md`, `daza-2018-counterfactual-nof1.md`, `piccininni-2025-causal-inference-nof1.md`, `konigorski-digital-nof1-experimental-physiology.md`
+**Notes:** `schork-2015-personalized-medicine-one-person-trials.md`, `schork-2022-exploring-human-biology-nof1.md`, `daza-2018-counterfactual-nof1.md`, `piccininni-2025-causal-inference-nof1.md`, `konigorski-digital-nof1-experimental-physiology.md`
 
 </details>
 
 <details>
 <summary><strong>LLM Engineering & RAG — 67 notes</strong></summary>
 
-Comprehensive coverage of LLM application architecture — the meta-domain that informs *how the vault itself is built and queried*.
+The domain that informs how the vault retrieval itself is built — I read this research while designing the system.
 
-Built from Alto's *LLM-Powered Applications* (2024, 13 chapters) and primary research papers.
+- **Self-RAG (2023):** Adaptive retrieval where the model decides *when* to retrieve. Informs why I do signal-ranked retrieval rather than always dumping all notes into context.
+- **ReAct (Reasoning + Acting):** Chain-of-thought combined with tool use. The mental model for how the AI advisor uses live health data alongside vault research.
+- **Reflexion (Shinn et al., 2023):** Verbal RL via reflection. Why `validate_plan()` explains violations to Claude rather than just rejecting silently.
+- **Constitutional AI (Bai et al., 2022):** Anthropic's safety-through-self-critique framework. Context for how Claude's safety behaviors interact with clinical coaching instructions.
 
-**Key patterns encoded:**
-
-- **RAG architecture (retrieval-augmented generation):** Retriever + generator separation; factuality vs parametric knowledge tradeoffs; context window efficiency. Directly informs the `load_vault_research()` signal-ranked retrieval design.
-- **HyDE (Hypothetical Document Embeddings):** Zero-shot dense retrieval via generating a hypothetical answer first, then retrieving against it. Potential future enhancement to vault search.
-- **Self-RAG (2023):** Adaptive retrieval with critique tokens — model decides *when* to retrieve vs rely on parametric knowledge. Encoded as architectural context for why the vault is injected conditionally (signal-ranked) rather than always-on.
-- **ReAct (Reasoning + Acting):** Synergizing chain-of-thought with tool use. The theoretical basis for how the AI advisor combines live health data (tool) with vault research (knowledge) in responses.
-- **Reflexion (Shinn et al., 2023):** Verbal reinforcement learning via reflection. Encoded as context for why `validate_plan()` triggers re-calls with violation feedback rather than patching responses.
-- **Constitutional AI (Bai et al., 2022):** Anthropic's framework for safety through self-critique. Encoded as interpretive context for how Claude's safety behaviors interact with clinical coaching guidance.
-- **LLM-as-judge (MT-Bench):** Using LLMs to evaluate LLM outputs. Encoded as context for potential future automated plan quality evaluation.
-
-**Notes in vault:** `retrieval-augmented-generation.md`, `self-rag.md`, `react-synergizing-reasoning-and-acting.md`, `shinn-2023-reflexion-verbal-rl.md`, `hyde-zero-shot-dense-retrieval.md`, `hypothetical-document-embeddings.md`, `bai-2022-constitutional-ai.md`, `llm-as-judge-mt-bench.md`, `llm-prompt-engineering-techniques.md`, `llm-chain-of-thought.md`, `cognitive-architectures-for-language-agents.md`, `vector-embeddings.md`, `dense-retrieval.md`, `reranking.md`, `raptor-recursive-abstractive-processing.md`
+**Notes:** `retrieval-augmented-generation.md`, `self-rag.md`, `react-synergizing-reasoning-and-acting.md`, `shinn-2023-reflexion-verbal-rl.md`, `hypothetical-document-embeddings.md`, `bai-2022-constitutional-ai.md`, `cognitive-architectures-for-language-agents.md`, `vector-embeddings.md`, `reranking.md`
 
 </details>
 
 ---
 
-### Signal-Ranked Note Retrieval
+### How the Vault Gets Used
 
-`load_vault_research()` selects the top 4 most-relevant notes on every call based on today's health signals:
+On every workout generation or briefing call, `load_vault_research()` selects the 4 most relevant notes based on what's going on with me today:
 
 ```python
 signals = {
@@ -495,150 +465,114 @@ signals = {
     "poor_sleep",          # last night < 6h
     "push_pull_imbalance", # 28d ratio > 1.2 or < 0.8
     "volume_spike",        # 4-week volume Δ > 40%
-    "recomposition",       # always active (primary goal)
+    "recomposition",       # always active
     "exercise_selection",  # always active
 }
 ```
 
-Each note carries YAML frontmatter tags scored against active signals (`+2` per specific signal match, `+1` for default). A high-ACWR/low-HRV day surfaces overtraining and deload notes automatically — they outcompete rest-interval notes that score well on normal days.
+Each note has YAML frontmatter tags. The retriever scores tags against active signals (`+2` per match, `+1` for default) and returns the top 4. On a high-ACWR/low-HRV day, overtraining and deload notes automatically beat out rest-interval notes.
 
 **Example: ACWR = 1.42, HRV σ = −1.8**
 
-| Note | Tags matched | Score |
-|---|---|---|
-| `overtraining-and-deload.md` | overtraining→deload+2, hrv→hrv_anomaly+2, acwr→high_acwr+2 | **+6** |
-| `fitness-fatigue-theory.md` | overreaching→deload+2, hrv→hrv_anomaly+2 | **+4** |
-| `supercompensation-theory.md` | volume→volume_spike+2, default+1 | **+3** |
-| `rest-interval-hypertrophy.md` | default+1 | **+1** |
+| Note | Score |
+|---|---|
+| `overtraining-and-deload.md` | **+6** (deload+2, hrv_anomaly+2, high_acwr+2) |
+| `fitness-fatigue-theory.md` | **+4** (deload+2, hrv_anomaly+2) |
+| `supercompensation-theory.md` | **+3** (volume_spike+2, default+1) |
+| `rest-interval-hypertrophy.md` | **+1** (default+1) |
 
-### Pinned Exercise Science Foundation
+Six notes also load unconditionally on every plan call — exercise selection, exercise order, Schoenfeld's hypertrophy mechanisms, rest intervals for strength and hypertrophy. These are the foundation that every plan builds on regardless of the day's signals.
 
-Six notes load unconditionally on every workout generation call, never competing with situational notes:
-
-```
-exercise-selection-strength.md        — compound movement pattern selection
-exercise-selection-hypertrophy.md     — muscle group prioritization by mechanism
-exercise-order-strength.md            — compound-before-isolation ordering
-schoenfeld-2010-hypertrophy-mechanisms.md — mechanical tension > metabolic stress > damage
-rest-interval-hypertrophy.md          — 90–120s minimum; longer rest preserves volume
-rest-interval-strength.md             — 180–300s for compound strength work
-```
-
-### Section Extraction — Only What the Model Needs
-
-Raw vault notes contain literature review, methodology, caveats. The retriever strips everything except sections the model can act on:
+Raw notes get stripped down to just the actionable sections before being sent to Claude:
 
 ```
-## Summary             → high-level principle (1–3 sentences)
-## Prescription        → actionable protocol (the actual numbers)
-## Key Claims          → evidence anchors (what the research actually says)
-## Practical Takeaways → direct application
-## Exercise Selection Rules → selection logic
+## Summary          → the principle
+## Prescription     → the actual numbers
+## Key Claims       → what the research says
+## Practical Takeaways → how to apply it
 ```
 
-A 3,000-word hypertrophy mechanisms paper is condensed to a 400-word prescription block. The model reasons from conclusions, not re-derived literature. Context window stays efficient across 10 concurrent notes.
-
-### Vault Insights — Required Plan Artifact
-
-Every generated workout plan must include a `vault_insights` array. The backend validates this before accepting the plan:
-
-```python
-if not plan.get("vault_insights"):
-    raise ValueError("vault_insights is empty — must cite research")
-```
-
-The frontend renders these attributed with the Obsidian logo:
-
-```
-┌─ FROM YOUR VAULT ─────────────────────────────────────────┐
-│  ◈  · Rest 90–120s between compound sets per              │
-│       rest-interval-strength.md                           │
-│     · Upper pull emphasis applied — push:pull at 1.35     │
-│       per exercise-selection-hypertrophy.md               │
-│     · Volume capped — ACWR at 1.38, within 10% of         │
-│       deload threshold per overtraining-and-deload.md     │
-└───────────────────────────────────────────────────────────┘
-```
-
-Every plan decision is traceable: prescription → vault note → primary research.
-
-### Architecture: Read-Only, No Sync
-
-```
-Obsidian (editor) → ~/Vault/savage_vault/wiki/*.md → load_vault_research() → Claude context
-                                                   → /api/vault/search    → AI Advisor
-```
-
-The vault is strictly input. No note is ever created, modified, or deleted by the system. Obsidian remains the editor; the platform is the consumer. The researcher's curation decisions are never overridden by an automated write-back.
+A 3,000-word hypertrophy paper becomes a 400-word prescription. Every plan Claude generates has to cite which vault notes it applied — there's a `vault_insights` field that's validated server-side, so the model can't silently ignore the research I handed it.
 
 ---
 
-## Dashboard
+## The Dashboard
 
-The dashboard is a single-page React application structured around eight discrete zones:
+What I actually look at every day. Eight zones, built with Next.js 15 + React 19.
 
 <table>
 <tr>
 <td width="50%">
 
 **⚡ Command Briefing**
-Today's readiness tier (GREEN / YELLOW / RED), composite score, the three signals that drove it (HRV σ, sleep, ACWR), and a Claude-generated narrative synthesizing everything into a single recommendation.
+The top card. Green/yellow/red, the score, the three signals that drove it, and a paragraph from Claude explaining what it means for today. This is the whole point — one read, one decision.
 
 **📡 Biometric HUD**
-Persistent header strip with live WHOOP + Hevy sync-status badges, real-time vitals (recovery, HRV, RHR, strain), and data-age indicators.
+Always-on header with live WHOOP and Hevy sync status, today's vitals, and data freshness. I want to know if something hasn't synced.
 
 **🫀 Recovery Intelligence**
-WHOOP recovery ring with 7-night HRV sparkline and ±1σ band. Points outside the band are colored to flag anomalous nights.
+WHOOP recovery ring plus a 7-night HRV sparkline with ±1σ bands. Points outside the band are colored — it's easy to spot anomalous nights at a glance.
 
 **😴 Sleep Architecture**
-Stacked bar across 7 nights (total / deep / REM), sleep debt accumulator, per-night SpO2. Weighted for sleep-disordered breathing context.
+7-night stacked bar (total / deep / REM), sleep debt accumulator, SpO2 per night. The debt tracker is something I actually use.
 
 </td>
 <td width="50%">
 
 **🏋️ Training Load**
-ACWR trend with safe-zone band (0.8–1.3), weekly volume by muscle group, push:pull ratio, monotony index.
+ACWR trend with the safe-zone band drawn in, weekly volume by muscle group, push:pull ratio. I built this after noticing I was chronically over-pushing and under-pulling.
 
 **🎯 Readiness Composite**
-Score and component breakdown with visual indication of active weight vector. Gate reasons rendered in natural language.
+The score broken down into components, with a visual showing which weight vector is active. Gate reasons in plain English.
 
 **💬 AI Advisor** `⌘K`
-Full Claude chat with `build_daily_context()` injected per-message — the model always has today's DailyState, medications, diagnoses, labs, training history, and gates.
+Claude chat, but it already knows everything before I type anything. Every message includes today's full DailyState, medications, labs, training history, and gate state.
 
 **🌊 Ambient Layer**
-Full-page gradient keyed to readiness score. Hue shifts green → neutral → red as readiness falls. Communicates system state before a number is read.
+The page background hue shifts with readiness — greenish when I'm good, reddish when I'm not. It's subtle but I notice it before I read anything.
 
 </td>
 </tr>
 </table>
 
-### Trend Intelligence — Five-Tab Deep Dive
+### Trend Intelligence
 
-| Tab | Content |
+Five tabs I open when I want to dig into something:
+
+| Tab | What's in it |
 |---|---|
-| **Recovery** | 90-day rolling HRV, recovery score, RHR time series with 28d moving average |
-| **Body** | Weight trend with 4-week regression line, target range band, Apple Health sync |
-| **Patterns** | Scatter plots: sleep vs recovery, HRV vs readiness — Pearson-r with confidence range |
-| **Insights** | Computed correlation cards — unlocks after 7 days of data |
-| **Clinical** | Unified event timeline of medications, diagnoses, labs (abnormal flagged) |
+| **Recovery** | 90-day HRV, recovery score, RHR with 28d moving average |
+| **Body** | Weight trend, 4-week regression line, Apple Health sync |
+| **Patterns** | Sleep vs recovery and HRV vs readiness scatter plots — Pearson-r per plot |
+| **Insights** | Computed correlation cards, unlocks after 7 days of data |
+| **Clinical** | Timeline of medications, diagnoses, and labs — abnormal values flagged |
 
-### Today's Workout Plan
+### Today's Workout
 
-AI-generated via Claude Opus 4.7 with full `DailyState` + clinical context + ranked vault research. Structured as blocks (warm-up / main / accessory) with exercises, sets × reps, target weight, RPE, coaching notes, and vault citations. Cached per day; `?regen=true` forces a fresh call. **Push to Hevy** button exports the plan as a live routine via the Hevy REST API.
+Generated by Claude with full context injected. Comes back as structured blocks — warm-up, main, accessory — with exercises, sets × reps, weight, RPE, and coaching notes, each citing which vault note justified the choice. I can push it directly to Hevy as a routine with one button.
 
 ---
 
 ## AI Integration
 
-### Briefing System
+### How Context Gets Built
 
-`shc/ai/briefing.py` builds two context blocks per call:
+Every time Claude gets called, `build_daily_context()` assembles:
 
-**`build_daily_context()`** injects: DailyState (all computed metrics), 28-day cardio composition (Z2 vs threshold vs VO2max minutes), push:pull imbalance direction, skin-temp delta from baseline, active medications with dosing and onset, active conditions, recent labs with reference ranges, training history (PRs, volume trend, last session per muscle group), gate reasons, and signal-ranked vault research.
+- Today's full DailyState (all computed metrics)
+- 28-day cardio composition (Zone 2 vs threshold vs VO₂max minutes)
+- Push:pull imbalance direction and magnitude
+- Skin-temp delta from my 28-day baseline
+- Active medications with dosing and onset dates
+- Active diagnoses
+- 20 most recent lab values with reference ranges
+- Recent PRs, volume trend, last session per muscle group
+- Active gate reasons
+- Signal-ranked vault research
 
-**`build_clinical_context()`** structures the clinical data as a dedicated markdown block that appears early in the system prompt.
+`build_clinical_context()` structures the clinical data into a dedicated block that appears early in the system prompt. The HEALTH_SYSTEM prompt encodes drug-class interpretation rules so Claude doesn't have to infer pharmacology from first principles.
 
-### Workout Planner
+### Workout Generation Flow
 
 ```
 SYSTEM: HEALTH_SYSTEM + gate enforcement rules + personal context
@@ -650,31 +584,27 @@ USER:   build_training_context()
         → gates (max_intensity, forbid_muscle_groups, zone shifts)
         → signal-ranked vault research (top 4 notes)
         → pinned exercise science foundation (6 notes always)
-        → session goals (duration target, focus areas)
+        → session goals
 ```
 
-`validate_plan()` checks every field against gates — accepts or rejects + re-calls. Response cached 24h.
+Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=true` forces a fresh call.
 
-### Air-Gapped Fallback
+### Running Locally Without Claude
 
-`SHC_LLM_MODE=local_only` routes all calls to a local Ollama instance (`llama3.3:70b`). Full clinical context injection preserved. Functions offline with no data leaving the machine.
-
-### Cost Management
-
-`ANTHROPIC_DAILY_CAP_USD` (default `$2.00`) limits daily Claude API spend. All calls log token usage and cost to `data/logs/`. `make doctor` reports current-day spend and remaining budget.
+`SHC_LLM_MODE=local_only` routes everything to a local Ollama instance (`llama3.3:70b`). Same context injection, lower reasoning quality, works fully offline. I use this when I'm traveling.
 
 ---
 
 ## Data Sources
 
-| Source | Protocol | Data |
+| Source | Protocol | What I get |
 |---|---|---|
-| **WHOOP 4.0** | OAuth 2.0, background sync 60 min | Recovery 0–100, HRV (ms), RHR, strain, sleep stages, SpO2, skin temp |
-| **Apple Health** | iCloud HealthAutoExport → CCDA XML | Steps, active energy, HR, HRV, sleep, blood pressure, body weight, glucose, temp |
-| **Hevy** | REST API + routine push export | Exercises, sets, reps, weight (kg), RPE, timestamps |
-| **Morning check-in** | Dashboard form | Energy, stress, motivation, sleep quality (1–10), medication flag, body weight, muscle soreness |
-| **Cardio log** | Dashboard form | Sport, duration (min), average HR, RPE |
-| **Clinical data** | Dashboard forms | Active medications (dose, frequency, onset), diagnoses, lab results with reference ranges |
+| **WHOOP 4.0** | OAuth 2.0, syncs every 60 min | Recovery, HRV, RHR, sleep stages, strain, SpO2, skin temp |
+| **Apple Health** | HealthAutoExport → CCDA XML | Steps, HR, weight, glucose, blood pressure, sleep |
+| **Hevy** | REST API + routine export | Every lift back to 2015 |
+| **Morning check-in** | Dashboard form | Energy, stress, soreness, weight, medication flags |
+| **Cardio log** | Dashboard form | Manual sessions — sport, duration, HR, RPE |
+| **Clinical data** | Dashboard forms | Medications, diagnoses, labs |
 
 ---
 
@@ -723,13 +653,13 @@ USER:   build_training_context()
 </tr>
 </table>
 
-**Infrastructure:** Honcho (`Procfile`) — API `:8000`, frontend `:3000` · GitHub Actions CI (ruff, pyright, pytest) · `make install / dev / seed / reset / doctor / lint / test`
+**Infrastructure:** Honcho (`Procfile`) — API `:8000`, frontend `:3000` · GitHub Actions CI (ruff, pyright, pytest on push to main)
 
 ---
 
-## Design System
+## Design
 
-The frontend uses OKLCH (Oklab Lightness-Chroma-Hue) — a perceptually uniform color space where green, yellow, and red at the same lightness value look equally bright to the human eye. In sRGB, greens appear brighter and reds appear darker at the same hex value. OKLCH eliminates that.
+I spent more time on the UI than I probably should have. The whole thing uses OKLCH (Oklab Lightness-Chroma-Hue) — a perceptually uniform color space where the same lightness value actually looks equally bright across all hues. In standard sRGB, green looks brighter than red at the same hex value, which makes status colors feel inconsistent. OKLCH fixes that.
 
 <table>
 <tr>
@@ -740,17 +670,17 @@ The frontend uses OKLCH (Oklab Lightness-Chroma-Hue) — a perceptually uniform 
 <tr>
 <td>🟢 Ready</td>
 <td><code>oklch(0.72 0.18 145)</code></td>
-<td>Full intensity — push hard</td>
+<td>Push hard</td>
 </tr>
 <tr>
 <td>🟡 Moderate</td>
 <td><code>oklch(0.78 0.15 85)</code></td>
-<td>Proceed with caution</td>
+<td>Back off a bit</td>
 </tr>
 <tr>
 <td>🔴 Rest</td>
 <td><code>oklch(0.65 0.22 20)</code></td>
-<td>Recovery work only</td>
+<td>Recovery only</td>
 </tr>
 <tr>
 <td>⬛ Background</td>
@@ -764,16 +694,14 @@ The frontend uses OKLCH (Oklab Lightness-Chroma-Hue) — a perceptually uniform 
 </tr>
 </table>
 
-**Typography:** `Orbitron 900` — KPI numbers, tier labels, eyebrows · `Geist Sans` — body copy · `Geist Mono` — tabular data, metrics
+**Typography:** `Orbitron 900` for KPI numbers and tier labels, `Geist Sans` for everything else, `Geist Mono` for data tables.
 
 ---
 
 ## Data Model
 
 <details>
-<summary>Core tables (14 + 4 views)</summary>
-
-### Core Tables
+<summary>Schema — 14 tables, 4 views</summary>
 
 ```sql
 measurements        -- Apple Health time-series (metric, ts, value, unit, content_hash)
@@ -782,47 +710,37 @@ workout_sets        -- Strength sets (exercise, reps, weight_kg, rpe, is_warmup)
 sleep               -- Multi-source (stages_json, spo2_avg, hrv, rhr, night_date)
 recovery            -- WHOOP (date, score, hrv, rhr, skin_temp)
 cardio_sessions     -- Manual + integrations (modality, duration, avg_hr, rpe, zones)
-working_weights     -- Current e1RM per exercise (updated per session)
-workout_plans       -- AI-generated plans (plan_json, source, date)
+working_weights     -- Current e1RM per exercise
+workout_plans       -- AI-generated plans (plan_json, date)
 workout_retrospectives  -- Post-workout summaries (completion_pct, overload_flag, vault_insights)
-plan_adherence      -- Prescription vs execution (avg_rpe_actual vs target)
-daily_checkin       -- Morning survey (energy, stress, soreness, medication, body_weight)
-medications         -- Active medications with audit trail (valid_to for history)
-conditions          -- Diagnoses (status, onset, valid_to)
-labs                -- Lab results (value, ref_low/high, panel, is_abnormal, collected_at)
-schema_version      -- Migration tracking (14 applied)
+plan_adherence      -- Prescription vs execution
+daily_checkin       -- Morning survey
+medications         -- Active medications with audit trail
+conditions          -- Diagnoses
+labs                -- Lab results with reference ranges
+schema_version      -- 14 migrations applied
 ```
 
-### Materialized Views
-
 ```sql
-v_hrv_baseline_28d      -- Rolling 28d HRV mean and SD per date (for σ-deviation)
+v_hrv_baseline_28d      -- Rolling 28d HRV mean and SD (for σ-deviation)
 v_session_load          -- Per-day load from WHOOP strain + Hevy volume
 v_daily_load            -- Composite load — true Gabbett ACWR denominator
-workout_sets_dedup      -- Deduped sets (handles Hevy sync collisions on retry)
+workout_sets_dedup      -- Deduped sets (handles Hevy sync collisions)
 ```
 
 </details>
 
 ---
 
-## Security & Privacy
+## Privacy
 
-> [!WARNING]
-> This system handles sensitive personal health data. The following properties are non-negotiable.
-
-- ✅ **No cloud storage** — all data stays on-device; no telemetry, no third-party analytics
-- ✅ **Encrypted database** — DuckDB encrypted at rest; `PRAGMA key` set from Keychain at startup
-- ✅ **Keychain-only credentials** — OAuth tokens and API keys never touch disk
-- ✅ **Localhost only** — FastAPI requires a session token; not exposed to the internet
-- ✅ **Idempotent ingestion** — content-hash dedup prevents double-counting on sync retry
-- ✅ **Personal context gitignored** — clinical details loaded at runtime from `backend/data/` (not committed)
+Everything runs on my MacBook. Nothing goes to a cloud. The database is encrypted at rest (DuckDB + Keychain key). OAuth tokens live in Keychain, not on disk. The API is localhost-only behind a session token. Clinical details are loaded at runtime from a gitignored file — they're not in version control.
 
 ---
 
-## Quickstart
+## Running It
 
-**Prerequisites:** Python 3.12+, Node 20+, [uv](https://github.com/astral-sh/uv), macOS (Keychain required)
+This is a personal tool built for my specific setup — WHOOP, Hevy, Apple Health export, macOS Keychain. It's not packaged for general use, but if you want to poke around:
 
 ```bash
 git clone https://github.com/robsavage619/savage-labs
@@ -831,34 +749,21 @@ cd savage-labs
 make install
 
 cp env.example .env
-# Three required values:
-# ANTHROPIC_API_KEY   — console.anthropic.com
-# WHOOP_CLIENT_ID     — developer.whoop.com
-# WHOOP_CLIENT_SECRET — developer.whoop.com
+# ANTHROPIC_API_KEY, WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET
 
-make seed    # 90 days of synthetic data + run migrations
-make dev     # FastAPI :8000 + Next.js :3000
+make seed    # seeds 90 days of synthetic data
+make dev     # API on :8000, frontend on :3000
 ```
 
-### Commands
-
-| Command | What it does |
+| Command | Does |
 |---|---|
-| `make dev` | Start API + frontend via Honcho |
-| `make seed` | Seed 90 days of synthetic data |
-| `make reset` | Drop and rebuild database (`CONFIRM=1` required) |
-| `make doctor` | Verify config, DuckDB, Ollama status, daily AI spend |
-| `make logs` | Tail all service logs |
-| `make lint` | Run ruff |
-| `make typecheck` | Run pyright |
-| `make test` | Run pytest suite |
-
-### LLM Modes
-
-```bash
-SHC_LLM_MODE=auto        # Claude Opus 4.7 with Ollama fallback (default)
-SHC_LLM_MODE=local_only  # Ollama only — air-gapped, no Anthropic calls
-```
+| `make dev` | Start everything |
+| `make seed` | 90 days synthetic data |
+| `make doctor` | Check config, DB, AI spend |
+| `make reset` | Nuclear option (`CONFIRM=1`) |
+| `make lint` | ruff |
+| `make typecheck` | pyright |
+| `make test` | pytest |
 
 ---
 
@@ -866,6 +771,6 @@ SHC_LLM_MODE=local_only  # Ollama only — air-gapped, no Anthropic calls
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20,25,30&height=120&section=footer" width="100%" />
 
-*Built by Rob Savage — senior software engineer, FinOps architect, and one person who wanted a health system that understood his whole picture.*
+*Built by Rob Savage — because no existing tool understood my whole picture.*
 
 </div>
