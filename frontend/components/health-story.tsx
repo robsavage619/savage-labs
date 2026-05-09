@@ -161,7 +161,7 @@ Optimize for body recomposition (strength + fat loss). The plan must be a JSON o
           "weight_lbs": <number or null>,
           "rpe_target": <number>,
           "rest_seconds": <number>,
-          "notes": "..."
+          "notes": "<plain coaching cue — see format rules below>"
         }
       ]
     }
@@ -170,6 +170,16 @@ Optimize for body recomposition (strength + fat loss). The plan must be a JSON o
   "clinical_notes": ["<string>", ...],
   "vault_insights": ["<string>", ...]
 }
+
+Exercise notes format — PLAIN ENGLISH COACHING CUES:
+Write notes like a coach talking at the rack, not a research abstract. The goal is actionable, human, and specific to that movement.
+Good: "Push the floor away, keep your chest up — stop a rep short if your lower back rounds"
+Good: "Full stretch at the bottom, squeeze hard at the top — slow the way down"
+Good: "Elbows in, drive your hips through at the top"
+Bad: "Eccentric overload with stretch-mediated hypertrophy stimulus"
+Bad: "~80% of working weight for progressive overload"
+Bad: "Compound movement targeting posterior chain via hip hinge pattern"
+Rules: one or two short sentences max; include one movement cue (what to feel or focus on) and one autoregulation note if needed (e.g. "stop if lower back tightens"); no abbreviations or jargon; always write in second person ("you", "your").
 
 Exercise selection — SCIENCE FIRST, HISTORY SECOND:
 This is a sports science lab, not a habit tracker. Do NOT anchor to TOP EXERCISES or WORKING WEIGHTS — those lists reflect what Rob has done repeatedly, not what's optimal.
@@ -180,7 +190,14 @@ If an exercise has no WORKING WEIGHTS entry, set weight_lbs: null and use rpe_ta
 
 Field rules (validator enforces exactly):
 - blocks[].label — NOT "name"; exercises[].name — NOT "exercise"
-- rest_seconds required on EVERY exercise: 180 compounds, 90 accessories, 60 isolation/superset pairs, 0 pure cardio
+- rest_seconds required on EVERY exercise — set by intensity and mechanism, not just category (Schoenfeld 2016: longer rests = superior strength AND hypertrophy):
+  · Heavy strength (≤5 reps, RPE 8+, barbell compound): 240–300s (4–5 min)
+  · Hypertrophy compound (6–12 reps, RPE 7–8, e.g. squat, deadlift, bench, row): 180s (3 min)
+  · Hypertrophy accessory (8–15 reps, RPE 7–8, e.g. dumbbell press, cable row, split squat): 120s (2 min)
+  · Isolation / single-joint (10–20 reps, RPE 6–8, e.g. curl, lateral raise, tricep pushdown): 90s
+  · Superset pair (antagonist or upper/lower): 60s between exercises within the pair, 90s after the pair completes
+  · Metabolic finisher / EMOM / conditioning circuit: 30–60s (match the work interval)
+  · Pure cardio / Z2: 0s
 - clinical_notes: non-empty array; always include propranolol PRN status + asthma note
 - vault_insights: non-empty array; cite ≥2 vault research sources with the specific mechanism they justify
 - Always include a metabolic finisher block (or Z2 walk on red/deload days)
