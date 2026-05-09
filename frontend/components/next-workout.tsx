@@ -495,14 +495,6 @@ export function NextWorkoutPane() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Start live session — opens autoregulating set logger */}
-          <a
-            href="/workout"
-            className="btn btn-primary"
-            title="Open the live session view — set-by-set logging with autoregulation"
-          >
-            ▶ Start
-          </a>
           {/* Push plan to Hevy */}
           <button
             onClick={handlePushHevy}

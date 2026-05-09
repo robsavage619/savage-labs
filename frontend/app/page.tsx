@@ -5,6 +5,7 @@ import { PillarRecovery } from "@/components/pillar-recovery";
 import { PillarSleep } from "@/components/pillar-sleep";
 import { PillarTrainingLoad } from "@/components/pillar-training-load";
 import { PeriodizationStrip } from "@/components/periodization-strip";
+import { AfterActionPanel } from "@/components/after-action-panel";
 import { FuelingPanel } from "@/components/fueling-panel";
 import { StrengthPanel } from "@/components/strength-panel";
 import { TrendIntelligence } from "@/components/trend-intelligence";
@@ -93,6 +94,10 @@ export default function Dashboard() {
 
           <ErrorBoundary label="Periodization">
             <PeriodizationStrip />
+          </ErrorBoundary>
+
+          <ErrorBoundary label="After action">
+            <AfterActionPanel />
           </ErrorBoundary>
 
           <ErrorBoundary label="Fueling">

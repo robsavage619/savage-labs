@@ -2798,113 +2798,167 @@ async def recent_workouts(limit: int = Query(default=10, gt=0, le=50)) -> list[d
     ]
 
 
-class SessionSetLog(BaseModel):
-    """Single set logged from the live workout view."""
-    block: str | None = None
-    exercise: str
-    set_idx: int
-    target_reps: int | None = None
-    target_weight_kg: float | None = None
-    target_rpe: float | None = None
-    target_rir: int | None = None
-    actual_reps: int | None = None
-    actual_weight_kg: float | None = None
-    actual_rpe: float | None = None
-    actual_rir: int | None = None
-    mcv_m_s: float | None = None
-    notes: str | None = None
+@router.get("/training/after-action")
+async def training_after_action() -> dict:
+    """Per-exercise autoregulation read-out for the last completed Hevy session.
 
+    For each exercise in the most recent session: compares actual sets/reps/RPE
+    against the saved plan target (if one exists for that date) and emits a
+    next-session weight suggestion. Read-only — Rob logs in Hevy, this just
+    reads what synced and tells him what to do next time.
 
-@router.post("/workout/session/log")
-async def log_session_set(body: SessionSetLog) -> dict:
-    """Persist a single set from the live workout view (autoregulation source-of-truth)."""
-    import uuid
-    sid = str(uuid.uuid4())
-    today = date.today().isoformat()
-    async with write_ctx() as conn:
-        conn.execute(
-            """
-            INSERT INTO session_set_logs
-                (id, session_date, block, exercise, set_idx,
-                 target_reps, target_weight_kg, target_rpe, target_rir,
-                 actual_reps, actual_weight_kg, actual_rpe, actual_rir,
-                 mcv_m_s, notes)
-            VALUES ($id, $d, $block, $ex, $idx,
-                    $tr, $tw, $trp, $tri,
-                    $ar, $aw, $arp, $ari,
-                    $mcv, $notes)
-            """,
-            {
-                "id": sid,
-                "d": today,
-                "block": body.block,
-                "ex": body.exercise,
-                "idx": body.set_idx,
-                "tr": body.target_reps,
-                "tw": body.target_weight_kg,
-                "trp": body.target_rpe,
-                "tri": body.target_rir,
-                "ar": body.actual_reps,
-                "aw": body.actual_weight_kg,
-                "arp": body.actual_rpe,
-                "ari": body.actual_rir,
-                "mcv": body.mcv_m_s,
-                "notes": body.notes,
-            },
-        )
-    return {"status": "ok", "id": sid, "date": today}
+    Rules (Helms 2018 / RP autoreg, RPE-only since Hevy doesn't capture MCV):
+        avg actual RPE ≥ target + 2  → -10% next time
+        avg actual RPE ≥ target + 1  → -5%
+        rep miss ≥ 2 reps/set        → -5%
+        avg actual RPE ≤ target - 2  → +2.5%
+        else                         → repeat (progress 2.5% if all reps + RPE met)
+    """
+    import json as _json
 
-
-@router.get("/workout/session/today")
-async def session_today() -> dict:
-    """Return all sets logged in today's live session."""
-    today = date.today().isoformat()
     conn = get_read_conn()
     try:
-        rows = conn.execute(
+        last_day = conn.execute(
+            "SELECT MAX(day_d) FROM workout_sets_dedup WHERE is_warmup = FALSE"
+        ).fetchone()
+        if not last_day or not last_day[0]:
+            return {"as_of": date.today().isoformat(), "session_date": None, "exercises": []}
+        sess_date: date = last_day[0]
+
+        actuals = conn.execute(
             """
-            SELECT id, block, exercise, set_idx,
-                   target_reps, target_weight_kg, target_rpe, target_rir,
-                   actual_reps, actual_weight_kg, actual_rpe, actual_rir,
-                   mcv_m_s, completed_at, notes
-            FROM session_set_logs
-            WHERE session_date = $d
-            ORDER BY completed_at, set_idx
+            SELECT canon_exercise,
+                   ANY_VALUE(exercise) AS exercise,
+                   COUNT(*)            AS sets,
+                   AVG(reps)           AS avg_reps,
+                   MIN(reps)           AS min_reps,
+                   AVG(weight_kg)      AS avg_weight_kg,
+                   MAX(weight_kg)      AS max_weight_kg,
+                   AVG(NULLIF(rpe, 0)) AS avg_rpe
+            FROM workout_sets_dedup
+            WHERE day_d = $d AND is_warmup = FALSE AND reps > 0 AND weight_kg > 0
+            GROUP BY canon_exercise
+            ORDER BY MIN(set_idx)
             """,
-            {"d": today},
+            {"d": sess_date.isoformat()},
         ).fetchall()
+
+        plan_row = conn.execute(
+            "SELECT plan_json FROM workout_plans WHERE date = $d",
+            {"d": sess_date.isoformat()},
+        ).fetchone()
     finally:
         conn.close()
+
+    # Build {canonical-name: target} from the plan
+    plan_targets: dict[str, dict[str, Any]] = {}
+    if plan_row:
+        try:
+            plan = _json.loads(plan_row[0]) if isinstance(plan_row[0], str) else plan_row[0]
+            for block in plan.get("blocks", []):
+                for ex in block.get("exercises", []):
+                    name = (ex.get("name") or "").lower().strip()
+                    if not name:
+                        continue
+                    reps_raw = ex.get("reps")
+                    target_reps: int | None = None
+                    if isinstance(reps_raw, int):
+                        target_reps = reps_raw
+                    elif isinstance(reps_raw, str):
+                        import re as _re
+                        m = _re.search(r"(\d+)", reps_raw)
+                        target_reps = int(m.group(1)) if m else None
+                    plan_targets[name] = {
+                        "target_reps": target_reps,
+                        "target_weight_lbs": ex.get("weight_lbs"),
+                        "target_weight_kg": ex.get("weight_kg")
+                            or (ex.get("weight_lbs") * 0.453592 if ex.get("weight_lbs") else None),
+                        "target_rpe": ex.get("rpe_target"),
+                        "target_sets": ex.get("sets"),
+                        "block": block.get("label"),
+                        "notes": ex.get("notes"),
+                    }
+        except (ValueError, AttributeError, TypeError):
+            pass
+
+    LB_PER_KG = 2.20462
+
+    def _round_to_2_5(lbs: float) -> float:
+        return round(lbs / 2.5) * 2.5
+
+    out: list[dict] = []
+    for canon, exname, sets_n, avg_reps, min_reps, avg_wt, max_wt, avg_rpe in actuals:
+        plan_target = plan_targets.get((exname or "").lower().strip()) or plan_targets.get(canon.lower().strip()) or {}
+        target_reps = plan_target.get("target_reps")
+        target_rpe = plan_target.get("target_rpe")
+        target_weight_lbs = plan_target.get("target_weight_lbs") or (
+            round(plan_target.get("target_weight_kg") * LB_PER_KG) if plan_target.get("target_weight_kg") else None
+        )
+        actual_weight_lbs = round(float(max_wt or 0) * LB_PER_KG, 1) if max_wt else None
+        avg_rpe_val = round(float(avg_rpe), 1) if avg_rpe is not None else None
+
+        # Compute suggestion
+        delta_pct = 0.0
+        reason_parts: list[str] = []
+
+        rpe_gap = (avg_rpe_val - target_rpe) if (avg_rpe_val is not None and target_rpe is not None) else None
+        if rpe_gap is not None:
+            if rpe_gap >= 2:
+                delta_pct = -10
+                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {target_rpe} — fatigue ahead of plan")
+            elif rpe_gap >= 1:
+                delta_pct = -5
+                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {target_rpe} — harder than planned")
+            elif rpe_gap <= -2:
+                delta_pct = 2.5
+                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {target_rpe} — too easy")
+
+        if target_reps is not None and min_reps is not None and (target_reps - min_reps) >= 2:
+            if delta_pct >= 0:
+                delta_pct = -5
+                reason_parts.append(f"missed reps by {target_reps - int(min_reps)} on at least one set")
+
+        # On-target & RPE met or unknown: nudge up 2.5% if reps were hit AND RPE under target
+        if delta_pct == 0 and rpe_gap is not None and rpe_gap < 0 and target_reps is not None and min_reps is not None and min_reps >= target_reps:
+            delta_pct = 2.5
+            reason_parts.append("hit all reps under target RPE — small progression")
+
+        next_lbs: float | None = None
+        base_lbs = target_weight_lbs or actual_weight_lbs
+        if base_lbs is not None and delta_pct != 0:
+            next_lbs = _round_to_2_5(base_lbs * (1 + delta_pct / 100))
+
+        verdict = (
+            "drop" if delta_pct < 0 else "progress" if delta_pct > 0 else "repeat"
+            if (target_reps is not None or target_rpe is not None) else "no_plan_target"
+        )
+
+        out.append({
+            "exercise": exname,
+            "block": plan_target.get("block"),
+            "sets": int(sets_n),
+            "avg_reps": round(float(avg_reps), 1) if avg_reps is not None else None,
+            "min_reps": int(min_reps) if min_reps is not None else None,
+            "target_reps": target_reps,
+            "actual_weight_lbs": actual_weight_lbs,
+            "target_weight_lbs": target_weight_lbs,
+            "avg_rpe": avg_rpe_val,
+            "target_rpe": target_rpe,
+            "delta_pct": delta_pct,
+            "next_session_lbs": next_lbs,
+            "verdict": verdict,
+            "reason": "; ".join(reason_parts) if reason_parts else (
+                "On target — repeat planned weight" if (target_rpe or target_reps) else "No plan target on file — log RPE in Hevy for autoreg"
+            ),
+        })
+
     return {
-        "date": today,
-        "sets": [
-            {
-                "id": r[0],
-                "block": r[1],
-                "exercise": r[2],
-                "set_idx": r[3],
-                "target_reps": r[4],
-                "target_weight_kg": r[5],
-                "target_rpe": r[6],
-                "target_rir": r[7],
-                "actual_reps": r[8],
-                "actual_weight_kg": r[9],
-                "actual_rpe": r[10],
-                "actual_rir": r[11],
-                "mcv_m_s": r[12],
-                "completed_at": r[13].isoformat() if r[13] else None,
-                "notes": r[14],
-            }
-            for r in rows
-        ],
+        "as_of": date.today().isoformat(),
+        "session_date": sess_date.isoformat(),
+        "days_ago": (date.today() - sess_date).days,
+        "has_plan": bool(plan_targets),
+        "exercises": out,
     }
-
-
-@router.delete("/workout/session/log/{set_id}")
-async def delete_session_set(set_id: str) -> dict:
-    async with write_ctx() as conn:
-        conn.execute("DELETE FROM session_set_logs WHERE id = $id", {"id": set_id})
-    return {"status": "ok"}
 
 
 @router.post("/workout/retrospective")

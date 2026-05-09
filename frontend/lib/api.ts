@@ -659,85 +659,29 @@ export const api = {
       notes: string | null;
       volume_targets: Record<string, { mev: number; mav: number; mrv: number }>;
     }>("/api/training/mesocycle"),
-  sessionSetLog: async (body: {
-    block?: string | null;
-    exercise: string;
-    set_idx: number;
-    target_reps?: number | null;
-    target_weight_kg?: number | null;
-    target_rpe?: number | null;
-    target_rir?: number | null;
-    actual_reps?: number | null;
-    actual_weight_kg?: number | null;
-    actual_rpe?: number | null;
-    actual_rir?: number | null;
-    mcv_m_s?: number | null;
-    notes?: string | null;
-  }) => {
-    const r = await fetch(`${BASE}/api/workout/session/log`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error(`sessionSetLog ${r.status}`);
-    return r.json() as Promise<{ status: string; id: string; date: string }>;
-  },
-  sessionToday: () =>
+  afterAction: () =>
     get<{
-      date: string;
-      sets: {
-        id: string;
-        block: string | null;
+      as_of: string;
+      session_date: string | null;
+      days_ago?: number;
+      has_plan: boolean;
+      exercises: {
         exercise: string;
-        set_idx: number;
+        block: string | null;
+        sets: number;
+        avg_reps: number | null;
+        min_reps: number | null;
         target_reps: number | null;
-        target_weight_kg: number | null;
+        actual_weight_lbs: number | null;
+        target_weight_lbs: number | null;
+        avg_rpe: number | null;
         target_rpe: number | null;
-        target_rir: number | null;
-        actual_reps: number | null;
-        actual_weight_kg: number | null;
-        actual_rpe: number | null;
-        actual_rir: number | null;
-        mcv_m_s: number | null;
-        completed_at: string | null;
-        notes: string | null;
+        delta_pct: number;
+        next_session_lbs: number | null;
+        verdict: "drop" | "progress" | "repeat" | "no_plan_target";
+        reason: string;
       }[];
-    }>("/api/workout/session/today"),
-  sessionDelete: async (id: string) => {
-    const r = await fetch(`${BASE}/api/workout/session/log/${id}`, { method: "DELETE" });
-    if (!r.ok) throw new Error(`sessionDelete ${r.status}`);
-    return r.json();
-  },
-  workoutNext: () =>
-    get<{
-      generated_at: string;
-      title: string;
-      date: string;
-      readiness_tier: string;
-      readiness_summary: string;
-      recommendation: {
-        intensity: string;
-        focus: string;
-        rationale: string;
-        estimated_duration_min: number;
-        target_rpe: number;
-      };
-      warmup?: { name: string; sets: number; duration_min?: number; rest_seconds: number; notes?: string }[];
-      blocks: {
-        label: string;
-        exercises: {
-          name: string;
-          sets: number;
-          reps: string | number;
-          weight_lbs?: number;
-          weight_kg?: number;
-          rpe_target?: number;
-          rir_target?: number;
-          rest_seconds?: number;
-          notes?: string;
-        }[];
-      }[];
-    }>("/api/workout/next"),
+    }>("/api/training/after-action"),
   fuelingToday: () =>
     get<{
       as_of: string;
