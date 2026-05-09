@@ -161,7 +161,10 @@ export function PillarRecovery() {
       </div>
 
       <div className="flex items-center gap-5 mt-3">
-        <RecoveryArc score={score != null ? Math.round(score) : 0} color={t.color} />
+        <div className="relative flex-shrink-0">
+          <RecoveryArc score={score != null ? Math.round(score) : 0} color={t.color} />
+          <div className="shc-reticle" aria-hidden />
+        </div>
         <div className="flex-1 min-w-0">
           <div className="h-[72px] -mx-2">
             <ResponsiveContainer width="100%" height="100%">
@@ -217,7 +220,8 @@ export function PillarRecovery() {
 
       <div className="grid grid-cols-3 gap-3 mt-4">
         <div className="border-l border-[var(--hairline)] pl-3">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5">
             <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">HRV</p>
             {betaBlocker && (
               <span
@@ -232,6 +236,8 @@ export function PillarRecovery() {
                 β-adj
               </span>
             )}
+            </div>
+            <span style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-01</span>
           </div>
           <div className="mt-0.5">
             <Metric value={hrv ? hrv.toFixed(0) : "—"} unit="ms" size="md" />
@@ -244,7 +250,10 @@ export function PillarRecovery() {
           )}
         </div>
         <div className="border-l border-[var(--hairline)] pl-3">
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">RHR</p>
+          <div className="flex items-center justify-between gap-1.5">
+            <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">RHR</p>
+            <span style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-02</span>
+          </div>
           <div className="mt-0.5">
             <Metric value={rhr ?? "—"} unit="bpm" size="md" />
           </div>
@@ -255,7 +264,10 @@ export function PillarRecovery() {
           )}
         </div>
         <div className="border-l border-[var(--hairline)] pl-3">
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Skin Δ</p>
+          <div className="flex items-center justify-between gap-1.5">
+            <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Skin Δ</p>
+            <span style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-03</span>
+          </div>
           <div className="mt-0.5">
             <Metric
               value={

@@ -115,10 +115,10 @@ body::before {
     var(--bg);
 }
 
-/* Faint scanline grid — global, slow parallax drift (no opt-in needed) */
+/* Engineering graph-paper grid — 48px minor grid + accent dot every 4th cell */
 @keyframes shc-grid-drift {
-  0%   { background-position: 0 0, 0 0; }
-  100% { background-position: 64px 64px, 64px 64px; }
+  0%   { background-position: 0 0, 0 0, 0 0; }
+  100% { background-position: 48px 48px, 48px 48px, 192px 192px; }
 }
 body::after {
   content: "";
@@ -126,12 +126,13 @@ body::after {
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  opacity: 0.035;
+  opacity: 0.038;
   background-image:
     linear-gradient(to right, oklch(1 0 0) 1px, transparent 1px),
-    linear-gradient(to bottom, oklch(1 0 0) 1px, transparent 1px);
-  background-size: 64px 64px, 64px 64px;
-  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, black 0%, transparent 80%);
+    linear-gradient(to bottom, oklch(1 0 0) 1px, transparent 1px),
+    radial-gradient(circle, oklch(0.72 0.20 210 / 0.75) 1.2px, transparent 1.2px);
+  background-size: 48px 48px, 48px 48px, 192px 192px;
+  mask-image: radial-gradient(ellipse 82% 72% at 50% 38%, black 0%, transparent 80%);
   animation: shc-grid-drift 60s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -248,6 +249,7 @@ body::after {
   position: relative;
   border-radius: var(--r-lg);
   border: 1px solid var(--hairline);
+  border-top: 1px dashed oklch(1 0 0 / 0.09);
   background:
     linear-gradient(180deg,
       oklch(0.20 0.02 260 / 0.55) 0%,
@@ -309,6 +311,66 @@ body::after {
 .shc-card:hover::after { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   .shc-card::after { transition: none; }
+}
+
+/* Measurement reticle — framing corners on the recovery arc */
+.shc-reticle {
+  position: absolute;
+  inset: 4px;
+  pointer-events: none;
+  --rc: oklch(0.72 0.20 210 / 0.22);
+  --rw: 10px;
+  --rt: 1px;
+  background:
+    linear-gradient(var(--rc), var(--rc)) top    left  / var(--rw) var(--rt) no-repeat,
+    linear-gradient(var(--rc), var(--rc)) top    left  / var(--rt) var(--rw) no-repeat,
+    linear-gradient(var(--rc), var(--rc)) top    right / var(--rw) var(--rt) no-repeat,
+    linear-gradient(var(--rc), var(--rc)) top    right / var(--rt) var(--rw) no-repeat,
+    linear-gradient(var(--rc), var(--rc)) bottom left  / var(--rw) var(--rt) no-repeat,
+    linear-gradient(var(--rc), var(--rc)) bottom left  / var(--rt) var(--rw) no-repeat,
+    linear-gradient(var(--rc), var(--rc)) bottom right / var(--rw) var(--rt) no-repeat,
+    linear-gradient(var(--rc), var(--rc)) bottom right / var(--rt) var(--rw) no-repeat;
+  transition: background 200ms ease;
+}
+.shc-card:hover .shc-reticle {
+  --rw: 14px;
+  --rc: oklch(0.72 0.20 210 / 0.50);
+}
+
+/* Classification badge next to wordmark */
+.sl-classified-badge {
+  font-family: var(--font-geist-mono, monospace);
+  font-size: 7.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid oklch(1 0 0 / 0.08);
+  padding: 2px 6px;
+  border-radius: 3px;
+  align-self: flex-end;
+  margin-bottom: 2px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+/* Protocol strip scan sweep */
+@keyframes sl-protocol-sweep {
+  0%   { transform: translateX(-110%); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 0.7; }
+  100% { transform: translateX(110%); opacity: 0; }
+}
+.sl-protocol-scan {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    oklch(0.72 0.20 210 / 0.05) 50%,
+    transparent 100%
+  );
+  animation: sl-protocol-sweep 10s ease-in-out infinite;
+  pointer-events: none;
 }
 
 /* ── Gradient utilities ──────────────────── */

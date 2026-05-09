@@ -10,6 +10,7 @@ import { RightRail } from "@/components/right-rail";
 import { SyncStatus } from "@/components/sync-status";
 import { DashboardClock } from "@/components/dashboard-clock";
 import { LiveBadge } from "@/components/live-badge";
+import { ProtocolStrip } from "@/components/protocol-strip";
 import { AmbientHue } from "@/components/ambient-hue";
 import { HeaderHUD } from "@/components/header-hud";
 import { NextWorkoutCard } from "@/components/next-workout-card";
@@ -30,6 +31,7 @@ export default function Dashboard() {
             </h1>
             <span className="sl-wordmark-beta">β</span>
             <LiveBadge />
+            <span className="sl-classified-badge">INTERNAL // AUTH</span>
           </div>
           <div className="sl-wordmark-bar" />
         </div>
@@ -38,6 +40,8 @@ export default function Dashboard() {
           <DashboardClock />
         </div>
       </header>
+
+      <ProtocolStrip />
 
       <div className="mb-4">
         <SyncStatus />
