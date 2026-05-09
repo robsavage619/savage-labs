@@ -334,14 +334,157 @@ On beta-blocker days, the gate engine injects a −20 bpm shift before zone calc
 
 ## Obsidian Vault — Retrieval-Augmented Training Intelligence
 
-The system's third AI input (alongside live biometrics and clinical context) is a personal exercise science knowledge base built in Obsidian and stored at `~/Vault/savage_vault/wiki/`. Every workout plan and daily briefing is grounded in this vault — not in the model's general training knowledge.
+The system's third AI input — alongside live biometrics and clinical context — is a personal knowledge base of **405 research notes** built in Obsidian at `~/Vault/savage_vault/wiki/`. Every workout plan and daily briefing is grounded in this vault, not in the model's general training knowledge.
 
 > [!NOTE]
-> **Why a personal vault over general LLM knowledge?** LLMs know exercise science in aggregate. The vault encodes *specific protocol decisions* — which exercise selection framework this athlete follows, what rest intervals are calibrated for this training phase, which meta-analyses are trusted. The model is told which evidence base to apply, not left to synthesize one from training data.
+> **Why a personal vault over general LLM knowledge?** LLMs know exercise science in aggregate. The vault encodes *specific protocol decisions* — which exercise selection framework this athlete follows, what rest intervals are calibrated for this training phase, which meta-analyses are trusted over which guidelines. The model is told which evidence base to apply, not left to synthesize one from training data.
+
+### What's In It
+
+**405 notes across 10 domains.** Every note is ingested from primary sources — textbooks, meta-analyses, RCTs — then structured with YAML frontmatter tags and actionable prescription sections. The vault is a personal distillation of the research, not summaries of summaries.
+
+<details>
+<summary><strong>Strength & Hypertrophy — 147 notes</strong></summary>
+
+The largest domain. Built primarily from Schoenfeld's *Science and Development of Muscle Hypertrophy* (2021), Israetel's *Scientific Principles of Hypertrophy Training* (2020), Helms' *Muscle & Strength Pyramid* (Training vol., 2018), and Bompa/Zatsiorsky's periodization texts.
+
+**Key prescriptions encoded:**
+
+- **Volume landmark (Schoenfeld 2016 meta-analysis, 15 studies):** ≥10 working sets per muscle group per week to maximize hypertrophy. +0.37% hypertrophy per additional weekly set across 2–30 set range.
+- **Hypertrophy mechanisms (Schoenfeld 2010):** Mechanical tension is primary driver; metabolic stress and muscle damage are secondary. Notes encode this hierarchy into exercise selection rules — ROM, load at stretch, time under tension weighting.
+- **Rest intervals:** 90–120s minimum between compound sets for hypertrophy; 180–300s for strength. Schoenfeld (2016): longer rest superior for both strength and hypertrophy vs the "metabolic stress" shorter-rest hypothesis.
+- **Exercise order:** Compound movements before isolation within a session; highest-priority muscle groups first within a training block.
+- **Range of motion:** Full ROM superior to partial ROM for hypertrophy; lengthened-position loading (e.g. deficit RDLs, stretched-position flies) produces greater hypertrophic stimulus per the Pedrosa (2022) and Maeo (2021) findings.
+- **DUP periodization structure:** Daily undulating periodization — distinct rep ranges across sessions within a week (strength day 3–5 reps, hypertrophy day 8–12, endurance day 15–20) — produces superior gains vs linear periodization for trained athletes.
+- **SRA curves by muscle group:** Stimulus-recovery-adaptation timelines encoded per muscle (quads 72h compound, biceps 48h, delts 36–48h) — these directly feed the `forbid_muscle_groups` gate logic.
+- **Supercompensation theory:** Volume landmarks → MEV (minimum effective volume) → MAV (maximum adaptive volume) → MRV (maximum recoverable volume). Training above MRV triggers deload signal.
+- **Concurrent training interference:** Cardio modality and timing relative to strength sessions. Low-interference: cycling Z2 post-strength. High-interference: running before strength, same-day HIIT.
+
+**Specific notes feeding the planner:**
+`exercise-selection-strength.md`, `exercise-selection-hypertrophy.md`, `exercise-order-strength.md`, `rest-interval-strength.md`, `rest-interval-hypertrophy.md`, `range-of-motion-hypertrophy.md`, `training-volume-hypertrophy.md`, `training-frequency-hypertrophy.md`, `schoenfeld-2016-rt-volume-hypertrophy.md`, `schoenfeld-2021-science-development-muscle-hypertrophy.md` (9 chapters), `sra-training-frequency.md`, `supercompensation-theory.md`, `fitness-fatigue-theory.md`, `overreaching-detection.md`, `concurrent-training-interference.md`
+
+</details>
+
+<details>
+<summary><strong>Sleep Science — 76 notes</strong></summary>
+
+Built from Walker's *Why We Sleep* (2017, 16 chapters) and Winter's *The Sleep Solution* (2017, 16 chapters), with primary research on HRV monitoring during sleep, OSA, and sleep × performance.
+
+**Key findings encoded:**
+
+- **6–7h sleep demolishes immune function** (Walker Ch1); 2× cancer risk vs 8h; ghrelin ↑ drives ~300 kcal/day excess intake on sleep-deprived days. This underpins the sleep debt accumulator in the dashboard.
+- **Sleep architecture targets:** N3 (slow-wave / deep) consolidates physical recovery and growth hormone release; REM consolidates motor learning and emotional regulation. Both tracked separately in the sleep pillar.
+- **SpO2 threshold:** <95% SpO2 average flags sleep-disordered breathing — weighted higher than duration in the composite sleep score for this specific use case.
+- **Sleep state misperception:** Subjective sleep quality often diverges from objective stage data. The morning check-in captures subjective quality (1–10) as a separate signal from WHOOP's objective staging.
+- **Circadian anchoring:** Consistent wake time > consistent bed time for circadian stability (Winter Ch7, Ch12).
+- **Stimulus control protocol:** Encoded from Winter Ch9 — bed is only for sleep; remove stimulus association. Feeds the sleep hygiene advisory in the AI advisor.
+- **Fatal Familial Insomnia (Walker Ch12):** Genetic progressive insomnia → death in 12–18 months. Encoded as context for why sleep monitoring is non-negotiable, not optional.
+
+**Notes in vault:** `walker-2017-why-we-sleep.md` (Ch1–16 individually), `winter-2017-sleep-solution.md` (Ch1–16), `sleep-spindles.md`, `sleep-learning-consolidation.md`, `obstructive-sleep-apnea.md`, `biphasic-sleep.md`, `napping-protocol.md`, `stimulus-control-protocol.md`, `rem-dreaming-mechanisms.md`, `dolezal-2017-sleep-exercise-review.md`
+
+</details>
+
+<details>
+<summary><strong>Nutrition — 55 notes</strong></summary>
+
+Built primarily from Israetel's *Renaissance Diet 2.0* (2020, 17 chapters) and Helms' *Muscle & Strength Pyramid: Nutrition* (2016), with Attia's *Outlive* (2023) for metabolic health context.
+
+**Key prescriptions encoded:**
+
+- **Diet priority pyramid (Israetel Ch1):** Adherence > calorie balance > macronutrients > nutrient timing > food choice > supplements. This ordering determines what the AI advisor emphasizes first.
+- **Body recomposition conditions:** Possible in three cases — new to resistance training, returning after layoff, or using PEDs. For a trained athlete in neither state, simultaneous gain and loss requires precise calorie cycling. Encoded as a constraint on what Claude will recommend.
+- **Protein targets:** 0.7–1.0g/lb body weight for muscle retention in a deficit; 1.0–1.2g/lb during a surplus. Minimum floor: 0.7g/lb at any calorie level.
+- **Calorie deficit rate:** 0.5–1.0% body weight per week for fat loss while preserving muscle. Faster than 1% → elevated lean mass loss risk.
+- **NEAT as primary TDEE lever:** Non-exercise activity thermogenesis accounts for the largest variable in TDEE. Encoded as the primary lever before adjusting food intake.
+- **Peri-workout nutrition:** 20–40g protein within 2h post-training; intra-workout carbs for sessions > 75 min. Pre-workout: protein 1–2h pre.
+- **Diet break / refeed protocol:** Planned maintenance phases every 4–12 weeks during deficit to restore leptin, reduce adaptive thermogenesis.
+- **Supplementation tier list:** Tier 1: creatine monohydrate (3–5g/day), caffeine (3–6mg/kg pre-workout). Tier 2: vitamin D3+K2, omega-3. Tier 3: everything else. Tier list encoded to gate AI supplement recommendations.
+- **Alcohol (Israetel Ch16):** Directly inhibits protein synthesis, reduces fat oxidation, disrupts sleep architecture. Flagged in the clinical notes when the check-in notes alcohol.
+
+**Notes in vault:** `israetel-2020-renaissance-diet.md` (Ch1–17), `helms-2016-muscle-strength-pyramid-nutrition.md` (Ch1–7), `protein-target.md`, `calorie-deficit-fat-loss-rate.md`, `calorie-surplus-muscle-gain-rate.md`, `diet-break-refeed-protocol.md`, `diet-priority-pyramid.md`, `peri-workout-nutrition.md`, `nutritional-periodization.md`, `supplements-tier-list.md`, `supplement-creatine.md`, `supplement-caffeine.md`, `hunger-management.md`, `alcohol-and-performance.md`
+
+</details>
+
+<details>
+<summary><strong>Longevity & Healthspan — 35 notes</strong></summary>
+
+Built from Attia's *Outlive* (2023, 17 chapters). Frames every health metric in terms of the four horsemen of chronic disease: cardiovascular disease, cancer, neurodegeneration, metabolic dysfunction.
+
+**Key prescriptions encoded:**
+
+- **VO₂max as mortality predictor (Attia Ch11):** Bottom quartile → 4× all-cause mortality vs top quartile. No upper limit to benefit. The system tracks cardio zone distribution specifically to drive VO₂max improvement (Zone 2 base + Zone 5 intervals).
+- **Centenarian Decathlon:** VO₂max, grip strength, leg press, single-leg balance, stair climb, carry test, floor-rise test, overhead press, gait speed. Encoded as the long-term performance targets that inform training prioritization.
+- **Zone 2 training:** ~80% of aerobic volume at lactate threshold 1 (conversational pace). Mitochondrial density, fat oxidation capacity, metabolic flexibility. Encoded in cardio prescription logic.
+- **ApoB as primary lipid target:** ApoB > LDL-C as the causal CV risk marker (Attia Ch7). Encoded to ensure the AI advisor references ApoB when lab context is injected, not just LDL.
+- **APOE genotype:** APOE ε4 carriers have higher Alzheimer's risk, higher LDL absorption. Encoded as a condition interpretation rule — relevant if genetic testing is present in labs.
+- **Compression of morbidity:** Goal is extending the health span — years of full function — not just lifespan. Frames training not as aesthetics but as investment in the last decade of life.
+- **Grip strength (Attia Ch11):** Independent predictor of all-cause mortality; declines faster than VO₂max with age. Encoded as a non-negotiable training variable.
+
+**Notes in vault:** `attia-2023-outlive.md` (Ch1–17), `four-horsemen-chronic-disease.md`, `centenarian-decathlon.md`, `vo2max-longevity.md`, `zone-2-training.md`, `compression-of-morbidity.md`, `grip-strength.md`, `apob.md`, `apoe.md`, `lp-a.md`, `medicine-3-0.md`, `cgm.md`
+
+</details>
+
+<details>
+<summary><strong>HRV & Biometric Research — 15 notes</strong></summary>
+
+Primary research on HRV monitoring, wearable validation, and heart rate modelling.
+
+**Key papers encoded:**
+
+- **Task Force (1996):** The foundational HRV standards paper. Time-domain (RMSSD, SDNN) and frequency-domain (LF/HF) metrics defined. Encoded to establish why RMSSD is the relevant metric for short-term vagal monitoring.
+- **Shaffer & Ginsberg (2017):** Normative HRV ranges by age and sex. Encoded so the AI advisor contextualizes absolute HRV values against population norms when they appear in labs.
+- **Kiviniemi et al. (2007):** HRV-guided training outperforms fixed-intensity programs in endurance athletes. The theoretical basis for why this system gates training intensity off HRV σ-deviation rather than a fixed schedule.
+- **Plews et al. (2013, 2014):** Practical HRV monitoring for compliance; HRV + training intensity distribution in elite rowers. 7-day rolling average superior to single-day readings for training decisions. Encoded in the 28-day baseline design decision.
+- **Tanaka et al. (2001):** 220−age HRmax formula underestimates HRmax in older trained adults. Tanaka formula (208 − 0.7 × age) is lower-error. Directly encoded in `cardio-panel.tsx` and the HR zone calculation.
+- **Buchheit (2014):** HR recovery as a training status indicator. Post-exercise HR drop at 60s correlates with parasympathetic reactivation speed. Encoded as interpretive context for WHOOP strain data.
+- **Dial et al. (2025):** WHOOP and Garmin validation study for RHR and HRV accuracy. Provides the confidence interval for treating WHOOP readings as ground truth.
+
+**Notes in vault:** `task-force-1996-hrv-standards.md`, `shaffer-2017-hrv-metrics-norms.md`, `kiviniemi-2007-hrv-guided-endurance-training.md`, `plews-2013-hrv-monitoring-compliance.md`, `plews-2014-hrv-training-intensity-rowers.md`, `tanaka-2001-hrmax-revisited.md`, `buchheit-2014-training-status-hr-monitoring.md`, `dial-2025-wearable-rhr-hrv-validation.md`
+
+</details>
+
+<details>
+<summary><strong>N-of-1 Methodology — 5 notes</strong></summary>
+
+The meta-framework that justifies the entire architecture: single-subject experimental design as rigorous science.
+
+**Key papers encoded:**
+
+- **Schork (2015, 2022):** N-of-1 trials as the gold standard for personalized medicine. Population RCTs establish what works *on average*; N-of-1 trials establish what works *for this person*. The philosophical foundation for treating a single athlete's data as the experimental unit.
+- **Daza (2018):** Counterfactual inference in single-subject designs. Causal identification in the absence of a control group. Encoded to frame how the system interprets "did this protocol work?" — comparing the same individual across time windows, not against a population baseline.
+- **Piccininni et al. (2025):** Causal inference methods for N-of-1 designs. The most recent methodological development in the domain. Encoded to ground the correlation card logic (sleep→recovery, HRV→readiness) in causal rather than purely associational framing.
+- **Konigorski et al.:** Digital N-of-1 trials in experimental physiology. Connects wearable sensor data to the N-of-1 experimental framework — the direct theoretical basis for WHOOP + Apple Health as measurement instruments.
+
+**Notes in vault:** `schork-2015-personalized-medicine-one-person-trials.md`, `schork-2022-exploring-human-biology-nof1.md`, `daza-2018-counterfactual-nof1.md`, `piccininni-2025-causal-inference-nof1.md`, `konigorski-digital-nof1-experimental-physiology.md`
+
+</details>
+
+<details>
+<summary><strong>LLM Engineering & RAG — 67 notes</strong></summary>
+
+Comprehensive coverage of LLM application architecture — the meta-domain that informs *how the vault itself is built and queried*.
+
+Built from Alto's *LLM-Powered Applications* (2024, 13 chapters) and primary research papers.
+
+**Key patterns encoded:**
+
+- **RAG architecture (retrieval-augmented generation):** Retriever + generator separation; factuality vs parametric knowledge tradeoffs; context window efficiency. Directly informs the `load_vault_research()` signal-ranked retrieval design.
+- **HyDE (Hypothetical Document Embeddings):** Zero-shot dense retrieval via generating a hypothetical answer first, then retrieving against it. Potential future enhancement to vault search.
+- **Self-RAG (2023):** Adaptive retrieval with critique tokens — model decides *when* to retrieve vs rely on parametric knowledge. Encoded as architectural context for why the vault is injected conditionally (signal-ranked) rather than always-on.
+- **ReAct (Reasoning + Acting):** Synergizing chain-of-thought with tool use. The theoretical basis for how the AI advisor combines live health data (tool) with vault research (knowledge) in responses.
+- **Reflexion (Shinn et al., 2023):** Verbal reinforcement learning via reflection. Encoded as context for why `validate_plan()` triggers re-calls with violation feedback rather than patching responses.
+- **Constitutional AI (Bai et al., 2022):** Anthropic's framework for safety through self-critique. Encoded as interpretive context for how Claude's safety behaviors interact with clinical coaching guidance.
+- **LLM-as-judge (MT-Bench):** Using LLMs to evaluate LLM outputs. Encoded as context for potential future automated plan quality evaluation.
+
+**Notes in vault:** `retrieval-augmented-generation.md`, `self-rag.md`, `react-synergizing-reasoning-and-acting.md`, `shinn-2023-reflexion-verbal-rl.md`, `hyde-zero-shot-dense-retrieval.md`, `hypothetical-document-embeddings.md`, `bai-2022-constitutional-ai.md`, `llm-as-judge-mt-bench.md`, `llm-prompt-engineering-techniques.md`, `llm-chain-of-thought.md`, `cognitive-architectures-for-language-agents.md`, `vector-embeddings.md`, `dense-retrieval.md`, `reranking.md`, `raptor-recursive-abstractive-processing.md`
+
+</details>
+
+---
 
 ### Signal-Ranked Note Retrieval
 
-`load_vault_research()` selects the top 4 most-relevant notes based on today's health signals:
+`load_vault_research()` selects the top 4 most-relevant notes on every call based on today's health signals:
 
 ```python
 signals = {
@@ -357,44 +500,47 @@ signals = {
 }
 ```
 
-Each vault note carries YAML frontmatter tags. The retriever scores every note by matching tags against active signals — `+2` per specific signal match, `+1` for default. A deload note scores +6 on a high-ACWR/low-HRV day and surfaces automatically.
+Each note carries YAML frontmatter tags scored against active signals (`+2` per specific signal match, `+1` for default). A high-ACWR/low-HRV day surfaces overtraining and deload notes automatically — they outcompete rest-interval notes that score well on normal days.
 
-```yaml
----
-tags: [overtraining, deload, hrv, recovery, acwr]
----
-```
+**Example: ACWR = 1.42, HRV σ = −1.8**
+
+| Note | Tags matched | Score |
+|---|---|---|
+| `overtraining-and-deload.md` | overtraining→deload+2, hrv→hrv_anomaly+2, acwr→high_acwr+2 | **+6** |
+| `fitness-fatigue-theory.md` | overreaching→deload+2, hrv→hrv_anomaly+2 | **+4** |
+| `supercompensation-theory.md` | volume→volume_spike+2, default+1 | **+3** |
+| `rest-interval-hypertrophy.md` | default+1 | **+1** |
 
 ### Pinned Exercise Science Foundation
 
 Six notes load unconditionally on every workout generation call, never competing with situational notes:
 
 ```
-exercise-selection-strength.md        — movement pattern selection rules
-exercise-selection-hypertrophy.md     — muscle group prioritization
+exercise-selection-strength.md        — compound movement pattern selection
+exercise-selection-hypertrophy.md     — muscle group prioritization by mechanism
 exercise-order-strength.md            — compound-before-isolation ordering
-schoenfeld-2010-hypertrophy-mechanisms.md — mechanical tension, metabolic stress, damage
-rest-interval-hypertrophy.md          — optimal inter-set rest for hypertrophy
-rest-interval-strength.md             — optimal inter-set rest for strength
+schoenfeld-2010-hypertrophy-mechanisms.md — mechanical tension > metabolic stress > damage
+rest-interval-hypertrophy.md          — 90–120s minimum; longer rest preserves volume
+rest-interval-strength.md             — 180–300s for compound strength work
 ```
 
-### Section Extraction
+### Section Extraction — Only What the Model Needs
 
-Raw vault notes contain literature review, citations, caveats. The retriever strips everything except sections the model can act on:
+Raw vault notes contain literature review, methodology, caveats. The retriever strips everything except sections the model can act on:
 
 ```
-## Summary             → high-level principle
-## Prescription        → actionable protocol
-## Key Claims          → evidence anchors
+## Summary             → high-level principle (1–3 sentences)
+## Prescription        → actionable protocol (the actual numbers)
+## Key Claims          → evidence anchors (what the research actually says)
 ## Practical Takeaways → direct application
 ## Exercise Selection Rules → selection logic
 ```
 
-A 3,000-word note is condensed to the 400-word prescription block. Context window stays efficient; the model reasons from conclusions, not from re-derived literature.
+A 3,000-word hypertrophy mechanisms paper is condensed to a 400-word prescription block. The model reasons from conclusions, not re-derived literature. Context window stays efficient across 10 concurrent notes.
 
 ### Vault Insights — Required Plan Artifact
 
-Every generated workout plan must include a `vault_insights` array. The backend validates this:
+Every generated workout plan must include a `vault_insights` array. The backend validates this before accepting the plan:
 
 ```python
 if not plan.get("vault_insights"):
@@ -414,7 +560,7 @@ The frontend renders these attributed with the Obsidian logo:
 └───────────────────────────────────────────────────────────┘
 ```
 
-This creates an auditable chain: plan decision → vault note → evidence.
+Every plan decision is traceable: prescription → vault note → primary research.
 
 ### Architecture: Read-Only, No Sync
 
@@ -423,7 +569,7 @@ Obsidian (editor) → ~/Vault/savage_vault/wiki/*.md → load_vault_research() �
                                                    → /api/vault/search    → AI Advisor
 ```
 
-The vault is strictly input. No note is ever created, modified, or deleted by the system.
+The vault is strictly input. No note is ever created, modified, or deleted by the system. Obsidian remains the editor; the platform is the consumer. The researcher's curation decisions are never overridden by an automated write-back.
 
 ---
 
