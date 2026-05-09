@@ -1,9 +1,31 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+import keyring
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger(__name__)
+
+_KEYCHAIN_SERVICE = "savage-health-center"
+_KEYCHAIN_DB_KEY_ACCOUNT = "db-encryption-key"
+
+
+def _load_db_encryption_key() -> str | None:
+    """Prefer macOS Keychain; fall back to env-loaded value if present.
+
+    Storing the key in `.env` is supported for migration but discouraged — set
+    it once via ``security add-generic-password -s savage-health-center -a
+    db-encryption-key -w <key>`` and remove it from `.env`.
+    """
+    try:
+        kc = keyring.get_password(_KEYCHAIN_SERVICE, _KEYCHAIN_DB_KEY_ACCOUNT)
+    except Exception as exc:
+        log.warning("keychain lookup failed: %s", exc)
+        kc = None
+    return kc
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,8 +61,8 @@ class Settings(BaseSettings):
         default=Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/Health Data/Fitness Data/WorkoutExport.csv"
     )
 
-    # Security
-    db_encryption_key: str | None = Field(default=None)
+    # Security — prefer Keychain over .env (see _load_db_encryption_key)
+    db_encryption_key: str | None = Field(default_factory=_load_db_encryption_key)
 
     # WHOOP OAuth
     whoop_client_id: str | None = Field(default=None)
@@ -49,17 +71,6 @@ class Settings(BaseSettings):
 
     # Hevy
     hevy_api_key: str | None = Field(default=None)
-
-    # Anthropic
-    anthropic_api_key: str | None = Field(default=None)
-    anthropic_daily_cap_usd: float = Field(default=2.00)
-
-    # LLM kill-switch: "local_only" forces Ollama regardless of router
-    shc_llm_mode: str = Field(default="auto")
-
-    # Ollama
-    ollama_base_url: str = Field(default="http://127.0.0.1:11434")
-    ollama_model: str = Field(default="llama3.2:3b")
 
     # Server
     host: str = "127.0.0.1"

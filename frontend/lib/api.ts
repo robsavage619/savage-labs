@@ -312,11 +312,6 @@ export interface Briefing {
   cost_usd: number;
 }
 
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
 // ── DailyState — single source of truth from /api/state/today ────────────────
 
 export interface DailyStateRecovery {
@@ -512,14 +507,6 @@ export const api = {
   briefing: () => get<Briefing | Record<string, never>>("/api/briefing"),
   workoutNext: (regen = false) =>
     get<WorkoutPlan>(`/api/workout/next${regen ? "?regen=true" : ""}`),
-  workoutGenerate: async () => {
-    const r = await fetch(`${BASE}/api/workout/generate`, { method: "POST" });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err.detail || `workoutGenerate ${r.status}`);
-    }
-    return r.json() as Promise<WorkoutPlan>;
-  },
   workoutContext: () => get<{ context: string }>("/api/workout/context"),
   workoutSubmit: async (plan: object) => {
     const r = await fetch(`${BASE}/api/workout/plan`, {
@@ -650,29 +637,3 @@ export const api = {
       trend_90d: { date: string; recovery: number; hrv: number | null; rhr: number | null }[];
     }>("/api/whoop/patterns"),
 };
-
-export async function* streamChat(messages: ChatMessage[]): AsyncGenerator<string> {
-  const res = await fetch(`${BASE}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
-  });
-  if (!res.ok || !res.body) throw new Error(`chat ${res.status}`);
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const payload = JSON.parse(line.slice(6));
-      if (payload.type === "text") yield payload.text as string;
-      if (payload.type === "error") throw new Error(payload.text as string);
-      if (payload.type === "done") return;
-    }
-  }
-}

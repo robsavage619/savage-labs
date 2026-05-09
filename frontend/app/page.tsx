@@ -7,7 +7,6 @@ import { PillarTrainingLoad } from "@/components/pillar-training-load";
 import { StrengthPanel } from "@/components/strength-panel";
 import { TrendIntelligence } from "@/components/trend-intelligence";
 import { RightRail } from "@/components/right-rail";
-import { AdvisorChat } from "@/components/advisor-chat";
 import { SyncStatus } from "@/components/sync-status";
 import { DashboardClock } from "@/components/dashboard-clock";
 import { LiveBadge } from "@/components/live-badge";
@@ -107,7 +106,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <AdvisorChat />
     </main>
   );
 }

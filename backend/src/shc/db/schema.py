@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import duckdb
 
 from shc.config import settings
+
+# Allow only printable ASCII without quotes/backslashes/control chars.
+# Prevents PRAGMA SQL injection via the encryption key value.
+_KEY_RE = re.compile(r"^[A-Za-z0-9+/=_\-.@#$%^&*()!~`:;,?<>\[\]{}|]{16,256}$")
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +64,12 @@ def init_db() -> None:
         conn = duckdb.connect(str(resolved_path))
         encryption_key = settings.db_encryption_key
         if encryption_key:
+            if not _KEY_RE.match(encryption_key):
+                raise ValueError(
+                    "db_encryption_key contains disallowed characters or has unsafe length; "
+                    "use 16–256 chars from the safe set (no quotes, no backslashes)"
+                )
+            # Safe to interpolate — value is validated against an allowlist above.
             conn.execute(f"PRAGMA key='{encryption_key}'")
         return conn
 

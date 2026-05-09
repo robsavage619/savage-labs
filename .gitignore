@@ -211,4 +211,7 @@ __marimo__/
 
 # SHC database (lives in canonical worktree, symlinked at runtime)
 backend/data/
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp
 

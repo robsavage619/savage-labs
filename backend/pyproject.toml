@@ -17,18 +17,16 @@ dependencies = [
     "keyring>=25",
     # File watching
     "watchdog>=5",
-    # LLM
-    "anthropic>=0.40",
     # Data / validation
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     # XML / CCDA parsing
     "lxml>=5",
+    "defusedxml>=0.7",
     # Utilities
     "python-dotenv>=1.0",
     "click>=8.1",
     "pytz>=2026.1.post1",
-    "openai>=1.0",
     "pyyaml>=6",
 ]
 

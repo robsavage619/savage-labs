@@ -4,7 +4,7 @@ import hashlib
 import logging
 import re
 from pathlib import Path
-from xml.etree.ElementTree import iterparse
+from defusedxml.ElementTree import iterparse
 
 _OFFSET_RE = re.compile(r"\s+([+-])(\d{2})(\d{2})$")
 
