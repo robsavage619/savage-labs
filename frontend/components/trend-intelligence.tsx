@@ -195,6 +195,34 @@ function buildHeatmapGrid(
   return grid;
 }
 
+function HRVTooltip({ active, payload, label }: { active?: boolean; payload?: { dataKey: string; value: number | null }[]; label?: string }) {
+  if (!active || !payload?.length) return null;
+  const get = (key: string) => payload.find((p) => p.dataKey === key)?.value ?? null;
+  const hrv = get("hrv");
+  const avg = get("avg");
+  const hi = get("bandHigh");
+  const lo = get("bandLow");
+  if (hrv == null) return null;
+  return (
+    <div style={{
+      background: "var(--card-hover)",
+      border: "1px solid var(--hairline-strong)",
+      borderRadius: 8,
+      padding: "8px 12px",
+      fontSize: 11,
+      lineHeight: 1.7,
+      minWidth: 148,
+    }}>
+      <div style={{ color: "var(--text-muted)", marginBottom: 4, fontSize: 10.5, letterSpacing: "0.04em" }}>{label}</div>
+      <div style={{ color: "var(--chart-line)", fontWeight: 600 }}>HRV&nbsp;&nbsp;<span style={{ float: "right" }}>{hrv} ms</span></div>
+      {avg != null && <div style={{ color: "var(--text-muted)" }}>28d avg&nbsp;&nbsp;<span style={{ float: "right" }}>{avg} ms</span></div>}
+      {hi != null && lo != null && (
+        <div style={{ color: "var(--text-dim)", marginTop: 2 }}>±1σ band&nbsp;&nbsp;<span style={{ float: "right" }}>{lo}–{hi}</span></div>
+      )}
+    </div>
+  );
+}
+
 function HRVTrendCard({
   data,
   baseline,
@@ -248,7 +276,7 @@ function HRVTrendCard({
             )}
             <XAxis dataKey="date" tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} interval={Math.floor(series.length / 6) || 1} />
             <YAxis tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} width={30} />
-            <Tooltip contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11 }} cursor={{ stroke: "var(--hairline-strong)" }} />
+            <Tooltip content={<HRVTooltip />} cursor={{ stroke: "var(--hairline-strong)", strokeWidth: 1 }} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
