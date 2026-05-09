@@ -1994,6 +1994,153 @@ async def body_rhr_trend(days: int = Query(90, gt=0, le=365)) -> list[dict]:
     ]
 
 
+@router.get("/fueling/today")
+async def fueling_today() -> dict:
+    """Today's energy balance, macros, hydration. Empty fields when no data.
+
+    Pulls from `measurements` (Apple Health). Diet entries flow through Apple
+    Health from MyFitnessPal / Cronometer / Lose-It / etc. Body composition
+    flows from a smart-scale (Withings, Renpho, Eufy, Fitbit Aria).
+    """
+    today = date.today()
+    conn = get_read_conn()
+    try:
+        # Today's intake totals (sum of values logged today)
+        rows = conn.execute(
+            """
+            SELECT metric, COALESCE(SUM(value_num), 0)
+            FROM measurements
+            WHERE ts::DATE = $d
+              AND metric IN (
+                'dietary_energy_kcal','dietary_protein_g','dietary_carbs_g',
+                'dietary_fat_g','dietary_fiber_g','dietary_sugar_g',
+                'dietary_water_ml','dietary_sodium_mg','dietary_caffeine_mg',
+                'active_energy_kcal','basal_energy_kcal'
+              )
+            GROUP BY metric
+            """,
+            {"d": today.isoformat()},
+        ).fetchall()
+        sums = {r[0]: float(r[1]) for r in rows}
+
+        # Latest body weight (kg) — last 7 days
+        bw = conn.execute(
+            "SELECT value_num FROM measurements "
+            "WHERE metric = 'body_mass_kg' AND ts::DATE >= $s "
+            "ORDER BY ts DESC LIMIT 1",
+            {"s": (today - timedelta(days=7)).isoformat()},
+        ).fetchone()
+        body_mass_kg = float(bw[0]) if bw else None
+
+        # Latest body fat % and lean mass — last 30 days
+        bf = conn.execute(
+            "SELECT value_num, ts::DATE FROM measurements "
+            "WHERE metric = 'body_fat_pct' AND ts::DATE >= $s "
+            "ORDER BY ts DESC LIMIT 1",
+            {"s": (today - timedelta(days=30)).isoformat()},
+        ).fetchone()
+        lbm = conn.execute(
+            "SELECT value_num, ts::DATE FROM measurements "
+            "WHERE metric = 'lean_body_mass_kg' AND ts::DATE >= $s "
+            "ORDER BY ts DESC LIMIT 1",
+            {"s": (today - timedelta(days=30)).isoformat()},
+        ).fetchone()
+    finally:
+        conn.close()
+
+    kcal_in = sums.get("dietary_energy_kcal") or None
+    active_out = sums.get("active_energy_kcal") or None
+    basal_out = sums.get("basal_energy_kcal") or None
+    tdee_today = (active_out or 0) + (basal_out or 0) if (active_out or basal_out) else None
+    balance = (kcal_in - tdee_today) if (kcal_in is not None and tdee_today is not None) else None
+
+    protein_g = sums.get("dietary_protein_g") or None
+    protein_per_kg = (
+        round(protein_g / body_mass_kg, 2)
+        if (protein_g is not None and body_mass_kg)
+        else None
+    )
+    # Athletic target: 1.6-2.2 g/kg body mass
+    protein_target_g = round(body_mass_kg * 1.8, 0) if body_mass_kg else None
+
+    return {
+        "as_of": today.isoformat(),
+        "body_mass_kg": round(body_mass_kg, 2) if body_mass_kg else None,
+        "body_mass_lbs": round(body_mass_kg * 2.20462, 1) if body_mass_kg else None,
+        "body_fat_pct": round(float(bf[0]), 1) if bf else None,
+        "body_fat_date": bf[1].isoformat() if bf else None,
+        "lean_body_mass_kg": round(float(lbm[0]), 2) if lbm else None,
+        "lean_body_mass_lbs": round(float(lbm[0]) * 2.20462, 1) if lbm else None,
+        "lean_body_mass_date": lbm[1].isoformat() if lbm else None,
+        "kcal_in": round(kcal_in, 0) if kcal_in else None,
+        "kcal_active_out": round(active_out, 0) if active_out else None,
+        "kcal_basal_out": round(basal_out, 0) if basal_out else None,
+        "kcal_tdee_today": round(tdee_today, 0) if tdee_today else None,
+        "kcal_balance": round(balance, 0) if balance is not None else None,
+        "protein_g": round(protein_g, 1) if protein_g else None,
+        "protein_per_kg": protein_per_kg,
+        "protein_target_g": protein_target_g,
+        "carbs_g": round(sums.get("dietary_carbs_g"), 1) if sums.get("dietary_carbs_g") else None,
+        "fat_g": round(sums.get("dietary_fat_g"), 1) if sums.get("dietary_fat_g") else None,
+        "fiber_g": round(sums.get("dietary_fiber_g"), 1) if sums.get("dietary_fiber_g") else None,
+        "sugar_g": round(sums.get("dietary_sugar_g"), 1) if sums.get("dietary_sugar_g") else None,
+        "water_ml": round(sums.get("dietary_water_ml"), 0) if sums.get("dietary_water_ml") else None,
+        "water_oz": round(sums.get("dietary_water_ml") / 29.5735, 1) if sums.get("dietary_water_ml") else None,
+        "sodium_mg": round(sums.get("dietary_sodium_mg"), 0) if sums.get("dietary_sodium_mg") else None,
+        "caffeine_mg": round(sums.get("dietary_caffeine_mg"), 0) if sums.get("dietary_caffeine_mg") else None,
+        "has_diet_data": kcal_in is not None or protein_g is not None,
+        "has_body_comp_data": bf is not None or lbm is not None,
+    }
+
+
+@router.get("/fueling/trend")
+async def fueling_trend(days: int = Query(14, gt=0, le=90)) -> list[dict]:
+    """Per-day kcal balance + protein g/kg over the last N days."""
+    since = (date.today() - timedelta(days=days)).isoformat()
+    conn = get_read_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT ts::DATE AS day, metric, COALESCE(SUM(value_num), 0)
+            FROM measurements
+            WHERE ts::DATE >= $s
+              AND metric IN (
+                'dietary_energy_kcal','dietary_protein_g',
+                'active_energy_kcal','basal_energy_kcal','body_mass_kg'
+              )
+            GROUP BY day, metric ORDER BY day
+            """,
+            {"s": since},
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_day: dict[str, dict[str, float]] = {}
+    for d, m, v in rows:
+        by_day.setdefault(str(d), {})[m] = float(v)
+
+    # Carry-forward body mass for protein/kg
+    last_bw: float | None = None
+    out: list[dict] = []
+    for d in sorted(by_day.keys()):
+        m = by_day[d]
+        bw = m.get("body_mass_kg")
+        if bw and bw > 30:  # body mass averaging not summing — take last reading
+            last_bw = bw
+        kcal_in = m.get("dietary_energy_kcal") or None
+        kcal_out = (m.get("active_energy_kcal", 0) + m.get("basal_energy_kcal", 0)) or None
+        protein = m.get("dietary_protein_g") or None
+        out.append({
+            "date": d,
+            "kcal_in": round(kcal_in, 0) if kcal_in else None,
+            "kcal_out": round(kcal_out, 0) if kcal_out else None,
+            "balance": round(kcal_in - kcal_out, 0) if (kcal_in and kcal_out) else None,
+            "protein_g": round(protein, 1) if protein else None,
+            "protein_per_kg": round(protein / last_bw, 2) if (protein and last_bw) else None,
+        })
+    return out
+
+
 @router.get("/oauth/status")
 async def oauth_status() -> list[dict]:
     conn = get_read_conn()

@@ -28,9 +28,22 @@ _WANTED: dict[str, tuple[str, str | None]] = {
     "HKQuantityTypeIdentifierBodyFatPercentage": ("body_fat_pct", "%"),
     "HKQuantityTypeIdentifierVO2Max": ("vo2_max", "mL/kg/min"),
     "HKQuantityTypeIdentifierFlightsClimbed": ("flights_climbed", "count"),
+    # Body composition — populated by smart scales via Apple Health
+    "HKQuantityTypeIdentifierLeanBodyMass": ("lean_body_mass_kg", "kg"),
+    # Fueling / diet — populated by MyFitnessPal, Cronometer, Lose-It, etc.
+    "HKQuantityTypeIdentifierDietaryEnergyConsumed": ("dietary_energy_kcal", "kcal"),
+    "HKQuantityTypeIdentifierDietaryProtein": ("dietary_protein_g", "g"),
+    "HKQuantityTypeIdentifierDietaryCarbohydrates": ("dietary_carbs_g", "g"),
+    "HKQuantityTypeIdentifierDietaryFatTotal": ("dietary_fat_g", "g"),
+    "HKQuantityTypeIdentifierDietaryFiber": ("dietary_fiber_g", "g"),
+    "HKQuantityTypeIdentifierDietarySugar": ("dietary_sugar_g", "g"),
+    "HKQuantityTypeIdentifierDietaryWater": ("dietary_water_ml", "mL"),
+    "HKQuantityTypeIdentifierDietarySodium": ("dietary_sodium_mg", "mg"),
+    "HKQuantityTypeIdentifierDietaryCaffeine": ("dietary_caffeine_mg", "mg"),
 }
 
-_KG_TYPES = {"HKQuantityTypeIdentifierBodyMass"}
+
+_KG_TYPES = {"HKQuantityTypeIdentifierBodyMass", "HKQuantityTypeIdentifierLeanBodyMass"}
 _LB_TO_KG = 0.453592
 
 
