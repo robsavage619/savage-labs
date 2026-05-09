@@ -292,6 +292,7 @@ export interface WeightPoint {
   date: string;
   kg: number;
   lbs: number;
+  source: "apple_health" | "checkin";
 }
 
 export interface VO2Point { date: string; vo2max: number }

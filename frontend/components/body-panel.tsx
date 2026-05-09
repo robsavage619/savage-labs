@@ -24,16 +24,44 @@ function rollingAvg(data: { lbs: number }[], window: number) {
   });
 }
 
+const CHECKIN_COLOR = "var(--sl-accent)";
+const APPLE_COLOR = "oklch(1 0 0 / 0.06)";
+
 const WtTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null;
   const lbs = payload.find((p: any) => p.dataKey === "lbs")?.value;
   const avg = payload.find((p: any) => p.dataKey === "avg")?.value;
+  const source = payload.find((p: any) => p.dataKey === "lbs")?.payload?.source;
   return (
-    <div className="rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: "var(--card-hover)", borderColor: "var(--hairline-strong)" }}>
+    <div className="rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: "var(--card-hover)", borderColor: "var(--hairline-strong)", minWidth: 140 }}>
       <p className="text-[var(--text-dim)] mb-1">{label}</p>
       {lbs && <p className="text-[var(--text-primary)]">{lbs} lbs</p>}
-      {avg && <p className="text-[var(--text-muted)]">{avg.toFixed(1)} lbs avg</p>}
+      {avg && <p className="text-[var(--text-muted)]">{avg.toFixed(1)} lbs 7d avg</p>}
+      {source && (
+        <p className="mt-1 text-[9.5px]" style={{ color: source === "checkin" ? CHECKIN_COLOR : "var(--text-faint)" }}>
+          {source === "checkin" ? "● daily log" : "○ Apple Health"}
+        </p>
+      )}
     </div>
+  );
+};
+
+// Custom bar shape — accent color for checkin points, dim for Apple Health.
+const WeightBar = (props: any) => {
+  const { x, y, width, height, source } = props;
+  if (!height || height <= 0) return null;
+  return (
+    <rect
+      x={x}
+      y={y}
+      width={width}
+      height={height}
+      rx={2}
+      ry={2}
+      fill={source === "checkin" ? "oklch(0.72 0.20 210 / 0.55)" : "oklch(1 0 0 / 0.06)"}
+      stroke={source === "checkin" ? "oklch(0.72 0.20 210 / 0.85)" : "none"}
+      strokeWidth={source === "checkin" ? 0.5 : 0}
+    />
   );
 };
 
@@ -49,17 +77,26 @@ function WeightTrend() {
     label: d.date.slice(5),
     lbs: d.lbs,
     avg: +avgs[i].toFixed(1),
+    source: d.source,
   }));
 
   const latest = data[data.length - 1];
   const earliest = data[0];
   const delta = latest && earliest ? +(latest.lbs - earliest.lbs).toFixed(1) : null;
   const deltaColor = delta == null ? "var(--text-faint)" : delta <= 0 ? "var(--positive)" : "var(--negative)";
+  const checkinCount = data.filter(d => d.source === "checkin").length;
 
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>Body weight · all-time (Apple Health)</Eyebrow>
+        <div className="flex items-baseline gap-2">
+          <Eyebrow>Body weight · all-time</Eyebrow>
+          {checkinCount > 0 && (
+            <span className="text-[9px] tabular-nums" style={{ color: CHECKIN_COLOR, fontFamily: "var(--font-orbitron)", letterSpacing: "0.1em" }}>
+              {checkinCount} logged
+            </span>
+          )}
+        </div>
         <div className="flex items-baseline gap-3">
           {latest && (
             <span className="text-[11px] font-mono tabular-nums text-[var(--text-primary)]">{latest.lbs} lbs</span>
@@ -74,14 +111,14 @@ function WeightTrend() {
       {isLoading ? (
         <div className="h-[140px] shc-skeleton rounded" />
       ) : data.length === 0 ? (
-        <p className="text-[12px] text-[var(--text-faint)] py-8 text-center">No weight data in Apple Health export</p>
+        <p className="text-[12px] text-[var(--text-faint)] py-8 text-center">No weight data</p>
       ) : (
         <ResponsiveContainer width="100%" height={140}>
           <ComposedChart data={formatted} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
             <XAxis dataKey="label" tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} tickLine={false} axisLine={false} interval={Math.floor(formatted.length / 6) || 1} />
             <YAxis tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} tickLine={false} axisLine={false} domain={["auto", "auto"]} />
             <Tooltip content={<WtTooltip />} cursor={{ stroke: "var(--hairline-strong)" }} />
-            <Bar dataKey="lbs" fill="oklch(1 0 0 / 0.06)" radius={[2, 2, 0, 0]} maxBarSize={6} isAnimationActive={false} />
+            <Bar dataKey="lbs" maxBarSize={6} isAnimationActive={false} shape={<WeightBar />} />
             <Line dataKey="avg" stroke="var(--chart-line)" strokeWidth={2} dot={false} isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>
