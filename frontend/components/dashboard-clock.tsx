@@ -16,9 +16,11 @@ export function DashboardClock() {
   const weekday = now.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
   const day = String(now.getDate()).padStart(2, "0");
   const month = now.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
-  const hours = String(now.getHours()).padStart(2, "0");
+  const rawHours = now.getHours();
+  const hours = String(rawHours % 12 || 12);
   const minutes = String(now.getMinutes()).padStart(2, "0");
   const seconds = String(now.getSeconds()).padStart(2, "0");
+  const ampm = rawHours < 12 ? "AM" : "PM";
 
   return (
     <div className="flex flex-col items-end gap-0.5 select-none">
@@ -63,6 +65,18 @@ export function DashboardClock() {
           }}
         >
           {seconds}
+        </span>
+        <span
+          style={{
+            fontFamily: "var(--font-orbitron)",
+            fontSize: 8,
+            fontWeight: 500,
+            letterSpacing: "0.12em",
+            color: "var(--text-dim)",
+            marginBottom: 2,
+          }}
+        >
+          {ampm}
         </span>
       </div>
     </div>
