@@ -192,10 +192,18 @@ def _run_pickleball_next_morning(conn, q: dict) -> LabFinding:
     since = (date.today() - timedelta(days=q["window_days"])).isoformat()
     rows = conn.execute(
         """
-        SELECT r.date, r.hrv,
-               (SELECT COUNT(*) FROM cardio_sessions cs
-                WHERE cs.started_at::DATE = r.date AND LOWER(cs.sport) = 'pickleball') AS pb
-        FROM recovery r WHERE r.date >= $s AND r.hrv IS NOT NULL ORDER BY r.date
+        WITH pb AS (
+            SELECT started_at::DATE AS day, COUNT(*) AS n
+            FROM cardio_sessions
+            WHERE LOWER(sport) = 'pickleball'
+              AND started_at::DATE >= $s
+            GROUP BY started_at::DATE
+        )
+        SELECT r.date, r.hrv, COALESCE(pb.n, 0) AS pb
+        FROM recovery r
+        LEFT JOIN pb ON pb.day = r.date
+        WHERE r.date >= $s AND r.hrv IS NOT NULL
+        ORDER BY r.date
         """,
         {"s": since},
     ).fetchall()
@@ -295,10 +303,17 @@ def _run_strain_high_rhr_next(conn, q: dict) -> LabFinding:
     since = (date.today() - timedelta(days=q["window_days"])).isoformat()
     rows = conn.execute(
         """
-        SELECT r.date, r.rhr,
-               (SELECT MAX(strain) FROM daily_cycle dc
-                WHERE dc.date = r.date) AS strain
-        FROM recovery r WHERE r.date >= $s AND r.rhr IS NOT NULL ORDER BY r.date
+        WITH d AS (
+            SELECT date, MAX(strain) AS strain
+            FROM daily_cycle
+            WHERE date >= $s
+            GROUP BY date
+        )
+        SELECT r.date, r.rhr, d.strain
+        FROM recovery r
+        LEFT JOIN d ON d.date = r.date
+        WHERE r.date >= $s AND r.rhr IS NOT NULL
+        ORDER BY r.date
         """,
         {"s": since},
     ).fetchall()
@@ -377,7 +392,7 @@ def _run_push_pull_imbalance(conn, q: dict) -> LabFinding:
         pull_sum = sum(by_day_pull.get(d, 0) for d in window)
         if push_sum + pull_sum < 6:
             continue
-        if pull_sum == 0:
+        if pull_sum == 0 or push_sum == 0:
             continue
         ratio = push_sum / pull_sum
         rec_mean = sum(rec_by_day.get(d, 0) for d in window if d in rec_by_day) / max(
