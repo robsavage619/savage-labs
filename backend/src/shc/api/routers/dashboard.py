@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from shc.ai._personal_context import load_personal_context
 from shc.ai.briefing import build_daily_context, store_briefing
 from shc.ai.workout_planner import (
     GateViolation,
@@ -2130,8 +2131,10 @@ _WORKOUT_TOOL = {
     },
 }
 
-_SYSTEM_PROMPT = """You are the user's personal strength + conditioning coach.
-
+def _build_system_prompt() -> str:
+    personal = load_personal_context()
+    personal_block = f"\n{personal}\n" if personal else ""
+    return f"""You are the user's personal strength + conditioning coach.{personal_block}
 ═══════════════════════════════════════════════════════════════
 PROGRAMMING PHILOSOPHY (apply every plan)
 ═══════════════════════════════════════════════════════════════
@@ -2142,15 +2145,6 @@ PROGRAMMING PHILOSOPHY (apply every plan)
 • If recent push:pull or push:legs is imbalanced (see CONTEXT below), bias today toward the deficient group regardless of "most rested."
 • If skin temp >+0.5°C above 28d baseline → recommend rest/Z2 only, flag illness possibility.
 • If sleep <5h → cap intensity at moderate, no PR attempts.
-
-═══════════════════════════════════════════════════════════════
-CLINICAL CONTEXT (always factor in)
-═══════════════════════════════════════════════════════════════
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-[clinical context loaded at runtime]
 
 ═══════════════════════════════════════════════════════════════
 INTENSITY MATRIX (default; deviate only with reason)
@@ -2219,6 +2213,9 @@ Top-level keys (exactly):
   vault_insights: array of strings (cite specific research from context)
 
 The plan should feel like it came from a coach who has read every data point — strain, HRV trend, push:pull ratio, body weight, last 5 sessions, cardio mix — and is solving the recomp problem with the data."""
+
+
+_SYSTEM_PROMPT = _build_system_prompt()
 
 
 @router.post("/workout/generate")
@@ -2664,10 +2661,7 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         ],
         "blocks": blocks,
         "cooldown": "5 min mobility — target trained muscle groups",
-        "clinical_notes": [
-            [removed],
-            [removed],
-        ],
+        "clinical_notes": [],
         "vault_insights": [
             "ACWR 0.8–1.3 minimizes injury risk (Gabbett, 2016) — current: " + (f"{acwr:.2f}" if acwr else "unknown"),
             "HRV-guided training outperforms fixed-load programs (Kiviniemi et al.)",

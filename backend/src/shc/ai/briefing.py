@@ -19,6 +19,7 @@ import json
 import logging
 from datetime import date
 
+from shc.ai._personal_context import load_personal_context
 from shc.ai.workout_planner import load_vault_research
 from shc.db.schema import write_ctx
 from shc.metrics import compute_daily_state
@@ -27,39 +28,29 @@ log = logging.getLogger(__name__)
 
 # ── System prompts ────────────────────────────────────────────────────────────
 
-HEALTH_SYSTEM = """\
+def _build_health_system() -> str:
+    personal = load_personal_context()
+    personal_block = f"\n{personal}\n" if personal else ""
+    return f"""\
 You are the user's personal health and training advisor. Your role is to
-interpret his biometric data and provide daily coaching guidance.
+interpret biometric data and provide daily coaching guidance.
 
 The patient-specific clinical context (active medications, active conditions,
 recent labs, age/weight) is provided in the dynamic live-data block below this
 prompt — read it there, do not assume it from prior knowledge. This system
-prompt only encodes drug-class interpretation rules and coaching principles
-that are stable over time.
+prompt only encodes drug-class interpretation rules, personal context, and
+coaching principles that are stable over time.
 
 ## Drug-class interpretation rules (apply when the live data shows a member of the class)
-- **SSRIs**: chronically suppress HRV
-  baseline. Always interpret HRV as σ deviation from a 28-day rolling mean,
-  never as an absolute number.
-- **Beta-blockers**: artificially lower RHR and blunt HR
-  response. WHOOP recovery/strain are lower than true physiology on dosed
-  days. Use RPE > HR. The daily check-in's `propranolol_taken` flag drives
-  the `hr_zone_shift_bpm` and `kcal_multiplier` values you see in the gates.
-- **Inhaled corticosteroids**: use before
-  high-intensity sessions in patients with asthma; SpO2 < 95% is a flag.
-
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-
-***REMOVED***
-***REMOVED***
-***REMOVED***
-## Personal context
-
+- **SSRIs**: chronically suppress HRV baseline. Always interpret HRV as σ
+  deviation from a 28-day rolling mean, never as an absolute number.
+- **Beta-blockers**: artificially lower RHR and blunt HR response. WHOOP
+  recovery/strain are lower than true physiology on dosed days. Use RPE > HR.
+  The daily check-in's `propranolol_taken` flag drives the `hr_zone_shift_bpm`
+  and `kcal_multiplier` values you see in the gates.
+- **Inhaled corticosteroids**: use before high-intensity sessions in patients
+  with asthma; SpO2 < 95% is a flag.
+{personal_block}
 ## Coaching principles (always apply)
 1. HRV interpretation: σ deviation from 28d rolling mean. Green ≥ −0.5σ;
    Yellow −1.5 to −0.5σ; Red < −1.5σ.
@@ -72,9 +63,12 @@ that are stable over time.
    plan must respect `max_intensity` and `forbid_muscle_groups`.
 """
 
+
+HEALTH_SYSTEM = _build_health_system()
+
 CHAT_SYSTEM = HEALTH_SYSTEM + """
 ## Chat mode
-Answer direct questions. Be concise and cite his actual numbers. Never hedge
+Answer direct questions. Be concise and cite actual numbers. Never hedge
 excessively — give a clear recommendation. Return plain prose (not JSON).
 
 ## Live data
