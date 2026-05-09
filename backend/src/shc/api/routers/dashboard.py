@@ -2320,74 +2320,34 @@ async def clinical_research_insights() -> dict:
         # cardiovascular markers normalised against clinical thresholds.
         # Each marker contributes 0/1/2 (0 = normal, 1 = borderline, 2 = high).
         # Sum / max yields a 0-1 fraction surfaced as 0-10 score.
-        clin_rows = conn.execute(
-            "SELECT name, last_value FROM v_kaiser_summary"
-        ).fetchall() if conn.execute(
-            "SELECT COUNT(*) FROM information_schema.views WHERE table_name = 'v_kaiser_summary'"
-        ).fetchone()[0] else []
-        clin_map = {str(r[0]).lower(): r[1] for r in clin_rows} if clin_rows else {}
+        # Vitals (BP, BMI) live in `measurements` with source='kaiser_summary'
+        vital_rows = conn.execute(
+            """
+            SELECT DISTINCT ON (metric) metric, value_num
+            FROM measurements
+            WHERE source = 'kaiser_summary'
+            ORDER BY metric, ts DESC
+            """
+        ).fetchall()
+        vitals_map = {str(r[0]).lower(): float(r[1]) for r in vital_rows if r[1] is not None}
+        bp_sys = vitals_map.get("bp_systolic") or vitals_map.get("systolic")
+        bp_dia = vitals_map.get("bp_diastolic") or vitals_map.get("diastolic")
+        bmi = vitals_map.get("bmi")
 
-        # Pull straight from kaiser_summary if view doesn't exist
-        if not clin_map:
-            try:
-                ks = conn.execute(
-                    "SELECT name, last_value FROM kaiser_summary WHERE last_value IS NOT NULL"
-                ).fetchall()
-                clin_map = {str(r[0]).lower(): r[1] for r in ks}
-            except Exception:
-                pass
-
-        # Latest BP — from kaiser_summary or measurements
-        bp_sys = bp_dia = None
-        for k, v in clin_map.items():
-            if "systolic" in k or "blood pressure systolic" in k:
-                bp_sys = float(v) if v else None
-            elif "diastolic" in k or "blood pressure diastolic" in k:
-                bp_dia = float(v) if v else None
-        if bp_sys is None:
-            bp_row = conn.execute(
-                "SELECT value_num FROM measurements WHERE metric = 'bp_systolic' "
-                "ORDER BY ts DESC LIMIT 1"
-            ).fetchone()
-            if bp_row:
-                bp_sys = float(bp_row[0])
-        if bp_dia is None:
-            bp_row = conn.execute(
-                "SELECT value_num FROM measurements WHERE metric = 'bp_diastolic' "
-                "ORDER BY ts DESC LIMIT 1"
-            ).fetchone()
-            if bp_row:
-                bp_dia = float(bp_row[0])
-
-        # Latest BMI: weight kg / height m²; pull height from kaiser_summary if any
-        height_m = None
-        for k, v in clin_map.items():
-            if "height" in k:
-                try:
-                    height_m = float(v) / 100.0 if float(v) > 3 else float(v)
-                except Exception:
-                    pass
-        bw = conn.execute(
-            "SELECT body_weight_kg FROM daily_checkin WHERE body_weight_kg IS NOT NULL "
-            "ORDER BY date DESC LIMIT 1"
-        ).fetchone()
-        body_kg = float(bw[0]) if bw else None
-        bmi = None
-        if body_kg and height_m and height_m > 1.0:
-            bmi = body_kg / (height_m * height_m)
-        else:
-            for k, v in clin_map.items():
-                if k == "bmi" or k.endswith("bmi"):
-                    try:
-                        bmi = float(v)
-                    except Exception:
-                        pass
-
-        # Lipids + A1c
-        ldl = clin_map.get("ldl cholesterol (calc)") or clin_map.get("ldl-c") or clin_map.get("ldl")
-        hdl = clin_map.get("hdl cholesterol") or clin_map.get("hdl")
-        trig = clin_map.get("triglycerides")
-        a1c = clin_map.get("hba1c") or clin_map.get("a1c")
+        # Labs live in `labs` table — most-recent per name
+        lab_rows = conn.execute(
+            """
+            SELECT DISTINCT ON (name) name, value
+            FROM labs
+            WHERE value IS NOT NULL
+            ORDER BY name, collected_at DESC
+            """
+        ).fetchall()
+        labs_map = {str(r[0]).lower(): float(r[1]) for r in lab_rows if r[1] is not None}
+        ldl = labs_map.get("ldl cholesterol (calc)") or labs_map.get("ldl-c") or labs_map.get("ldl")
+        hdl = labs_map.get("hdl cholesterol") or labs_map.get("hdl")
+        trig = labs_map.get("triglycerides")
+        a1c = labs_map.get("hba1c") or labs_map.get("a1c")
 
         def _band(value, low, high):
             """Return 0 (normal) | 1 (borderline) | 2 (high) | None (missing)."""
