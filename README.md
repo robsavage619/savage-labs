@@ -86,9 +86,11 @@ It'd be easy to build a dashboard that shows you your WHOOP score and calls it d
 │                       DuckDB (encrypted)                        │
 │  measurements  │  workouts  │  workout_sets  │  sleep           │
 │  recovery      │  cardio    │  daily_checkin │  medications     │
-│  conditions    │  labs      │  working_weights│  workout_plans  │
+│  conditions    │  labs      │  daily_cycle    │  workout_plans  │
+│  mesocycles    │  muscle_volume_targets       │  lab_questions  │
+│  lab_findings  │  workout_retrospectives      │  working_weights│
 │                                                                 │
-│  Views: v_hrv_baseline_28d, v_session_load, v_daily_load       │
+│  Views: v_hrv_baseline_28d, v_session_load, v_daily_load        │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │
                                 ▼
@@ -96,23 +98,30 @@ It'd be easy to build a dashboard that shows you your WHOOP score and calls it d
 │                      METRICS ENGINE                             │
 │                  compute_daily_state()                          │
 │                                                                 │
-│  HRV σ-deviation  │  True ACWR  │  Sleep composite             │
-│  Readiness score  │  Gates      │  Epley e1RM                  │
-│  Push:pull ratio  │  Zone calc  │  Regression detection        │
+│  HRV σ-deviation  │  True ACWR  │  Sleep composite              │
+│  Readiness score  │  Gates      │  Epley e1RM                   │
+│  Push:pull ratio  │  Zone calc  │  Regression detection         │
+│  Sleep arch.      │  Banister CTL/ATL/TSB │ Mesocycle phase     │
+│  After-action     │  Fueling balance      │ Allostatic load     │
+│  SRI · lnRMSSD    │  Drug-adjusted HRV    │ N-of-1 lab runners  │
 └──────────┬────────────────────────────────┬─────────────────────┘
            │                                │
            ▼                                ▼
 ┌──────────────────────┐      ┌─────────────────────────────────┐
 │    FastAPI REST       │      │         AI LAYER                │
-│    50+ endpoints      │      │                                 │
+│    60+ endpoints      │      │                                 │
 │                       │      │  build_daily_context()          │
 │  /api/state/today     │      │  build_training_context()       │
-│  /api/workout/generate│      │  build_clinical_context()       │
-│  /api/chat            │      │  load_vault_research()          │
-│  /api/briefing        │      │                                 │
-│  /api/insights        │      │  Claude Opus 4.7                │
-│  /api/hevy/push       │      │  → validate_plan()              │
-│  /api/vault/search    │      │  → Ollama fallback (air-gapped) │
+│  /api/workout/*       │      │  build_clinical_context()       │
+│  /api/training/*      │      │  load_vault_research()          │
+│  /api/training/load-curve  ──┤                                 │
+│  /api/training/after-action  │  Claude Opus 4.7                │
+│  /api/training/mesocycle     │  → validate_plan()              │
+│  /api/clinical-research/*    │  → Ollama fallback (air-gapped) │
+│  /api/lab/{questions,findings,run}                             │
+│  /api/fueling/{today,trend}                                    │
+│  /api/chat · /api/briefing · /api/insights                     │
+│  /api/hevy/push · /api/vault/search                            │
 └──────────┬────────────┘      └─────────────────────────────────┘
            │
            ▼
@@ -124,6 +133,8 @@ It'd be easy to build a dashboard that shows you your WHOOP score and calls it d
 │                                                                 │
 │  Command Briefing  │  Four Pillars  │  Trend Intelligence       │
 │  Workout Planner   │  AI Advisor    │  Clinical Overview        │
+│  Periodization Strip · After-Action · Fueling Panel             │
+│  Clinical Research Signals · Research Lab (N-of-1)              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -324,6 +335,128 @@ On days I take a beta-blocker, my HR peaks lower. Without this adjustment, every
 
 ---
 
+## Sports-Science Layer
+
+Once the daily-readiness loop was solid, the next push was treating Savage Labs as an actual sports-science platform — not just a wearable dashboard. Six additions, each anchored to peer-reviewed methodology.
+
+### Sleep Architecture — Beyond Total Hours
+
+Total sleep duration is the noisiest possible single metric. The dashboard surfaces six dimensions every morning, each pulled from the dedicated columns the WHOOP V2 ingest writes (no JSON parsing in the hot path):
+
+| Field | What it tells me | Reference |
+|---|---|---|
+| **Deep %** | N3 / slow-wave — physical recovery + GH release. Target 15-25%. | Walker 2017 |
+| **REM %** | Motor learning + emotional regulation. Target 20-28%. | Walker 2017 |
+| **Efficiency %** | Time asleep / time in bed. >85% = good. | Watson AASM 2015 |
+| **Wakes** | Whoop disturbance count — fragmented sleep marker. | — |
+| **Midpoint σ** | 7-day standard deviation of sleep midpoint hour — circadian / social-jet-lag proxy. <0.75h is tight. | Lunsford-Avery 2018 |
+| **Sleep Regularity Index** | % probability the asleep/awake state matches at the same clock minute on consecutive nights. ≥80 = tight. | Phillips 2017 *Scientific Reports* |
+
+---
+
+### Periodization Strip + Banister Fitness-Fatigue Model
+
+Most "training load" tools stop at ACWR. I added the full Banister model on top — separating **fitness** (slow-decay 42d EWMA), **fatigue** (fast-decay 7d EWMA), and **form** (their difference):
+
+```python
+ctl_decay = exp(-1/42)        # CTL — fitness
+atl_decay = exp(-1/7)         #  ATL — fatigue
+ctl = ctl * ctl_decay + load * (1 - ctl_decay)
+atl = atl * atl_decay + load * (1 - atl_decay)
+tsb = ctl - atl               # TSB — form
+```
+
+**Form interpretation:**
+
+| TSB | Meaning |
+|---|---|
+| `> +15` | Detraining risk |
+| `+5 to +15` | Race-ready |
+| `−10 to +5` | Productive training zone |
+| `−20 to −10` | Fatigued |
+| `< −20` | Overreaching |
+
+The mesocycle phase strip sits beside it — one cell per planned week, the current week glows, the deload week is amber. Reads the live `mesocycles` table; phase + weeks-to-deload are pulled from `ensure_active_mesocycle()`.
+
+---
+
+### After-Action Autoregulation — Reading the Hevy Sync
+
+I log every set in Hevy. Once it syncs, the **After-Action panel** computes per-exercise actuals vs. plan target and emits a next-session weight suggestion. Read-only — no double-logging.
+
+The autoregulation rules (Helms 2018 + RP autoreg, RPE-based since Hevy doesn't capture mean concentric velocity):
+
+| Condition | Suggestion |
+|---|---|
+| Avg actual RPE ≥ target + 2 | **−10%** next time |
+| Avg actual RPE ≥ target + 1 | **−5%** |
+| Min reps short of target by ≥2 | **−5%** |
+| Avg actual RPE ≤ target − 2 | **+2.5%** |
+| Reps hit + RPE under target | **+2.5%** progression |
+| All on target | repeat |
+
+Every suggestion is rounded to the nearest 2.5 lbs. A `verdict` column tints the row green (progress), red (drop), or neutral (repeat).
+
+---
+
+### Fueling Layer — Body Comp + Macros + Hydration
+
+Apple Health was already syncing weight and active/basal energy. The ingest map now also pulls every dietary metric (energy, protein, carbs, fat, fiber, sugar, water, sodium, caffeine) and **lean body mass** from a smart scale.
+
+The `/api/fueling/today` endpoint computes:
+- **kcal balance** — dietary in − (active + basal) out
+- **Protein g/kg** vs the 1.6–2.2 g/kg hypertrophy band (Morton 2018 meta)
+- **Hydration** in oz + sodium in mg
+- **Body composition** — weight, BF%, lean mass, falling back to BF×weight when LBM is missing
+
+Empty-state UX: when no diet data is logged yet, the card shows targets sized to current body weight ("~194g protein, ~3779ml water, TDEE balance ±250 kcal") so the prescription is visible from day one.
+
+---
+
+### Clinical Research Signals — Six Peer-Reviewed Tiles
+
+A new panel layered on top of the standard Insights pane. Each tile is anchored to a primary citation surfaced via tooltip hover:
+
+| Tile | What it computes | Threshold | Reference |
+|---|---|---|---|
+| **SRI** | Overlap-based sleep regularity index | ≥80 tight, ≥60 moderate | Phillips 2017 |
+| **lnRMSSD** | log-transformed HRV mean rolling 7d, with 4w-avg delta + CV% | + delta = autonomic adaptation | Buchheit 2014 |
+| **Red-streak** | Consecutive recovery <34 days | 3+ doubles soft-tissue injury risk | WHOOP 2022 internal cohort |
+| **Allostatic Load** | Composite of BP, BMI, LDL, HDL, trig, A1c each scored 0/1/2 | <3 low, <6 moderate, ≥6 elevated | Seeman 2001 *JAMA* |
+| **Adj. HRV** | Raw HRV uplifted ~15% on propranolol days, ~7% on SSRI | strips medication shadow | Kemp 2010 meta + Mølgaard 1991 |
+| **Z2 HR drift** | Coefficient-of-variation across recent Z2 cardio sessions | <5% stable, ≥7% drifting | Maffetone |
+
+This was the layer that took the platform from "consumer wearable dashboard" to "research-grade single-subject panel."
+
+---
+
+### Research Lab — Pre-Registered N-of-1 Hypotheses
+
+The piece I'm most proud of. A **pre-registered hypothesis catalog** runs against my live time-series and emits CONFIRMED / REFUTED / INCONCLUSIVE / INSUFFICIENT verdicts per question — with effect size, n, p-value, and the primary citation. The test type and threshold are fixed in advance, so I can't p-hack.
+
+Six standing hypotheses seeded from the vault:
+
+1. **Short sleep depresses next-day HRV** — Welch's t between <6.5h and ≥7.5h nights
+2. **Long sleep lifts next-day HRV** — Welch's t between ≥8h and 6.5-7.5h nights
+3. **Pickleball depresses next-morning HRV** — paired t for session vs no-session days
+4. **Skin-temp +1°F precedes red recovery within 48h** — change-point rate
+5. **High strain elevates next-morning RHR** — Welch's t vs trailing 28d baseline
+6. **Push:pull imbalance correlates with weekly recovery** — Pearson r on |log push:pull|
+
+Wired through:
+
+```
+GET  /api/lab/questions    → catalogue
+GET  /api/lab/findings     → latest verdict per question
+POST /api/lab/run          → re-run all enabled hypotheses
+```
+
+The frontend `LabPanel` renders one verdict-coded card per question with the hypothesis text, summary, effect size, n, p-value, test type, and vault citation. Hit "RUN ALL" or wire it to a weekly cron. New hypotheses go into `lab_questions` as a one-row INSERT plus a runner function in `shc/lab.py` — that's the entire surface area for adding new questions.
+
+The philosophical backbone is in the vault — Schork 2015/2022 and Daza 2018 on N-of-1 trials as rigorous science.
+
+---
+
 ## The Obsidian Vault
 
 The third input into every AI call — alongside live biometrics and clinical context — is a personal knowledge base of **405 research notes** I've built in Obsidian. Every workout plan Claude generates is grounded in this vault, not in whatever the model learned during pretraining.
@@ -498,7 +631,7 @@ A 3,000-word hypertrophy paper becomes a 400-word prescription. Every plan Claud
 
 ## The Dashboard
 
-What I actually look at every day. Eight zones, built with Next.js 15 + React 19.
+What I actually look at every day. Built with Next.js 15 + React 19.
 
 <table>
 <tr>
@@ -534,6 +667,18 @@ The page background hue shifts with readiness — greenish when I'm good, reddis
 </td>
 </tr>
 </table>
+
+### The Sports-Science Strip
+
+Six newer panels stack between the daily-readiness row and the legacy Strength / Cardio panels:
+
+| Panel | What it shows |
+|---|---|
+| **Periodization** | Mesocycle phase strip (W-of-N, deload-week amber) + CTL/ATL/TSB sparkline with form label |
+| **After-Action** | Per-exercise Hevy-driven autoreg: actuals vs plan, next-session weight suggestion, verdict tint |
+| **Clinical Research Signals** | Six peer-reviewed tiles — SRI, lnRMSSD, red-streak, allostatic load, drug-adjusted HRV, Z2 drift |
+| **Fueling** | Body comp strip (weight / BF% / lean mass) + macros (kcal in/out/balance, protein g/kg, hydration) + 14d energy-balance bar chart |
+| **Research Lab** | Six pre-registered hypothesis cards with CONFIRMED / REFUTED / INCONCLUSIVE / INSUFFICIENT verdicts; "Run all" button refreshes findings on demand |
 
 ### Trend Intelligence
 
@@ -622,7 +767,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 |---|---|
 | Language | Python 3.12 |
 | Framework | FastAPI 0.115 |
-| Database | DuckDB 1.1 (encrypted, 14 migrations) |
+| Database | DuckDB 1.1 (encrypted, 19 migrations) |
 | Background | APScheduler 3.10 |
 | HTTP | httpx 0.28 (async) |
 | XML | lxml 5 (Apple Health CCDA) |
@@ -701,15 +846,18 @@ I spent more time on the UI than I probably should have. The whole thing uses OK
 ## Data Model
 
 <details>
-<summary>Schema — 14 tables, 4 views</summary>
+<summary>Schema — 19 tables, 4 views</summary>
 
 ```sql
 measurements        -- Apple Health time-series (metric, ts, value, unit, content_hash)
+                    -- now also captures dietary energy/protein/carbs/fat/fiber/water/sodium/caffeine + lean body mass
 workouts            -- WHOOP + Hevy sessions (strain, HR, kcal, kind)
 workout_sets        -- Strength sets (exercise, reps, weight_kg, rpe, is_warmup)
-sleep               -- Multi-source (stages_json, spo2_avg, hrv, rhr, night_date)
+sleep               -- Multi-source — sws_min, rem_min, light_min, awake_min, sleep_efficiency_pct,
+                    --                 sleep_consistency_pct, disturbance_count, sleep_needed_min
 recovery            -- WHOOP (date, score, hrv, rhr, skin_temp)
 cardio_sessions     -- Manual + integrations (modality, duration, avg_hr, rpe, zones)
+daily_cycle         -- WHOOP daily cycle (date, strain, kilojoule, avg_hr, max_hr)
 working_weights     -- Current e1RM per exercise
 workout_plans       -- AI-generated plans (plan_json, date)
 workout_retrospectives  -- Post-workout summaries (completion_pct, overload_flag, vault_insights)
@@ -718,13 +866,17 @@ daily_checkin       -- Morning survey
 medications         -- Active medications with audit trail
 conditions          -- Diagnoses
 labs                -- Lab results with reference ranges
-schema_version      -- 14 migrations applied
+mesocycles          -- Active periodization block (started_on, planned_weeks, deload_trigger)
+muscle_volume_targets   -- MEV / MAV / MRV per muscle group, per mesocycle
+lab_questions       -- Pre-registered hypothesis catalogue (id, hypothesis, test_type, threshold, vault_ref)
+lab_findings        -- Per-run results (verdict, n, effect_size, p_value, evidence)
+schema_version      -- 19 migrations applied
 ```
 
 ```sql
 v_hrv_baseline_28d      -- Rolling 28d HRV mean and SD (for σ-deviation)
 v_session_load          -- Per-day load from WHOOP strain + Hevy volume
-v_daily_load            -- Composite load — true Gabbett ACWR denominator
+v_daily_load            -- Composite load — true Gabbett ACWR denominator + Banister CTL/ATL input
 workout_sets_dedup      -- Deduped sets (handles Hevy sync collisions)
 ```
 
