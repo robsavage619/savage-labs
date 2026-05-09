@@ -193,11 +193,11 @@ def _run_pickleball_next_morning(conn, q: dict) -> LabFinding:
     rows = conn.execute(
         """
         WITH pb AS (
-            SELECT started_at::DATE AS day, COUNT(*) AS n
+            SELECT date AS day, COUNT(*) AS n
             FROM cardio_sessions
             WHERE LOWER(modality) = 'pickleball'
-              AND started_at::DATE >= $s
-            GROUP BY started_at::DATE
+              AND date >= $s
+            GROUP BY date
         )
         SELECT r.date, r.hrv, COALESCE(pb.n, 0) AS pb
         FROM recovery r
