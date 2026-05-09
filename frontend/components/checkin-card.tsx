@@ -20,6 +20,9 @@ export function CheckinCard() {
   const [weightLbs, setWeightLbs] = useState<string>("");
   const [soreness, setSoreness] = useState<number | null>(null);
   const [sleepQ, setSleepQ] = useState<number | null>(null);
+  const [energy, setEnergy] = useState<number | null>(null);
+  const [stress, setStress] = useState<number | null>(null);
+  const [motivation, setMotivation] = useState<number | null>(null);
   const [illness, setIllness] = useState<boolean>(false);
   const [travel, setTravel] = useState<boolean>(false);
   const [notes, setNotes] = useState<string>("");
@@ -36,6 +39,9 @@ export function CheckinCard() {
     );
     setSoreness(t.soreness_overall ?? null);
     setSleepQ(t.sleep_quality_1_10 ?? null);
+    setEnergy(t.energy_1_10 ?? null);
+    setStress(t.stress_1_10 ?? null);
+    setMotivation(t.motivation_1_10 ?? null);
     setIllness(!!t.illness_flag);
     setTravel(!!t.travel_flag);
     setNotes(t.notes ?? "");
@@ -71,7 +77,10 @@ export function CheckinCard() {
     propranolol !== null &&
     weightLbs.trim() !== "" &&
     soreness !== null &&
-    sleepQ !== null;
+    sleepQ !== null &&
+    energy !== null &&
+    stress !== null &&
+    motivation !== null;
 
   if (complete && !editing) {
     return (
@@ -80,6 +89,9 @@ export function CheckinCard() {
         weightLbs={weightLbs}
         soreness={soreness}
         sleepQ={sleepQ}
+        energy={energy}
+        stress={stress}
+        motivation={motivation}
         illness={illness}
         travel={travel}
         notes={notes}
@@ -138,6 +150,24 @@ export function CheckinCard() {
         onChange={(v) => { setSleepQ(v); send({ sleep_quality_1_10: v }); }}
       />
 
+      {/* Energy / Stress / Motivation */}
+      <Slider
+        label="Energy"
+        value={energy}
+        onChange={(v) => { setEnergy(v); send({ energy_1_10: v }); }}
+      />
+      <Slider
+        label="Stress"
+        value={stress}
+        onChange={(v) => { setStress(v); send({ stress_1_10: v }); }}
+        invertColor
+      />
+      <Slider
+        label="Motivation"
+        value={motivation}
+        onChange={(v) => { setMotivation(v); send({ motivation_1_10: v }); }}
+      />
+
       {/* Body diagram — per-muscle soreness */}
       <BodyDiagram
         value={muscleSoreness}
@@ -185,6 +215,9 @@ function CheckinLogged({
   weightLbs,
   soreness,
   sleepQ,
+  energy,
+  stress,
+  motivation,
   illness,
   travel,
   notes,
@@ -194,6 +227,9 @@ function CheckinLogged({
   weightLbs: string;
   soreness: number | null;
   sleepQ: number | null;
+  energy: number | null;
+  stress: number | null;
+  motivation: number | null;
   illness: boolean;
   travel: boolean;
   notes: string;
@@ -204,6 +240,9 @@ function CheckinLogged({
     { label: "Weight", value: `${weightLbs} lbs` },
     { label: "Soreness", value: `${soreness}/10` },
     { label: "Sleep", value: `${sleepQ}/10` },
+    { label: "Energy", value: `${energy}/10` },
+    { label: "Stress", value: `${stress}/10` },
+    { label: "Motivation", value: `${motivation}/10` },
   ];
   const flags: string[] = [];
   if (illness) flags.push("Sick");
@@ -283,13 +322,19 @@ function Slider({
   label,
   value,
   onChange,
+  invertColor = false,
 }: {
   label: string;
   value: number | null;
   onChange: (v: number) => void;
+  invertColor?: boolean;
 }) {
   const display = value ?? 0;
   const pct = value != null ? ((value - 1) / 9) * 100 : 0;
+  // For inverted sliders (stress), walk from neutral → red as value rises.
+  const fillColor = invertColor && value != null
+    ? value <= 4 ? "var(--positive)" : value <= 6 ? "var(--neutral)" : "var(--negative)"
+    : "var(--text-primary)";
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between">
@@ -300,13 +345,11 @@ function Slider({
         </span>
       </div>
       <div className="relative h-[18px] flex items-center">
-        {/* track */}
         <div className="absolute inset-x-0 h-[3px] rounded-full bg-[var(--hairline-strong)]" />
-        {/* fill */}
         {value != null && (
           <div
-            className="absolute h-[3px] rounded-full bg-[var(--text-primary)]"
-            style={{ width: `${pct}%`, transition: "width 140ms ease" }}
+            className="absolute h-[3px] rounded-full"
+            style={{ width: `${pct}%`, background: fillColor, transition: "width 140ms ease, background 300ms ease" }}
           />
         )}
         <input
