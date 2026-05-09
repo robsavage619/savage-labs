@@ -342,7 +342,7 @@ async def push_routine(plan: dict) -> dict:
     Returns the Hevy API response.
     """
     today = datetime.now(UTC).date().isoformat()
-    title = f"SHC Plan — {today}"
+    title = f"Savage Labs WOD ({today})"
 
     # Check template cache
     read_conn = get_read_conn()
