@@ -1783,9 +1783,16 @@ async def body_trend() -> list[dict]:
     try:
         rows = conn.execute(
             """
-            SELECT ts::DATE AS day, AVG(value_num) AS kg
-            FROM measurements
-            WHERE metric = 'body_mass_kg'
+            SELECT day, AVG(kg) AS kg
+            FROM (
+                SELECT ts::DATE AS day, value_num AS kg
+                FROM measurements
+                WHERE metric = 'body_mass_kg' AND value_num IS NOT NULL
+                UNION ALL
+                SELECT date AS day, body_weight_kg AS kg
+                FROM daily_checkin
+                WHERE body_weight_kg IS NOT NULL
+            )
             GROUP BY day
             ORDER BY day
             """
