@@ -112,7 +112,7 @@ function StoryNarrative({
 const STORY_PROMPT = `Generate Rob's daily health story AND today's workout plan in a single pass.
 
 STEP 1 — Read context.
-If the API is down (ECONNREFUSED), run `zsh /Users/robsavage/Projects/savage-health-center/dev-restart.sh` and wait 8s before fetching.
+If the API is down (ECONNREFUSED), run: zsh /Users/robsavage/Projects/savage-health-center/dev-restart.sh — then wait 8s before fetching.
 - GET http://127.0.0.1:8000/api/briefing/context for live biometrics (recovery, HRV, sleep, gates) AND today's most-relevant vault notes (selected server-side based on signals like HRV anomaly, high ACWR, deload, illness).
 - GET http://127.0.0.1:8000/api/workout/context for training history (also includes the ranked vault notes).
 - Both responses already contain a "## VAULT RESEARCH" section — do not read files from disk.
