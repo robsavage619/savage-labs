@@ -138,7 +138,7 @@ async def _get(path: str, params: dict | None = None) -> dict:
     raise RuntimeError(f"WHOOP _get exhausted retries on {path}")
 
 
-_HASH_SCHEMA_VERSION = "v2"  # bump when ingestion adds/changes parsed fields
+_HASH_SCHEMA_VERSION = "v3"  # bump when ingestion adds/changes parsed fields
 
 
 def _hash(data: dict) -> str:
