@@ -104,6 +104,8 @@ It'd be easy to build a dashboard that shows you your WHOOP score and calls it d
 │  Sleep arch.      │  Banister CTL/ATL/TSB │ Mesocycle phase     │
 │  After-action     │  Fueling balance      │ Allostatic load     │
 │  SRI · lnRMSSD    │  Drug-adjusted HRV    │ N-of-1 lab runners  │
+│  RR sentinel      │  WHOOP-measured HRmax │ Pickleball volume   │
+│  Concurrent-load signal       │  Percent-recorded filter        │
 └──────────┬────────────────────────────────┬─────────────────────┘
            │                                │
            ▼                                ▼
@@ -112,12 +114,13 @@ It'd be easy to build a dashboard that shows you your WHOOP score and calls it d
 │    60+ endpoints      │      │                                 │
 │                       │      │  build_daily_context()          │
 │  /api/state/today     │      │  build_training_context()       │
-│  /api/workout/*       │      │  build_clinical_context()       │
-│  /api/training/*      │      │  load_vault_research()          │
-│  /api/training/load-curve  ──┤                                 │
-│  /api/training/after-action  │  Claude Opus 4.7                │
-│  /api/training/mesocycle     │  → validate_plan()              │
-│  /api/clinical-research/*    │  → Ollama fallback (air-gapped) │
+│  /api/daily/brief     │      │  build_clinical_context()       │
+│  /api/workout/*       │      │  load_vault_research()          │
+│  /api/training/*      ├──────┤                                 │
+│  /api/training/load-curve    │  Claude Opus 4.7                │
+│  /api/training/after-action  │  → validate_plan()              │
+│  /api/training/mesocycle     │  → Ollama fallback (air-gapped) │
+│  /api/clinical-research/*                                      │
 │  /api/lab/{questions,findings,run}                             │
 │  /api/fueling/{today,trend}                                    │
 │  /api/chat · /api/briefing · /api/insights                     │
@@ -150,12 +153,14 @@ Everything flows through a single typed dataclass computed once per request. The
 @dataclass
 class DailyState:
     as_of: str
-    recovery: RecoveryMetrics      # WHOOP score, HRV ms, RHR, skin temp
-    sleep: SleepMetrics            # duration, deep%, REM%, SpO2, debt
-    training_load: TrainingLoadMetrics  # ACWR, acute/chronic, muscle group rest
+    recovery: RecoveryMetrics      # WHOOP score, HRV ms, RHR, skin temp, SpO2, RR delta
+    sleep: SleepMetrics            # duration, deep%, REM%, SpO2, debt, cycles, efficiency,
+                                   # disturbances, respiratory_rate, sleep_need attribution
+    training_load: TrainingLoadMetrics  # ACWR, acute/chronic, muscle group rest,
+                                        # max_hr_measured, zone_min_7d, pickleball_min_7d/28d
     checkin: CheckinMetrics        # energy, stress, soreness, medication flag
     readiness: ReadinessSnapshot   # composite score, tier, component weights
-    gates: AutoRegGates            # deterministic intensity constraints
+    gates: AutoRegGates            # deterministic intensity constraints (20 rules)
     freshness: DataFreshness       # staleness flags per source
 ```
 
@@ -224,7 +229,7 @@ Detection is dual-gated — the medications table needs an active entry *and* th
 
 ### The Gate Engine
 
-This was probably the most important design decision. Claude generates a workout plan. Before it gets shown to me, a separate deterministic layer validates it against 13 hard rules derived from physiology research. If anything fails, the plan gets rejected and Claude is called again — with the violations explained.
+This was probably the most important design decision. Claude generates a workout plan. Before it gets shown to me, a separate deterministic layer validates it against 20 hard rules derived from physiology research. If anything fails, the plan gets rejected and Claude is called again — with the violations explained.
 
 ```python
 @dataclass
@@ -240,7 +245,7 @@ class AutoRegGates:
 ```
 
 <details>
-<summary>All 13 gate rules</summary>
+<summary>All 20 gate rules</summary>
 
 | Condition | Gate |
 |---|---|
@@ -257,6 +262,13 @@ class AutoRegGates:
 | Sleep < 5h | No PR attempts |
 | Acute soreness ≥ 3 on muscle | Group forbidden |
 | HRV σ < −1.5 | Cap to low |
+| SpO₂ < 94% overnight | Cap to low — hypoxia recovery flag |
+| User-calibrating flag | Gates suppressed — not enough baseline |
+| Respiratory rate Δ ≥ +1 bpm above 28d median | Illness sentinel (Bourdillon/Nicolò) |
+| Sleep cycles < 3 | No compound primary at GREEN intensity |
+| Sleep efficiency < 70% | Cap to moderate |
+| Sleep disturbances ≥ 8 | Cap to moderate |
+| WHOOP performance score < 33 | Cap to low |
 
 </details>
 
@@ -309,7 +321,7 @@ Four sources, one database. Every record gets a content hash so syncs are always
 
 | Source | How it gets in | What I get |
 |---|---|---|
-| **WHOOP** | OAuth 2.0, syncs every 60 min | Recovery, HRV, RHR, sleep stages, strain, SpO2, skin temp |
+| **WHOOP** | OAuth 2.0, syncs every 60 min | Recovery, HRV, RHR, sleep stages (cycles, efficiency, disturbances, respiratory rate), strain, SpO2, skin temp, HR zone durations, body measurements (measured max HR), user profile |
 | **Apple Health** | iCloud HealthAutoExport → CCDA XML parse | Everything — steps, HR, weight, glucose, blood pressure, sleep |
 | **Hevy** | REST API | Every lift, every set, every rep, back to 2015 |
 | **Morning check-in** | Dashboard form I fill out daily | Energy, stress, soreness, body weight, medication flags |
@@ -322,22 +334,25 @@ OAuth tokens live in macOS Keychain. The database is encrypted at rest. Nothing 
 
 ---
 
-### HR Zones That Account for Medication
+### HR Zones That Account for Medication and Measured Physiology
 
-I use the Tanaka formula for HRmax (lower error than Fox 220−age for trained adults):
+HR zone boundaries now use **WHOOP-measured max HR** when available, falling back to the Tanaka formula:
 
 ```
-HRmax          = 208 − (0.7 × age)
-adjusted_HRmax = HRmax − hr_zone_shift_bpm    # -20 on beta-blocker days
+HRmax (measured)  = body_measurement.max_heart_rate   # e.g. 183 bpm (WHOOP)
+HRmax (Tanaka)    = 208 − (0.7 × age)                 # e.g. 180 bpm — fallback only
+adjusted_HRmax    = HRmax − hr_zone_shift_bpm          # −20 on beta-blocker days
 ```
 
 On days I take a beta-blocker, my HR peaks lower. Without this adjustment, every cardio session would look like it was in a higher zone than it actually was. The gate engine injects the shift automatically.
+
+**Zone durations** also use WHOOP's authoritative `zone_two_min` through `zone_five_min` columns (synced per workout) instead of inferring zones from average HR. The cardio panel shows the actual distribution pulled from WHOOP's zone breakdown.
 
 ---
 
 ## Sports-Science Layer
 
-Once the daily-readiness loop was solid, the next push was treating Savage Labs as an actual sports-science platform — not just a wearable dashboard. Six additions, each anchored to peer-reviewed methodology.
+Once the daily-readiness loop was solid, the next push was treating Savage Labs as an actual sports-science platform — not just a wearable dashboard. Seven additions, each anchored to peer-reviewed methodology.
 
 ### Sleep Architecture — Beyond Total Hours
 
@@ -457,6 +472,44 @@ The philosophical backbone is in the vault — Schork 2015/2022 and Daza 2018 on
 
 ---
 
+### Concurrent Training Awareness — Pickleball as Primary Sport
+
+The original platform was framed around generic recomposition. That's changed. The primary goal is now **4.5 → 5.0 pickleball while preserving strength and size** — breaking the racquet-sport norm of trading muscle for endurance.
+
+This required wiring concurrent training interference theory directly into the planner. The vault now contains Wilson 2012, Schumann 2022, Coffey & Hawley 2017, and Suchomel 2016. The core findings that drive planning decisions:
+
+| Finding | Source | How it's applied |
+|---|---|---|
+| Lower-body explosive power is the first adaptation lost under high sport volume | Wilson 2012 | When `pickleball_min_7d ≥ 150`, drop leg hypertrophy to MEV; bias toward power block |
+| AMPK activation from aerobic work suppresses mTOR-driven hypertrophy for ~6h | Coffey & Hawley 2017 | Finisher rule: ≥150 min/wk → Z2-only, no HIIT — sport already supplied the stimulus |
+| Sport-specific aerobic (court movement) interferes less than running-based aerobic | Schumann 2022 | Upper-body hypertrophy volume stays at MAV — the interference is lower-body |
+| Strength is the floor on which power is built — never sacrifice the floor | Suchomel 2016 | Primary compounds always present; sport volume reduces accessories, not compounds |
+
+Two new vault signals gate the planner automatically:
+
+```python
+"pickleball_focus":     pickleball_min_7d ≥ 60     # sport present → stay out of HIIT
+"concurrent_training":  pickleball_min_7d ≥ 150    # high volume → lower-body MEV + Z2 finisher only
+```
+
+These signals surface relevant vault notes (concurrent-training-interference, power-development, maximal-strength) to Claude's context, so the rationale is evidence-based and traceable, not just a hard-coded heuristic.
+
+---
+
+### Respiratory Rate Sentinel Gate
+
+WHOOP logs respiratory rate per night as a dedicated sleep column. A new gate fires when tonight's value is ≥ +1 bpm above the 28-day median baseline:
+
+```python
+baseline = median(respiratory_rate values where 8 ≤ rr ≤ 30, last 28 nights)
+delta    = tonight_rr − baseline
+gate     = "illness sentinel" if delta ≥ 1.0 else None
+```
+
+The median (not mean) protects against outlier contamination. The 8–30 bpm clamp excludes implausible values from earlier schema iterations. Bourdillon (2018) and Nicolò (2020) both show respiratory rate rises 3–4 days before subjective illness symptoms — this gate catches it early.
+
+---
+
 ## The Obsidian Vault
 
 The third input into every AI call — alongside live biometrics and clinical context — is a personal knowledge base of **405 research notes** I've built in Obsidian. Every workout plan Claude generates is grounded in this vault, not in whatever the model learned during pretraining.
@@ -465,7 +518,7 @@ The difference matters. Claude knows exercise science in aggregate from its trai
 
 ### What's In It
 
-**405 notes across 10 domains** — all ingested from primary sources (textbooks, meta-analyses, RCTs), structured with YAML frontmatter tags, and condensed to actionable prescription sections.
+**~416 notes across 11 domains** — all ingested from primary sources (textbooks, meta-analyses, RCTs), structured with YAML frontmatter tags, and condensed to actionable prescription sections.
 
 <details>
 <summary><strong>Strength & Hypertrophy — 147 notes</strong></summary>
@@ -557,6 +610,25 @@ Primary papers on HRV monitoring, wearable validation, and HR modelling — the 
 </details>
 
 <details>
+<summary><strong>Concurrent Training & Sports Science — 11 notes</strong></summary>
+
+Added in response to pickleball becoming the primary sport goal. Covers interference effects, power development, and cardio zone methodology anchored to primary papers.
+
+**What's encoded:**
+
+- **Concurrent training interference (Wilson 2012):** The residual fatigue model. Lower-body explosive power is the first adaptation lost when aerobic volume is high — not upper-body strength. This asymmetry drives the planner's split: preserve compound pulling and pushing volume, drop lower-body to MEV when pickleball ≥ 150 min/7d.
+- **Molecular mechanisms (Coffey & Hawley 2017):** AMPK activated by aerobic work phosphorylates TSC2 → suppresses Rheb → inhibits mTORC1 → blunts hypertrophy signaling for ~6h. Practical application: Z2-only finishers when concurrent training load is high; ≥6h separation between sport and lifting reduces interference.
+- **Compatibility conditions (Schumann 2022):** Sport-specific movement patterns interfere less than generic running. Court-movement aerobic (pickleball) creates less lower-body interference than an equivalent HIIT session. Upper-body hypertrophy can remain at MAV even in high sport-volume weeks.
+- **Strength as the floor (Suchomel 2016):** Maximal strength is the foundation for all power expression in racquet sports. Never sacrifice compound primaries to make room for sport volume — reduce accessories, not the strength base.
+- **Polarized zone distribution (Seiler 2010, Stoggl & Sperlich 2014):** 80/20 rule — ~80% of aerobic volume at Z1/Z2 (conversational), ~20% at threshold or above. Validated across endurance sports. Applied to finisher selection: Z2-only finishers preserve this distribution when pickleball is already supplying the high-intensity stimulus.
+- **Respiratory rate monitoring (Nicolò 2020, Bourdillon 2018):** RR rises 3–4 days before subjective illness. Used to implement the +1 bpm sentinel gate.
+- **Athlete sleep (Vitale 2019):** Sleep extension to ≥8h improves reaction time and sprint speed. Platform now surfaces sleep cycle count, efficiency, and disturbances as first-class gate inputs.
+
+**Notes:** `wilson-2012-concurrent-training-interference.md`, `schumann-2022-concurrent-training-compatibility.md`, `coffey-2017-concurrent-training-molecular.md`, `suchomel-2016-strength-athletic-performance.md`, `seiler-2010-polarized-training.md`, `stoggl-2014-polarized-vs-pyramidal.md`, `nicolo-2020-respiratory-rate-monitoring.md`, `vitale-2019-athlete-sleep-hygiene.md`, `robergs-2002-hrmax-formula-critique.md`, `grosicki-2025-whoop-adherence-outcomes.md`, `whoop-2025-healthspan-whitepaper.md`
+
+</details>
+
+<details>
 <summary><strong>N-of-1 Methodology — 5 notes</strong></summary>
 
 The meta-framework that justifies treating my own data seriously — single-subject experimental design as rigorous science, not just self-tracking.
@@ -594,12 +666,14 @@ signals = {
     "hrv_anomaly",         # HRV σ-deviation < -1.0
     "high_acwr",           # ACWR > 1.3
     "deload",              # gates.deload_required = True
-    "illness",             # checkin.illness_flag = True
+    "illness",             # checkin.illness_flag = True OR rr_delta ≥ 1.0
     "poor_sleep",          # last night < 6h
     "push_pull_imbalance", # 28d ratio > 1.2 or < 0.8
     "volume_spike",        # 4-week volume Δ > 40%
     "recomposition",       # always active
     "exercise_selection",  # always active
+    "pickleball_focus",    # pickleball_min_7d ≥ 60
+    "concurrent_training", # pickleball_min_7d ≥ 150 — triggers concurrent-training vault notes
 }
 ```
 
@@ -700,6 +774,21 @@ Generated by Claude with full context injected. Comes back as structured blocks 
 
 ## AI Integration
 
+### Slim Daily Brief Endpoint
+
+`GET /api/daily/brief` returns a single 24KB payload that replaces the previous multi-endpoint context-building pattern (which required fetching ~293KB across 6+ endpoints). The brief combines:
+
+- Full `DailyState` DTO (all computed metrics)
+- 5 signal-ranked vault notes × 800 chars each
+- Last 7 days of training sessions
+- Top 20 working weights
+- Complete Hevy exercise catalog
+- Mesocycle + ACWR + muscle-group rest status
+
+This endpoint is what the `shc-workout` Claude Code skill uses. Context is fetched once, in one shot, in ~500ms rather than 6+ minutes.
+
+---
+
 ### How Context Gets Built
 
 Every time Claude gets called, `build_daily_context()` assembles:
@@ -744,7 +833,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 
 | Source | Protocol | What I get |
 |---|---|---|
-| **WHOOP 4.0** | OAuth 2.0, syncs every 60 min | Recovery, HRV, RHR, sleep stages, strain, SpO2, skin temp |
+| **WHOOP 4.0** | OAuth 2.0, syncs every 60 min | Recovery, HRV, RHR, sleep stages (with cycles, efficiency, disturbances, respiratory rate), strain, SpO2, skin temp, HR zone durations, body measurements (max HR), user profile |
 | **Apple Health** | HealthAutoExport → CCDA XML | Steps, HR, weight, glucose, blood pressure, sleep |
 | **Hevy** | REST API + routine export | Every lift back to 2015 |
 | **Morning check-in** | Dashboard form | Energy, stress, soreness, weight, medication flags |
@@ -767,7 +856,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 |---|---|
 | Language | Python 3.12 |
 | Framework | FastAPI 0.115 |
-| Database | DuckDB 1.1 (encrypted, 19 migrations) |
+| Database | DuckDB 1.1 (encrypted, 22 migrations) |
 | Background | APScheduler 3.10 |
 | HTTP | httpx 0.28 (async) |
 | XML | lxml 5 (Apple Health CCDA) |
@@ -846,18 +935,24 @@ I spent more time on the UI than I probably should have. The whole thing uses OK
 ## Data Model
 
 <details>
-<summary>Schema — 19 tables, 4 views</summary>
+<summary>Schema — 21 tables, 4 views (22 migrations applied)</summary>
 
 ```sql
 measurements        -- Apple Health time-series (metric, ts, value, unit, content_hash)
-                    -- now also captures dietary energy/protein/carbs/fat/fiber/water/sodium/caffeine + lean body mass
+                    -- captures dietary energy/protein/carbs/fat/fiber/water/sodium/caffeine + lean body mass
 workouts            -- WHOOP + Hevy sessions (strain, HR, kcal, kind)
 workout_sets        -- Strength sets (exercise, reps, weight_kg, rpe, is_warmup)
 sleep               -- Multi-source — sws_min, rem_min, light_min, awake_min, sleep_efficiency_pct,
-                    --                 sleep_consistency_pct, disturbance_count, sleep_needed_min
-recovery            -- WHOOP (date, score, hrv, rhr, skin_temp)
-cardio_sessions     -- Manual + integrations (modality, duration, avg_hr, rpe, zones)
-daily_cycle         -- WHOOP daily cycle (date, strain, kilojoule, avg_hr, max_hr)
+                    --   sleep_consistency_pct, disturbance_count, sleep_needed_min,
+                    --   respiratory_rate, sleep_cycle_count, in_bed_min, no_data_min,
+                    --   sleep_need_baseline_min, sleep_need_strain_min, sleep_need_nap_min, sleep_need_debt_min
+recovery            -- WHOOP (date, score, hrv, rhr, skin_temp, spo2_pct, user_calibrating)
+cardio_sessions     -- Manual + integrations (modality, duration, avg_hr, rpe, zones,
+                    --   zone_zero_min…zone_five_min, zone_distribution_json, percent_recorded,
+                    --   sport_id, sport_name, distance_meter)
+daily_cycle         -- WHOOP daily cycle (date, strain, kilojoule, avg_hr, max_hr, score_state)
+body_measurement    -- WHOOP body measurements (height_meter, weight_kg, max_heart_rate, synced_at)
+whoop_user_profile  -- WHOOP user profile (user_id, email, first_name, last_name, synced_at)
 working_weights     -- Current e1RM per exercise
 workout_plans       -- AI-generated plans (plan_json, date)
 workout_retrospectives  -- Post-workout summaries (completion_pct, overload_flag, vault_insights)
@@ -870,12 +965,12 @@ mesocycles          -- Active periodization block (started_on, planned_weeks, de
 muscle_volume_targets   -- MEV / MAV / MRV per muscle group, per mesocycle
 lab_questions       -- Pre-registered hypothesis catalogue (id, hypothesis, test_type, threshold, vault_ref)
 lab_findings        -- Per-run results (verdict, n, effect_size, p_value, evidence)
-schema_version      -- 19 migrations applied
+schema_version      -- 22 migrations applied
 ```
 
 ```sql
 v_hrv_baseline_28d      -- Rolling 28d HRV mean and SD (for σ-deviation)
-v_session_load          -- Per-day load from WHOOP strain + Hevy volume
+v_session_load          -- Per-day load from WHOOP strain + Hevy volume (filters percent_recorded ≥ 50%)
 v_daily_load            -- Composite load — true Gabbett ACWR denominator + Banister CTL/ATL input
 workout_sets_dedup      -- Deduped sets (handles Hevy sync collisions)
 ```
