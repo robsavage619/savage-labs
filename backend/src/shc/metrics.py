@@ -131,6 +131,9 @@ class TrainingLoadMetrics:
     cardio_zone_min_7d: dict[str, float] = field(default_factory=dict)  # {z0:.., z1:.., ..., z5:..} from WHOOP
     max_hr_measured: int | None = None       # WHOOP-measured max HR (preferred over Tanaka formula)
     max_hr_tanaka: int | None = None         # 208 - 0.7 × age (population formula, fallback)
+    pickleball_min_7d: int = 0               # primary sport for Rob's 4.5→5.0 climb
+    pickleball_min_28d: int = 0
+    cardio_modality_min_7d: dict[str, int] = field(default_factory=dict)  # per-sport minutes
 
 
 @dataclass
@@ -560,6 +563,28 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
     ).fetchone()
     if cardio and cardio[0] is not None:
         m.cardio_min_28d = int(cardio[0])
+
+    # Per-modality breakdown for last 7 days — drives the pickleball_focus signal.
+    modality_rows = conn.execute(
+        """
+        SELECT modality, COALESCE(SUM(duration_min), 0) AS mins
+        FROM cardio_sessions
+        WHERE date >= (current_date - INTERVAL '7 days')
+        GROUP BY modality
+        """
+    ).fetchall()
+    m.cardio_modality_min_7d = {
+        (r[0] or "unknown"): int(r[1] or 0) for r in modality_rows
+    }
+    m.pickleball_min_7d = m.cardio_modality_min_7d.get("pickleball", 0)
+    pb28_row = conn.execute(
+        """
+        SELECT COALESCE(SUM(duration_min), 0) FROM cardio_sessions
+        WHERE date >= (current_date - INTERVAL '28 days') AND modality = 'pickleball'
+        """
+    ).fetchone()
+    if pb28_row and pb28_row[0] is not None:
+        m.pickleball_min_28d = int(pb28_row[0])
 
     # Z2 (and full HR-zone breakdown) — prefer WHOOP's authoritative zone
     # durations on each workout. Falls back to inferring from avg_hr when

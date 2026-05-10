@@ -320,6 +320,16 @@ def build_daily_context(conn) -> str:
             f" (vs Tanaka {load['max_hr_tanaka']})" if load.get("max_hr_tanaka") else ""
         )
         lines.append(f"Max HR (WHOOP-measured): {load['max_hr_measured']} bpm{formula}")
+    # Pickleball volume — primary sport for the 4.5→5.0 climb. Surfaced so
+    # the planner frames lifting as court-power transfer when sport vol is high.
+    pb7 = load.get("pickleball_min_7d") or 0
+    pb28 = load.get("pickleball_min_28d") or 0
+    if pb7 or pb28:
+        lines.append(
+            f"Pickleball volume: {pb7}m last 7d · {pb28}m last 28d "
+            f"(primary sport for 4.5→5.0 climb)"
+        )
+
     # Cardio HR zone distribution (last 7 days, WHOOP-authoritative).
     zones = load.get("cardio_zone_min_7d") or {}
     if zones and any(zones.values()):

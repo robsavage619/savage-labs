@@ -182,6 +182,16 @@ _TAG_SIGNALS: dict[str, tuple[str, ...]] = {
     "specificity": ("exercise_selection",),
     "range-of-motion": ("exercise_selection",),
     "eccentric": ("exercise_selection",),
+    # Pickleball / 4.5 → 5.0 climb — Rob's primary 2026 goal.
+    # Concurrent training papers surface when sport volume is high so the LLM
+    # frames lifting in terms of court-power transfer, not generic recomp.
+    "concurrent-training":  ("concurrent_training", "pickleball_focus"),
+    "interference-effect":  ("concurrent_training", "pickleball_focus"),
+    "power-development":    ("concurrent_training", "pickleball_focus", "default"),
+    "maximal-strength":     ("concurrent_training", "default"),
+    "polarized-training":   ("pickleball_focus", "default"),
+    "respiratory-rate":     ("illness",),
+    "athlete-sleep":        ("poor_sleep", "default"),
 }
 
 # Notes always included in the detailed excerpts, regardless of score.
@@ -517,9 +527,31 @@ def state_signals(
         signals.add("illness")
     if (sleep.get("last_hours") or 8) < 6:
         signals.add("poor_sleep")
+
+    # Pickleball / concurrent-training signals — Rob's 2026 goal is climbing
+    # 4.5 → 5.0 while preserving strength + size. When weekly pickleball
+    # volume is high, surface concurrent-training research so the planner
+    # frames lifting as court-power transfer, not generic recomp.
+    pickleball_min_7d = _pickleball_minutes_last_7d(load)
+    if pickleball_min_7d >= 60:
+        # Any meaningful pickleball week → pull pickleball-relevant research.
+        signals.add("pickleball_focus")
+    if pickleball_min_7d >= 150:
+        # Heavy sport volume — interference-effect research is now load-bearing.
+        signals.add("concurrent_training")
+
+    # Respiratory-rate sentinel signal (Bourdillon / Nicolò early-warning).
+    if (rec.get("respiratory_rate_delta") or 0) >= 1.0:
+        signals.add("illness")
+
     if extra:
         signals |= extra
     return signals
+
+
+def _pickleball_minutes_last_7d(load: dict[str, Any]) -> int:
+    """Read pickleball_min_7d directly from training_load."""
+    return int(load.get("pickleball_min_7d") or 0)
 
 
 # ── Public entry point ────────────────────────────────────────────────────────

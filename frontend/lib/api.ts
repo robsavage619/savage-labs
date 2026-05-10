@@ -382,6 +382,9 @@ export interface DailyStateLoad {
   cardio_zone_min_7d: Record<string, number>;
   max_hr_measured: number | null;
   max_hr_tanaka: number | null;
+  pickleball_min_7d: number;
+  pickleball_min_28d: number;
+  cardio_modality_min_7d: Record<string, number>;
 }
 
 export interface DailyStateCheckin {
