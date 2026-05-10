@@ -7,9 +7,9 @@ import type { IMuscleStats } from "react-body-highlighter";
 export type Soreness = Record<string, number>;
 
 const SEV_COLORS = [
-  "rgba(245,200,80,0.75)",   // mild    — amber
-  "rgba(240,130,50,0.88)",   // moderate — orange
-  "rgba(220,70,70,0.95)",    // acute    — red
+  "rgba(245,200,80,0.90)",   // mild    — amber
+  "rgba(240,130,50,0.95)",   // moderate — orange
+  "rgba(220,60,60,1.00)",    // acute    — red
 ];
 const SEV_LABEL = ["", "mild", "moderate", "acute"];
 
@@ -131,12 +131,12 @@ export function BodyDiagram({
         </div>
       </div>
 
-      <div className="flex items-start gap-3">
-        <div style={{ width: 130, flexShrink: 0 }}>
+      <div className="flex items-start gap-4">
+        <div style={{ width: 160, flexShrink: 0 }}>
           <Model
             data={data}
             type={view === "front" ? "anterior" : "posterior"}
-            bodyColor="oklch(0.22 0.02 240 / 0.9)"
+            bodyColor="oklch(0.42 0.04 240 / 0.85)"
             highlightedColors={SEV_COLORS}
             onClick={handleClick}
             style={{ width: "100%", cursor: "pointer" }}
@@ -144,20 +144,20 @@ export function BodyDiagram({
           />
         </div>
 
-        <div className="flex-1 min-w-0 space-y-1.5">
-          <div className="text-[10px] text-[var(--text-faint)] leading-relaxed">
+        <div className="flex-1 min-w-0 space-y-2">
+          <div className="text-[11px] text-[var(--text-muted)] leading-relaxed">
             Tap a muscle to cycle:{" "}
-            <span className="text-[var(--text-muted)]">none → mild → moderate → acute</span>.
+            <span className="text-[var(--text-primary)]">none → mild → moderate → acute</span>.
             Acute soreness will forbid that muscle group in tomorrow's plan.
           </div>
           <div className="space-y-1">
             {flaggedEntries.map(([k, s]) => (
-              <div key={k} className="flex items-center justify-between text-[11px] tabular-nums">
-                <span className="text-[var(--text-muted)] capitalize">
+              <div key={k} className="flex items-center justify-between text-[12px] tabular-nums">
+                <span className="text-[var(--text-primary)] capitalize">
                   {k.replace(/_/g, " ")}
                 </span>
                 <span
-                  className="px-1.5 py-0.5 rounded-sm text-[10px]"
+                  className="px-2 py-0.5 rounded-sm text-[11px] font-medium"
                   style={{
                     background: SEV_COLORS[s - 1] ?? "transparent",
                     color: "oklch(1 0 0)",
@@ -169,7 +169,7 @@ export function BodyDiagram({
               </div>
             ))}
             {flagged === 0 && (
-              <div className="text-[10.5px] text-[var(--text-faint)] italic">
+              <div className="text-[11.5px] text-[var(--text-muted)] italic">
                 No soreness flagged.
               </div>
             )}
