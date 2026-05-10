@@ -30,6 +30,25 @@ _WANTED: dict[str, tuple[str, str | None]] = {
     "HKQuantityTypeIdentifierFlightsClimbed": ("flights_climbed", "count"),
     # Body composition — populated by smart scales via Apple Health
     "HKQuantityTypeIdentifierLeanBodyMass": ("lean_body_mass_kg", "kg"),
+    # Cardio / recovery
+    "HKQuantityTypeIdentifierWalkingHeartRateAverage": ("walking_heart_rate_avg", "bpm"),
+    "HKQuantityTypeIdentifierHeartRateRecoveryOneMinute": ("hr_recovery_1min", "bpm"),
+    # Gait & mobility (Apple Watch accelerometer — outdoor walks)
+    "HKQuantityTypeIdentifierWalkingSpeed": ("walking_speed_m_s", "m/s"),
+    "HKQuantityTypeIdentifierWalkingStepLength": ("walking_step_length_m", "m"),
+    "HKQuantityTypeIdentifierWalkingAsymmetryPercentage": ("walking_asymmetry_pct", "%"),
+    "HKQuantityTypeIdentifierWalkingDoubleSupportPercentage": ("walking_double_support_pct", "%"),
+    "HKQuantityTypeIdentifierStairAscentSpeed": ("stair_ascent_speed_m_s", "m/s"),
+    "HKQuantityTypeIdentifierStairDescentSpeed": ("stair_descent_speed_m_s", "m/s"),
+    # Activity rings
+    "HKQuantityTypeIdentifierAppleExerciseTime": ("exercise_time_min", "min"),
+    "HKQuantityTypeIdentifierAppleStandTime": ("stand_time_min", "min"),
+    # Distance
+    "HKQuantityTypeIdentifierDistanceWalkingRunning": ("distance_walking_km", "km"),
+    # Body / environment
+    "HKQuantityTypeIdentifierAppleSleepingWristTemperature": ("wrist_temp_delta_c", "°C"),
+    "HKQuantityTypeIdentifierEnvironmentalAudioExposure": ("env_audio_dbspl", "dBASPL"),
+    "HKQuantityTypeIdentifierHeadphoneAudioExposure": ("headphone_audio_dbspl", "dBASPL"),
     # Fueling / diet — populated by MyFitnessPal, Cronometer, Lose-It, etc.
     "HKQuantityTypeIdentifierDietaryEnergyConsumed": ("dietary_energy_kcal", "kcal"),
     "HKQuantityTypeIdentifierDietaryProtein": ("dietary_protein_g", "g"),

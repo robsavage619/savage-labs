@@ -64,21 +64,49 @@ async def apple_hae_webhook(request: Request) -> dict[str, Any]:
 
 # Known metric names → unit (Shortcuts sends values without unit context)
 _SHORTCUT_UNITS: dict[str, str] = {
+    # Core vitals
     "hrv_sdnn": "ms",
     "resting_heart_rate": "bpm",
     "heart_rate": "bpm",
-    "step_count": "count",
-    "active_energy_kcal": "kcal",
-    "basal_energy_kcal": "kcal",
-    "body_mass_kg": "kg",
     "spo2_pct": "%",
     "respiratory_rate": "bpm",
+    "bp_systolic": "mmHg",
+    "bp_diastolic": "mmHg",
+    # Cardio / recovery
     "vo2_max": "mL/kg/min",
+    "walking_heart_rate_avg": "bpm",
+    "hr_recovery_1min": "bpm",
+    # Activity
+    "step_count": "count",
     "flights_climbed": "count",
+    "active_energy_kcal": "kcal",
+    "basal_energy_kcal": "kcal",
+    "exercise_time_min": "min",
+    "stand_time_min": "min",
+    "distance_walking_km": "km",
+    # Gait & mobility (Apple Watch outdoor walks)
+    "walking_speed_m_s": "m/s",
+    "walking_step_length_m": "m",
+    "walking_asymmetry_pct": "%",
+    "walking_double_support_pct": "%",
+    "stair_ascent_speed_m_s": "m/s",
+    "stair_descent_speed_m_s": "m/s",
+    # Body composition
+    "body_mass_kg": "kg",
+    "body_fat_pct": "%",
+    "lean_body_mass_kg": "kg",
+    # Body / environment
+    "wrist_temp_delta_c": "°C",       # Series 8+/Ultra — overnight delta from baseline
+    "env_audio_dbspl": "dBASPL",
+    "headphone_audio_dbspl": "dBASPL",
+    # Mindfulness — Shortcuts returns duration in seconds; stored as minutes
+    "mindful_min": "min",
+    # Diet (MyFitnessPal / Cronometer via Apple Health)
     "dietary_energy_kcal": "kcal",
     "dietary_protein_g": "g",
     "dietary_carbs_g": "g",
     "dietary_fat_g": "g",
+    "dietary_fiber_g": "g",
     "dietary_water_ml": "mL",
 }
 
@@ -125,6 +153,9 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
             except (TypeError, ValueError):
                 skipped.append(metric)
                 continue
+            # Mindful sessions: Shortcuts returns duration in seconds, store as minutes
+            if metric == "mindful_min" and val > 300:
+                val = round(val / 60, 2)
             unit = _SHORTCUT_UNITS[metric]
             ext_id = f"shortcut:{metric}:{ts_raw}"
             row_hash = hashlib.sha256(f"{metric}{ts_raw}{val}".encode()).hexdigest()[:16]
