@@ -62,52 +62,59 @@ async def apple_hae_webhook(request: Request) -> dict[str, Any]:
     return {"ok": True, "metrics": metric_count, "samples": sample_count}
 
 
-# Known metric names → unit (Shortcuts sends values without unit context)
-_SHORTCUT_UNITS: dict[str, str] = {
+# Shortcut key → db metric name + SI unit
+# Unit-neutral metrics (bpm, %, kcal, count, min) are the same regardless of locale.
+_SHORTCUT_UNITS: dict[str, tuple[str, str]] = {
     # Core vitals
-    "hrv_sdnn": "ms",
-    "resting_heart_rate": "bpm",
-    "heart_rate": "bpm",
-    "spo2_pct": "%",
-    "respiratory_rate": "bpm",
-    "bp_systolic": "mmHg",
-    "bp_diastolic": "mmHg",
+    "hrv_sdnn":              ("hrv_sdnn",              "ms"),
+    "resting_heart_rate":    ("resting_heart_rate",    "bpm"),
+    "heart_rate":            ("heart_rate",            "bpm"),
+    "spo2_pct":              ("spo2_pct",              "%"),
+    "respiratory_rate":      ("respiratory_rate",      "bpm"),
+    "bp_systolic":           ("bp_systolic",           "mmHg"),
+    "bp_diastolic":          ("bp_diastolic",          "mmHg"),
     # Cardio / recovery
-    "vo2_max": "mL/kg/min",
-    "walking_heart_rate_avg": "bpm",
-    "hr_recovery_1min": "bpm",
-    # Activity
-    "step_count": "count",
-    "flights_climbed": "count",
-    "active_energy_kcal": "kcal",
-    "basal_energy_kcal": "kcal",
-    "exercise_time_min": "min",
-    "stand_time_min": "min",
-    "distance_walking_km": "km",
-    # Gait & mobility (Apple Watch outdoor walks)
-    "walking_speed_m_s": "m/s",
-    "walking_step_length_m": "m",
-    "walking_asymmetry_pct": "%",
-    "walking_double_support_pct": "%",
-    "stair_ascent_speed_m_s": "m/s",
-    "stair_descent_speed_m_s": "m/s",
-    # Body composition
-    "body_mass_kg": "kg",
-    "body_fat_pct": "%",
-    "lean_body_mass_kg": "kg",
-    # Body / environment
-    "wrist_temp_delta_c": "°C",       # Series 8+/Ultra — overnight delta from baseline
-    "env_audio_dbspl": "dBASPL",
-    "headphone_audio_dbspl": "dBASPL",
-    # Mindfulness — Shortcuts returns duration in seconds; stored as minutes
-    "mindful_min": "min",
-    # Diet (MyFitnessPal / Cronometer via Apple Health)
-    "dietary_energy_kcal": "kcal",
-    "dietary_protein_g": "g",
-    "dietary_carbs_g": "g",
-    "dietary_fat_g": "g",
-    "dietary_fiber_g": "g",
-    "dietary_water_ml": "mL",
+    "vo2_max":               ("vo2_max",               "mL/kg/min"),
+    "walking_heart_rate_avg":("walking_heart_rate_avg","bpm"),
+    "hr_recovery_1min":      ("hr_recovery_1min",      "bpm"),
+    # Activity (unit-neutral)
+    "step_count":            ("step_count",            "count"),
+    "flights_climbed":       ("flights_climbed",       "count"),
+    "active_energy_kcal":    ("active_energy_kcal",    "kcal"),
+    "basal_energy_kcal":     ("basal_energy_kcal",     "kcal"),
+    "exercise_time_min":     ("exercise_time_min",     "min"),
+    "stand_time_min":        ("stand_time_min",        "min"),
+    # Gait — unit-neutral percentages
+    "walking_asymmetry_pct":     ("walking_asymmetry_pct",     "%"),
+    "walking_double_support_pct":("walking_double_support_pct","%"),
+    # Body composition — unit-neutral
+    "body_fat_pct":          ("body_fat_pct",          "%"),
+    # Environment / mindfulness — unit-neutral
+    "env_audio_dbspl":       ("env_audio_dbspl",       "dBASPL"),
+    "headphone_audio_dbspl": ("headphone_audio_dbspl", "dBASPL"),
+    "mindful_min":           ("mindful_min",           "min"),
+    # Diet
+    "dietary_energy_kcal":   ("dietary_energy_kcal",   "kcal"),
+    "dietary_protein_g":     ("dietary_protein_g",     "g"),
+    "dietary_carbs_g":       ("dietary_carbs_g",       "g"),
+    "dietary_fat_g":         ("dietary_fat_g",         "g"),
+    "dietary_fiber_g":       ("dietary_fiber_g",       "g"),
+    "dietary_water_ml":      ("dietary_water_ml",      "mL"),
+}
+
+# Imperial keys Shortcuts sends on a US-locale iPhone → convert to SI for DB consistency
+# DB always stores SI (matches XML importer). Display layer converts back to imperial.
+_IMPERIAL_TO_SI: dict[str, tuple[str, str, float]] = {
+    # shortcut key → (db metric, db unit, multiplier)
+    "body_mass_lb":          ("body_mass_kg",          "kg",    0.453592),
+    "lean_body_mass_lb":     ("lean_body_mass_kg",     "kg",    0.453592),
+    "distance_walking_mi":   ("distance_walking_km",   "km",    1.60934),
+    "walking_speed_mph":     ("walking_speed_m_s",     "m/s",   0.44704),
+    "walking_step_length_in":("walking_step_length_m", "m",     0.0254),
+    "stair_ascent_speed_fps":("stair_ascent_speed_m_s","m/s",   0.3048),
+    "stair_descent_speed_fps":("stair_descent_speed_m_s","m/s", 0.3048),
+    # Wrist temp: Shortcuts sends delta °F → store as delta °C (delta, so just multiply)
+    "wrist_temp_delta_f":    ("wrist_temp_delta_c",    "°C",    0.5556),
 }
 
 
@@ -144,21 +151,28 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
     skipped: list[str] = []
 
     async with write_ctx() as conn:
-        for metric, value in metrics.items():
-            if metric not in _SHORTCUT_UNITS:
-                skipped.append(metric)
-                continue
+        for shortcut_key, value in metrics.items():
             try:
                 val = float(value)
             except (TypeError, ValueError):
-                skipped.append(metric)
+                skipped.append(shortcut_key)
                 continue
+
+            if shortcut_key in _IMPERIAL_TO_SI:
+                db_metric, db_unit, multiplier = _IMPERIAL_TO_SI[shortcut_key]
+                val = round(val * multiplier, 4)
+            elif shortcut_key in _SHORTCUT_UNITS:
+                db_metric, db_unit = _SHORTCUT_UNITS[shortcut_key]
+            else:
+                skipped.append(shortcut_key)
+                continue
+
             # Mindful sessions: Shortcuts returns duration in seconds, store as minutes
-            if metric == "mindful_min" and val > 300:
+            if db_metric == "mindful_min" and val > 300:
                 val = round(val / 60, 2)
-            unit = _SHORTCUT_UNITS[metric]
-            ext_id = f"shortcut:{metric}:{ts_raw}"
-            row_hash = hashlib.sha256(f"{metric}{ts_raw}{val}".encode()).hexdigest()[:16]
+
+            ext_id = f"shortcut:{db_metric}:{ts_raw}"
+            row_hash = hashlib.sha256(f"{db_metric}{ts_raw}{val}".encode()).hexdigest()[:16]
             conn.execute(
                 """
                 INSERT INTO measurements
@@ -166,7 +180,7 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
                 VALUES ('apple_health', $metric, $ts, $value, $unit, $ext_id, $hash)
                 ON CONFLICT (source, metric, ts, external_id) DO NOTHING
                 """,
-                {"metric": metric, "ts": ts_raw, "value": val, "unit": unit,
+                {"metric": db_metric, "ts": ts_raw, "value": val, "unit": db_unit,
                  "ext_id": ext_id, "hash": row_hash},
             )
             inserted += 1
