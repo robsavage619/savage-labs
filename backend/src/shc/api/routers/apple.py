@@ -81,7 +81,6 @@ _SHORTCUT_UNITS: dict[str, tuple[str, str]] = {
     "step_count":            ("step_count",            "count"),
     "flights_climbed":       ("flights_climbed",       "count"),
     "active_energy_kcal":    ("active_energy_kcal",    "kcal"),
-    "basal_energy_kcal":     ("basal_energy_kcal",     "kcal"),
     "exercise_time_min":     ("exercise_time_min",     "min"),
     "stand_time_min":        ("stand_time_min",        "min"),
     # Gait — unit-neutral percentages
