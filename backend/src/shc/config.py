@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     apple_webhook_key: str | None = Field(default=None)
 
     # Server
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 8000
     frontend_origin: str = "http://localhost:3000"
     # Tailscale hostname (e.g. "my-mac.tail1234.ts.net") — added to allowed Host headers
