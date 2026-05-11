@@ -19,7 +19,12 @@ class HostOriginMiddleware(BaseHTTPMiddleware):
         host = request.headers.get("host", "")
         expected_host = f"{settings.host}:{settings.port}"
 
-        allowed_hosts = {expected_host, f"localhost:{settings.port}"}
+        # Always allow loopback — the bind address (0.0.0.0 in prod) is irrelevant
+        # to what clients put in the Host header.
+        allowed_hosts = {
+            f"127.0.0.1:{settings.port}",
+            f"localhost:{settings.port}",
+        }
         if settings.tailscale_host:
             allowed_hosts.add(settings.tailscale_host)
             allowed_hosts.add(f"{settings.tailscale_host}:{settings.port}")
