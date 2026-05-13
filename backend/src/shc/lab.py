@@ -427,13 +427,539 @@ def _run_push_pull_imbalance(conn, q: dict) -> LabFinding:
     )
 
 
+def _run_yoga_hrv_lift(conn, q: dict) -> LabFinding:
+    """Yoga sessions → higher next-morning HRV vs non-yoga days."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    hrv_rows = conn.execute(
+        "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL ORDER BY date",
+        {"s": since},
+    ).fetchall()
+    if len(hrv_rows) < q["min_n"]:
+        return LabFinding(q["id"], len(hrv_rows), None, "ms", None, "insufficient",
+                          f"Only {len(hrv_rows)} HRV days.", [])
+    baselines = _hrv_baseline_28d(hrv_rows)
+    yoga_days = {
+        r[0] for r in conn.execute(
+            "SELECT date FROM cardio_sessions WHERE date >= $s AND modality ILIKE '%yoga%'",
+            {"s": since},
+        ).fetchall()
+    }
+    yoga_next, rest_next, evidence = [], [], []
+    for i, (d, hrv) in enumerate(hrv_rows):
+        if d not in baselines or hrv is None:
+            continue
+        prev = hrv_rows[i - 1][0] if i > 0 else None
+        if prev is None:
+            continue
+        deviation = float(hrv) - baselines[d]
+        entry = {"date": str(d), "hrv": float(hrv), "baseline": round(baselines[d], 1),
+                 "deviation": round(deviation, 1), "yoga_prev": prev in yoga_days}
+        evidence.append(entry)
+        if prev in yoga_days:
+            yoga_next.append(deviation)
+        else:
+            rest_next.append(deviation)
+    if len(yoga_next) < 6 or len(rest_next) < 6:
+        return LabFinding(q["id"], len(yoga_next) + len(rest_next), None, "ms", None, "insufficient",
+                          f"Too few yoga ({len(yoga_next)}) or rest ({len(rest_next)}) days.", evidence)
+    delta = sum(yoga_next) / len(yoga_next) - sum(rest_next) / len(rest_next)
+    ttest = _welch_t(yoga_next, rest_next)
+    p = ttest[1] if ttest else None
+    threshold = float(q["threshold"])
+    if delta >= threshold and (p is None or p < 0.1):
+        verdict = "confirmed"
+    elif delta <= -threshold:
+        verdict = "refuted"
+    elif abs(delta) >= threshold * 0.5:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(yoga_next) + len(rest_next), round(delta, 2), "ms", p, verdict,
+        f"After yoga ({len(yoga_next)} days): next-AM HRV deviation {delta:+.1f}ms vs rest days. Δ={delta:+.1f}ms.",
+        evidence[-60:],
+    )
+
+
+def _run_consecutive_training_recovery_drop(conn, q: dict) -> LabFinding:
+    """Two+ consecutive strength training days → lower next-day recovery."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    rec_rows = conn.execute(
+        "SELECT date, score FROM recovery WHERE date >= $s AND score IS NOT NULL ORDER BY date",
+        {"s": since},
+    ).fetchall()
+    if len(rec_rows) < q["min_n"]:
+        return LabFinding(q["id"], len(rec_rows), None, "pts", None, "insufficient",
+                          f"Only {len(rec_rows)} recovery days.", [])
+    training_days = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT day_d FROM workout_sets_dedup WHERE day_d >= $s AND is_warmup = FALSE",
+            {"s": since},
+        ).fetchall()
+    }
+    rec_by_day = {r[0]: float(r[1]) for r in rec_rows}
+    consec_next, rest_next, evidence = [], [], []
+    days_sorted = sorted(rec_by_day.keys())
+    for i, d in enumerate(days_sorted):
+        if i < 2:
+            continue
+        prev1, prev2 = days_sorted[i - 1], days_sorted[i - 2]
+        both_trained = prev1 in training_days and prev2 in training_days
+        entry = {"date": str(d), "recovery": rec_by_day[d],
+                 "consecutive_training": both_trained}
+        evidence.append(entry)
+        if both_trained:
+            consec_next.append(rec_by_day[d])
+        elif prev1 not in training_days:
+            rest_next.append(rec_by_day[d])
+    if len(consec_next) < 6 or len(rest_next) < 6:
+        return LabFinding(q["id"], len(consec_next) + len(rest_next), None, "pts", None, "insufficient",
+                          f"Too few consecutive ({len(consec_next)}) or rest ({len(rest_next)}) observations.", evidence)
+    delta = sum(consec_next) / len(consec_next) - sum(rest_next) / len(rest_next)
+    ttest = _welch_t(consec_next, rest_next)
+    p = ttest[1] if ttest else None
+    threshold = float(q["threshold"])
+    if delta <= -threshold and (p is None or p < 0.1):
+        verdict = "confirmed"
+    elif delta >= threshold:
+        verdict = "refuted"
+    elif abs(delta) >= threshold * 0.5:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(consec_next) + len(rest_next), round(delta, 2), "pts", p, verdict,
+        f"After 2+ consecutive training days ({len(consec_next)} obs): recovery {delta:+.1f}pts vs post-rest days.",
+        evidence[-60:],
+    )
+
+
+def _run_two_pb_3d_hrv_drop(conn, q: dict) -> LabFinding:
+    """2+ pickleball sessions in any 3-day window → more HRV depression than 1 session."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    hrv_rows = conn.execute(
+        "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL ORDER BY date",
+        {"s": since},
+    ).fetchall()
+    if len(hrv_rows) < q["min_n"]:
+        return LabFinding(q["id"], len(hrv_rows), None, "ms", None, "insufficient",
+                          f"Only {len(hrv_rows)} HRV days.", [])
+    baselines = _hrv_baseline_28d(hrv_rows)
+    pb_days = {
+        r[0] for r in conn.execute(
+            "SELECT date FROM cardio_sessions WHERE date >= $s AND modality ILIKE '%pickleball%'",
+            {"s": since},
+        ).fetchall()
+    }
+    multi_next, single_next, evidence = [], [], []
+    hrv_by_day = {r[0]: float(r[1]) for r in hrv_rows}
+    for d, hrv in hrv_rows:
+        if d not in baselines or hrv is None:
+            continue
+        window = [d - timedelta(days=i) for i in range(1, 4)]
+        pb_count = sum(1 for w in window if w in pb_days)
+        if pb_count == 0:
+            continue
+        deviation = float(hrv) - baselines[d]
+        entry = {"date": str(d), "deviation": round(deviation, 1), "pb_in_3d": pb_count}
+        evidence.append(entry)
+        if pb_count >= 2:
+            multi_next.append(deviation)
+        else:
+            single_next.append(deviation)
+    if len(multi_next) < 5 or len(single_next) < 5:
+        return LabFinding(q["id"], len(multi_next) + len(single_next), None, "ms", None, "insufficient",
+                          f"Too few multi ({len(multi_next)}) or single ({len(single_next)}) pickleball windows.", evidence)
+    delta = sum(multi_next) / len(multi_next) - sum(single_next) / len(single_next)
+    ttest = _welch_t(multi_next, single_next)
+    p = ttest[1] if ttest else None
+    threshold = float(q["threshold"])
+    if delta <= -threshold and (p is None or p < 0.15):
+        verdict = "confirmed"
+    elif delta >= threshold:
+        verdict = "refuted"
+    elif abs(delta) >= threshold * 0.5:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(multi_next) + len(single_next), round(delta, 2), "ms", p, verdict,
+        f"After 2+ pickleball in 3d ({len(multi_next)} obs): HRV deviation {delta:+.1f}ms vs single-session windows.",
+        evidence[-60:],
+    )
+
+
+def _run_weekly_volume_spike_recovery(conn, q: dict) -> LabFinding:
+    """Weeks where set count > 1.5× 4-week avg correlate with lower avg recovery."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    rec_rows = conn.execute(
+        "SELECT date, score FROM recovery WHERE date >= $s AND score IS NOT NULL ORDER BY date",
+        {"s": since},
+    ).fetchall()
+    if len(rec_rows) < q["min_n"]:
+        return LabFinding(q["id"], len(rec_rows), None, "r", None, "insufficient",
+                          f"Only {len(rec_rows)} recovery days.", [])
+    set_rows = conn.execute(
+        "SELECT day_d FROM workout_sets_dedup WHERE day_d >= $s AND is_warmup = FALSE",
+        {"s": since},
+    ).fetchall()
+    # Count sets per week (Monday-based ISO week)
+    sets_by_week: dict[str, int] = {}
+    for (d,) in set_rows:
+        wk = d.strftime("%G-W%V")
+        sets_by_week[wk] = sets_by_week.get(wk, 0) + 1
+    rec_by_day = {r[0]: float(r[1]) for r in rec_rows}
+    # Weekly recovery average
+    rec_by_week: dict[str, list[float]] = {}
+    for d, score in rec_by_day.items():
+        wk = d.strftime("%G-W%V")
+        rec_by_week.setdefault(wk, []).append(score)
+    weeks = sorted(set(sets_by_week) & set(rec_by_week))
+    if len(weeks) < 8:
+        return LabFinding(q["id"], len(weeks), None, "r", None, "insufficient",
+                          f"Only {len(weeks)} weeks with both training and recovery data.", [])
+    # For each week, check if volume > 1.5× prior 4-week average
+    spike_rec, normal_rec, evidence = [], [], []
+    for i, wk in enumerate(weeks[4:], start=4):
+        prior_4 = [sets_by_week.get(weeks[i - j - 1], 0) for j in range(4)]
+        prior_avg = sum(prior_4) / 4
+        this_sets = sets_by_week.get(wk, 0)
+        avg_rec = sum(rec_by_week[wk]) / len(rec_by_week[wk])
+        is_spike = prior_avg > 0 and this_sets > 1.5 * prior_avg
+        entry = {"week": wk, "sets": this_sets, "prior_avg": round(prior_avg, 1),
+                 "spike": is_spike, "avg_recovery": round(avg_rec, 1)}
+        evidence.append(entry)
+        if is_spike:
+            spike_rec.append(avg_rec)
+        else:
+            normal_rec.append(avg_rec)
+    if len(spike_rec) < 3 or len(normal_rec) < 3:
+        return LabFinding(q["id"], len(evidence), None, "r", None, "insufficient",
+                          f"Too few spike ({len(spike_rec)}) or normal ({len(normal_rec)}) weeks.", evidence)
+    # Correlation: spike weeks → recovery
+    xs = [1.0 if e["spike"] else 0.0 for e in evidence]
+    ys = [e["avg_recovery"] for e in evidence]
+    r_corr = _pearson(xs, ys) or 0.0
+    threshold = float(q["threshold"])
+    delta = (sum(spike_rec) / len(spike_rec)) - (sum(normal_rec) / len(normal_rec))
+    if r_corr <= -threshold:
+        verdict = "confirmed"
+    elif r_corr >= threshold:
+        verdict = "refuted"
+    elif abs(r_corr) >= 0.15:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(evidence), round(r_corr, 3), "r", None, verdict,
+        f"Volume-spike weeks ({len(spike_rec)}): avg recovery {sum(spike_rec)/len(spike_rec):.0f}; "
+        f"normal weeks ({len(normal_rec)}): {sum(normal_rec)/len(normal_rec):.0f}. Δ={delta:+.1f}pts, r={r_corr:+.3f}.",
+        evidence,
+    )
+
+
+def _run_rest_day_hrv_rebound(conn, q: dict) -> LabFinding:
+    """Full rest days (no Hevy, no cardio) → higher next-morning HRV."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    hrv_rows = conn.execute(
+        "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL ORDER BY date",
+        {"s": since},
+    ).fetchall()
+    if len(hrv_rows) < q["min_n"]:
+        return LabFinding(q["id"], len(hrv_rows), None, "ms", None, "insufficient",
+                          f"Only {len(hrv_rows)} HRV days.", [])
+    baselines = _hrv_baseline_28d(hrv_rows)
+    training_days = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT day_d FROM workout_sets_dedup WHERE day_d >= $s AND is_warmup = FALSE",
+            {"s": since},
+        ).fetchall()
+    }
+    cardio_days = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT date FROM cardio_sessions WHERE date >= $s",
+            {"s": since},
+        ).fetchall()
+    }
+    active_days = training_days | cardio_days
+    rest_next, active_next, evidence = [], [], []
+    hrv_list = list(hrv_rows)
+    for i in range(1, len(hrv_list)):
+        d, hrv = hrv_list[i]
+        prev = hrv_list[i - 1][0]
+        if d not in baselines or hrv is None:
+            continue
+        deviation = float(hrv) - baselines[d]
+        is_rest_prev = prev not in active_days
+        entry = {"date": str(d), "deviation": round(deviation, 1), "prev_was_rest": is_rest_prev}
+        evidence.append(entry)
+        if is_rest_prev:
+            rest_next.append(deviation)
+        else:
+            active_next.append(deviation)
+    if len(rest_next) < 6 or len(active_next) < 6:
+        return LabFinding(q["id"], len(rest_next) + len(active_next), None, "ms", None, "insufficient",
+                          f"Too few rest ({len(rest_next)}) or active ({len(active_next)}) days.", evidence)
+    delta = sum(rest_next) / len(rest_next) - sum(active_next) / len(active_next)
+    ttest = _welch_t(rest_next, active_next)
+    p = ttest[1] if ttest else None
+    threshold = float(q["threshold"])
+    if delta >= threshold and (p is None or p < 0.1):
+        verdict = "confirmed"
+    elif delta <= -threshold:
+        verdict = "refuted"
+    elif abs(delta) >= threshold * 0.5:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(rest_next) + len(active_next), round(delta, 2), "ms", p, verdict,
+        f"After rest days ({len(rest_next)} obs): HRV deviation {delta:+.1f}ms vs after active days.",
+        evidence[-60:],
+    )
+
+
+def _run_energy_checkin_hrv_correlation(conn, q: dict) -> LabFinding:
+    """Self-reported energy (1–10) correlates with same-morning HRV."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    rows = conn.execute(
+        """
+        SELECT r.date, r.hrv, c.energy_1_10
+        FROM recovery r
+        JOIN daily_checkin c ON c.date = r.date
+        WHERE r.date >= $s AND r.hrv IS NOT NULL AND c.energy_1_10 IS NOT NULL
+        ORDER BY r.date
+        """,
+        {"s": since},
+    ).fetchall()
+    if len(rows) < q["min_n"]:
+        return LabFinding(q["id"], len(rows), None, "r", None, "insufficient",
+                          f"Only {len(rows)} days with both HRV and energy check-in.", [])
+    xs = [float(r[2]) for r in rows]  # energy
+    ys = [float(r[1]) for r in rows]  # hrv
+    r_corr = _pearson(xs, ys)
+    if r_corr is None:
+        return LabFinding(q["id"], len(rows), None, "r", None, "inconclusive",
+                          "Variance too low for correlation.", [])
+    evidence = [{"date": str(r[0]), "hrv": float(r[1]), "energy": int(r[2])} for r in rows]
+    threshold = float(q["threshold"])
+    if r_corr >= threshold:
+        verdict = "confirmed"
+    elif r_corr <= -threshold:
+        verdict = "refuted"
+    elif abs(r_corr) >= 0.15:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(rows), round(r_corr, 3), "r", None, verdict,
+        f"Energy check-in correlates with same-morning HRV at r={r_corr:+.3f} across {len(rows)} days.",
+        evidence[-60:],
+    )
+
+
+def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
+    """Rising 7d RHR trend (≥2 bpm) predicts HRV below 28d mean within 3 days."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    rows = conn.execute(
+        "SELECT date, hrv, rhr FROM recovery WHERE date >= $s AND hrv IS NOT NULL AND rhr IS NOT NULL ORDER BY date",
+        {"s": since},
+    ).fetchall()
+    if len(rows) < q["min_n"]:
+        return LabFinding(q["id"], len(rows), None, "rate", None, "insufficient",
+                          f"Only {len(rows)} days with both HRV and RHR.", [])
+    baselines = _hrv_baseline_28d(rows)
+    rhr_by_day = {r[0]: int(r[2]) for r in rows}
+    days_sorted = [r[0] for r in rows]
+    triggers, trigger_hits, total_triggers, evidence = 0, 0, 0, []
+    for i, d in enumerate(days_sorted):
+        if i < 7:
+            continue
+        prior_7 = [rhr_by_day[days_sorted[i - j - 1]] for j in range(7) if days_sorted[i - j - 1] in rhr_by_day]
+        if len(prior_7) < 5:
+            continue
+        avg_prior_7 = sum(prior_7) / len(prior_7)
+        current_rhr = rhr_by_day.get(d)
+        if current_rhr is None:
+            continue
+        # Look back 7 days' average for prior week
+        prior_14_7 = [rhr_by_day[days_sorted[i - j - 8]] for j in range(7)
+                      if i - j - 8 >= 0 and days_sorted[i - j - 8] in rhr_by_day]
+        if len(prior_14_7) < 5:
+            continue
+        avg_prior_14_7 = sum(prior_14_7) / len(prior_14_7)
+        rhr_trend = avg_prior_7 - avg_prior_14_7
+        if rhr_trend < 2.0:
+            continue
+        # Rising trend — check HRV over next 3 days
+        total_triggers += 1
+        hit = False
+        for j in range(1, 4):
+            if i + j >= len(days_sorted):
+                break
+            future_day = days_sorted[i + j]
+            future_hrv = dict(rows).get(future_day)
+            future_baseline = baselines.get(future_day)
+            if future_hrv and future_baseline and float(future_hrv) < future_baseline:
+                hit = True
+                break
+        evidence.append({"trigger_date": str(d), "rhr_trend": round(rhr_trend, 1), "hrv_drop_within_3d": hit})
+        if hit:
+            trigger_hits += 1
+    if total_triggers < q["min_n"]:
+        return LabFinding(q["id"], total_triggers, None, "rate", None, "insufficient",
+                          f"Only {total_triggers} rising-RHR-trend events.", evidence)
+    rate = trigger_hits / total_triggers if total_triggers > 0 else 0.0
+    threshold = float(q["threshold"])
+    if rate >= threshold:
+        verdict = "confirmed"
+    elif rate < 0.2:
+        verdict = "refuted"
+    else:
+        verdict = "inconclusive"
+    return LabFinding(
+        q["id"], total_triggers, round(rate, 3), "rate", None, verdict,
+        f"{trigger_hits}/{total_triggers} rising-RHR events were followed by HRV below baseline within 3 days "
+        f"({rate:.0%} hit rate).",
+        evidence[-60:],
+    )
+
+
+def _run_sleep_quality_checkin_hrv(conn, q: dict) -> LabFinding:
+    """Self-reported sleep quality ≤5/10 → next-morning HRV below 28d mean."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    rows = conn.execute(
+        """
+        SELECT r.date, r.hrv, c.sleep_quality_1_10
+        FROM recovery r
+        JOIN daily_checkin c ON c.date = r.date
+        WHERE r.date >= $s AND r.hrv IS NOT NULL AND c.sleep_quality_1_10 IS NOT NULL
+        ORDER BY r.date
+        """,
+        {"s": since},
+    ).fetchall()
+    if len(rows) < q["min_n"]:
+        return LabFinding(q["id"], len(rows), None, "ms", None, "insufficient",
+                          f"Only {len(rows)} days with both HRV and sleep quality check-in.", [])
+    hrv_rows_for_baseline = [(r[0], None, r[1]) for r in rows]
+    baselines = _hrv_baseline_28d(hrv_rows_for_baseline)
+    low_qual, high_qual, evidence = [], [], []
+    for d, hrv, sq in rows:
+        if d not in baselines or hrv is None:
+            continue
+        deviation = float(hrv) - baselines[d]
+        entry = {"date": str(d), "sleep_quality": int(sq), "hrv_deviation": round(deviation, 1)}
+        evidence.append(entry)
+        if int(sq) <= 5:
+            low_qual.append(deviation)
+        else:
+            high_qual.append(deviation)
+    if len(low_qual) < 6 or len(high_qual) < 6:
+        return LabFinding(q["id"], len(low_qual) + len(high_qual), None, "ms", None, "insufficient",
+                          f"Too few low ({len(low_qual)}) or high ({len(high_qual)}) quality nights.", evidence)
+    delta = sum(low_qual) / len(low_qual) - sum(high_qual) / len(high_qual)
+    ttest = _welch_t(low_qual, high_qual)
+    p = ttest[1] if ttest else None
+    threshold = float(q["threshold"])
+    if delta <= -threshold and (p is None or p < 0.1):
+        verdict = "confirmed"
+    elif delta >= threshold:
+        verdict = "refuted"
+    elif abs(delta) >= threshold * 0.5:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(low_qual) + len(high_qual), round(delta, 2), "ms", p, verdict,
+        f"Low sleep quality nights ≤5 ({len(low_qual)} obs): HRV deviation {delta:+.1f}ms vs higher quality nights.",
+        evidence[-60:],
+    )
+
+
+# ── Rotation ──────────────────────────────────────────────────────────────────
+
+_STABLE_RUNS_REQUIRED = 3   # consecutive identical verdict to retire
+_STABLE_N_MULTIPLIER = 1.5  # n must be >= min_n * this
+
+
+def rotate_if_stable(conn) -> list[str]:
+    """Retire questions with stable definitive verdicts; promote next queued.
+
+    Returns list of question IDs that were retired this call.
+    """
+    enabled = conn.execute(
+        "SELECT id, min_n FROM lab_questions WHERE enabled = TRUE AND retired_at IS NULL"
+    ).fetchall()
+    retired_ids: list[str] = []
+    for qid, min_n in enabled:
+        recent = conn.execute(
+            """
+            SELECT verdict, n FROM lab_findings
+            WHERE question_id = $qid
+            ORDER BY run_at DESC
+            LIMIT $k
+            """,
+            {"qid": qid, "k": _STABLE_RUNS_REQUIRED},
+        ).fetchall()
+        if len(recent) < _STABLE_RUNS_REQUIRED:
+            continue
+        verdicts = [r[0] for r in recent]
+        latest_n = recent[0][1] or 0
+        definitive = all(v in ("confirmed", "refuted") for v in verdicts)
+        all_same = len(set(verdicts)) == 1
+        enough_n = latest_n >= int(min_n or 0) * _STABLE_N_MULTIPLIER
+        if definitive and all_same and enough_n:
+            conn.execute(
+                "UPDATE lab_questions SET enabled = FALSE, retired_at = now() WHERE id = $qid",
+                {"qid": qid},
+            )
+            log.info("lab: retired question %s (verdict=%s, n=%d)", qid, verdicts[0], latest_n)
+            retired_ids.append(qid)
+            _promote_next(conn)
+    return retired_ids
+
+
+def _promote_next(conn) -> None:
+    """Enable the lowest-queued_order bank question that has a registered runner."""
+    row = conn.execute(
+        """
+        SELECT id FROM lab_questions
+        WHERE enabled = FALSE AND retired_at IS NULL AND queued_order IS NOT NULL
+        ORDER BY queued_order ASC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row is None:
+        log.warning("lab: bank exhausted — no queued questions left to promote")
+        return
+    next_id = row[0]
+    if next_id not in _RUNNERS:
+        log.warning("lab: queued question %s has no runner — skipping", next_id)
+        return
+    conn.execute(
+        "UPDATE lab_questions SET enabled = TRUE, queued_order = NULL WHERE id = $qid",
+        {"qid": next_id},
+    )
+    log.info("lab: promoted question %s from bank", next_id)
+
+
 _RUNNERS = {
+    # Original six
     "sleep_short_hrv_drop": _run_sleep_short_hrv_drop,
     "long_sleep_hrv_lift": _run_long_sleep_hrv_lift,
     "pickleball_next_morning_hrv": _run_pickleball_next_morning,
     "skin_temp_illness_alarm": _run_skin_temp_illness_alarm,
     "strain_high_rhr_next": _run_strain_high_rhr_next,
     "push_pull_imbalance_recovery": _run_push_pull_imbalance,
+    # Bank (runners registered now; questions activate on promotion)
+    "yoga_hrv_lift": _run_yoga_hrv_lift,
+    "consecutive_training_recovery_drop": _run_consecutive_training_recovery_drop,
+    "two_pb_3d_hrv_drop": _run_two_pb_3d_hrv_drop,
+    "weekly_volume_spike_recovery": _run_weekly_volume_spike_recovery,
+    "rest_day_hrv_rebound": _run_rest_day_hrv_rebound,
+    "energy_checkin_hrv_correlation": _run_energy_checkin_hrv_correlation,
+    "rhr_trend_hrv_drop": _run_rhr_trend_hrv_drop,
+    "sleep_quality_checkin_hrv": _run_sleep_quality_checkin_hrv,
 }
 
 

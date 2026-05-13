@@ -2217,9 +2217,11 @@ async def lab_run() -> dict:
     async with write_ctx() as conn:
         findings = _lab.run_all(conn)
         _lab.persist(conn, findings)
+        retired = _lab.rotate_if_stable(conn)
     return {
         "ran": len(findings),
         "verdicts": {f.question_id: f.verdict for f in findings},
+        "retired": retired,
         "completed_at": date.today().isoformat(),
     }
 
