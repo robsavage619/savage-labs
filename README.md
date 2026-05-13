@@ -463,10 +463,14 @@ Wired through:
 ```
 GET  /api/lab/questions    → catalogue
 GET  /api/lab/findings     → latest verdict per question
-POST /api/lab/run          → re-run all enabled hypotheses
+POST /api/lab/run          → re-run all enabled hypotheses + rotate stable questions
 ```
 
 The frontend `LabPanel` renders one verdict-coded card per question with the hypothesis text, summary, effect size, n, p-value, test type, and vault citation. Hit "RUN ALL" or wire it to a weekly cron. New hypotheses go into `lab_questions` as a one-row INSERT plus a runner function in `shc/lab.py` — that's the entire surface area for adding new questions.
+
+**Automatic rotation.** After each run, `rotate_if_stable()` checks every active question. If a question has produced 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, it's retired and the next queued question (lowest `queued_order`) is promoted automatically. A bank of 8 additional hypotheses covers yoga → HRV, consecutive training → recovery drop, 3-day pickleball volume → HRV, weekly load spike → recovery, full rest days → HRV rebound, self-reported energy ↔ HRV, 7-day rising RHR → HRV drop, and sleep quality ↔ HRV. The system never runs out of questions to test.
+
+**Verdicts feed the AI.** Every call to `build_daily_context()` or `build_training_context()` injects the current `## YOUR PERSONAL LAB FINDINGS` block. Claude sees which effects have been statistically confirmed or refuted on my data before writing a word — REFUTED findings override population-level assumptions.
 
 The philosophical backbone is in the vault — Schork 2015/2022 and Daza 2018 on N-of-1 trials as rigorous science.
 
@@ -752,7 +756,7 @@ Six newer panels stack between the daily-readiness row and the legacy Strength /
 | **After-Action** | Per-exercise Hevy-driven autoreg: actuals vs plan, next-session weight suggestion, verdict tint |
 | **Clinical Research Signals** | Six peer-reviewed tiles — SRI, lnRMSSD, red-streak, allostatic load, drug-adjusted HRV, Z2 drift |
 | **Fueling** | Body comp strip (weight / BF% / lean mass) + macros (kcal in/out/balance, protein g/kg, hydration) + 14d energy-balance bar chart |
-| **Research Lab** | Six pre-registered hypothesis cards with CONFIRMED / REFUTED / INCONCLUSIVE / INSUFFICIENT verdicts; "Run all" button refreshes findings on demand |
+| **Research Lab** | Six active pre-registered hypothesis cards (CONFIRMED / REFUTED / INCONCLUSIVE / INSUFFICIENT) + automatic rotation from an 8-question queued bank; verdicts injected into every AI call |
 
 ### Trend Intelligence
 
@@ -856,7 +860,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 |---|---|
 | Language | Python 3.12 |
 | Framework | FastAPI 0.115 |
-| Database | DuckDB 1.1 (encrypted, 22 migrations) |
+| Database | DuckDB 1.1 (encrypted, 23 migrations) |
 | Background | APScheduler 3.10 |
 | HTTP | httpx 0.28 (async) |
 | XML | lxml 5 (Apple Health CCDA) |
@@ -935,7 +939,7 @@ I spent more time on the UI than I probably should have. The whole thing uses OK
 ## Data Model
 
 <details>
-<summary>Schema — 21 tables, 4 views (22 migrations applied)</summary>
+<summary>Schema — 21 tables, 4 views (23 migrations applied)</summary>
 
 ```sql
 measurements        -- Apple Health time-series (metric, ts, value, unit, content_hash)
@@ -963,9 +967,10 @@ conditions          -- Diagnoses
 labs                -- Lab results with reference ranges
 mesocycles          -- Active periodization block (started_on, planned_weeks, deload_trigger)
 muscle_volume_targets   -- MEV / MAV / MRV per muscle group, per mesocycle
-lab_questions       -- Pre-registered hypothesis catalogue (id, hypothesis, test_type, threshold, vault_ref)
+lab_questions       -- Pre-registered hypothesis catalogue (id, hypothesis, test_type, threshold, vault_ref,
+                    --   retired_at, queued_order — rotation system)
 lab_findings        -- Per-run results (verdict, n, effect_size, p_value, evidence)
-schema_version      -- 22 migrations applied
+schema_version      -- 23 migrations applied
 ```
 
 ```sql
