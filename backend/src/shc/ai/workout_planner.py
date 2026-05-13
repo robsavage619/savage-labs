@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 # ── Vault research ────────────────────────────────────────────────────────────
 # Delegated to shc.ai.vault — see that module for the full retrieval design.
 
+from shc.ai.lab_findings import lab_findings_section
 from shc.ai.vault import state_signals as _state_signals_fn
 from shc.ai.vault import vault_context as _vault_context
 
@@ -423,6 +424,10 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             hints.extend(k for k, v in sore_map.items() if (v or 0) >= 2)
     except Exception:
         pass
+
+    lab = lab_findings_section(conn)
+    if lab:
+        lines.append("\n" + lab)
 
     vault = load_vault_research(state, extra_signals=extra, keyword_hints=hints)
     if vault:
