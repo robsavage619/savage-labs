@@ -483,10 +483,12 @@ def _plan_to_hevy_exercises(
                 note_parts.append(ex["notes"])
             combined_notes = " · ".join(note_parts)
 
+            rest_secs = ex.get("rest_seconds")
             exercises.append({
                 "exercise_template_id": template_id,
                 "superset_id": None,
                 "notes": combined_notes,
+                **({"rest_seconds": rest_secs} if rest_secs is not None else {}),
                 "sets": [
                     {
                         "type": "normal",
