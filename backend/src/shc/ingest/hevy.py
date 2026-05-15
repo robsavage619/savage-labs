@@ -159,6 +159,7 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
     set_rows = []
     for ex in w.get("exercises", []):
         exercise_name = ex.get("title", "Unknown")
+        exercise_notes = ex.get("notes") or None
         for idx, s in enumerate(ex.get("sets", [])):
             set_hash = _content_hash("hevy", hevy_id, exercise_name, str(idx))
             set_id = f"hevy_set_{set_hash}"
@@ -171,6 +172,7 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
                 "weight_kg": s.get("weight_kg"),
                 "rpe": s.get("rpe"),
                 "is_warmup": s.get("type") == "warmup",
+                "exercise_notes": exercise_notes,
                 "content_hash": set_hash,
             })
     return workout_row, set_rows
@@ -202,9 +204,11 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
         conn.execute(
             """
             INSERT INTO workout_sets
-                (id, workout_id, exercise, set_idx, reps, weight_kg, rpe, is_warmup, content_hash)
-            VALUES ($id, $workout_id, $exercise, $set_idx, $reps, $weight_kg, $rpe, $is_warmup, $content_hash)
-            ON CONFLICT (id) DO NOTHING
+                (id, workout_id, exercise, set_idx, reps, weight_kg, rpe, is_warmup, exercise_notes, content_hash)
+            VALUES ($id, $workout_id, $exercise, $set_idx, $reps, $weight_kg, $rpe, $is_warmup, $exercise_notes, $content_hash)
+            ON CONFLICT (id) DO UPDATE SET
+                exercise_notes = EXCLUDED.exercise_notes
+            WHERE EXCLUDED.exercise_notes IS NOT NULL
             """,
             s,
         )

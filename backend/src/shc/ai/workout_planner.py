@@ -372,6 +372,30 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         for ex, status, notes in prefs:
             lines.append(f"- {ex} ({status})" + (f": {notes}" if notes else ""))
 
+    # ── Your exercise notes (from Hevy) ───────────────────────────────────────
+    try:
+        note_rows = conn.execute(
+            """
+            SELECT ws.exercise, MAX(w.started_at)::DATE AS session_date, ws.exercise_notes
+            FROM workout_sets ws
+            JOIN workouts w ON w.id = ws.workout_id
+            WHERE ws.exercise_notes IS NOT NULL
+              AND ws.exercise_notes != ''
+              AND w.started_at >= (current_date - INTERVAL '60 days')
+            GROUP BY ws.exercise, ws.exercise_notes
+            ORDER BY session_date DESC
+            LIMIT 30
+            """
+        ).fetchall()
+        if note_rows:
+            lines.append("\n## YOUR EXERCISE NOTES (from Hevy — read these carefully)")
+            lines.append("These are comments you wrote in Hevy after completing exercises.")
+            lines.append("Use them to adjust load, cues, form, or exercise selection today.")
+            for exercise, session_date, note in note_rows:
+                lines.append(f"- {exercise} ({session_date}): \"{note}\"")
+    except Exception as _e:
+        log.debug("exercise notes unavailable: %s", _e)
+
     # ── Hevy exercise catalog ─────────────────────────────────────────────────
     try:
         hevy_tmpl_rows = conn.execute(
