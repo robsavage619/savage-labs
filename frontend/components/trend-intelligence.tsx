@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { WarningIcon } from "@/components/ui/icons";
 import {
   Area,
   ComposedChart,
@@ -355,7 +356,7 @@ function PreIllnessStrip({
           return (
             <div
               key={c.date}
-              title={`${c.date}\n${c.rhrDelta != null ? `RHR Δ ${c.rhrDelta >= 0 ? "+" : ""}${c.rhrDelta.toFixed(1)} bpm` : "no RHR"}\n${c.sigma != null ? `HRV ${c.sigma >= 0 ? "+" : ""}${c.sigma.toFixed(2)}σ` : "no HRV"}${c.both ? "\n⚠ both flags hit" : ""}`}
+              title={`${c.date}\n${c.rhrDelta != null ? `RHR Δ ${c.rhrDelta >= 0 ? "+" : ""}${c.rhrDelta.toFixed(1)} bpm` : "no RHR"}\n${c.sigma != null ? `HRV ${c.sigma >= 0 ? "+" : ""}${c.sigma.toFixed(2)}σ` : "no HRV"}${c.both ? "\nboth flags hit" : ""}`}
               className="h-[24px] flex-1 rounded-[2px] transition-transform hover:scale-y-110"
               style={{ background: bg, boxShadow: `inset 0 0 0 1px ${outline}` }}
             />

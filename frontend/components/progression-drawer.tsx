@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { XIcon } from "@/components/ui/icons";
 import { useQuery } from "@tanstack/react-query";
 import {
   ComposedChart,
@@ -101,7 +102,7 @@ export function ProgressionDrawer({ exercise, onClose }: Props) {
             className="rounded-md p-1.5 text-[var(--text-faint)] hover:text-[var(--text-primary)] hover:bg-[var(--card-hover)] transition-colors"
             aria-label="Close"
           >
-            ✕
+            <XIcon size={14} />
           </button>
         </header>
 

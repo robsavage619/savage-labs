@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { CheckIcon, MODALITY_ICON } from "@/components/ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
@@ -38,17 +39,10 @@ const MODALITY_LABEL: Record<string, string> = {
   other: "Other",
 };
 
-const MODALITY_ICON: Record<string, string> = {
-  pickleball: "🏓",
-  tennis: "🎾",
-  walk: "🚶",
-  run: "🏃",
-  bike: "🚴",
-  hike: "🥾",
-  swim: "🏊",
-  yoga: "🧘",
-  other: "•",
-};
+function ModalityIcon({ modality, size = 14 }: { modality: string; size?: number }) {
+  const Icon = MODALITY_ICON[modality];
+  return Icon ? <Icon size={size} className="inline-block align-middle opacity-70" /> : <span className="text-[var(--text-faint)]">·</span>;
+}
 
 function modalityKey(kind: string): string {
   const k = kind.toLowerCase();
@@ -158,14 +152,14 @@ function WeeklyZoneVolume({
     totalMin === 0
       ? "no data"
       : polarizedPctLow >= 75 && polarizedPctLow <= 85
-        ? "polarized ✓"
+        ? "polarized"
         : polarizedPctLow >= 70 && polarizedPctLow < 90
           ? "near polarized"
           : polarizedPctLow < 70
             ? "intensity-heavy"
             : "all base";
   const polarizedColor =
-    polarizedStatus === "polarized ✓"
+    polarizedStatus === "polarized"
       ? "var(--positive)"
       : polarizedStatus === "intensity-heavy"
         ? "var(--negative)"
@@ -179,7 +173,7 @@ function WeeklyZoneVolume({
         <Eyebrow>Weekly volume by zone · 12w</Eyebrow>
         <span className="text-[10.5px] tabular-nums" style={{ color: polarizedColor }}>
           {polarizedPctLow.toFixed(0)}% low / {(100 - polarizedPctLow).toFixed(0)}% high
-          <span className="text-[var(--text-faint)] ml-1">· {polarizedStatus}</span>
+          <span className="text-[var(--text-faint)] ml-1 inline-flex items-center gap-0.5">· {polarizedStatus}{polarizedStatus === "polarized" && <CheckIcon size={10} />}</span>
         </span>
       </div>
       <div className="h-[160px]">
@@ -570,7 +564,7 @@ function SessionRow({
         <span className="text-[var(--text-faint)] text-[10px] mr-1">{ago}</span>
       </td>
       <td className="px-3 py-2 text-[var(--text-primary)] font-medium">
-        <span className="mr-1.5">{MODALITY_ICON[m]}</span>
+        <span className="mr-1.5"><ModalityIcon modality={m} /></span>
         {MODALITY_LABEL[m]}
       </td>
       <td className="px-3 py-2 text-right tabular-nums text-[var(--text-muted)]">
@@ -618,7 +612,7 @@ function SessionRow({
           className="text-[var(--text-faint)] hover:text-[var(--negative)] opacity-0 group-hover:opacity-100 transition-opacity text-[12px] px-1"
           title={s.source === "manual" ? "Delete" : "Hide (WHOOP false positive)"}
         >
-          ✕
+          <XIcon size={12} />
         </button>
       </td>
     </tr>
@@ -739,7 +733,7 @@ export function CardioPanel() {
           {summary[0] ? (
             <div className="flex items-baseline gap-1.5">
               <span className="text-[16px] font-medium leading-none text-[var(--text-primary)]">
-                {MODALITY_ICON[modalityKey(summary[0].kind)] ?? "•"} {MODALITY_LABEL[modalityKey(summary[0].kind)] ?? summary[0].kind}
+                <ModalityIcon modality={modalityKey(summary[0].kind)} size={16} />{" "}{MODALITY_LABEL[modalityKey(summary[0].kind)] ?? summary[0].kind}
               </span>
             </div>
           ) : (

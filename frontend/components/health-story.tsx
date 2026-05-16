@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
 import { ObsidianMark, ObsidianSourceTag } from "@/components/obsidian-badge";
+import { CheckIcon, XIcon, RefreshIcon, WarningIcon, SparkleIcon } from "@/components/ui/icons";
 
 // Highlights key biometric figures inline (HRV, sigma, scores, percentages, ACWR values)
 function HighlightFigures({ text }: { text: string }) {
@@ -333,7 +334,7 @@ export function HealthStory() {
             title="Step 1 — copy prompt, paste into Claude Code to generate today's story"
           >
             <span className="text-[10px] mr-1 text-[var(--text-faint)]">1</span>
-            {copied ? "✓ Prompt copied" : "✦ Copy CC prompt"}
+            {copied ? <><CheckIcon size={11} className="inline mr-1" />Prompt copied</> : <><SparkleIcon size={11} className="inline mr-1" />Copy CC prompt</>}
           </button>
 
           {needsReauth && (
@@ -343,7 +344,7 @@ export function HealthStory() {
               style={{ background: "var(--negative)", color: "#fff" }}
               title="WHOOP tokens expired — click to re-authorize"
             >
-              ⚠ Re-authorize
+              <WarningIcon size={11} className="inline mr-1" />Re-authorize
             </a>
           )}
 
@@ -359,7 +360,7 @@ export function HealthStory() {
               className={sync.kind === "syncing" ? "animate-spin inline-block" : ""}
               style={sync.kind === "err" ? { color: "var(--negative)" } : undefined}
             >
-              {sync.kind === "ok" ? "✓" : sync.kind === "err" ? "✗" : "↻"}
+              {sync.kind === "ok" ? <CheckIcon size={11} /> : sync.kind === "err" ? <XIcon size={11} /> : <RefreshIcon size={11} />}
             </span>{" "}
             {sync.kind === "syncing"
               ? "Syncing…"

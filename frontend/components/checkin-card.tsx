@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type CheckinPayload } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
+import { CheckIcon } from "@/components/ui/icons";
 import { BodyDiagram, type Soreness } from "@/components/body-diagram";
 
 /**
@@ -266,7 +267,7 @@ function CheckinLogged({
           className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold"
           style={{ background: "var(--positive)", color: "var(--bg)" }}
         >
-          ✓
+          <CheckIcon size={9} />
         </span>
         <span className="text-[12.5px] font-medium text-[var(--text-primary)]">
           Check-in logged

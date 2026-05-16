@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { WarningIcon } from "@/components/ui/icons";
 import {
   ComposedChart,
   Line,
@@ -198,7 +199,7 @@ function VO2MaxPanel() {
           </div>
           {delta != null && delta < -5 && (
             <p className="text-[10.5px] leading-snug" style={{ color: "var(--negative)" }}>
-              ⚠ Decline is ~4× expected age-related rate. Priority: zone 2 cardio 3×/wk.
+              <WarningIcon size={11} className="inline mr-1 align-middle" />Decline is ~4× expected age-related rate. Priority: zone 2 cardio 3×/wk.
             </p>
           )}
           <p className="text-[10px] text-[var(--text-faint)] leading-snug">

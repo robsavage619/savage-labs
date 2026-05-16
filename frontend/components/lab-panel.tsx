@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
+import { BookIcon } from "@/components/ui/icons";
 
 const VERDICT_META: Record<string, { color: string; label: string; bg: string }> = {
   confirmed: { color: "var(--positive)", label: "CONFIRMED", bg: "var(--positive)/0.08" },
@@ -109,7 +110,7 @@ export function LabPanel() {
 
                 {f.vault_ref && (
                   <p className="mt-2 text-[10px] text-[var(--text-faint)]">
-                    📚 {f.vault_ref}
+                    <BookIcon size={11} className="inline mr-1 align-middle opacity-60" />{f.vault_ref}
                   </p>
                 )}
               </div>

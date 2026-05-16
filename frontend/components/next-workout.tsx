@@ -5,6 +5,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
 import { ObsidianMark } from "@/components/obsidian-badge";
+import { CheckIcon, RefreshIcon, ArrowRightIcon, XIcon } from "@/components/ui/icons";
 import type { WorkoutPlan, WorkoutBlock, WarmupItem } from "@/lib/api";
 import { ProgressionDrawer } from "@/components/progression-drawer";
 
@@ -503,7 +504,7 @@ export function NextWorkoutPane() {
             title="Push today's plan to Hevy as a routine"
           >
             <span className={push.kind === "pushing" ? "animate-spin inline-block" : ""}>
-              {push.kind === "pushing" ? "⟳" : push.kind === "ok" ? "✓" : "→"}
+              {push.kind === "pushing" ? <RefreshIcon size={13} /> : push.kind === "ok" ? <CheckIcon size={13} /> : <ArrowRightIcon size={13} />}
             </span>
             {push.kind === "pushing" ? "Pushing…" : push.kind === "ok" ? "In Hevy" : "Hevy"}
           </button>
@@ -516,7 +517,7 @@ export function NextWorkoutPane() {
             style={{ padding: "8px 10px" }}
             title="Delete today's plan"
           >
-            ✕
+            <XIcon size={13} />
           </button>
         </div>
       </div>
@@ -534,7 +535,7 @@ export function NextWorkoutPane() {
           className="rounded-[var(--r-sm)] px-3 py-2 text-[11px]"
           style={{ background: "var(--positive-soft)", border: "1px solid oklch(0.72 0.18 145 / 0.25)", color: "var(--positive)" }}
         >
-          ✓ {push.focus} routine ready in Hevy (id {push.routineId.slice(0, 8)}…). Open the app to start.
+          <CheckIcon size={11} className="inline mr-1 align-middle" />{push.focus} routine ready in Hevy (id {push.routineId.slice(0, 8)}…). Open the app to start.
         </div>
       )}
 

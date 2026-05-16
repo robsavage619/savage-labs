@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api, type DailyState, type OAuthStatus } from "@/lib/api";
+import { WarningIcon } from "@/components/ui/icons";
 
 function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -348,7 +349,7 @@ export function WhoopVitals() {
                   background: "var(--neutral-soft, oklch(0.5 0.05 80 / 0.15))",
                 }}
               >
-                ⚠ WHOOP calibrating — score may be unreliable
+                <WarningIcon size={11} className="inline mr-1 align-middle" />WHOOP calibrating — score may be unreliable
               </span>
             )}
           </div>
