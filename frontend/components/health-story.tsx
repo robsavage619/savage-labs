@@ -221,11 +221,16 @@ interface StoryData {
   sources?: string[];
 }
 
+const BASE = process.env.NEXT_PUBLIC_SHC_API ?? "http://127.0.0.1:8000";
+
 export function HealthStory() {
   const qc = useQueryClient();
   const [copied, setCopied] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const [sync, setSync] = useState<SyncState>({ kind: "idle" });
+
+  const oauthQ = useQuery({ queryKey: ["oauth-status"], queryFn: api.oauthStatus });
+  const needsReauth = oauthQ.data?.find((s) => s.source === "whoop")?.needs_reauth ?? false;
 
   const storyQ = useQuery<StoryData>({
     queryKey: ["health-story"],
@@ -330,6 +335,17 @@ export function HealthStory() {
             <span className="text-[10px] mr-1 text-[var(--text-faint)]">1</span>
             {copied ? "✓ Prompt copied" : "✦ Copy CC prompt"}
           </button>
+
+          {needsReauth && (
+            <a
+              href={`${BASE}/auth/whoop/login`}
+              className="btn text-[11px]"
+              style={{ background: "var(--negative)", color: "#fff" }}
+              title="WHOOP tokens expired — click to re-authorize"
+            >
+              ⚠ Re-authorize
+            </a>
+          )}
 
           <button
             type="button"
