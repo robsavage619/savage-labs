@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CheckIcon, MODALITY_ICON } from "@/components/ui/icons";
+import { CheckIcon, XIcon, MODALITY_ICON } from "@/components/ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
