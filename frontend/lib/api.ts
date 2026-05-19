@@ -28,6 +28,8 @@ export interface HRVPoint {
   hrv: number;
   avg: number;
   sd: number;
+  hrv_7d_avg?: number | null;
+  hrv_7d_sd?: number | null;
 }
 
 export interface SleepEntry {
@@ -787,4 +789,46 @@ export const api = {
       today: { date: string; load: number; ctl: number; atl: number; tsb: number } | null;
       tau: { ctl_days: number; atl_days: number };
     }>(`/api/training/load-curve?days=${days}`),
+  muscleVolume: () =>
+    get<{
+      as_of: string;
+      week_start: string;
+      mesocycle_id: string;
+      muscles: {
+        muscle: string;
+        weekly_sets: number;
+        mev: number | null;
+        mav: number | null;
+        mrv: number | null;
+      }[];
+      unmapped_exercises: string[];
+    }>("/api/training/muscle-volume"),
+  pickleballTrend: (days = 90) =>
+    get<{
+      as_of: string;
+      sessions: {
+        date: string;
+        duration_min: number | null;
+        avg_hr: number | null;
+        rpe: number | null;
+        recovery_day_of: number | null;
+        hrv_day_of: number | null;
+        hrv_next_day: number | null;
+        hrv_delta: number | null;
+      }[];
+      tournaments: {
+        id: string;
+        date: string;
+        name: string;
+        format: string;
+        dupr_before: number | null;
+        dupr_after: number | null;
+        dupr_delta: number | null;
+        result_notes: string | null;
+      }[];
+      hrv_baseline: number | null;
+      avg_recovery_on_play_days: number | null;
+      total_sessions: number;
+      total_duration_min: number;
+    }>(`/api/pickleball/trend?days=${days}`),
 };

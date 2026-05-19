@@ -106,6 +106,7 @@ export function CommandBriefing() {
   const load = state.training_load;
   const gates = state.gates;
   const fresh = state.freshness;
+  const propranolol = state.checkin?.propranolol_taken ?? false;
 
   const score = r.score;
   const t = tier(score);
@@ -114,13 +115,14 @@ export function CommandBriefing() {
     briefingQ.data && "training_call" in briefingQ.data ? (briefingQ.data as Briefing) : null;
 
   // The "why" — structured chips, not a punctuation-delimited string.
-  type Chip = { label: string; value: string; tone?: "positive" | "neutral" | "negative" };
+  type Chip = { label: string; value: string; tone?: "positive" | "neutral" | "negative"; dim?: boolean };
   const whyChips: Chip[] = [];
   if (rec.hrv_sigma != null) {
     whyChips.push({
       label: "HRV",
       value: `${rec.hrv_sigma >= 0 ? "+" : ""}${rec.hrv_sigma.toFixed(1)}σ`,
-      tone: rec.hrv_sigma >= 0 ? "positive" : rec.hrv_sigma < -1 ? "negative" : "neutral",
+      tone: propranolol ? "neutral" : rec.hrv_sigma >= 0 ? "positive" : rec.hrv_sigma < -1 ? "negative" : "neutral",
+      dim: propranolol,
     });
   }
   if (rec.score != null) {
@@ -175,7 +177,20 @@ export function CommandBriefing() {
               Insufficient data — sync sources to populate.
             </p>
           )}
-          {r.beta_blocker_adjusted && (
+          {propranolol && (
+            <div
+              className="mt-2 inline-flex items-center gap-2 px-2.5 py-1 rounded-lg text-[10.5px]"
+              style={{
+                background: "oklch(0.65 0.16 80 / 0.1)",
+                border: "1px solid oklch(0.65 0.16 80 / 0.35)",
+                color: "oklch(0.78 0.16 80)",
+              }}
+            >
+              <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: "oklch(0.72 0.18 80)" }} />
+              HRV pharmacologically elevated — intensity based on sleep + RHR trend
+            </div>
+          )}
+          {!propranolol && r.beta_blocker_adjusted && (
             <span
               className="inline-flex items-center gap-1.5 mt-1.5 text-[10px] tracking-wide"
               style={{ color: "var(--text-muted)" }}
@@ -329,9 +344,11 @@ export function CommandBriefing() {
   );
 }
 
-function WhyChip({ chip }: { chip: { label: string; value: string; tone?: "positive" | "neutral" | "negative" } }) {
+function WhyChip({ chip }: { chip: { label: string; value: string; tone?: "positive" | "neutral" | "negative"; dim?: boolean } }) {
   const dotColor =
-    chip.tone === "positive"
+    chip.dim
+      ? "var(--text-faint)"
+      : chip.tone === "positive"
       ? "var(--positive)"
       : chip.tone === "negative"
       ? "var(--negative)"
@@ -340,9 +357,11 @@ function WhyChip({ chip }: { chip: { label: string; value: string; tone?: "posit
     <span
       className="inline-flex items-baseline gap-1.5 px-2 py-0.5 rounded-full border text-[11.5px] tabular-nums"
       style={{
-        borderColor: "var(--hairline)",
+        borderColor: chip.dim ? "var(--hairline)" : "var(--hairline)",
         background: "oklch(1 0 0 / 0.02)",
+        opacity: chip.dim ? 0.45 : 1,
       }}
+      title={chip.dim ? "HRV unreliable — propranolol active" : undefined}
     >
       <span
         className="inline-block w-1 h-1 rounded-full self-center"

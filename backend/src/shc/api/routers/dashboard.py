@@ -98,8 +98,16 @@ async def hrv_trend(days: int = Query(28, gt=0, le=365)) -> list[dict]:
     try:
         rows = conn.execute(
             """
-            SELECT date, hrv, hrv_28d_avg, hrv_28d_sd
-            FROM v_hrv_baseline_28d
+            WITH base AS (
+                SELECT date, hrv, hrv_28d_avg, hrv_28d_sd
+                FROM v_hrv_baseline_28d
+                ORDER BY date
+            )
+            SELECT
+                date, hrv, hrv_28d_avg, hrv_28d_sd,
+                AVG(hrv) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS hrv_7d_avg,
+                STDDEV(hrv) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS hrv_7d_sd
+            FROM base
             ORDER BY date DESC
             LIMIT $days
             """,
@@ -107,7 +115,17 @@ async def hrv_trend(days: int = Query(28, gt=0, le=365)) -> list[dict]:
         ).fetchall()
     finally:
         conn.close()
-    return [{"date": str(r[0]), "hrv": r[1], "avg": r[2], "sd": r[3]} for r in reversed(rows)]
+    return [
+        {
+            "date": str(r[0]),
+            "hrv": r[1],
+            "avg": r[2],
+            "sd": r[3],
+            "hrv_7d_avg": round(r[4], 2) if r[4] is not None else None,
+            "hrv_7d_sd": round(r[5], 2) if r[5] is not None else None,
+        }
+        for r in reversed(rows)
+    ]
 
 
 @router.get("/sleep/recent")

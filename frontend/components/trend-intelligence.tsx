@@ -21,8 +21,11 @@ import { CorrelationCards } from "@/components/correlation-cards";
 import { ClinicalOverview } from "@/components/clinical-overview";
 import { BodyPane } from "@/components/body-panel";
 import { PatternsPane } from "@/components/patterns-pane";
+import { PerformanceCurvePane } from "@/components/performance-curve";
+import { PickleballPane } from "@/components/pickleball-panel";
+import { MuscleVolumePanel } from "@/components/muscle-volume-panel";
 
-const TABS = ["Recovery", "Body", "Patterns", "Insights", "Clinical"] as const;
+const TABS = ["Recovery", "Body", "Patterns", "Insights", "Performance", "Sport", "Clinical"] as const;
 type Tab = (typeof TABS)[number];
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -203,6 +206,8 @@ function HRVTooltip({ active, payload, label }: { active?: boolean; payload?: { 
   const avg = get("avg");
   const hi = get("bandHigh");
   const lo = get("bandLow");
+  const hi7 = get("band7High");
+  const lo7 = get("band7Low");
   if (hrv == null) return null;
   return (
     <div style={{
@@ -218,7 +223,10 @@ function HRVTooltip({ active, payload, label }: { active?: boolean; payload?: { 
       <div style={{ color: "var(--chart-line)", fontWeight: 600 }}>HRV&nbsp;&nbsp;<span style={{ float: "right" }}>{hrv} ms</span></div>
       {avg != null && <div style={{ color: "var(--text-muted)" }}>28d avg&nbsp;&nbsp;<span style={{ float: "right" }}>{avg} ms</span></div>}
       {hi != null && lo != null && (
-        <div style={{ color: "var(--text-dim)", marginTop: 2 }}>±1σ band&nbsp;&nbsp;<span style={{ float: "right" }}>{lo}–{hi}</span></div>
+        <div style={{ color: "var(--text-dim)", marginTop: 2 }}>28d ±1σ&nbsp;&nbsp;<span style={{ float: "right" }}>{lo}–{hi}</span></div>
+      )}
+      {hi7 != null && lo7 != null && (
+        <div style={{ color: "oklch(0.72 0.16 200 / 0.8)", marginTop: 2 }}>7d ±0.5σ&nbsp;&nbsp;<span style={{ float: "right" }}>{lo7}–{hi7}</span></div>
       )}
     </div>
   );
@@ -228,7 +236,7 @@ function HRVTrendCard({
   data,
   baseline,
 }: {
-  data: { date: string; hrv: number; avg: number; sd: number }[];
+  data: { date: string; hrv: number; avg: number; sd: number; hrv_7d_avg?: number | null; hrv_7d_sd?: number | null }[];
   baseline: number | null;
 }) {
   const series = data.map((p) => ({
@@ -237,15 +245,37 @@ function HRVTrendCard({
     bandHigh: p.avg && p.sd ? +(p.avg + p.sd).toFixed(1) : null,
     bandLow: p.avg && p.sd ? +(p.avg - p.sd).toFixed(1) : null,
     avg: p.avg ? +p.avg.toFixed(1) : null,
+    band7High: p.hrv_7d_avg && p.hrv_7d_sd ? +(p.hrv_7d_avg + 0.5 * p.hrv_7d_sd).toFixed(1) : null,
+    band7Low: p.hrv_7d_avg && p.hrv_7d_sd ? +(p.hrv_7d_avg - 0.5 * p.hrv_7d_sd).toFixed(1) : null,
+    avg7: p.hrv_7d_avg ? +p.hrv_7d_avg.toFixed(1) : null,
   }));
   const today = data.length ? data[data.length - 1] : null;
   const sigma = today && today.sd ? (today.hrv - today.avg) / today.sd : null;
+
+  // Streak below 7d band (0.5 SD rule)
+  const belowStreak = useMemo(() => {
+    let streak = 0;
+    for (let i = data.length - 1; i >= 0; i--) {
+      const p = data[i];
+      if (!p.hrv_7d_avg || !p.hrv_7d_sd) break;
+      if (p.hrv < p.hrv_7d_avg - 0.5 * p.hrv_7d_sd) streak++;
+      else break;
+    }
+    return streak;
+  }, [data]);
+
+  const has7dBand = data.some((p) => p.hrv_7d_avg != null);
 
   return (
     <div>
       <div className="flex items-baseline justify-between mb-2">
         <Eyebrow>HRV · 90d with ±1σ band</Eyebrow>
         <div className="flex items-center gap-3 text-[10.5px] tabular-nums">
+          {belowStreak >= 3 && (
+            <span style={{ color: "var(--warn)" }}>
+              ↓ {belowStreak}d below 7d band
+            </span>
+          )}
           {sigma != null && (
             <span style={{ color: sigmaColor(sigma) }}>
               today {sigma >= 0 ? "+" : ""}
@@ -260,8 +290,16 @@ function HRVTrendCard({
       <div className="h-[180px]">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={series} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
+            {/* 28d ±1σ band (wide) */}
             <Area dataKey="bandHigh" fill="var(--chart-band)" stroke="none" isAnimationActive={false} />
             <Area dataKey="bandLow" fill="var(--bg)" stroke="none" isAnimationActive={false} />
+            {/* 7d ±0.5σ band (tighter, more actionable) */}
+            {has7dBand && (
+              <Area dataKey="band7High" fill="oklch(0.65 0.14 200 / 0.12)" stroke="none" isAnimationActive={false} />
+            )}
+            {has7dBand && (
+              <Area dataKey="band7Low" fill="var(--bg)" stroke="none" isAnimationActive={false} />
+            )}
             <Line dataKey="avg" stroke="var(--chart-baseline)" strokeWidth={1} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
             <Line
               dataKey="hrv"
@@ -271,7 +309,6 @@ function HRVTrendCard({
               isAnimationActive={false}
               activeDot={{ r: 3 }}
             />
-            {/* Today marker */}
             {series.length > 0 && (
               <ReferenceLine x={series[series.length - 1].date} stroke="var(--accent)" strokeWidth={1.2} strokeDasharray="2 2" />
             )}
@@ -281,6 +318,18 @@ function HRVTrendCard({
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+      {has7dBand && (
+        <div className="flex items-center gap-4 mt-1.5 text-[10px] text-[var(--text-faint)]">
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: "var(--chart-band)", opacity: 0.6 }} />
+            28d ±1σ
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: "oklch(0.65 0.14 200 / 0.4)" }} />
+            7d ±0.5σ (guidance)
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -437,6 +486,7 @@ function InsightsPane() {
       </p>
       <ReadinessDecomposition />
       <VolumeLandmarks />
+      <MuscleVolumePanel />
       <SleepDoseResponse />
       <ACWRDeloadCard />
       <CorrelationCards />
@@ -909,6 +959,8 @@ export function TrendIntelligence() {
         {tab === "Body" && <BodyPane />}
         {tab === "Patterns" && <PatternsPane />}
         {tab === "Insights" && <InsightsPane />}
+        {tab === "Performance" && <PerformanceCurvePane />}
+        {tab === "Sport" && <PickleballPane />}
         {tab === "Clinical" && <ClinicalPane />}
       </div>
     </div>

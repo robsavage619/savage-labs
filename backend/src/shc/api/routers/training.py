@@ -200,3 +200,185 @@ async def get_training_context() -> dict[str, str]:
         return {"context": block}
     finally:
         conn.close()
+
+
+@router.get("/training/muscle-volume")
+async def get_muscle_volume() -> dict[str, Any]:
+    """Per-muscle weekly set counts vs MEV/MAV/MRV targets from the active mesocycle.
+
+    Joins workout_sets_dedup → exercise_muscle_map to group sets by muscle.
+    Falls back gracefully if exercise_muscle_map is empty (returns empty muscles list).
+    """
+    conn = get_read_conn()
+    try:
+        # Current week Mon–Sun window
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+
+        state = ensure_active_mesocycle(conn)
+        targets = volume_targets(conn, state.id)
+
+        # Check if exercise_muscle_map table exists (created by migration 0025)
+        table_exists = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_name = 'exercise_muscle_map'"
+        ).fetchone()[0]
+
+        muscles: list[dict[str, Any]] = []
+        unmapped_exercises: list[str] = []
+
+        if table_exists:
+            rows = conn.execute(
+                """
+                SELECT
+                    m.primary_muscle,
+                    COUNT(DISTINCT ws.id) AS work_sets
+                FROM workout_sets_dedup ws
+                JOIN exercise_muscle_map m ON ws.exercise_name = m.exercise_name
+                WHERE ws.started_at::DATE >= ?
+                  AND NOT ws.is_warmup
+                  AND ws.weight_kg > 0 AND ws.reps > 0
+                GROUP BY m.primary_muscle
+                ORDER BY m.primary_muscle
+                """,
+                [week_start.isoformat()],
+            ).fetchall()
+            muscle_sets = {r[0]: int(r[1]) for r in rows}
+
+            # Find exercises in this week that lack a muscle mapping
+            unmapped = conn.execute(
+                """
+                SELECT DISTINCT ws.exercise_name
+                FROM workout_sets_dedup ws
+                LEFT JOIN exercise_muscle_map m ON ws.exercise_name = m.exercise_name
+                WHERE ws.started_at::DATE >= ?
+                  AND NOT ws.is_warmup
+                  AND ws.weight_kg > 0 AND ws.reps > 0
+                  AND m.exercise_name IS NULL
+                ORDER BY ws.exercise_name
+                """,
+                [week_start.isoformat()],
+            ).fetchall()
+            unmapped_exercises = [r[0] for r in unmapped]
+
+            # All known muscles (union of mapped sets + target keys)
+            all_muscles = sorted(set(muscle_sets.keys()) | set(targets.keys()))
+            for muscle in all_muscles:
+                t = targets.get(muscle)
+                muscles.append({
+                    "muscle": muscle,
+                    "weekly_sets": muscle_sets.get(muscle, 0),
+                    "mev": t.mev if t else None,
+                    "mav": t.mav if t else None,
+                    "mrv": t.mrv if t else None,
+                })
+
+        return {
+            "as_of": today.isoformat(),
+            "week_start": week_start.isoformat(),
+            "mesocycle_id": state.id,
+            "muscles": muscles,
+            "unmapped_exercises": unmapped_exercises,
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/pickleball/trend")
+async def get_pickleball_trend(days: int = 90) -> dict[str, Any]:
+    """Pickleball session history with recovery context.
+
+    Returns session list, next-day HRV delta per session, play freshness
+    (recovery score on play days), and tournament events.
+    """
+    conn = get_read_conn()
+    try:
+        since = (date.today() - timedelta(days=days)).isoformat()
+
+        # Pickleball cardio sessions
+        sessions = conn.execute(
+            """
+            SELECT cs.date, cs.duration_min, cs.avg_hr, cs.rpe,
+                   r.score AS recovery_day_of,
+                   r.hrv AS hrv_day_of,
+                   r2.hrv AS hrv_next_day
+            FROM cardio_sessions cs
+            LEFT JOIN recovery r ON r.date = cs.date
+            LEFT JOIN recovery r2 ON r2.date = cs.date + INTERVAL '1 day'
+            WHERE cs.modality ILIKE '%pickleball%'
+              AND cs.date >= ?
+            ORDER BY cs.date DESC
+            """,
+            [since],
+        ).fetchall()
+
+        # HRV baseline for delta calculation
+        hrv_baseline_row = conn.execute(
+            "SELECT AVG(hrv) FROM recovery WHERE date >= ? AND hrv IS NOT NULL",
+            [since],
+        ).fetchone()
+        hrv_baseline = float(hrv_baseline_row[0]) if hrv_baseline_row and hrv_baseline_row[0] else None
+
+        session_list = []
+        for r in sessions:
+            hrv_delta = None
+            if r[5] is not None and r[6] is not None:
+                hrv_delta = round(r[6] - r[5], 1)
+            session_list.append({
+                "date": str(r[0]),
+                "duration_min": r[1],
+                "avg_hr": r[2],
+                "rpe": r[3],
+                "recovery_day_of": round(r[4], 0) if r[4] is not None else None,
+                "hrv_day_of": round(r[5], 1) if r[5] is not None else None,
+                "hrv_next_day": round(r[6], 1) if r[6] is not None else None,
+                "hrv_delta": hrv_delta,
+            })
+
+        # Tournament events
+        events_exist = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_name = 'tournament_events'"
+        ).fetchone()[0]
+
+        tournaments: list[dict[str, Any]] = []
+        if events_exist:
+            t_rows = conn.execute(
+                "SELECT id, event_date, event_name, format, dupr_before, dupr_after, result_notes "
+                "FROM tournament_events ORDER BY event_date DESC LIMIT 20"
+            ).fetchall()
+            tournaments = [
+                {
+                    "id": r[0],
+                    "date": str(r[1]),
+                    "name": r[2],
+                    "format": r[3],
+                    "dupr_before": r[4],
+                    "dupr_after": r[5],
+                    "dupr_delta": round(r[5] - r[4], 2) if r[4] is not None and r[5] is not None else None,
+                    "result_notes": r[6],
+                }
+                for r in t_rows
+            ]
+
+        # Freshness summary: avg recovery on play days vs non-play days
+        play_dates = {str(r[0]) for r in sessions}
+        freshness = None
+        if play_dates:
+            avg_play_recovery = conn.execute(
+                f"SELECT AVG(score) FROM recovery WHERE date IN ({','.join(['?' for _ in play_dates])})",
+                list(play_dates),
+            ).fetchone()
+            freshness = round(float(avg_play_recovery[0]), 1) if avg_play_recovery and avg_play_recovery[0] else None
+
+        return {
+            "as_of": date.today().isoformat(),
+            "sessions": session_list,
+            "tournaments": tournaments,
+            "hrv_baseline": hrv_baseline,
+            "avg_recovery_on_play_days": freshness,
+            "total_sessions": len(session_list),
+            "total_duration_min": sum(s["duration_min"] or 0 for s in session_list),
+        }
+    finally:
+        conn.close()
