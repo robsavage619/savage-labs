@@ -163,7 +163,16 @@ export function GoalScorecard() {
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <Eyebrow>DUPR doubles · target 5.0</Eyebrow>
+            <div className="flex items-center gap-2 mb-1">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/dupr-wordmark.png"
+                alt="DUPR"
+                className="h-[14px] w-auto"
+                style={{ filter: "brightness(0) invert(1) opacity(0.55)" }}
+              />
+              <span className="text-[9px] uppercase tracking-widest text-[var(--text-faint)]">doubles · target 5.0</span>
+            </div>
             <div className="flex items-baseline gap-3 mt-1.5">
               <span
                 className="text-[32px] font-bold tabular-nums leading-none"

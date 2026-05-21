@@ -287,7 +287,17 @@ export function PickleballPane() {
         return (
           <div>
             <div className="flex items-baseline justify-between mb-2">
-              <Eyebrow>Tournament results · DUPR match history</Eyebrow>
+              <div className="flex items-center gap-2">
+                <Eyebrow>Tournament results ·</Eyebrow>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/dupr-wordmark.png"
+                  alt="DUPR"
+                  className="h-[10px] w-auto"
+                  style={{ filter: "brightness(0) invert(1) opacity(0.45)" }}
+                />
+                <Eyebrow>match history</Eyebrow>
+              </div>
               {matchesQ.isLoading && (
                 <span className="text-[9.5px] text-[var(--text-faint)]">loading…</span>
               )}
