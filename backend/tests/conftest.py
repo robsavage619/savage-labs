@@ -78,6 +78,20 @@ def seed(conn: duckdb.DuckDBPyConnection):
             [cid, day, modality, duration_min, avg_hr, cid],
         )
 
+    def _add_sleep(night: date, ts_in: datetime, ts_out: datetime, **fields) -> None:
+        sid = str(uuid.uuid4())
+        row = {
+            "id": sid, "source": "whoop", "night_date": night,
+            "content_hash": sid, "ts_in": ts_in, "ts_out": ts_out,
+        }
+        row.update(fields)
+        cols = list(row)
+        placeholders = ", ".join("?" for _ in cols)
+        conn.execute(
+            f"INSERT INTO sleep ({', '.join(cols)}) VALUES ({placeholders})",
+            list(row.values()),
+        )
+
     def _add_checkin(day: date, **fields) -> None:
         cols = ["date", "created_at"]
         vals: list = [day, datetime.now()]
@@ -98,6 +112,7 @@ def seed(conn: duckdb.DuckDBPyConnection):
             "plan": staticmethod(_add_plan),
             "med": staticmethod(_add_med),
             "cardio": staticmethod(_add_cardio),
+            "sleep": staticmethod(_add_sleep),
             "checkin": staticmethod(_add_checkin),
         },
     )
