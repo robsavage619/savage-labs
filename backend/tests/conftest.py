@@ -61,7 +61,35 @@ def seed(conn: duckdb.DuckDBPyConnection):
             [day, json.dumps({"deload_prescribed": deload_prescribed}), "test"],
         )
 
-    return type("Seed", (), {"workout": staticmethod(_add_workout), "plan": staticmethod(_add_plan)})
+    def _add_med(name: str, *, active: bool = True) -> None:
+        conn.execute(
+            "INSERT INTO medications (id, name, valid_from, valid_to) "
+            "VALUES (?, ?, now(), ?)",
+            [str(uuid.uuid4()), name, None if active else datetime.now()],
+        )
+
+    def _add_checkin(day: date, **fields) -> None:
+        cols = ["date", "created_at"]
+        vals: list = [day, datetime.now()]
+        for k, v in fields.items():
+            cols.append(k)
+            vals.append(v)
+        placeholders = ", ".join("?" for _ in cols)
+        conn.execute(
+            f"INSERT INTO daily_checkin ({', '.join(cols)}) VALUES ({placeholders})",
+            vals,
+        )
+
+    return type(
+        "Seed",
+        (),
+        {
+            "workout": staticmethod(_add_workout),
+            "plan": staticmethod(_add_plan),
+            "med": staticmethod(_add_med),
+            "checkin": staticmethod(_add_checkin),
+        },
+    )
 
 
 @pytest.fixture
