@@ -4,9 +4,19 @@ import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from shc.ingest import hevy, whoop
+from shc.ingest import dupr, hevy, whoop
 
 log = logging.getLogger(__name__)
+
+
+async def _dupr_sync_safe() -> None:
+    """Daily DUPR pull that no-ops quietly until credentials are configured."""
+    try:
+        await dupr.sync_rating()
+    except RuntimeError as exc:
+        log.info("skipping DUPR sync: %s", exc)
+    except Exception:
+        log.exception("DUPR sync failed")
 
 
 async def _recompute_adherence() -> None:
@@ -79,6 +89,7 @@ async def _recompute_adherence() -> None:
         )
     log.info("plan adherence recomputed for %s (sets %s/%s)", yesterday, sets_done, prescribed_sets)
 
+
 _scheduler: AsyncIOScheduler | None = None
 
 
@@ -114,6 +125,16 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         hour=4,
         minute=15,
         id="adherence_recompute",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    # DUPR rating snapshot — once daily; ratings only move after matches post.
+    scheduler.add_job(
+        _dupr_sync_safe,
+        "cron",
+        hour=5,
+        minute=30,
+        id="dupr_sync",
         replace_existing=True,
         misfire_grace_time=3600,
     )

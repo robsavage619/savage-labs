@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     # Hevy
     hevy_api_key: str | None = Field(default=None)
 
+    # DUPR (unofficial API) — login credentials for the daily rating pull.
+    # Keychain takes priority (shc.dupr.* via auth.keychain); these env vars are
+    # the fallback. See ingest/dupr.py.
+    dupr_email: str | None = Field(default=None)
+    dupr_password: str | None = Field(default=None)
+
     # Apple Health webhook (HAE / Shortcuts)
     # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
     apple_webhook_key: str | None = Field(default=None)

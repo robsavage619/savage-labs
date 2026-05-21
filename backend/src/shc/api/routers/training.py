@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Training / mesocycle API endpoints.
 
 GET  /api/training/mesocycle          → current mesocycle state + volume summary
@@ -8,14 +6,17 @@ POST /api/training/mesocycle/advance  → transition active → deloading → co
 POST /api/training/scores/recompute   → recompute all exercise scores for this week
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import date, timedelta
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from shc.db.schema import get_read_conn, get_write_conn, write_ctx
+from shc.db.schema import get_read_conn, write_ctx
 from shc.training.mesocycle import (
     advance_mesocycle,
     compute_all_scores,
@@ -51,8 +52,7 @@ async def get_mesocycle() -> dict[str, Any]:
             "deload_trigger": state.deload_trigger,
             "notes": state.notes,
             "volume_targets": {
-                mg: {"mev": t.mev, "mav": t.mav, "mrv": t.mrv}
-                for mg, t in targets.items()
+                mg: {"mev": t.mev, "mav": t.mav, "mrv": t.mrv} for mg, t in targets.items()
             },
         }
     finally:
@@ -104,13 +104,15 @@ async def get_load_curve(days: int = 90) -> dict[str, Any]:
             ctl = ctl * ctl_decay + load * (1 - ctl_decay)
             atl = atl * atl_decay + load * (1 - atl_decay)
             if d >= cutoff:
-                points.append({
-                    "date": d.isoformat(),
-                    "load": round(load, 2),
-                    "ctl": round(ctl, 2),
-                    "atl": round(atl, 2),
-                    "tsb": round(ctl - atl, 2),
-                })
+                points.append(
+                    {
+                        "date": d.isoformat(),
+                        "load": round(load, 2),
+                        "ctl": round(ctl, 2),
+                        "atl": round(atl, 2),
+                        "tsb": round(ctl - atl, 2),
+                    }
+                )
 
         latest = points[-1] if points else None
         return {
@@ -149,23 +151,27 @@ async def get_progression(weeks: int = 4) -> dict[str, Any]:
                 history = weekly_e1rm(conn, ex, n_weeks=weeks)
                 if history:
                     latest = history[-1]
-                    results.append({
-                        "exercise": ex,
-                        "e1rm_lbs": round(latest.e1rm_kg * 2.20462),
-                        "work_sets": latest.work_sets,
-                        "perf_score": None,
-                        "trend": None,
-                        "recommendation": "insufficient history",
-                    })
+                    results.append(
+                        {
+                            "exercise": ex,
+                            "e1rm_lbs": round(latest.e1rm_kg * 2.20462),
+                            "work_sets": latest.work_sets,
+                            "perf_score": None,
+                            "trend": None,
+                            "recommendation": "insufficient history",
+                        }
+                    )
             else:
-                results.append({
-                    "exercise": ps.exercise,
-                    "e1rm_lbs": round(ps.e1rm_lbs),
-                    "work_sets": ps.work_sets,
-                    "perf_score": ps.perf_score,
-                    "trend": ps.trend,
-                    "recommendation": ps.recommendation,
-                })
+                results.append(
+                    {
+                        "exercise": ps.exercise,
+                        "e1rm_lbs": round(ps.e1rm_lbs),
+                        "work_sets": ps.work_sets,
+                        "perf_score": ps.perf_score,
+                        "trend": ps.trend,
+                        "recommendation": ps.recommendation,
+                    }
+                )
 
         return {"exercises": results, "as_of": date.today().isoformat()}
     finally:
@@ -265,13 +271,15 @@ async def get_muscle_volume() -> dict[str, Any]:
             all_muscles = sorted(set(muscle_sets.keys()) | set(targets.keys()))
             for muscle in all_muscles:
                 t = targets.get(muscle)
-                muscles.append({
-                    "muscle": muscle,
-                    "weekly_sets": muscle_sets.get(muscle, 0),
-                    "mev": t.mev if t else None,
-                    "mav": t.mav if t else None,
-                    "mrv": t.mrv if t else None,
-                })
+                muscles.append(
+                    {
+                        "muscle": muscle,
+                        "weekly_sets": muscle_sets.get(muscle, 0),
+                        "mev": t.mev if t else None,
+                        "mav": t.mav if t else None,
+                        "mrv": t.mrv if t else None,
+                    }
+                )
 
         return {
             "as_of": today.isoformat(),
@@ -317,28 +325,31 @@ async def get_pickleball_trend(days: int = 90) -> dict[str, Any]:
             "SELECT AVG(hrv) FROM recovery WHERE date >= ? AND hrv IS NOT NULL",
             [since],
         ).fetchone()
-        hrv_baseline = float(hrv_baseline_row[0]) if hrv_baseline_row and hrv_baseline_row[0] else None
+        hrv_baseline = (
+            float(hrv_baseline_row[0]) if hrv_baseline_row and hrv_baseline_row[0] else None
+        )
 
         session_list = []
         for r in sessions:
             hrv_delta = None
             if r[5] is not None and r[6] is not None:
                 hrv_delta = round(r[6] - r[5], 1)
-            session_list.append({
-                "date": str(r[0]),
-                "duration_min": r[1],
-                "avg_hr": r[2],
-                "rpe": r[3],
-                "recovery_day_of": round(r[4], 0) if r[4] is not None else None,
-                "hrv_day_of": round(r[5], 1) if r[5] is not None else None,
-                "hrv_next_day": round(r[6], 1) if r[6] is not None else None,
-                "hrv_delta": hrv_delta,
-            })
+            session_list.append(
+                {
+                    "date": str(r[0]),
+                    "duration_min": r[1],
+                    "avg_hr": r[2],
+                    "rpe": r[3],
+                    "recovery_day_of": round(r[4], 0) if r[4] is not None else None,
+                    "hrv_day_of": round(r[5], 1) if r[5] is not None else None,
+                    "hrv_next_day": round(r[6], 1) if r[6] is not None else None,
+                    "hrv_delta": hrv_delta,
+                }
+            )
 
         # Tournament events
         events_exist = conn.execute(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_name = 'tournament_events'"
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'tournament_events'"
         ).fetchone()[0]
 
         tournaments: list[dict[str, Any]] = []
@@ -355,7 +366,9 @@ async def get_pickleball_trend(days: int = 90) -> dict[str, Any]:
                     "format": r[3],
                     "dupr_before": r[4],
                     "dupr_after": r[5],
-                    "dupr_delta": round(r[5] - r[4], 2) if r[4] is not None and r[5] is not None else None,
+                    "dupr_delta": round(r[5] - r[4], 2)
+                    if r[4] is not None and r[5] is not None
+                    else None,
                     "result_notes": r[6],
                 }
                 for r in t_rows
@@ -369,7 +382,11 @@ async def get_pickleball_trend(days: int = 90) -> dict[str, Any]:
                 f"SELECT AVG(score) FROM recovery WHERE date IN ({','.join(['?' for _ in play_dates])})",
                 list(play_dates),
             ).fetchone()
-            freshness = round(float(avg_play_recovery[0]), 1) if avg_play_recovery and avg_play_recovery[0] else None
+            freshness = (
+                round(float(avg_play_recovery[0]), 1)
+                if avg_play_recovery and avg_play_recovery[0]
+                else None
+            )
 
         return {
             "as_of": date.today().isoformat(),
@@ -382,3 +399,62 @@ async def get_pickleball_trend(days: int = 90) -> dict[str, Any]:
         }
     finally:
         conn.close()
+
+
+# DUPR doubles rating goal — Rob's 2026 target (4.5 → 5.0).
+DUPR_TARGET_DOUBLES = 5.0
+
+
+@router.get("/pickleball/dupr")
+def dupr_rating() -> dict[str, Any]:
+    """Return the DUPR rating snapshot series plus the current value and sync state."""
+    conn = get_read_conn()
+    try:
+        table_exists = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'dupr_snapshots'"
+        ).fetchone()[0]
+        snapshots: list[dict[str, Any]] = []
+        if table_exists:
+            rows = conn.execute(
+                "SELECT date, doubles, singles, doubles_provisional "
+                "FROM dupr_snapshots ORDER BY date"
+            ).fetchall()
+            snapshots = [
+                {
+                    "date": str(r[0]),
+                    "doubles": r[1],
+                    "singles": r[2],
+                    "doubles_provisional": r[3],
+                }
+                for r in rows
+            ]
+        state = conn.execute(
+            "SELECT last_sync_at, needs_reauth FROM oauth_state WHERE source = 'dupr'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    current = snapshots[-1] if snapshots else None
+    first_doubles = next((s["doubles"] for s in snapshots if s["doubles"] is not None), None)
+    return {
+        "as_of": date.today().isoformat(),
+        "snapshots": snapshots,
+        "current": current,
+        "baseline_doubles": first_doubles,
+        "target_doubles": DUPR_TARGET_DOUBLES,
+        "last_sync_at": state[0] if state else None,
+        "needs_reauth": bool(state[1]) if state else False,
+    }
+
+
+@router.post("/pickleball/dupr/sync")
+async def dupr_sync() -> dict[str, Any]:
+    """Pull the current DUPR rating and store today's snapshot."""
+    from shc.ingest import dupr
+
+    try:
+        return await dupr.sync_rating()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
