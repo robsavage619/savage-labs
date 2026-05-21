@@ -68,6 +68,16 @@ def seed(conn: duckdb.DuckDBPyConnection):
             [str(uuid.uuid4()), name, None if active else datetime.now()],
         )
 
+    def _add_cardio(day: date, modality: str, duration_min: float, *,
+                    avg_hr: int | None = None) -> None:
+        cid = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO cardio_sessions "
+            "(id, date, modality, duration_min, avg_hr, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [cid, day, modality, duration_min, avg_hr, cid],
+        )
+
     def _add_checkin(day: date, **fields) -> None:
         cols = ["date", "created_at"]
         vals: list = [day, datetime.now()]
@@ -87,6 +97,7 @@ def seed(conn: duckdb.DuckDBPyConnection):
             "workout": staticmethod(_add_workout),
             "plan": staticmethod(_add_plan),
             "med": staticmethod(_add_med),
+            "cardio": staticmethod(_add_cardio),
             "checkin": staticmethod(_add_checkin),
         },
     )

@@ -133,3 +133,31 @@ def test_clean_inputs_leave_high() -> None:
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "high"
     assert g.deload_required is False
+
+
+def test_acwr_above_1_5_forces_rest() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.acwr = 1.6
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "rest"
+
+
+def test_acwr_above_1_3_caps_moderate() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.acwr = 1.4
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "moderate"
+
+
+def test_acwr_in_safe_band_leaves_high() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.acwr = 1.1
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "high"
+
+
+def test_recent_leg_training_forbids_legs() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.days_since_legs = 1  # < 2-day threshold for legs
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "legs" in g.forbid_muscle_groups
