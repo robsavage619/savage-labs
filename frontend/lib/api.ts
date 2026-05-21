@@ -841,6 +841,28 @@ export const api = {
       last_sync_at: string | null;
       needs_reauth: boolean;
     }>("/api/pickleball/dupr"),
+  pickleballMatches: () =>
+    get<{
+      matches: {
+        match_id: number;
+        event_date: string;
+        event_name: string | null;
+        venue: string | null;
+        format: string;
+        partner_name: string | null;
+        opponent1_name: string | null;
+        opponent2_name: string | null;
+        won: boolean;
+        games: ({ us: number; them: number } | null)[];
+        dupr_pre: number | null;
+        dupr_post: number | null;
+        dupr_delta: number | null;
+        recovery_score: number | null;
+        hrv_ms: number | null;
+        rhr_bpm: number | null;
+      }[];
+      total: number;
+    }>("/api/pickleball/matches"),
   trainingProgressionAll: (weeks = 8) =>
     get<{
       exercises: {

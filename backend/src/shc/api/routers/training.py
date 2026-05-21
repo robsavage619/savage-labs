@@ -514,3 +514,81 @@ async def dupr_sync() -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
+
+
+@router.post("/pickleball/dupr/sync-matches")
+async def dupr_sync_matches() -> dict[str, Any]:
+    """Pull full DUPR match history and upsert into dupr_matches."""
+    from shc.ingest import dupr
+
+    try:
+        return await dupr.sync_matches()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
+
+
+@router.get("/pickleball/matches")
+def get_pickleball_matches() -> dict[str, Any]:
+    """Return DUPR match history joined with WHOOP recovery on match days.
+
+    Requires migration 0027 (dupr_matches table). Returns empty list gracefully
+    if table doesn't exist yet.
+    """
+    conn = get_read_conn()
+    try:
+        table_exists = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'dupr_matches'"
+        ).fetchone()[0]
+        if not table_exists:
+            return {"matches": [], "total": 0}
+
+        rows = conn.execute(
+            """
+            SELECT
+                m.match_id, m.event_date, m.event_name, m.venue, m.format,
+                m.partner_name, m.opponent1_name, m.opponent2_name,
+                m.won,
+                m.game1_us, m.game1_them,
+                m.game2_us, m.game2_them,
+                m.game3_us, m.game3_them,
+                m.dupr_pre, m.dupr_post, m.dupr_delta,
+                r.score   AS recovery_score,
+                r.hrv     AS hrv_ms,
+                r.rhr     AS rhr_bpm
+            FROM dupr_matches m
+            LEFT JOIN recovery r ON r.date = m.event_date::DATE
+            ORDER BY m.event_date DESC, m.match_id DESC
+            """
+        ).fetchall()
+
+        matches = [
+            {
+                "match_id": r[0],
+                "event_date": str(r[1]),
+                "event_name": r[2],
+                "venue": r[3],
+                "format": r[4],
+                "partner_name": r[5],
+                "opponent1_name": r[6],
+                "opponent2_name": r[7],
+                "won": r[8],
+                "games": [
+                    {"us": r[9], "them": r[10]} if r[9] is not None else None,
+                    {"us": r[11], "them": r[12]} if r[11] is not None else None,
+                    {"us": r[13], "them": r[14]} if r[13] is not None else None,
+                ],
+                "dupr_pre": round(r[15], 3) if r[15] is not None else None,
+                "dupr_post": round(r[16], 3) if r[16] is not None else None,
+                "dupr_delta": round(r[17], 4) if r[17] is not None else None,
+                "recovery_score": round(r[18], 0) if r[18] is not None else None,
+                "hrv_ms": round(r[19], 1) if r[19] is not None else None,
+                "rhr_bpm": r[20],
+            }
+            for r in rows
+        ]
+
+        return {"matches": matches, "total": len(matches)}
+    finally:
+        conn.close()

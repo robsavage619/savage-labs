@@ -55,11 +55,22 @@ function HRVDeltaTooltip({
   );
 }
 
+function shortEvent(name: string | null): string {
+  if (!name) return "Unknown event";
+  return name.split(" by ")[0].split(" - ")[0].replace(/^\d{4}\s+/, "").trim();
+}
+
 export function PickleballPane() {
   const trend = useQuery({
     queryKey: ["pickleball-trend-90"],
     queryFn: () => api.pickleballTrend(90),
     refetchInterval: 15 * 60_000,
+  });
+
+  const matchesQ = useQuery({
+    queryKey: ["pickleball-matches"],
+    queryFn: () => api.pickleballMatches(),
+    refetchInterval: 60 * 60_000,
   });
 
   const data = trend.data;
@@ -260,62 +271,210 @@ export function PickleballPane() {
         </>
       )}
 
-      {/* Tournament tracker */}
-      <div>
-        <div className="flex items-baseline justify-between mb-2">
-          <Eyebrow>Tournament results · DUPR tracking</Eyebrow>
-        </div>
-        {!data?.tournaments || data.tournaments.length === 0 ? (
-          <div
-            className="rounded-lg border border-[var(--hairline)] p-4 text-center"
-            style={{ borderStyle: "dashed" }}
-          >
-            <p className="text-[11px] text-[var(--text-dim)]">No tournaments logged yet.</p>
-            <p className="text-[10px] text-[var(--text-faint)] mt-1">
-              Add entries to the <code className="text-[var(--text-muted)]">tournament_events</code> table to track DUPR over time.
-            </p>
-          </div>
-        ) : (
-          <div className="rounded-lg border border-[var(--hairline)] overflow-hidden">
-            <table className="w-full text-[12px] tabular-nums">
-              <thead className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
-                <tr className="border-b border-[var(--hairline)]">
-                  <th className="px-3 py-2 text-left font-normal">Date</th>
-                  <th className="px-3 py-2 text-left font-normal">Event</th>
-                  <th className="px-3 py-2 text-right font-normal">DUPR before</th>
-                  <th className="px-3 py-2 text-right font-normal">DUPR after</th>
-                  <th className="px-3 py-2 text-right font-normal">Δ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.tournaments.map((t) => (
-                  <tr key={t.id} className="border-b border-[var(--hairline)] last:border-b-0">
-                    <td className="px-3 py-2 text-[var(--text-faint)]">{t.date.slice(5)}</td>
-                    <td className="px-3 py-2 text-[var(--text-muted)]">{t.name}</td>
-                    <td className="px-3 py-2 text-right">{t.dupr_before?.toFixed(2) ?? "—"}</td>
-                    <td className="px-3 py-2 text-right">{t.dupr_after?.toFixed(2) ?? "—"}</td>
-                    <td
-                      className="px-3 py-2 text-right font-medium"
-                      style={{
-                        color:
-                          t.dupr_delta == null
-                            ? "var(--text-faint)"
-                            : t.dupr_delta >= 0
-                            ? "var(--positive)"
-                            : "var(--negative)",
-                      }}
+      {/* Match history — grouped by tournament day */}
+      {(() => {
+        const allMatches = matchesQ.data?.matches ?? [];
+        // Group by event_date
+        const byDate = new Map<string, typeof allMatches>();
+        for (const m of [...allMatches].reverse()) {
+          // reverse so within a day we show oldest → newest (ascending match_id)
+          const key = m.event_date;
+          if (!byDate.has(key)) byDate.set(key, []);
+          byDate.get(key)!.push(m);
+        }
+        const tourneys = [...byDate.entries()].reverse(); // newest tourney first
+
+        return (
+          <div>
+            <div className="flex items-baseline justify-between mb-2">
+              <Eyebrow>Tournament results · DUPR match history</Eyebrow>
+              {matchesQ.isLoading && (
+                <span className="text-[9.5px] text-[var(--text-faint)]">loading…</span>
+              )}
+            </div>
+
+            {tourneys.length === 0 ? (
+              <div
+                className="rounded-lg border border-[var(--hairline)] p-4 text-center"
+                style={{ borderStyle: "dashed" }}
+              >
+                <p className="text-[11px] text-[var(--text-dim)]">No match history yet.</p>
+                <p className="text-[10px] text-[var(--text-faint)] mt-1">
+                  Run{" "}
+                  <code className="text-[var(--text-muted)]">
+                    POST /api/pickleball/dupr/sync-matches
+                  </code>{" "}
+                  to pull DUPR match history.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {tourneys.map(([eventDate, tMatches]) => {
+                  const wins = tMatches.filter((m) => m.won).length;
+                  const losses = tMatches.filter((m) => !m.won).length;
+                  const recovery = tMatches[0]?.recovery_score;
+                  const hrv = tMatches[0]?.hrv_ms;
+                  const eventName = shortEvent(tMatches[0]?.event_name ?? null);
+                  const venue = tMatches[0]?.venue ?? "";
+                  const duprStart = tMatches[0]?.dupr_pre;
+                  const duprEnd = tMatches[tMatches.length - 1]?.dupr_post;
+
+                  return (
+                    <div
+                      key={eventDate}
+                      className="rounded-lg border overflow-hidden"
+                      style={{ borderColor: "var(--hairline)" }}
                     >
-                      {t.dupr_delta != null
-                        ? `${t.dupr_delta >= 0 ? "+" : ""}${t.dupr_delta.toFixed(2)}`
-                        : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      {/* Tournament header */}
+                      <div
+                        className="px-4 py-3 flex items-start justify-between gap-3"
+                        style={{ background: "oklch(1 0 0 / 0.025)" }}
+                      >
+                        <div className="min-w-0">
+                          <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">
+                            {eventName}
+                          </div>
+                          <div className="text-[10px] text-[var(--text-faint)] mt-0.5">
+                            {new Date(eventDate + "T12:00:00").toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                            {venue ? ` · ${venue}` : ""}
+                          </div>
+                        </div>
+                        <div className="shrink-0 flex flex-col items-end gap-0.5">
+                          <div className="flex items-center gap-2 text-[12px] font-medium tabular-nums">
+                            <span style={{ color: "var(--positive)" }}>{wins}W</span>
+                            <span style={{ color: "var(--text-faint)" }}>·</span>
+                            <span style={{ color: "var(--negative)" }}>{losses}L</span>
+                          </div>
+                          {duprStart != null || duprEnd != null ? (
+                            <div className="text-[9.5px] text-[var(--text-faint)]">
+                              DUPR {duprStart != null ? duprStart.toFixed(3) : "NR"} → {duprEnd?.toFixed(3) ?? "—"}
+                            </div>
+                          ) : null}
+                          {recovery != null && (
+                            <div
+                              className="text-[9.5px] tabular-nums"
+                              style={{
+                                color:
+                                  recovery >= 67
+                                    ? "var(--positive)"
+                                    : recovery >= 34
+                                    ? "oklch(0.65 0.16 80)"
+                                    : "var(--negative)",
+                              }}
+                            >
+                              {recovery.toFixed(0)}% recovery{hrv != null ? ` · ${hrv.toFixed(0)}ms HRV` : ""}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Individual matches */}
+                      <div className="divide-y divide-[var(--hairline)]">
+                        {tMatches.map((m, idx) => {
+                          const playedGames = m.games.filter((g) => g != null) as {
+                            us: number;
+                            them: number;
+                          }[];
+                          const opponent = [m.opponent1_name, m.opponent2_name]
+                            .filter(Boolean)
+                            .join(" / ");
+                          const partner = m.partner_name;
+
+                          return (
+                            <div
+                              key={m.match_id}
+                              className="px-4 py-2 flex items-center gap-3"
+                              style={{
+                                borderLeft: `3px solid ${
+                                  m.won
+                                    ? "oklch(0.62 0.18 145 / 0.6)"
+                                    : "oklch(0.55 0.22 25 / 0.5)"
+                                }`,
+                              }}
+                            >
+                              {/* Match number */}
+                              <span className="text-[9.5px] text-[var(--text-faint)] w-4 shrink-0">
+                                G{idx + 1}
+                              </span>
+
+                              {/* Result badge */}
+                              <span
+                                className="text-[10px] font-bold w-7 shrink-0"
+                                style={{
+                                  color: m.won ? "var(--positive)" : "var(--negative)",
+                                }}
+                              >
+                                {m.won ? "WIN" : "LOSS"}
+                              </span>
+
+                              {/* Score */}
+                              <div className="flex gap-1.5 shrink-0">
+                                {playedGames.map((g, gi) => (
+                                  <span
+                                    key={gi}
+                                    className="text-[12px] font-medium tabular-nums"
+                                    style={{
+                                      color:
+                                        g.us > g.them
+                                          ? "var(--positive)"
+                                          : "var(--negative)",
+                                    }}
+                                  >
+                                    {g.us}–{g.them}
+                                  </span>
+                                ))}
+                                {playedGames.length === 0 && (
+                                  <span className="text-[11px] text-[var(--text-faint)]">—</span>
+                                )}
+                              </div>
+
+                              {/* Opponents */}
+                              <div className="flex-1 min-w-0 text-[10.5px] text-[var(--text-faint)] truncate">
+                                {opponent ? `vs ${opponent}` : ""}
+                                {partner ? (
+                                  <span className="text-[9.5px] text-[var(--text-faint)] ml-1">
+                                    w/ {partner.split(" ")[0]}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              {/* DUPR delta */}
+                              <div className="shrink-0 text-right">
+                                {m.dupr_delta != null ? (
+                                  <span
+                                    className="text-[10.5px] font-medium tabular-nums"
+                                    style={{
+                                      color:
+                                        m.dupr_delta >= 0
+                                          ? "var(--positive)"
+                                          : "var(--negative)",
+                                    }}
+                                  >
+                                    {m.dupr_delta >= 0 ? "+" : ""}
+                                    {m.dupr_delta.toFixed(3)}
+                                  </span>
+                                ) : (
+                                  <span className="text-[9.5px] text-[var(--text-faint)]">
+                                    {m.dupr_post != null ? `→ ${m.dupr_post.toFixed(3)}` : "NR"}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       <p className="text-[10px] text-[var(--text-faint)] leading-relaxed pt-2 border-t border-[var(--hairline)]">
         4.5→5.0 research: the primary physical separator at this level is hand speed (NVZ firefights)
