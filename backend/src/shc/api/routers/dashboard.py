@@ -3406,6 +3406,7 @@ async def training_after_action() -> dict:
             "SELECT plan_json FROM workout_plans WHERE date = $d",
             {"d": sess_date.isoformat()},
         ).fetchone()
+        state_d = compute_daily_state(conn)
     finally:
         conn.close()
 
@@ -3511,12 +3512,48 @@ async def training_after_action() -> dict:
             ),
         })
 
+    # Ground the retrospective in vault research, selected by execution signals
+    # derived from the verdicts (not just recovery state). Same retrieval engine
+    # the morning planner uses — see shc.ai.vault.
+    from shc.ai.vault import _get_index, state_signals
+
+    extra_signals: set[str] = set()
+    hints: list[str] = []
+    verdicts = {e["verdict"] for e in out}
+    reasons = " ".join(e["reason"] for e in out).lower()
+    no_rpe_logged = bool(out) and all(e["avg_rpe"] is None for e in out)
+
+    if "drop" in verdicts or "missed reps" in reasons:
+        hints += ["effective reps", "proximity to failure", "load selection", "repetitions in reserve"]
+    if "harder than planned" in reasons or "fatigue ahead" in reasons:
+        extra_signals.add("deload")
+        hints += ["fatigue management", "autoregulation", "stimulus to fatigue ratio"]
+    if "progress" in verdicts or "repeat" in verdicts:
+        hints += ["progressive overload", "step loading"]
+    if no_rpe_logged:
+        hints += ["autoregulation", "proximity to failure", "repetitions in reserve"]
+
+    signals = state_signals(state_d) | extra_signals
+    idx = _get_index()
+    notes = idx.query(signals, keyword_hints=hints, limit=8) if idx else []
+    vault_research = (
+        "## VAULT RESEARCH (ground every adjustment in these)\n\n"
+        + "\n\n---\n\n".join(
+            f"### {n.title} (`{n.filename}`)\n\n{(n.excerpt or n.body_excerpt or '')[:1400]}"
+            for n in notes
+        )
+        if notes
+        else ""
+    )
+
     return {
         "as_of": date.today().isoformat(),
         "session_date": sess_date.isoformat(),
         "days_ago": (date.today() - sess_date).days,
         "has_plan": bool(plan_targets),
         "exercises": out,
+        "signals": sorted(signals),
+        "vault_research": vault_research,
     }
 
 
@@ -3548,6 +3585,72 @@ async def submit_retrospective(body: RetrospectiveSubmission) -> dict:
             },
         )
     return {"status": "ok", "workout_id": body.workout_id}
+
+
+@router.get("/workout/retrospective/latest")
+async def latest_retrospective() -> dict:
+    """Return the most recent completed session and its stored retrospective (if any).
+
+    Powers the post-workout surface: when ``needs_retrospective`` is true the UI
+    shows the copy-prompt flow; once a retrospective is POSTed back it renders the
+    narrative, flags, and vault insights here. Read-only.
+    """
+    conn = get_read_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                w.id,
+                w.started_at,
+                STRING_AGG(DISTINCT ws.exercise, ', ')        AS exercises,
+                COUNT(*) FILTER (WHERE NOT ws.is_warmup)      AS work_sets,
+                r.generated_at,
+                r.summary,
+                r.progressive_overload_achieved,
+                r.rpe_vs_target,
+                r.flags,
+                r.vault_insights
+            FROM workouts w
+            JOIN workout_sets ws ON ws.workout_id = w.id
+            LEFT JOIN workout_retrospectives r ON r.workout_id = w.id
+            GROUP BY w.id, w.started_at, r.generated_at, r.summary,
+                     r.progressive_overload_achieved, r.rpe_vs_target,
+                     r.flags, r.vault_insights
+            ORDER BY w.started_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return {"workout_id": None, "needs_retrospective": False, "retrospective": None}
+
+    has_retro = row[5] is not None
+    started = row[1]
+    days_ago = (date.today() - started.date()).days if started else None
+
+    retrospective = None
+    if has_retro:
+        retrospective = {
+            "generated_at": str(row[4]) if row[4] else None,
+            "summary": row[5],
+            "progressive_overload_achieved": row[6],
+            "rpe_vs_target": row[7],
+            "flags": json.loads(row[8]) if row[8] else [],
+            "vault_insights": json.loads(row[9]) if row[9] else [],
+        }
+
+    return {
+        "workout_id": row[0],
+        "started_at": str(started) if started else None,
+        "session_date": started.date().isoformat() if started else None,
+        "days_ago": days_ago,
+        "exercises": row[2],
+        "work_sets": row[3],
+        "needs_retrospective": not has_retro,
+        "retrospective": retrospective,
+    }
 
 
 @router.post("/internal/checkpoint")

@@ -743,7 +743,27 @@ export const api = {
         verdict: "drop" | "progress" | "repeat" | "no_plan_target";
         reason: string;
       }[];
+      signals?: string[];
+      vault_research?: string;
     }>("/api/training/after-action"),
+  retrospectiveLatest: () =>
+    get<{
+      workout_id: string | null;
+      started_at?: string | null;
+      session_date?: string | null;
+      days_ago?: number | null;
+      exercises?: string | null;
+      work_sets?: number | null;
+      needs_retrospective: boolean;
+      retrospective: {
+        generated_at: string | null;
+        summary: string;
+        progressive_overload_achieved: boolean | null;
+        rpe_vs_target: string | null;
+        flags: string[];
+        vault_insights: string[];
+      } | null;
+    }>("/api/workout/retrospective/latest"),
   fuelingToday: () =>
     get<{
       as_of: string;

@@ -6,6 +6,7 @@ import { PillarSleep } from "@/components/pillar-sleep";
 import { PillarTrainingLoad } from "@/components/pillar-training-load";
 import { PeriodizationStrip } from "@/components/periodization-strip";
 import { AfterActionPanel } from "@/components/after-action-panel";
+import { PostWorkoutPanel } from "@/components/post-workout-panel";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { LabPanel } from "@/components/lab-panel";
 import { FuelingPanel } from "@/components/fueling-panel";
@@ -113,10 +114,15 @@ export default function Dashboard() {
             </ErrorBoundary>
           </CollapsibleSection>
 
-          <CollapsibleSection id="after-action" title="After-action">
-            <ErrorBoundary label="After action">
-              <AfterActionPanel />
-            </ErrorBoundary>
+          <CollapsibleSection id="after-action" title="Post-workout">
+            <div className="space-y-4">
+              <ErrorBoundary label="Post-workout debrief">
+                <PostWorkoutPanel />
+              </ErrorBoundary>
+              <ErrorBoundary label="After action">
+                <AfterActionPanel />
+              </ErrorBoundary>
+            </div>
           </CollapsibleSection>
 
           <CollapsibleSection id="research" title="Research">
