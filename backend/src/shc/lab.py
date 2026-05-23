@@ -68,10 +68,14 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
 
 
 def _hrv_baseline_28d(rows: list[tuple]) -> dict[str, float]:
-    """Return {date_iso: trailing_28d_mean_hrv}."""
+    """Return {date_iso: trailing_28d_mean_hrv}.
+
+    Expects rows shaped ``(date, hrv, ...)`` — HRV at index 1, the second
+    column every caller selects.
+    """
     out: dict[str, float] = {}
     for i, r in enumerate(rows):
-        prev = [float(x[2]) for x in rows[max(0, i - 28):i] if x[2] is not None]
+        prev = [float(x[1]) for x in rows[max(0, i - 28):i] if x[1] is not None]
         if len(prev) >= 7:
             out[str(r[0])] = sum(prev) / len(prev)
     return out
@@ -841,8 +845,7 @@ def _run_sleep_quality_checkin_hrv(conn, q: dict) -> LabFinding:
     if len(rows) < q["min_n"]:
         return LabFinding(q["id"], len(rows), None, "ms", None, "insufficient",
                           f"Only {len(rows)} days with both HRV and sleep quality check-in.", [])
-    hrv_rows_for_baseline = [(r[0], None, r[1]) for r in rows]
-    baselines = _hrv_baseline_28d(hrv_rows_for_baseline)
+    baselines = _hrv_baseline_28d(rows)
     low_qual, high_qual, evidence = [], [], []
     for d, hrv, sq in rows:
         if d not in baselines or hrv is None:
