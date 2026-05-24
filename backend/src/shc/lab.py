@@ -67,17 +67,20 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
     return num / (dx * dy)
 
 
-def _hrv_baseline_28d(rows: list[tuple]) -> dict[str, float]:
-    """Return {date_iso: trailing_28d_mean_hrv}.
+def _hrv_baseline_28d(rows: list[tuple]) -> dict[date, float]:
+    """Return {date: trailing_28d_mean_hrv}.
 
     Expects rows shaped ``(date, hrv, ...)`` — HRV at index 1, the second
-    column every caller selects.
+    column every caller selects. Keyed by the raw ``datetime.date`` so the
+    date-object lookups in every caller resolve.
     """
-    out: dict[str, float] = {}
+    out: dict[date, float] = {}
     for i, r in enumerate(rows):
         prev = [float(x[1]) for x in rows[max(0, i - 28):i] if x[1] is not None]
         if len(prev) >= 7:
-            out[str(r[0])] = sum(prev) / len(prev)
+            # Key by the raw date object — every caller looks up with a
+            # datetime.date, so stringifying the key here silently misses.
+            out[r[0]] = sum(prev) / len(prev)
     return out
 
 
