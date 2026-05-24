@@ -4,6 +4,7 @@ import difflib
 import hashlib
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -339,6 +340,27 @@ def _parse_reps(reps_str: str | int | None) -> int | None:
         return None
 
 
+_DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(min|minute|minutes|m|sec|second|seconds|s)\b", re.I)
+
+
+def _parse_duration_sec(reps_str: str | int | None) -> int | None:
+    """Parse a time-based reps field into seconds.
+
+    Handles the skill's time strings — '20 min', '45 sec', '3 min', '90s'.
+    Returns None for plain rep counts so the caller falls back to reps.
+    """
+    if reps_str is None:
+        return None
+    m = _DURATION_RE.search(str(reps_str))
+    if not m:
+        return None
+    value = float(m.group(1))
+    unit = m.group(2).lower()
+    if unit.startswith("m"):
+        return int(round(value * 60))
+    return int(round(value))
+
+
 async def push_routine(plan: dict) -> dict:
     """Push an AI workout plan as a Hevy routine.
 
@@ -346,16 +368,18 @@ async def push_routine(plan: dict) -> dict:
     Returns the Hevy API response.
     """
     today = datetime.now(UTC).date().isoformat()
-    title = f"Savage Labs WOD ({today})"
+    title = f"Savage Labs WOD — {today}"
 
-    # Check template cache
+    # Check template cache. Reuse the single most-recent routine so each push
+    # overwrites yesterday's WOD in place (Hevy has no DELETE-routine endpoint);
+    # the date in the title marks which day it's for.
     read_conn = get_read_conn()
     try:
         count = read_conn.execute(
             "SELECT COUNT(*) FROM hevy_exercise_templates"
         ).fetchone()[0]
         existing_routine = read_conn.execute(
-            "SELECT routine_id FROM hevy_routines WHERE date = $d", {"d": today}
+            "SELECT routine_id FROM hevy_routines ORDER BY pushed_at DESC LIMIT 1"
         ).fetchone()
     finally:
         read_conn.close()
@@ -472,7 +496,13 @@ def _plan_to_hevy_exercises(
                 continue
 
             n_sets = ex.get("sets", 3)
-            reps = _parse_reps(ex.get("reps"))
+            # Time-based moves (walks, planks, carries) carry their duration in
+            # the reps string ('20 min', '45 sec'). Emit duration_seconds so the
+            # time survives into Hevy instead of being mangled into a rep count.
+            duration = _parse_duration_sec(ex.get("reps"))
+            if duration is None and ex.get("duration_sec"):
+                duration = int(ex["duration_sec"])
+            reps = None if duration is not None else _parse_reps(ex.get("reps"))
             weight_kg = ex.get("weight_kg")
             if weight_kg is None and ex.get("weight_lbs"):
                 weight_kg = round(ex["weight_lbs"] / 2.20462, 4)
@@ -498,7 +528,7 @@ def _plan_to_hevy_exercises(
                         "type": "normal",
                         "weight_kg": weight_kg,
                         "reps": reps,
-                        "duration_seconds": None,
+                        "duration_seconds": duration,
                         "distance_meters": None,
                     }
                     for _ in range(n_sets)
