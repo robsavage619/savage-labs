@@ -4,6 +4,36 @@ All notable changes to this project. Dates are commit dates (Pacific time).
 
 ---
 
+## 2026-05-23
+
+### Added
+
+- **Loaded-lift RPE floor at 6** — `save_plan()` now normalizes plans on persist: any loaded exercise (and the session-level target) prescribed below RPE 6 is raised to 6. Hevy's RPE picker only goes 6–10, so a sub-6 target (e.g. a deload set at RPE 5) is unloggable and can't be autoregulated against. Cardio/bodyweight work is left untouched — it isn't RPE-logged in Hevy.
+
+- **Research lab study swap: yoga → heavy lift volume** — Retired the `yoga_hrv_lift` hypothesis (fired ~twice a year, so it never gathered enough exposure days to produce a verdict) and activated `lift_volume_hrv_drop`: a Pearson correlation between a day's strength tonnage and next-morning HRV deviation from the trailing 28-day mean. Runs well-powered on existing Hevy + WHOOP data (n≈180). Migration `0028`, runner `_run_lift_volume_hrv_drop`.
+
+### Fixed
+
+- **After-action RPE comparison ignored Hevy's loggable floor** — The autoregulation read compared logged RPE directly against the plan target with no floor. Since Hevy can't record below RPE 6, every deload set prescribed at RPE 5 was guaranteed to read "harder than planned" and drop the load — a pure artifact. The comparison now clamps the target to a floor of 6; genuine overshoots (RPE 8+) still trigger a drop.
+
+- **HRV baseline dict keyed by string, looked up by date** — `_hrv_baseline_28d()` built its output keyed by `str(date)`, but every consumer looked it up with a `datetime.date` (`d not in baselines`). The check never matched, so every day was skipped and the yoga, two-pickleball, rest-day, rhr-trend, and sleep-quality runners all returned `n=0` ("insufficient"). Keyed by the raw date object — `two_pb_3d_hrv_drop` and the others now produce real verdicts (e.g. two-pickleball-in-3-days → REFUTED, n=145). The earlier index fix had unmasked this; the runners crashed before reaching it.
+
+---
+
+## 2026-05-22
+
+### Added
+
+- **Post-workout retrospective surface** — A dedicated **Post-workout** dashboard section that captures execution feedback after a session instead of regenerating the (unchanged) morning recovery story. New endpoints: `GET /api/workout/retrospective/latest` (latest logged session + stored retrospective + `needs_retrospective` flag) and `POST /api/workout/retrospective` (stores the Claude-written narrative, flags, and vault citations, which feed the next morning's PRESCRIPTION → EXECUTION line). `PostWorkoutPanel` mirrors the health-story copy-prompt flow (Copy CC prompt → paste into Claude Code → POST back → Sync) and renders the narrative above the existing after-action adherence table.
+
+- **Research-grounded retrospectives** — `GET /api/training/after-action` now returns a `## VAULT RESEARCH` block: notes selected server-side from the session's *execution* signals (rep misses → effective-reps/load-selection, RPE overshoot → fatigue-management/SFR, progression → progressive-overload, missing RPE → autoregulation), routed through the same retrieval engine the planner uses. Every adjustment the retrospective recommends is grounded in cited research.
+
+### Fixed
+
+- **HRV column index in lab baseline helper** — `_hrv_baseline_28d()` read the HRV value at tuple index 2, but every caller selects HRV as the second column (index 1). The yoga, two-pickleball, and rest-day runners passed `(date, hrv)` rows and crashed with "tuple index out of range" (surfaced as `n=0` inconclusive); `rhr_trend` passed `(date, hrv, rhr)` and silently averaged RHR as the HRV baseline. Now reads index 1, with all callers consistent on `(date, hrv, …)`.
+
+---
+
 ## 2026-05-20
 
 ### Added

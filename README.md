@@ -415,6 +415,16 @@ The autoregulation rules (Helms 2018 + RP autoreg, RPE-based since Hevy doesn't 
 
 Every suggestion is rounded to the nearest 2.5 lbs. A `verdict` column tints the row green (progress), red (drop), or neutral (repeat).
 
+**Hevy RPE floor.** Hevy's RPE picker only goes 6–10, so a prescribed target below 6 (e.g. a deload set at RPE 5) is unloggable — comparing a logged 6 against a target of 5 would falsely read "harder than planned" and drop the load every time. The comparison clamps the target to a floor of 6, and `save_plan()` raises any loaded-lift `rpe_target` (and the session target) to 6 on persist so plans never prescribe an RPE you can't record. Cardio/bodyweight work is left alone — Hevy doesn't RPE-log it.
+
+---
+
+### Post-Workout Retrospective — Execution Feedback, Not a Stale Rerun
+
+The morning story is recovery-driven; those metrics don't change after you train. So the post-workout pass is a *separate* artifact: a vault-grounded **retrospective** of how the session went versus plan. The **Post-workout** dashboard section pairs the after-action adherence table with a copy-prompt flow (Copy CC prompt → paste into Claude Code → POST back → Sync), mirroring the morning health-story pattern.
+
+`GET /training/after-action` now also returns a `## VAULT RESEARCH` block — notes selected server-side from the session's *execution* signals (rep misses → effective-reps/load-selection, RPE overshoot → fatigue-management/SFR, progression → progressive-overload, missing RPE → autoregulation) — so every adjustment the retrospective recommends is grounded in the same retrieval engine the planner uses. `GET /workout/retrospective/latest` returns the latest session + stored retrospective + a `needs_retrospective` flag; `POST /workout/retrospective` stores the narrative, flags, and vault citations, which then feed the next morning's "PRESCRIPTION → EXECUTION" line.
+
 ---
 
 ### Fueling Layer — Body Comp + Macros + Hydration
@@ -471,7 +481,9 @@ POST /api/lab/run          → re-run all enabled hypotheses + rotate stable que
 
 The frontend `LabPanel` renders one verdict-coded card per question with the hypothesis text, summary, effect size, n, p-value, test type, and vault citation. Hit "RUN ALL" or wire it to a weekly cron. New hypotheses go into `lab_questions` as a one-row INSERT plus a runner function in `shc/lab.py` — that's the entire surface area for adding new questions.
 
-**Automatic rotation.** After each run, `rotate_if_stable()` checks every active question. If a question has produced 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, it's retired and the next queued question (lowest `queued_order`) is promoted automatically. A bank of 8 additional hypotheses covers yoga → HRV, consecutive training → recovery drop, 3-day pickleball volume → HRV, weekly load spike → recovery, full rest days → HRV rebound, self-reported energy ↔ HRV, 7-day rising RHR → HRV drop, and sleep quality ↔ HRV. The system never runs out of questions to test.
+**Automatic rotation.** After each run, `rotate_if_stable()` checks every active question. If a question has produced 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, it's retired and the next queued question (lowest `queued_order`) is promoted automatically. A bank of additional hypotheses covers consecutive training → recovery drop, 3-day pickleball volume → HRV, heavy lift tonnage → next-day HRV, weekly load spike → recovery, full rest days → HRV rebound, self-reported energy ↔ HRV, 7-day rising RHR → HRV drop, and sleep quality ↔ HRV. The system never runs out of questions to test.
+
+> **Match the study to the behaviour.** The yoga → HRV hypothesis was retired in favour of *heavy lift tonnage → next-day HRV*: yoga fired roughly twice a year, so it never gathered enough exposure days to produce a verdict, whereas lifting happens 3–4×/week and the correlation runs well-powered (n≈180). A standing hypothesis is only worth a slot if the exposure actually occurs.
 
 **Verdicts feed the AI.** Every call to `build_daily_context()` or `build_training_context()` injects the current `## YOUR PERSONAL LAB FINDINGS` block. Claude sees which effects have been statistically confirmed or refuted on my data before writing a word — REFUTED findings override population-level assumptions.
 
