@@ -419,7 +419,21 @@ def build_daily_context(conn) -> str:
     if lab:
         lines.append("\n" + lab)
 
-    vault = load_vault_research(state)
+    # Retrieval needs hints + extra signals or all hint-based scoring is dead
+    # and the briefing is grounded in a near-constant pinned set regardless of
+    # today's state. Mirror the planner's derivation from load + soreness.
+    extra: set[str] = set()
+    ratio = load.get("push_pull_ratio_28d")
+    if ratio is not None and (ratio > 1.3 or ratio < 0.75):
+        extra.add("push_pull_imbalance")
+    hints: list[str] = ["hypertrophy", "strength", "progressive overload", "periodization"]
+    if ratio is not None and ratio > 1.3:
+        hints += ["pull", "posterior chain", "row", "lat"]
+    elif ratio is not None and ratio < 0.75:
+        hints += ["push", "chest", "press", "anterior"]
+    hints.extend(m for m, sev in (chk.get("muscle_soreness") or {}).items() if (sev or 0) >= 2)
+
+    vault = load_vault_research(state, extra_signals=extra, keyword_hints=hints)
     if vault:
         lines.append("\n" + vault)
 

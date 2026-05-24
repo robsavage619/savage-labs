@@ -488,6 +488,17 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     if lab:
         lines.append("\n" + lab)
 
+    # Restate the hard gates immediately before the (large) vault block so the
+    # binding constraints sit adjacent to where the plan is reasoned, not buried
+    # above a wall of research (lost-in-the-middle mitigation).
+    lines.append("\n## ⚠ CONSTRAINT RECAP (read before planning — these are HARD)")
+    lines.append(f"- Max intensity: **{gates['max_intensity'].upper()}** · load ceiling **{cap_pct}% of e1RM**")
+    if gates["forbid_muscle_groups"]:
+        lines.append(f"- Forbidden muscle groups: {', '.join(gates['forbid_muscle_groups'])}")
+    if gates["deload_required"]:
+        lines.append(f"- DELOAD REQUIRED — ≤moderate intensity, target RPE ≤7 ({gates['deload_reason']})")
+    lines.append("- Cite vault notes by exact `filename.md`; every citation must be a real catalog note.")
+
     vault = load_vault_research(state, extra_signals=extra, keyword_hints=hints)
     if vault:
         lines.append("\n" + vault)
@@ -531,6 +542,41 @@ def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
     return {r[0]: float(r[1]) for r in rows if r[1]}
 
 
+_CITATION_RE = re.compile(r"`?\b([\w-]+\.md)\b`?")
+
+
+class CitationError(ValueError):
+    """Raised when a plan cites vault research that doesn't exist."""
+
+
+def _validate_citations(plan: dict[str, Any], allowed: set[str]) -> None:
+    """Reject plans whose vault_insights cite notes outside the real vault.
+
+    Every ``*.md`` filename referenced in a vault_insight must be a real note,
+    and at least one insight must cite a real note — this is what stops the
+    model (or a decorative fallback) from fabricating citations. Skipped when
+    ``allowed`` is empty (vault unavailable), so missing-vault never blocks a plan.
+    """
+    if not allowed:
+        return
+    insights = plan.get("vault_insights") or []
+    cited: set[str] = set()
+    for insight in insights:
+        text = insight if isinstance(insight, str) else str(insight.get("source", ""))
+        cited.update(m.group(1) for m in _CITATION_RE.finditer(text))
+    unknown = cited - allowed
+    if unknown:
+        raise CitationError(
+            f"vault_insights cite notes not in the vault: {sorted(unknown)}. "
+            "Cite only real filenames from the VAULT CATALOG."
+        )
+    if not cited:
+        raise CitationError(
+            "vault_insights cite no real vault note (`filename.md`). Every plan "
+            "must ground at least one decision in a real catalog note."
+        )
+
+
 def _first_int(value: Any) -> int | None:
     """Parse the leading integer from a reps field ('10-12', '10 each side')."""
     if isinstance(value, int):
@@ -550,6 +596,7 @@ def validate_plan(
     plan: dict[str, Any],
     state: dict[str, Any] | None = None,
     e1rm_ceilings: dict[str, float] | None = None,
+    allowed_citations: set[str] | None = None,
 ) -> bool:
     """Validate a plan dict against the schema AND the deterministic gates.
 
@@ -563,9 +610,14 @@ def validate_plan(
     ceiling — rejects any prescribed weight×reps whose Epley e1RM exceeds today's
     intensity cap. This is what stops a "deload" from being a max attempt.
 
+    Pass `allowed_citations` (the set of real vault filenames) to enforce that
+    every research citation in `vault_insights` maps to a real note. Omitting it
+    skips the citation check (schema-only, for tests / backwards compatibility).
+
     Raises:
         ValueError: on schema violation.
         GateViolation: on auto-regulation gate violation.
+        CitationError: on a vault citation that doesn't map to a real note.
     """
     if plan.get("readiness_tier") not in {"green", "yellow", "red"}:
         raise ValueError(f"Invalid readiness_tier: {plan.get('readiness_tier')!r}")
@@ -599,6 +651,8 @@ def validate_plan(
         raise ValueError("clinical_notes is empty — must include medication context")
     if not plan.get("vault_insights"):
         raise ValueError("vault_insights is empty — must cite research")
+    if allowed_citations is not None:
+        _validate_citations(plan, allowed_citations)
 
     # Auto-regulation gate enforcement.
     if state is not None:

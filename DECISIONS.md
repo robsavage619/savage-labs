@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-05-24 — Vault retrieval: semantic (model2vec) + lexical, with citation validation
+
+**Context.** Vault retrieval (`shc.ai.vault`) was purely lexical — tag→signal maps and substring matching over ~529 notes. Vocabulary mismatch silently dropped relevant research ("parasympathetic withdrawal" never matched the `hrv_anomaly` signal). The briefing path retrieved blind (no hints). And `vault_insights` citations were never validated — the model (or the decorative fallback) could cite any filename, real or invented.
+
+**Decision.** (1) Blend `model2vec` static embeddings (`minishlab/potion-base-8M`, torch-free, ~30MB) into `VaultIndex.query` via cosine similarity, with a similarity floor so vocabulary-mismatched notes still surface. Lexical scoring stays as a **graceful fallback** if the model can't load. (2) `validate_plan(..., allowed_citations=...)` rejects any `*.md` citation not in the real vault and requires ≥1 real citation; wired into `POST /api/workout/plan`. (3) Trimmed the injected context — catalog is titles-only, excerpts capped at 10, research fenced as `⟪BEGIN/END RESEARCH⟫` data. (4) Added `shc.ai.quality` (RPE-calibration, adherence trend, citation-validity rate) for no-API output-quality measurement.
+
+**Why.** Lexical-only under-recalled and there was no way to prove citations were grounded. model2vec was chosen over sentence-transformers to avoid a ~1GB torch dependency in a DuckDB+FastAPI app. Citation validation is opt-in (off by default) so existing schema-only tests are unaffected.
+
+**Consequences.** New dependency: `model2vec` (pulls `numpy`, `tokenizers`, `safetensors` — all torch-free). First retrieval call loads the model (~0.6s) and pings HF to check the model revision; offline-with-cache works, offline-without-cache falls back to lexical. `validate_plan` now raises `CitationError` (subclass of `ValueError`, returns HTTP 422) on a bad citation.
+
+---
+
 ## 2026-04-25 — DuckDB WAL corruption recovery
 
 **Symptom.** API fails to start with `INTERNAL Error: Failure while replaying WAL file`. Happens after force-killing uvicorn mid-transaction.

@@ -2621,8 +2621,14 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
         e1rm_ceilings = e1rm_by_exercise(conn, plan_date)
     finally:
         conn.close()
+    from shc.ai.vault import valid_citation_filenames
     try:
-        validate_plan(body.plan, state=state, e1rm_ceilings=e1rm_ceilings)
+        validate_plan(
+            body.plan,
+            state=state,
+            e1rm_ceilings=e1rm_ceilings,
+            allowed_citations=valid_citation_filenames(),
+        )
     except GateViolation as exc:
         raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
@@ -2941,9 +2947,11 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         "cooldown": "5 min mobility — target trained muscle groups",
         "clinical_notes": [],
         "vault_insights": [
-            "ACWR 0.8–1.3 minimizes injury risk (Gabbett, 2016) — current: " + (f"{acwr:.2f}" if acwr else "unknown"),
-            "HRV-guided training outperforms fixed-load programs (Kiviniemi et al.)",
-            f"{int(weight_pct*100)}% of working weight at {sets}×{reps_str} matches DUP {tier} day prescription.",
+            "ACWR 0.8–1.3 minimizes injury risk (`gabbett-2016-training-injury-prevention-paradox.md`) — current: "
+            + (f"{acwr:.2f}" if acwr else "unknown"),
+            "HRV-guided training outperforms fixed-load programs (`kiviniemi-2007-hrv-guided-endurance-training.md`)",
+            f"{int(weight_pct*100)}% of working weight at {sets}×{reps_str} matches DUP {tier} day prescription "
+            "(`progressive-overload-strength.md`).",
         ],
     }
 
