@@ -471,7 +471,7 @@ def _plan_to_hevy_exercises(
         exercises.append({
             "exercise_template_id": template_id,
             "superset_id": None,
-            "notes": wu.get("notes") or "",
+            "notes": wu.get("notes") or None,
             "sets": [
                 {
                     "type": "warmup",
@@ -515,7 +515,7 @@ def _plan_to_hevy_exercises(
                 note_parts.append(f"RPE {rpe}")
             if ex.get("notes"):
                 note_parts.append(ex["notes"])
-            combined_notes = " · ".join(note_parts)
+            combined_notes = " · ".join(note_parts) or None
 
             rest_secs = ex.get("rest_seconds")
             exercises.append({
