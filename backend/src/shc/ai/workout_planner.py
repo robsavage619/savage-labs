@@ -661,8 +661,28 @@ def validate_plan(
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 
+def _floor_loggable_rpe(plan: dict[str, Any]) -> None:
+    """Raise sub-6 RPE targets to 6 on loaded lifts, in place.
+
+    Hevy's RPE picker floors at 6, so a target below it (e.g. a deload set
+    at RPE 5) can never be logged or autoregulated against. Cardio/bodyweight
+    work (no ``weight_lbs``) is left alone — it isn't RPE-logged in Hevy.
+    """
+    floor = 6
+    for block in plan.get("blocks", []):
+        for ex in block.get("exercises", []):
+            w = ex.get("weight_lbs")
+            rpe = ex.get("rpe_target")
+            if w is not None and w > 0 and rpe is not None and rpe < floor:
+                ex["rpe_target"] = floor
+    rec = plan.get("recommendation", {})
+    if isinstance(rec.get("target_rpe"), (int, float)) and rec["target_rpe"] < floor:
+        rec["target_rpe"] = floor
+
+
 async def save_plan(plan: dict[str, Any], source: str = "claude", target_date: date | None = None) -> None:
     """Persist a validated plan to workout_plans for the target date (defaults to today)."""
+    _floor_loggable_rpe(plan)
     today = (target_date or date.today()).isoformat()
     async with write_ctx() as conn:
         conn.execute(
