@@ -3461,17 +3461,22 @@ async def training_after_action() -> dict:
         delta_pct = 0.0
         reason_parts: list[str] = []
 
-        rpe_gap = (avg_rpe_val - target_rpe) if (avg_rpe_val is not None and target_rpe is not None) else None
+        # Hevy's RPE picker floors at 6, so any prescribed target below 6 is
+        # unloggable — a logged 6 against a target of 5 is "on target", not an
+        # overshoot. Clamp the comparison to the floor to avoid spurious drops.
+        HEVY_RPE_FLOOR = 6.0
+        cmp_target = max(target_rpe, HEVY_RPE_FLOOR) if target_rpe is not None else None
+        rpe_gap = (avg_rpe_val - cmp_target) if (avg_rpe_val is not None and cmp_target is not None) else None
         if rpe_gap is not None:
             if rpe_gap >= 2:
                 delta_pct = -10
-                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {target_rpe} — fatigue ahead of plan")
+                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — fatigue ahead of plan")
             elif rpe_gap >= 1:
                 delta_pct = -5
-                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {target_rpe} — harder than planned")
+                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — harder than planned")
             elif rpe_gap <= -2:
                 delta_pct = 2.5
-                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {target_rpe} — too easy")
+                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — too easy")
 
         if target_reps is not None and min_reps is not None and (target_reps - min_reps) >= 2:
             if delta_pct >= 0:
