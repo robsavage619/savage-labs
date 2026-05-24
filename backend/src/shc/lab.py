@@ -765,6 +765,65 @@ def _run_energy_checkin_hrv_correlation(conn, q: dict) -> LabFinding:
     )
 
 
+def _run_lift_volume_hrv_drop(conn, q: dict) -> LabFinding:
+    """Higher strength-training tonnage on a day → lower next-morning HRV deviation."""
+    since = (date.today() - timedelta(days=q["window_days"])).isoformat()
+    hrv_rows = conn.execute(
+        "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL ORDER BY date",
+        {"s": since},
+    ).fetchall()
+    if len(hrv_rows) < q["min_n"]:
+        return LabFinding(q["id"], len(hrv_rows), None, "r", None, "insufficient",
+                          f"Only {len(hrv_rows)} HRV days.", [])
+    baselines = _hrv_baseline_28d(hrv_rows)
+    tonnage = {
+        r[0]: float(r[1])
+        for r in conn.execute(
+            """
+            SELECT day_d, SUM(weight_kg * reps) AS tonnage_kg
+            FROM workout_sets_dedup
+            WHERE day_d >= $s AND is_warmup = FALSE AND weight_kg > 0 AND reps > 0
+            GROUP BY day_d
+            """,
+            {"s": since},
+        ).fetchall()
+        if r[1] is not None
+    }
+    xs, ys, evidence = [], [], []
+    for d, hrv in hrv_rows:
+        if d not in baselines or hrv is None:
+            continue
+        prev = d - timedelta(days=1)
+        if prev not in tonnage:
+            continue
+        dev = float(hrv) - baselines[d]
+        xs.append(tonnage[prev])
+        ys.append(dev)
+        evidence.append({"date": str(d), "prev_day_tonnage_kg": round(tonnage[prev], 1),
+                         "hrv": float(hrv), "deviation": round(dev, 1)})
+    if len(xs) < q["min_n"]:
+        return LabFinding(q["id"], len(xs), None, "r", None, "insufficient",
+                          f"Only {len(xs)} mornings following a logged lift.", evidence)
+    r_corr = _pearson(xs, ys)
+    if r_corr is None:
+        return LabFinding(q["id"], len(xs), None, "r", None, "inconclusive",
+                          "Variance too low for correlation.", evidence)
+    threshold = float(q["threshold"])
+    if r_corr <= -threshold:
+        verdict = "confirmed"  # heavier tonnage → lower next-AM HRV
+    elif r_corr >= threshold:
+        verdict = "refuted"
+    elif abs(r_corr) >= threshold * 0.5:
+        verdict = "inconclusive"
+    else:
+        verdict = "refuted"
+    return LabFinding(
+        q["id"], len(xs), round(r_corr, 3), "r", None, verdict,
+        f"Across {len(xs)} mornings after a lift, prior-day tonnage vs next-AM HRV deviation r={r_corr:+.3f}.",
+        evidence[-60:],
+    )
+
+
 def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
     """Rising 7d RHR trend (≥2 bpm) predicts HRV below 28d mean within 3 days."""
     since = (date.today() - timedelta(days=q["window_days"])).isoformat()
@@ -966,6 +1025,7 @@ _RUNNERS = {
     "energy_checkin_hrv_correlation": _run_energy_checkin_hrv_correlation,
     "rhr_trend_hrv_drop": _run_rhr_trend_hrv_drop,
     "sleep_quality_checkin_hrv": _run_sleep_quality_checkin_hrv,
+    "lift_volume_hrv_drop": _run_lift_volume_hrv_drop,
 }
 
 
