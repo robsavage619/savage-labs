@@ -273,6 +273,19 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         lines.append(f"- Muscle soreness (body diagram): {', '.join(sore_groups)}")
     if chk["body_weight_trend_4wk"] is not None:
         lines.append(f"- Body weight trend (4wk): {chk['body_weight_trend_4wk']:+.2f}%")
+    bc = state.get("body_composition", {})
+    if bc.get("waist_to_shoulder") is not None:
+        trend = (
+            f"waist:shoulder 28d {bc['trend_28d_pct']:+.1f}% ({bc.get('trend_direction')})"
+            if bc.get("trend_28d_pct") is not None
+            else "no trend yet"
+        )
+        lines.append(
+            f"- Body composition (photos): waist:shoulder {bc['waist_to_shoulder']:.3f}, "
+            f"waist:hip {bc['waist_to_hip']:.3f}, {trend}"
+        )
+        if bc.get("note"):
+            lines.append(f"  → {bc['note']} (recomp goal: lean out, keep size)")
     if fresh["gaps"]:
         for g in fresh["gaps"]:
             lines.append(f"- ⚠ {g}")

@@ -380,6 +380,22 @@ def build_daily_context(conn) -> str:
     if chk["body_weight_trend_4wk"] is not None:
         lines.append(f"Body weight trend (4wk): {chk['body_weight_trend_4wk']:+.2f}%")
 
+    bc = state.get("body_composition", {})
+    if bc.get("waist_to_shoulder") is not None:
+        parts = [
+            f"waist:shoulder {bc['waist_to_shoulder']:.3f}",
+            f"waist:hip {bc['waist_to_hip']:.3f}",
+        ]
+        if bc.get("trend_28d_pct") is not None:
+            parts.append(
+                f"waist:shoulder 28d {bc['trend_28d_pct']:+.1f}% ({bc.get('trend_direction')})"
+            )
+        else:
+            parts.append("no trend yet (need a later photo)")
+        lines.append(f"Body composition (progress photos): {', '.join(parts)}")
+        if bc.get("note"):
+            lines.append(f"  → {bc['note']}")
+
     # Auto-regulation gates — surface to the LLM so it knows the constraints.
     if gates["reasons"]:
         lines.append("\n## AUTO-REG GATES (must respect)")

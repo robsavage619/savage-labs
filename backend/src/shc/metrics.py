@@ -188,6 +188,26 @@ class DataFreshness:
 
 
 @dataclass
+class BodyComposition:
+    """Leanness signal from progress photos — a trackable proxy, not a body-fat %.
+
+    Derived from the front-view waist-to-shoulder / waist-to-hip ratios (see
+    shc/vision/METHODOLOGY.md). The 28-day trend is gated by the ISAK 2% noise
+    floor so a change is only called real when it clears measurement error.
+    Surfaced as *context* for recommendations (interpreted against Rob's recomp
+    goal), never as a hard gate.
+    """
+
+    as_of: str | None = None              # latest passing front-photo date
+    n_photos: int = 0
+    waist_to_shoulder: float | None = None  # rolling median of recent shots
+    waist_to_hip: float | None = None
+    trend_28d_pct: float | None = None      # signed % change in waist:shoulder
+    trend_direction: str | None = None      # 'leaner' | 'softer' | 'stable' | None
+    note: str | None = None                 # factual cross-reference vs weight
+
+
+@dataclass
 class DailyState:
     as_of: str
     recovery: RecoveryMetrics
@@ -197,6 +217,7 @@ class DailyState:
     readiness: ReadinessSnapshot
     gates: AutoRegGates
     freshness: DataFreshness
+    body_composition: BodyComposition
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1060,6 +1081,83 @@ def get_active_medications(conn) -> list[str]:
     return [r[0] for r in rows if r[0]]
 
 
+def _body_composition(conn, today: date) -> BodyComposition:
+    """Leanness trend from passing front-view progress photos.
+
+    Uses a rolling median of recent shots for the current value and the ISAK 2%
+    noise floor to gate the 28-day trend (METHODOLOGY.md §2). Returns an empty
+    block when there are no usable photos.
+    """
+    rows = conn.execute(
+        """
+        SELECT p.photo_date,
+               max(CASE WHEN m.metric = 'waist_to_shoulder' THEN m.value_norm END),
+               max(CASE WHEN m.metric = 'waist_to_hip' THEN m.value_norm END)
+        FROM progress_photos p
+        JOIN photo_measurements m ON m.photo_id = p.id
+        WHERE p.angle = 'front' AND p.quality_pass
+        GROUP BY p.photo_date
+        ORDER BY p.photo_date
+        """
+    ).fetchall()
+    series = [
+        (r[0], float(r[1]), float(r[2]))
+        for r in rows
+        if r[1] is not None and r[2] is not None
+    ]
+    if not series:
+        return BodyComposition()
+
+    dates = [d for d, _, _ in series]
+    w2s = [s for _, s, _ in series]
+    w2h = [h for _, _, h in series]
+    latest = dates[-1]
+
+    cur_w2s = round(_st.median(w2s[-3:]), 4)
+    cur_w2h = round(_st.median(w2h[-3:]), 4)
+
+    # Trend reference: photos at least 14 days before the latest, so the
+    # comparison spans real time rather than the same session.
+    ref_vals = [s for d, s in zip(dates, w2s, strict=True) if (latest - d).days >= 14]
+    trend_pct: float | None = None
+    direction: str | None = None
+    if ref_vals:
+        ref = _st.median(ref_vals[-3:])
+        if ref:
+            trend_pct = round((cur_w2s - ref) / ref * 100, 2)
+            # ISAK 2% noise floor — below it, no real change.
+            direction = (
+                "stable"
+                if abs(trend_pct) < 2.0
+                else ("leaner" if trend_pct < 0 else "softer")
+            )
+
+    return BodyComposition(
+        as_of=latest.isoformat(),
+        n_photos=len(series),
+        waist_to_shoulder=cur_w2s,
+        waist_to_hip=cur_w2h,
+        trend_28d_pct=trend_pct,
+        trend_direction=direction,
+    )
+
+
+def _body_comp_note(bc: BodyComposition, weight_trend_4wk: float | None) -> str | None:
+    """Factual cross-reference of leanness trend against weight (no advice)."""
+    if not bc.trend_direction or weight_trend_4wk is None:
+        return None
+    wt = weight_trend_4wk
+    if bc.trend_direction == "leaner" and wt >= -1.0:
+        return "waist trending leaner while weight held — recomp on track (size kept, fat down)"
+    if bc.trend_direction == "softer" and wt > 0:
+        return "waist and weight both up — drifting toward fat gain"
+    if bc.trend_direction == "leaner" and wt < -1.0:
+        return "waist and weight both down — leaning out; verify strength/size are holding"
+    if bc.trend_direction == "stable":
+        return f"waist stable (within 2% noise), weight trend {wt:+.1f}%"
+    return f"waist {bc.trend_direction}, weight trend {wt:+.1f}%"
+
+
 def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, Any]:
     """Return the canonical `DailyState` for today as a JSON-serializable dict.
 
@@ -1087,6 +1185,9 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
     )
     freshness = _freshness(conn, today, rec, sleep, load)
 
+    body_comp = _body_composition(conn, today)
+    body_comp.note = _body_comp_note(body_comp, chk.body_weight_trend_4wk)
+
     state = DailyState(
         as_of=today.isoformat(),
         recovery=rec,
@@ -1096,5 +1197,6 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
         readiness=readiness,
         gates=gates,
         freshness=freshness,
+        body_composition=body_comp,
     )
     return asdict(state)
