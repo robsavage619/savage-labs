@@ -72,8 +72,9 @@ days-since legs/push/pull, push:pull balance, zone minutes, max HR. Plus readine
 (weighted, β-blocker), check-in subjectives, gates, body_composition, freshness.
 
 ## Ground it in the research — DO NOT lose this
-- USE the vault notes from /daily/brief and **cite them by filename** when an
-  interpretation or recommendation rests on them (e.g. effective-reps-hypertrophy.md).
+- USE the vault notes from /daily/brief. In the prose, cite by CONCEPT (e.g. "the
+  research on effective reps"), and put every vault filename you drew on in the
+  top-level `sources` array — those render as Obsidian-logo citations in the UI.
   These are Rob's curated evidence — never give generic advice that ignores them.
 - Honor each metric's research model:
   • HRV → interpret via **hrv_sigma**, not raw ms alone.
@@ -83,10 +84,19 @@ days-since legs/push/pull, push:pull balance, zone minutes, max HR. Plus readine
   • ACWR → true **Gabbett** acute/chronic; >1.5 = overload.
   • Readiness → weighted composite, β-blocker-reweighted when propranolol taken.
 
-## Timing awareness
-If `training_load.last_session_date` is today, do NOT just say "Rest" — state what was
-done, frame today as recovery, and prescribe the NEXT session from /api/workout/context.
-Only a true Rest day if ACWR/gates warrant an off day beyond the session already logged.
+## Timing awareness — pick the MODE
+Check `training_load.last_session_date` / `days_since_last`.
+- If Rob ALREADY trained today → **mode = "post_workout"**. Write a POST-WORKOUT BRIEF:
+  review what he did today (sets/exercises, how it tracked vs plan), today's recovery
+  status, and the NEXT session plan. Do NOT just say "Rest".
+- If he has NOT trained yet today → **mode = "pre_workout"**: plan today's session.
+Set the top-level `mode` field accordingly, and make the Readiness headline reflect it.
+
+## Generate the actual workout (not just prose)
+Build the structured workout for the planning day in the JSON shape that
+/api/workout/context specifies, and **POST it to http://127.0.0.1:8000/api/workout/plan**
+with `{"plan": <plan>, "source": "claude", "push_to_hevy": false}`. This makes the
+session real and ready for the one-tap Hevy push — don't leave it as narrative only.
 
 ## Write ONE deep report (sections in order)
 - **Readiness** — recovery/sleep/HRV/RHR/resp-rate/load, what each signal *means* today.
@@ -104,15 +114,19 @@ Write rich markdown: `##` subheads, **bold** key numbers, bullet lists. °F and 
 Direct and analytical, not flattering.
 
 ## Return — POST to http://127.0.0.1:8000/api/daily/report
-{"training_call": "<Push|Train|Maintain|Easy|Rest>",
- "readiness_headline": "<one line>",
+{"mode": "<pre_workout|post_workout>",
+ "training_call": "<Push|Train|Maintain|Easy|Rest>",
+ "readiness_headline": "<one line, reflects the mode>",
  "sections": [{"title": "Readiness", "body_md": "..."},
               {"title": "Metrics & progression", "body_md": "..."},
               {"title": "Patterns", "body_md": "..."},
-              {"title": "Training call + next session", "body_md": "..."},
+              {"title": "<Today's session (post) | Training call + session (pre)>", "body_md": "..."},
               {"title": "Health story", "body_md": "..."},
               {"title": "Body composition", "body_md": "..."}],
+ "sources": ["effective-reps-hypertrophy.md", "..."],
  "model": "claude"}
+
+Remember: also POST the structured workout to /api/workout/plan (above).
 """
 
 
@@ -131,6 +145,8 @@ class DailyReportSubmission(BaseModel):
     training_call: str | None = None
     readiness_headline: str | None = None
     sections: list[SectionIn]
+    sources: list[str] = []  # vault filenames cited (rendered as Obsidian tags)
+    mode: str | None = None  # 'pre_workout' | 'post_workout'
     model: str = "claude"
 
 
@@ -139,28 +155,35 @@ async def submit_daily_report(body: DailyReportSubmission) -> dict:
     """Persist a Claude-generated unified daily report (one row per day)."""
     if body.training_call and body.training_call not in _VALID_CALLS:
         raise HTTPException(422, f"training_call must be one of {sorted(_VALID_CALLS)}")
-    sections_json = json.dumps([s.model_dump() for s in body.sections])
     async with write_ctx() as conn:
         conn.execute(
             """
             INSERT INTO ai_daily_report
-                (report_date, generated_at, model, training_call, readiness_headline, sections)
-            VALUES (today(), now(), $model, $call, $headline, $sections)
+                (report_date, generated_at, model, training_call, readiness_headline,
+                 sections, sources, mode)
+            VALUES (today(), now(), $model, $call, $headline, $sections, $sources, $mode)
             ON CONFLICT (report_date) DO UPDATE SET
                 generated_at = excluded.generated_at,
                 model = excluded.model,
                 training_call = excluded.training_call,
                 readiness_headline = excluded.readiness_headline,
-                sections = excluded.sections
+                sections = excluded.sections,
+                sources = excluded.sources,
+                mode = excluded.mode
             """,
             {
                 "model": body.model,
                 "call": body.training_call,
                 "headline": body.readiness_headline,
-                "sections": sections_json,
+                "sections": json.dumps([s.model_dump() for s in body.sections]),
+                "sources": json.dumps(body.sources),
+                "mode": body.mode,
             },
         )
-    log.info("daily report stored — call=%s sections=%d", body.training_call, len(body.sections))
+    log.info(
+        "daily report stored — mode=%s call=%s sections=%d sources=%d",
+        body.mode, body.training_call, len(body.sections), len(body.sources),
+    )
     return {"status": "ok"}
 
 
@@ -168,7 +191,8 @@ async def submit_daily_report(body: DailyReportSubmission) -> dict:
 async def latest_daily_report() -> dict:
     """Return the most recent unified daily report."""
     row = get_read_conn().execute(
-        "SELECT report_date, generated_at, model, training_call, readiness_headline, sections "
+        "SELECT report_date, generated_at, model, training_call, readiness_headline, "
+        "sections, sources, mode "
         "FROM ai_daily_report ORDER BY report_date DESC LIMIT 1"
     ).fetchone()
     if not row:
@@ -181,5 +205,7 @@ async def latest_daily_report() -> dict:
             "training_call": row[3],
             "readiness_headline": row[4],
             "sections": json.loads(row[5]) if row[5] else [],
+            "sources": json.loads(row[6]) if row[6] else [],
+            "mode": row[7],
         }
     }

@@ -930,9 +930,11 @@ export interface DailyReport {
   report_date: string;
   generated_at: string;
   model: string;
+  mode: string | null;
   training_call: string | null;
   readiness_headline: string | null;
   sections: { title: string; body_md: string }[];
+  sources: string[];
 }
 
 export interface ProgressCritiqueState {
