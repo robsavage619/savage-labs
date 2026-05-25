@@ -21,6 +21,7 @@ from shc.ai.workout_planner import (
 )
 from shc.config import settings
 from shc.db.schema import get_read_conn, get_write_conn, write_ctx
+from shc.lab import _welch_t as _lab_welch
 from shc.metrics import compute_daily_state, muscle_group as _mg
 
 router = APIRouter(tags=["dashboard"])
@@ -635,20 +636,30 @@ async def insights() -> list[dict]:
             elif float(today_row[4]) < 6.5:
                 short_sleep_next_hrv.append(next_row[2])
 
-    if long_sleep_next_hrv and short_sleep_next_hrv:
+    # Only surface this association if the two buckets differ significantly
+    # (Welch's t, p < 0.10). Framed as a correlation, not causation: long-sleep
+    # nights tend to FOLLOW hard-training days, so depressed next-day HRV is
+    # likely driven by the prior load, not the extra sleep. The rigorous,
+    # pre-registered version of this test lives in the lab engine (lab.py).
+    _ls = _lab_welch(long_sleep_next_hrv, short_sleep_next_hrv) if (
+        len(long_sleep_next_hrv) >= 5 and len(short_sleep_next_hrv) >= 5
+    ) else None
+    if _ls is not None and _ls[1] < 0.10:
         delta = sum(long_sleep_next_hrv) / len(long_sleep_next_hrv) - sum(
             short_sleep_next_hrv
         ) / len(short_sleep_next_hrv)
-        verb = "lifts" if delta > 0 else "lowers"
+        verb = "higher" if delta > 0 else "lower"
         items.append(
             {
-                "headline": f"Long sleep {verb} next-day HRV by {abs(delta):.1f}ms",
+                "headline": f"Long sleep is associated with {verb} next-day HRV (~{abs(delta):.1f}ms)",
                 "body": (
-                    f"When you sleep ≥7.5h, next-day HRV averages "
+                    f"After ≥7.5h nights, next-day HRV averages "
                     f"{sum(long_sleep_next_hrv) / len(long_sleep_next_hrv):.1f}ms vs "
-                    f"{sum(short_sleep_next_hrv) / len(short_sleep_next_hrv):.1f}ms after <6.5h nights."
+                    f"{sum(short_sleep_next_hrv) / len(short_sleep_next_hrv):.1f}ms after <6.5h "
+                    f"(p={_ls[1]:.2f}). Likely reverse-causal: long nights tend to follow hard "
+                    f"days, so prior load — not the sleep itself — probably drives the difference."
                 ),
-                "polarity": "positive" if delta > 0 else "negative",
+                "polarity": "neutral",
             }
         )
 

@@ -19,6 +19,12 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+# Significance level for confirming a finding, and the family-wise FDR rate
+# applied across the whole catalogue (see _apply_fdr). A correlation or mean
+# difference must clear BOTH its effect-size threshold AND p < _ALPHA, then
+# survive Benjamini–Hochberg correction, before it is reported as CONFIRMED.
+_ALPHA = 0.10
+
 
 @dataclass
 class LabFinding:
@@ -32,6 +38,69 @@ class LabFinding:
     evidence: list[dict]
 
 
+def _betacf(a: float, b: float, x: float) -> float:
+    """Continued-fraction expansion for the incomplete beta (Numerical Recipes)."""
+    maxit, eps, fpmin = 200, 3.0e-12, 1.0e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < fpmin:
+        d = fpmin
+    d = 1.0 / d
+    h = d
+    for m in range(1, maxit + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < fpmin:
+            d = fpmin
+        c = 1.0 + aa / c
+        if abs(c) < fpmin:
+            c = fpmin
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < eps:
+            break
+    return h
+
+
+def _betai(a: float, b: float, x: float) -> float:
+    """Regularized incomplete beta function I_x(a, b)."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    bt = math.exp(
+        math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+        + a * math.log(x) + b * math.log(1.0 - x)
+    )
+    if x < (a + 1.0) / (a + b + 2.0):
+        return bt * _betacf(a, b, x) / a
+    return 1.0 - bt * _betacf(b, a, 1.0 - x) / b
+
+
+def _student_t_p(t: float, df: float) -> float:
+    """Two-tailed p-value for Student's t with df degrees of freedom.
+
+    Uses the regularized incomplete beta function — exact for any df, unlike the
+    normal (z) approximation that understates p at the small n's used here.
+    """
+    if df <= 0:
+        return 1.0
+    x = df / (df + t * t)
+    return max(0.0, min(1.0, _betai(df / 2.0, 0.5, x)))
+
+
 def _welch_t(a: list[float], b: list[float]) -> tuple[float, float] | None:
     """Welch's t for unequal variances. Returns (t, two-tailed p) or None."""
     if len(a) < 2 or len(b) < 2:
@@ -43,15 +112,11 @@ def _welch_t(a: list[float], b: list[float]) -> tuple[float, float] | None:
     if se == 0:
         return None
     t = (ma - mb) / se
-    # Welch–Satterthwaite df + survival function via erf approximation
+    # Welch–Satterthwaite degrees of freedom, then the exact t-distribution p.
     df = (va / len(a) + vb / len(b)) ** 2 / (
         (va / len(a)) ** 2 / (len(a) - 1) + (vb / len(b)) ** 2 / (len(b) - 1)
     )
-    # Two-tailed p via t→z approximation (df > ~10 is fine)
-    z = abs(t) * math.sqrt(df / (df + (t * t)))  # crude
-    # Use erf-based normal cdf for the simple approximation
-    p = 2 * (1 - 0.5 * (1 + math.erf(abs(t) / math.sqrt(2))))
-    return t, max(min(p, 1.0), 0.0)
+    return t, _student_t_p(t, df)
 
 
 def _pearson(xs: list[float], ys: list[float]) -> float | None:
@@ -65,6 +130,14 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
     if dx == 0 or dy == 0:
         return None
     return num / (dx * dy)
+
+
+def _pearson_p(r: float, n: int) -> float | None:
+    """Two-tailed significance of a Pearson r via t = r·√((n−2)/(1−r²))."""
+    if n < 3 or abs(r) >= 1.0:
+        return None
+    t = r * math.sqrt((n - 2) / (1.0 - r * r))
+    return _student_t_p(t, n - 2)
 
 
 def _hrv_baseline_28d(rows: list[tuple]) -> dict[date, float]:
@@ -418,18 +491,18 @@ def _run_push_pull_imbalance(conn, q: dict) -> LabFinding:
     if r_corr is None:
         return LabFinding(q["id"], len(ratios), None, "r", None, "inconclusive",
                           "Variance too low for correlation.", evidence[-30:])
+    p = _pearson_p(r_corr, len(ratios))
     threshold = float(q["threshold"])
-    if r_corr <= -threshold:
-        verdict = "confirmed"
-    elif r_corr >= threshold:
-        verdict = "confirmed"  # either direction was 'either'
+    sig = p is not None and p < _ALPHA
+    if abs(r_corr) >= threshold and sig:
+        verdict = "confirmed"  # direction='either' — magnitude in either sign
     elif abs(r_corr) >= 0.15:
         verdict = "inconclusive"
     else:
         verdict = "refuted"
     return LabFinding(
-        q["id"], len(ratios), round(r_corr, 3), "r", None, verdict,
-        f"Across {len(ratios)} rolling 7d windows, |log push:pull| correlates with avg recovery at r={r_corr:+.3f}.",
+        q["id"], len(ratios), round(r_corr, 3), "r", p, verdict,
+        f"Across {len(ratios)} rolling 7d windows, |log push:pull| correlates with avg recovery at r={r_corr:+.3f} (p={p:.3f}).",
         evidence[-60:],
     )
 
@@ -647,9 +720,11 @@ def _run_weekly_volume_spike_recovery(conn, q: dict) -> LabFinding:
     xs = [1.0 if e["spike"] else 0.0 for e in evidence]
     ys = [e["avg_recovery"] for e in evidence]
     r_corr = _pearson(xs, ys) or 0.0
+    p = _pearson_p(r_corr, len(xs))
     threshold = float(q["threshold"])
     delta = (sum(spike_rec) / len(spike_rec)) - (sum(normal_rec) / len(normal_rec))
-    if r_corr <= -threshold:
+    sig = p is not None and p < _ALPHA
+    if r_corr <= -threshold and sig:
         verdict = "confirmed"
     elif r_corr >= threshold:
         verdict = "refuted"
@@ -657,10 +732,11 @@ def _run_weekly_volume_spike_recovery(conn, q: dict) -> LabFinding:
         verdict = "inconclusive"
     else:
         verdict = "refuted"
+    p_str = f", p={p:.3f}" if p is not None else ""
     return LabFinding(
-        q["id"], len(evidence), round(r_corr, 3), "r", None, verdict,
+        q["id"], len(evidence), round(r_corr, 3), "r", p, verdict,
         f"Volume-spike weeks ({len(spike_rec)}): avg recovery {sum(spike_rec)/len(spike_rec):.0f}; "
-        f"normal weeks ({len(normal_rec)}): {sum(normal_rec)/len(normal_rec):.0f}. Δ={delta:+.1f}pts, r={r_corr:+.3f}.",
+        f"normal weeks ({len(normal_rec)}): {sum(normal_rec)/len(normal_rec):.0f}. Δ={delta:+.1f}pts, r={r_corr:+.3f}{p_str}.",
         evidence,
     )
 
@@ -749,8 +825,10 @@ def _run_energy_checkin_hrv_correlation(conn, q: dict) -> LabFinding:
         return LabFinding(q["id"], len(rows), None, "r", None, "inconclusive",
                           "Variance too low for correlation.", [])
     evidence = [{"date": str(r[0]), "hrv": float(r[1]), "energy": int(r[2])} for r in rows]
+    p = _pearson_p(r_corr, len(rows))
     threshold = float(q["threshold"])
-    if r_corr >= threshold:
+    sig = p is not None and p < _ALPHA
+    if r_corr >= threshold and sig:
         verdict = "confirmed"
     elif r_corr <= -threshold:
         verdict = "refuted"
@@ -758,9 +836,10 @@ def _run_energy_checkin_hrv_correlation(conn, q: dict) -> LabFinding:
         verdict = "inconclusive"
     else:
         verdict = "refuted"
+    p_str = f", p={p:.3f}" if p is not None else ""
     return LabFinding(
-        q["id"], len(rows), round(r_corr, 3), "r", None, verdict,
-        f"Energy check-in correlates with same-morning HRV at r={r_corr:+.3f} across {len(rows)} days.",
+        q["id"], len(rows), round(r_corr, 3), "r", p, verdict,
+        f"Energy check-in correlates with same-morning HRV at r={r_corr:+.3f}{p_str} across {len(rows)} days.",
         evidence[-60:],
     )
 
@@ -808,8 +887,10 @@ def _run_lift_volume_hrv_drop(conn, q: dict) -> LabFinding:
     if r_corr is None:
         return LabFinding(q["id"], len(xs), None, "r", None, "inconclusive",
                           "Variance too low for correlation.", evidence)
+    p = _pearson_p(r_corr, len(xs))
     threshold = float(q["threshold"])
-    if r_corr <= -threshold:
+    sig = p is not None and p < _ALPHA
+    if r_corr <= -threshold and sig:
         verdict = "confirmed"  # heavier tonnage → lower next-AM HRV
     elif r_corr >= threshold:
         verdict = "refuted"
@@ -817,9 +898,10 @@ def _run_lift_volume_hrv_drop(conn, q: dict) -> LabFinding:
         verdict = "inconclusive"
     else:
         verdict = "refuted"
+    p_str = f", p={p:.3f}" if p is not None else ""
     return LabFinding(
-        q["id"], len(xs), round(r_corr, 3), "r", None, verdict,
-        f"Across {len(xs)} mornings after a lift, prior-day tonnage vs next-AM HRV deviation r={r_corr:+.3f}.",
+        q["id"], len(xs), round(r_corr, 3), "r", p, verdict,
+        f"Across {len(xs)} mornings after a lift, prior-day tonnage vs next-AM HRV deviation r={r_corr:+.3f}{p_str}.",
         evidence[-60:],
     )
 
@@ -1029,6 +1111,35 @@ _RUNNERS = {
 }
 
 
+def _apply_fdr(findings: list[LabFinding], alpha: float = _ALPHA) -> None:
+    """Benjamini–Hochberg correction across the whole catalogue, in place.
+
+    The catalogue runs ~15 hypotheses against one noisy dataset every cycle.
+    Without correction, at α=0.10 we'd expect false positives by chance alone.
+    BH controls the false-discovery rate: a finding can only stay CONFIRMED if
+    its p-value clears the step-up critical value p_(k) ≤ (k/m)·α. Confirmed
+    findings that don't survive are downgraded to INCONCLUSIVE so the user isn't
+    told a chance correlation is real.
+    """
+    indexed = [(i, f.p_value) for i, f in enumerate(findings) if f.p_value is not None]
+    m = len(indexed)
+    if m == 0:
+        return
+    ordered = sorted(indexed, key=lambda t: t[1])
+    max_k = 0
+    for rank, (_, p) in enumerate(ordered, start=1):
+        if p <= (rank / m) * alpha:
+            max_k = rank
+    crit_p = ordered[max_k - 1][1] if max_k > 0 else -1.0
+    for f in findings:
+        if f.verdict == "confirmed" and f.p_value is not None and f.p_value > crit_p:
+            f.verdict = "inconclusive"
+            f.summary += (
+                " · did not survive Benjamini–Hochberg correction across "
+                f"{m} simultaneous hypotheses — treat as suggestive, not confirmed."
+            )
+
+
 def run_all(conn) -> list[LabFinding]:
     qrows = conn.execute(
         "SELECT id, title, hypothesis, exposure, outcome, test_type, window_days, "
@@ -1054,6 +1165,7 @@ def run_all(conn) -> list[LabFinding]:
                 qd["id"], 0, None, "", None, "inconclusive",
                 f"runner error: {exc}", [],
             ))
+    _apply_fdr(findings)
     return findings
 
 
