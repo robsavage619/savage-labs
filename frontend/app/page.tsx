@@ -26,6 +26,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { SectionNav } from "@/components/section-nav";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { GoalScorecard } from "@/components/goal-scorecard";
+import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
 
 export default function Dashboard() {
   return (
@@ -151,6 +152,12 @@ export default function Dashboard() {
           <CollapsibleSection id="cardio" title="Cardio & sports">
             <ErrorBoundary label="Cardio">
               <CardioPanel />
+            </ErrorBoundary>
+          </CollapsibleSection>
+
+          <CollapsibleSection id="physique" title="Progress photos">
+            <ErrorBoundary label="Progress photos">
+              <ProgressPhotoPanel />
             </ErrorBoundary>
           </CollapsibleSection>
 

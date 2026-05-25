@@ -9,7 +9,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from shc.api.middleware import HostOriginMiddleware
-from shc.api.routers import apple, auth, dashboard, hevy, training, vault
+from shc.api.routers import (
+    apple,
+    auth,
+    dashboard,
+    hevy,
+    progress_photos,
+    training,
+    vault,
+)
 from shc.config import settings
 from shc.db.schema import init_db
 from shc.ingest.apple import start_watcher, stop_watcher
@@ -52,6 +60,7 @@ app.include_router(dashboard.router, prefix="/api")
 app.include_router(hevy.router, prefix="/api")
 app.include_router(training.router, prefix="/api")
 app.include_router(vault.router, prefix="/api")
+app.include_router(progress_photos.router, prefix="/api")
 
 
 @app.get("/healthz")

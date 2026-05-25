@@ -895,4 +895,60 @@ export const api = {
       }[];
       as_of: string;
     }>(`/api/training/progression/all?weeks=${weeks}`),
+  progressPhotos: (angle?: string) =>
+    get<ProgressPhoto[]>(
+      `/api/progress-photos${angle ? `?angle=${angle}` : ""}`,
+    ),
+  progressPhotoUpload: async (file: File, photoDate: string, angle: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("photo_date", photoDate);
+    form.append("angle", angle);
+    const r = await fetch(`${BASE}/api/progress-photos`, {
+      method: "POST",
+      body: form,
+    });
+    if (!r.ok) throw new Error(`progressPhotoUpload ${r.status}`);
+    return r.json() as Promise<ProgressPhotoUploadResult>;
+  },
+  progressPhotoCompare: (angle: string, before: string, after: string) =>
+    get<ProgressComparison>(
+      `/api/progress-photos/compare?angle=${angle}&before=${before}&after=${after}`,
+    ),
+  progressHeatmapUrl: (angle: string, before: string, after: string) =>
+    `${BASE}/api/progress-photos/heatmap?angle=${angle}&before=${before}&after=${after}`,
 };
+
+export interface ProgressPhoto {
+  photo_date: string;
+  angle: string;
+  quality_pass: boolean;
+  quality_flags: string[];
+  measurements: Record<string, number>;
+}
+
+export interface ProgressPhotoUploadResult {
+  id: string;
+  photo_date: string;
+  angle: string;
+  quality_pass: boolean;
+  quality_flags: string[];
+  advisories: string[];
+  pose_conf: number;
+  measurements: Record<string, number>;
+}
+
+export interface ProgressComparison {
+  angle: string;
+  before: string;
+  after: string;
+  verdicts: {
+    metric: string;
+    detectable: boolean;
+    direction: string;
+    pct_change: number | null;
+  }[];
+  any_detectable: boolean;
+  weight_kg: { before: number | null; after: number | null };
+  conflict: string | null;
+}
