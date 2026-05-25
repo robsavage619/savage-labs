@@ -17,22 +17,48 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from shc.db.schema import get_read_conn, write_ctx
+from shc.ingest import dupr, hevy, whoop
+from shc.metrics import compute_daily_state
 
 router = APIRouter(tags=["daily-report"])
 log = logging.getLogger(__name__)
 
 _VALID_CALLS = {"Push", "Train", "Maintain", "Easy", "Rest"}
 
+
+@router.post("/sync/all")
+async def sync_all() -> dict:
+    """Force a fresh pull from every connected source before reporting.
+
+    Runs the same WHOOP / Hevy / DUPR syncs the scheduler does, on demand. Each
+    source is isolated — one failing (auth, network) never blocks the others; the
+    per-source outcome is returned so failures are visible, not silent. Apple
+    Health ingests automatically via the file watcher, so it isn't pulled here.
+    """
+    sources = (("whoop", whoop.sync_all), ("hevy", hevy.sync_workouts), ("dupr", dupr.sync_rating))
+    results: dict[str, dict] = {}
+    for name, fn in sources:
+        try:
+            results[name] = {"ok": True, "detail": await fn()}
+        except Exception as exc:  # isolate per source — surface, don't abort
+            log.warning("sync %s failed: %s", name, exc)
+            results[name] = {"ok": False, "error": str(exc)}
+    freshness = compute_daily_state(get_read_conn()).get("freshness", {})
+    return {"results": results, "freshness": freshness}
+
 _PROMPT = """\
 Generate Rob's COMPLETE daily report in one pass — this replaces the separate
 briefing, health-story, workout, and body-composition runs.
 
-## Pull your inputs (GET these first)
-1. http://127.0.0.1:8000/api/daily/brief
+## Sync first, then pull your inputs
+1. POST http://127.0.0.1:8000/api/sync/all
+   — force-refresh WHOOP / Hevy / DUPR so the report runs on current data. Note any
+     source that comes back `ok: false` (mention it in Readiness if a key feed failed).
+2. GET http://127.0.0.1:8000/api/daily/brief
    — DailyState (recovery, sleep, training load, readiness, AUTO-REG GATES,
-     body_composition), top vault notes, and recent training. This is your
+     body_composition, freshness), top vault notes, and recent training. This is your
      single source of numbers — never recompute them.
-2. http://127.0.0.1:8000/api/progress-photos/critique
+3. GET http://127.0.0.1:8000/api/progress-photos/critique
    — latest physique critique: use its `verdict` and the body-composition takeaway.
      If `critique` is null, say body-composition tracking has no critique yet.
 
