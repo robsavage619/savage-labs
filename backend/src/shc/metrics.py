@@ -319,7 +319,19 @@ def _rhr_subscore(today: float | None, baseline: float | None) -> float | None:
     return max(0.0, min(100.0, 50.0 - pct * 500.0))
 
 
-def _subj_subscore(energy: int | None, stress: int | None, soreness: int | None) -> float | None:
+def _subj_subscore(
+    energy: int | None,
+    stress: int | None,
+    soreness: int | None,
+    sleep_quality: int | None = None,
+    motivation: int | None = None,
+) -> float | None:
+    """Mean of the present 1–10 subjective check-ins, each mapped to 0–100.
+
+    Higher energy/sleep-quality/motivation and lower stress/soreness all read as
+    more ready. Subjective sleep quality is the felt-rest signal — distinct from
+    the objective WHOOP sleep score that drives the separate sleep component.
+    """
     parts: list[float] = []
     if energy is not None:
         parts.append(energy * 10.0)
@@ -327,6 +339,10 @@ def _subj_subscore(energy: int | None, stress: int | None, soreness: int | None)
         parts.append((10 - stress) * 10.0)
     if soreness is not None:
         parts.append((10 - soreness) * 10.0)
+    if sleep_quality is not None:
+        parts.append(sleep_quality * 10.0)
+    if motivation is not None:
+        parts.append(motivation * 10.0)
     if not parts:
         return None
     return sum(parts) / len(parts)
@@ -756,7 +772,10 @@ def _readiness_snapshot(
         "hrv": _hrv_subscore(rec.hrv_sigma),
         "sleep": sleep.score,
         "rhr": _rhr_subscore(rec.rhr, rec.rhr_baseline_28d),
-        "subj": _subj_subscore(chk.energy, chk.stress, chk.soreness_overall),
+        "subj": _subj_subscore(
+            chk.energy, chk.stress, chk.soreness_overall,
+            chk.sleep_quality, chk.motivation,
+        ),
     }
     present = [(k, v) for k, v in components.items() if v is not None]
     if not present:
