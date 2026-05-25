@@ -1,6 +1,3 @@
-import { CommandBriefing } from "@/components/command-briefing";
-import { HealthAnalysis } from "@/components/health-analysis";
-import { HealthStory } from "@/components/health-story";
 import { PillarRecovery } from "@/components/pillar-recovery";
 import { PillarSleep } from "@/components/pillar-sleep";
 import { PillarTrainingLoad } from "@/components/pillar-training-load";
@@ -75,20 +72,12 @@ export default function Dashboard() {
           </ErrorBoundary>
 
           <section id="today" className="scroll-mt-20 space-y-4">
-            <ErrorBoundary label="Command briefing">
-              <CommandBriefing />
-            </ErrorBoundary>
-
+            {/* Briefing, health story & health analysis retired — the unified
+                Daily Report (top of page) now covers readiness, training call,
+                health narrative, and body composition. Components retained in
+                the repo but no longer rendered. */}
             <ErrorBoundary label="WHOOP vitals">
               <WhoopVitals />
-            </ErrorBoundary>
-
-            <ErrorBoundary label="Health story">
-              <HealthStory />
-            </ErrorBoundary>
-
-            <ErrorBoundary label="Health analysis">
-              <HealthAnalysis />
             </ErrorBoundary>
           </section>
 
