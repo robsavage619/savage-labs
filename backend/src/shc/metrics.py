@@ -36,10 +36,6 @@ log = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-BETA_BLOCKER_NAMES = (
-    "propranolol", "metoprolol", "atenolol", "bisoprolol", "carvedilol", "nebivolol",
-)
-
 # Propranolol: HR suppressed ~15-25 bpm, kcal under-counted ~20-30%.
 # Conservative: shift HR zones -20 bpm and multiply HR-derived kcal by 1.25
 # only when Rob marks `propranolol_taken=True` for the day.
@@ -269,10 +265,6 @@ def muscle_group(exercise: str) -> str:
     if any(k in e for k in _CORE):
         return "core"
     return "other"
-
-
-def _is_beta_blocker(med_names: list[str]) -> bool:
-    return any(any(bb in m.lower() for bb in BETA_BLOCKER_NAMES) for m in med_names)
 
 
 def _hrv_subscore(sigma: float | None) -> float | None:
@@ -1080,13 +1072,6 @@ def _freshness(conn, today: date, rec: RecoveryMetrics, sleep: SleepMetrics, loa
 
 # ── Public entry point ───────────────────────────────────────────────────────
 
-def get_active_medications(conn) -> list[str]:
-    rows = conn.execute(
-        "SELECT name FROM medications WHERE valid_to IS NULL"
-    ).fetchall()
-    return [r[0] for r in rows if r[0]]
-
-
 def _body_composition(conn, today: date) -> BodyComposition:
     """Leanness trend from passing front-view progress photos.
 
@@ -1179,8 +1164,12 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
     load = _training_load(conn, effective)
     chk = _checkin(conn, today)
 
-    meds = get_active_medications(conn)
-    beta_blocker = _is_beta_blocker(meds) and bool(chk.propranolol_taken)
+    # Reweight readiness away from HR-based signals on propranolol-dosing days.
+    # Keyed off the day's check-in flag — the same authoritative signal the gate
+    # uses (see _gates). Previously this also required propranolol to appear in
+    # the active-medications list, so the reweight and the gate could diverge if
+    # the PRN prescription wasn't currently listed.
+    beta_blocker = bool(chk.propranolol_taken)
 
     readiness = _readiness_snapshot(rec, sleep, chk, beta_blocker=beta_blocker)
     e1rm = _e1rm_regression(conn, today)

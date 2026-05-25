@@ -461,14 +461,25 @@ async def stats_summary() -> dict:
             "FROM sleep WHERE night_date >= $since ORDER BY night_date",
             {"since": (today - timedelta(days=14)).isoformat()},
         ).fetchall()
+        # Canonical workload ACWR — same v_daily_load source and window math as
+        # metrics._training_load, so this endpoint agrees with /daily/brief.
+        # (Previously this computed a recovery-SCORE ratio mislabeled as ACWR,
+        # which disagreed with the canonical training-load ACWR.)
+        load_rows = conn.execute(
+            "SELECT date, composite_load FROM v_daily_load WHERE date >= $s ORDER BY date",
+            {"s": (today - timedelta(days=28)).isoformat()},
+        ).fetchall()
     finally:
         conn.close()
 
+    recent_load = [float(r[1] or 0) for r in load_rows if r[0] >= today - timedelta(days=7)]
+    chronic_load = [float(r[1] or 0) for r in load_rows]
+    acute = round(sum(recent_load) / 7.0, 2) if chronic_load else None
+    chronic = round(sum(chronic_load) / 28.0, 2) if chronic_load else None
+    acwr = round(acute / chronic, 2) if (acute and chronic) else None
+
+    # Recovery scores still feed the 7-day recovery trend slope below.
     scores_7 = [r[1] for r in rec_rows[-7:] if r[1] is not None]
-    scores_28 = [r[1] for r in rec_rows[-28:] if r[1] is not None]
-    acute = sum(scores_7) / len(scores_7) if scores_7 else None
-    chronic = sum(scores_28) / len(scores_28) if scores_28 else None
-    acwr = (acute / chronic) if (acute and chronic) else None
 
     rhrs_7 = [r[3] for r in rec_rows[-7:] if r[3] is not None]
     rhrs_28 = [r[3] for r in rec_rows[-28:] if r[3] is not None]
@@ -2718,14 +2729,13 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
             """,
             {"since": (date.today() - timedelta(days=14)).isoformat()},
         ).fetchall()
-        scores_7 = conn.execute(
-            "SELECT AVG(score) FROM recovery WHERE date >= $s",
-            {"s": (date.today() - timedelta(days=7)).isoformat()},
-        ).fetchone()
-        scores_28 = conn.execute(
-            "SELECT AVG(score) FROM recovery WHERE date >= $s",
+        # Canonical workload ACWR from v_daily_load (matches metrics._training_load
+        # and /stats/summary). Previously this used a recovery-SCORE ratio, which
+        # gated the fallback plan on the wrong signal.
+        load_rows = conn.execute(
+            "SELECT date, composite_load FROM v_daily_load WHERE date >= $s ORDER BY date",
             {"s": (date.today() - timedelta(days=28)).isoformat()},
-        ).fetchone()
+        ).fetchall()
     finally:
         conn.close()
 
@@ -2735,8 +2745,11 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
     hrv_sd = hrv_base[2] if hrv_base else None
     hrv_sigma = round((hrv_today - hrv_avg) / hrv_sd, 2) if (hrv_today and hrv_avg and hrv_sd) else None
     sleep_hours = round(float(sleep_row[0]), 1) if sleep_row and sleep_row[0] else None
-    acwr_acute = float(scores_7[0]) if scores_7 and scores_7[0] else None
-    acwr_chronic = float(scores_28[0]) if scores_28 and scores_28[0] else None
+    _today = date.today()
+    _recent_load = [float(r[1] or 0) for r in load_rows if r[0] >= _today - timedelta(days=7)]
+    _chronic_load = [float(r[1] or 0) for r in load_rows]
+    acwr_acute = round(sum(_recent_load) / 7.0, 2) if _chronic_load else None
+    acwr_chronic = round(sum(_chronic_load) / 28.0, 2) if _chronic_load else None
     acwr = round(acwr_acute / acwr_chronic, 2) if (acwr_acute and acwr_chronic) else None
 
     group_last_day: dict[str, str] = {}
