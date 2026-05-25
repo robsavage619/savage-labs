@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
+import { Markdown } from "@/components/ui/markdown";
 
 const CALL_COLOR: Record<string, string> = {
   Push: "var(--sl-accent)",
@@ -71,15 +72,24 @@ export function DailyReport() {
       ) : r ? (
         <div className="space-y-3">
           {r.sections.map((s, i) => (
-            <div key={i} className="space-y-1">
-              <span className="text-[9.5px] font-mono uppercase tracking-wide" style={{ color: "var(--sl-accent)" }}>
-                {s.title}
-              </span>
-              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-[var(--text-primary)]">
-                {s.body_md}
-              </p>
+            <div
+              key={i}
+              className="rounded-lg border p-3 space-y-2"
+              style={{ borderColor: "var(--hairline)", background: "var(--bg-elevated)" }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="h-3 w-[2px] rounded" style={{ background: "var(--sl-accent)" }} />
+                <h3 className="text-[12px] font-semibold tracking-tight text-[var(--text-primary)]">
+                  {s.title}
+                </h3>
+              </div>
+              <Markdown text={s.body_md} />
             </div>
           ))}
+          <p className="text-[10px] text-[var(--text-faint)] pt-1">
+            Generated {new Date(r.generated_at).toLocaleString()} · {r.model} · grounded in your synced
+            metrics + vault research
+          </p>
         </div>
       ) : (
         <p className="text-[12px] text-[var(--text-faint)]">

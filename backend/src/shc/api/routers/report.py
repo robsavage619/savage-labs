@@ -47,39 +47,69 @@ async def sync_all() -> dict:
     return {"results": results, "freshness": freshness}
 
 _PROMPT = """\
-Generate Rob's COMPLETE daily report in one pass — this replaces the separate
-briefing, health-story, workout, and body-composition runs.
+Generate Rob's COMPLETE daily report in one pass. This is the SINGLE report and must
+carry the FULL depth and research grounding — it replaces the old briefing,
+health-story, workout, and analytics dashboard. Be thorough and analytical, never thin.
 
-## Sync first, then pull your inputs
-1. POST http://127.0.0.1:8000/api/sync/all
-   — force-refresh WHOOP / Hevy / DUPR so the report runs on current data. Note any
-     source that comes back `ok: false` (mention it in Readiness if a key feed failed).
-2. GET http://127.0.0.1:8000/api/daily/brief
-   — DailyState (recovery, sleep, training load, readiness, AUTO-REG GATES,
-     body_composition, freshness), top vault notes, and recent training. This is your
-     single source of numbers — never recompute them.
-3. GET http://127.0.0.1:8000/api/progress-photos/critique
-   — latest physique critique: use its `verdict` and the body-composition takeaway.
-     If `critique` is null, say body-composition tracking has no critique yet.
+## Sync first, then pull ALL of these
+1. POST http://127.0.0.1:8000/api/sync/all — refresh WHOOP / Hevy / DUPR. Note any
+   source returning `ok: false`.
+2. GET http://127.0.0.1:8000/api/daily/brief — DailyState (full metric set below),
+   recent training, AND the curated vault research notes. Single source of numbers.
+3. GET http://127.0.0.1:8000/api/workout/context — TIMING-AWARE workout plan (if Rob
+   trained today it auto-plans the NEXT session). Use for the training section.
+4. GET http://127.0.0.1:8000/api/stats/summary — ACWR, RHR elevation, recovery-trend
+   slope, sleep avg/consistency/debt analytics.
+5. GET http://127.0.0.1:8000/api/insights AND /api/insights/correlations — detected
+   patterns.
+6. GET http://127.0.0.1:8000/api/progress-photos/critique — physique verdict (null → say so).
 
-## Write ONE report with these sections (in order)
-- **Readiness** — what the recovery/sleep/HRV/load numbers mean today.
-- **Training call + today's workout** — the call (Push/Train/Maintain/Easy/Rest)
-  and the actual session, RESPECTING the auto-reg gates in DailyState. Honor the
-  goal: climb to 5.0 pickleball while KEEPING strength + size (concurrent-training
-  lens, not generic recomp).
-- **Health story** — the knowledgeable-friend narrative tying it together.
-- **Body composition** — interpret waist:shoulder / waist:hip + the critique verdict
-  against the lean-out-keep-size goal. Do NOT claim change the gated trend doesn't
-  support; do NOT estimate body-fat %.
+## Use the FULL metric set — do not cherry-pick
+Recovery: HRV + **hrv_sigma** (σ vs 28d baseline), RHR + elevation%, skin-temp delta,
+**respiratory_rate_delta**, calibration flag. Sleep: deep%/REM/efficiency/consistency,
+the **sleep-need breakdown** (base/debt/strain/nap), midpoint. Training load: ACWR,
+days-since legs/push/pull, push:pull balance, zone minutes, max HR. Plus readiness
+(weighted, β-blocker), check-in subjectives, gates, body_composition, freshness.
 
-Use °F and lbs. Be direct, not flattering.
+## Ground it in the research — DO NOT lose this
+- USE the vault notes from /daily/brief and **cite them by filename** when an
+  interpretation or recommendation rests on them (e.g. effective-reps-hypertrophy.md).
+  These are Rob's curated evidence — never give generic advice that ignores them.
+- Honor each metric's research model:
+  • HRV → interpret via **hrv_sigma**, not raw ms alone.
+  • HRmax → max_hr_measured if present, else **Tanaka (208−0.7·age)** — NEVER 220−age.
+  • Respiratory rate → **Bourdillon** illness sentinel (+~1 bpm = flag).
+  • Deep sleep → **OSA-aware**: deep% weighs more than raw duration.
+  • ACWR → true **Gabbett** acute/chronic; >1.5 = overload.
+  • Readiness → weighted composite, β-blocker-reweighted when propranolol taken.
+
+## Timing awareness
+If `training_load.last_session_date` is today, do NOT just say "Rest" — state what was
+done, frame today as recovery, and prescribe the NEXT session from /api/workout/context.
+Only a true Rest day if ACWR/gates warrant an off day beyond the session already logged.
+
+## Write ONE deep report (sections in order)
+- **Readiness** — recovery/sleep/HRV/RHR/resp-rate/load, what each signal *means* today.
+- **Metrics & progression** — interpret the stats/summary analytics (ACWR trend, RHR vs
+  baseline, recovery slope, sleep avg/consistency/debt). The analytical depth.
+- **Patterns** — noteworthy items from /insights + correlations (omit if none).
+- **Training call + next session** — call (Push/Train/Maintain/Easy/Rest) + the session
+  from workout/context (timing-aware), respecting gates; goal = 5.0 pickleball while
+  KEEPING strength + size (concurrent-training lens, not generic recomp). Cite vault notes.
+- **Health story** — knowledgeable-friend narrative tying it together.
+- **Body composition** — waist:shoulder / waist:hip + critique verdict vs lean-out-keep-size.
+  No change claims the gated trend doesn't support; no body-fat %.
+
+Write rich markdown: `##` subheads, **bold** key numbers, bullet lists. °F and lbs.
+Direct and analytical, not flattering.
 
 ## Return — POST to http://127.0.0.1:8000/api/daily/report
 {"training_call": "<Push|Train|Maintain|Easy|Rest>",
  "readiness_headline": "<one line>",
  "sections": [{"title": "Readiness", "body_md": "..."},
-              {"title": "Training call + workout", "body_md": "..."},
+              {"title": "Metrics & progression", "body_md": "..."},
+              {"title": "Patterns", "body_md": "..."},
+              {"title": "Training call + next session", "body_md": "..."},
               {"title": "Health story", "body_md": "..."},
               {"title": "Body composition", "body_md": "..."}],
  "model": "claude"}
