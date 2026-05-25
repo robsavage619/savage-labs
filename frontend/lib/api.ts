@@ -917,12 +917,23 @@ export const api = {
     ),
   progressHeatmapUrl: (angle: string, before: string, after: string) =>
     `${BASE}/api/progress-photos/heatmap?angle=${angle}&before=${before}&after=${after}`,
+  dailyReport: () => get<{ report: DailyReport | null }>("/api/daily/report"),
+  dailyReportPrompt: () => get<{ prompt: string }>("/api/daily/report/prompt"),
   progressCritique: () => get<ProgressCritiqueState>("/api/progress-photos/critique"),
   progressCritiquePrompt: () =>
     get<{ prompt: string; attach_photos: { front: string | null; side: string | null }; basis: Record<string, number> }>(
       "/api/progress-photos/critique-prompt",
     ),
 };
+
+export interface DailyReport {
+  report_date: string;
+  generated_at: string;
+  model: string;
+  training_call: string | null;
+  readiness_headline: string | null;
+  sections: { title: string; body_md: string }[];
+}
 
 export interface ProgressCritiqueState {
   critique: {

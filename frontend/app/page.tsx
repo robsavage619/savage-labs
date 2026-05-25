@@ -27,6 +27,7 @@ import { SectionNav } from "@/components/section-nav";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { GoalScorecard } from "@/components/goal-scorecard";
 import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
+import { DailyReport } from "@/components/daily-report";
 
 export default function Dashboard() {
   return (
@@ -69,6 +70,10 @@ export default function Dashboard() {
       */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-4 min-w-0">
+          <ErrorBoundary label="Daily report">
+            <DailyReport />
+          </ErrorBoundary>
+
           <section id="today" className="scroll-mt-20 space-y-4">
             <ErrorBoundary label="Command briefing">
               <CommandBriefing />
