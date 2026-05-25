@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from shc.ai.briefing import build_daily_context, store_briefing
 from shc.ai.workout_planner import (
     GateViolation,
+    _workout_logged_today,
     build_training_context,
     load_latest_plan,
     load_plan,
@@ -3033,11 +3034,19 @@ async def daily_brief_slim() -> dict:
 
         # Extract structured training data — no rendered text.
         training = _slim_training_context(conn, today=date.today(), state=state_d)
+        # Authoritative report mode — computed the same way the workout planner
+        # decides whether to auto-plan the next session, so the report and the
+        # plan never disagree. The model must use this, not re-infer it.
+        trained_today = _workout_logged_today(conn)
     finally:
         conn.close()
 
     return {
         "as_of": state_d["as_of"],
+        "mode": "post_workout" if trained_today else "pre_workout",
+        "planning_date": (
+            (date.today() + timedelta(days=1)) if trained_today else date.today()
+        ).isoformat(),
         "state": state_d,
         "vault": vault_payload,
         "training": training,

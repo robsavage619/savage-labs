@@ -65,11 +65,16 @@ health-story, workout, and analytics dashboard. Be thorough and analytical, neve
 6. GET http://127.0.0.1:8000/api/progress-photos/critique — physique verdict (null → say so).
 
 ## Use the FULL metric set — do not cherry-pick
-Recovery: HRV + **hrv_sigma** (σ vs 28d baseline), RHR + elevation%, skin-temp delta,
-**respiratory_rate_delta**, calibration flag. Sleep: deep%/REM/efficiency/consistency,
-the **sleep-need breakdown** (base/debt/strain/nap), midpoint. Training load: ACWR,
-days-since legs/push/pull, push:pull balance, zone minutes, max HR. Plus readiness
-(weighted, β-blocker), check-in subjectives, gates, body_composition, freshness.
+Recovery: HRV + **hrv_sigma** (σ vs 28d baseline), RHR + elevation%, skin-temp delta
+(already °F), **respiratory_rate_delta**, SpO2, calibration flag. Sleep: deep%/**REM%**/
+**efficiency%**/consistency/performance, the **sleep-need breakdown** (base/debt/strain/
+nap), debt_7d, midpoint + midpoint variability. Training load: ACWR (+ acute_load_7d /
+chronic_load_28d), days-since legs/push/pull, push:pull balance, **pickleball_min_7d/28d**,
+**cardio zone minutes (z0–z5)**, max HR. Plus readiness (weighted, β-blocker), check-in
+subjectives, gates, body_composition, freshness.
+
+If any source returned `ok: false`, any metric is null, or the photo critique is null,
+SAY SO in the relevant section — never silently fabricate a number around missing data.
 
 ## Ground it in the research — DO NOT lose this
 - USE the vault notes from /daily/brief. In the prose, cite by CONCEPT (e.g. "the
@@ -84,19 +89,43 @@ days-since legs/push/pull, push:pull balance, zone minutes, max HR. Plus readine
   • ACWR → true **Gabbett** acute/chronic; >1.5 = overload.
   • Readiness → weighted composite, β-blocker-reweighted when propranolol taken.
 
-## Timing awareness — pick the MODE
-Check `training_load.last_session_date` / `days_since_last`.
-- If Rob ALREADY trained today → **mode = "post_workout"**. Write a POST-WORKOUT BRIEF:
-  review what he did today (sets/exercises, how it tracked vs plan), today's recovery
-  status, and the NEXT session plan. Do NOT just say "Rest".
-- If he has NOT trained yet today → **mode = "pre_workout"**: plan today's session.
-Set the top-level `mode` field accordingly, and make the Readiness headline reflect it.
+## Timing awareness — the API decides the MODE (do NOT re-infer it)
+`/api/daily/brief` returns an authoritative top-level **`mode`** and **`planning_date`**
+(computed the same way the workout planner decides). Use them verbatim — don't derive
+your own from `days_since_last`, or you may disagree with the plan the context built.
+- `mode = "post_workout"` → Rob already trained today. Write a POST-WORKOUT BRIEF: review
+  what he did today (sets/exercises, how it tracked vs plan), today's recovery, and the
+  NEXT session plan (for `planning_date`). Do NOT just say "Rest".
+- `mode = "pre_workout"` → plan today's session (`planning_date` = today).
+Copy `mode` into the top-level field and make the Readiness headline reflect it.
 
 ## Generate the actual workout (not just prose)
-Build the structured workout for the planning day in the JSON shape that
-/api/workout/context specifies, and **POST it to http://127.0.0.1:8000/api/workout/plan**
-with `{"plan": <plan>, "source": "claude", "push_to_hevy": false}`. This makes the
-session real and ready for the one-tap Hevy push — don't leave it as narrative only.
+Build the structured workout for `planning_date` and **POST it to
+http://127.0.0.1:8000/api/workout/plan** with
+`{"plan": <plan>, "source": "claude", "push_to_hevy": false, "plan_date": "<planning_date>"}`.
+This makes the session real and ready for the one-tap Hevy push — don't leave it as
+narrative only. The server validates the plan and rejects malformed shapes, so use this
+EXACT schema (field names are strict — `label` not `name`, `cooldown` is a plain string):
+
+```json
+{
+  "readiness_tier": "green | yellow | red",
+  "recommendation": {"intensity": "high | moderate | low | rest", "focus": "<one line>"},
+  "blocks": [
+    {"label": "<block name>", "exercises": [
+      {"name": "<EXACT Hevy exercise name>", "sets": 3, "reps": "10",
+       "weight_lbs": 130, "rpe_target": 7, "rest_seconds": 150, "notes": "<cue>"}
+    ]}
+  ],
+  "cooldown": "<plain string>",
+  "clinical_notes": "<med/gate context — required, non-empty>",
+  "vault_insights": ["effective-reps-hypertrophy.md", "..."]
+}
+```
+Hard constraints from `/api/workout/context`: `recommendation.intensity` must not exceed
+the gate's max intensity; every loaded exercise must stay under the e1RM load ceiling;
+respect forbidden muscle groups; every `vault_insights` filename must be a real catalog
+note; `rest_seconds` is required on every exercise.
 
 ## Write ONE deep report (sections in order)
 - **Readiness** — recovery/sleep/HRV/RHR/resp-rate/load, what each signal *means* today.
@@ -131,7 +160,7 @@ Direct and analytical, never flattering or padded.
  "sections": [{"title": "Readiness", "body_md": "..."},
               {"title": "Metrics & progression", "body_md": "..."},
               {"title": "Patterns", "body_md": "..."},
-              {"title": "<Today's session (post) | Training call + session (pre)>", "body_md": "..."},
+              {"title": "Today's session" (post_workout) OR "Training call + session" (pre_workout), "body_md": "..."},
               {"title": "Health story", "body_md": "..."},
               {"title": "Body composition", "body_md": "..."}],
  "sources": ["effective-reps-hypertrophy.md", "..."],
@@ -166,6 +195,18 @@ async def submit_daily_report(body: DailyReportSubmission) -> dict:
     """Persist a Claude-generated unified daily report (one row per day)."""
     if body.training_call and body.training_call not in _VALID_CALLS:
         raise HTTPException(422, f"training_call must be one of {sorted(_VALID_CALLS)}")
+
+    # Drop hallucinated citations — only keep filenames that exist in the vault
+    # catalogue, so a fabricated source can't render as a real Obsidian tag.
+    from shc.ai.vault import valid_citation_filenames
+
+    allowed = valid_citation_filenames()
+    sources, unknown = [], []
+    for s in body.sources:
+        (sources if s in allowed else unknown).append(s)
+    if unknown:
+        log.warning("daily report dropped %d unknown citation(s): %s", len(unknown), unknown)
+
     async with write_ctx() as conn:
         conn.execute(
             """
@@ -187,7 +228,7 @@ async def submit_daily_report(body: DailyReportSubmission) -> dict:
                 "call": body.training_call,
                 "headline": body.readiness_headline,
                 "sections": json.dumps([s.model_dump() for s in body.sections]),
-                "sources": json.dumps(body.sources),
+                "sources": json.dumps(sources),
                 "mode": body.mode,
             },
         )
