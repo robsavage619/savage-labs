@@ -917,7 +917,23 @@ export const api = {
     ),
   progressHeatmapUrl: (angle: string, before: string, after: string) =>
     `${BASE}/api/progress-photos/heatmap?angle=${angle}&before=${before}&after=${after}`,
+  progressCritique: () => get<ProgressCritiqueState>("/api/progress-photos/critique"),
+  progressCritiquePrompt: () =>
+    get<{ prompt: string; attach_photos: { front: string | null; side: string | null }; basis: Record<string, number> }>(
+      "/api/progress-photos/critique-prompt",
+    ),
 };
+
+export interface ProgressCritiqueState {
+  critique: {
+    created_at: string;
+    verdict: string;
+    shape_change_md: string;
+    visible_detail_md: string | null;
+  } | null;
+  stale: boolean;
+  reason: string;
+}
 
 export interface ProgressPhoto {
   photo_date: string;

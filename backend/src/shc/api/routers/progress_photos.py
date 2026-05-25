@@ -14,10 +14,12 @@ from datetime import date
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
-from shc.vision.noise import classify_change
+from shc.metrics import compute_daily_state
+from shc.vision.noise import GIRTH_NOISE_FRACTION, classify_change
 from shc.vision.overlay import change_heatmap
 from shc.vision.pipeline import analyze_photo
 
@@ -269,3 +271,138 @@ async def heatmap(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return Response(content=png, media_type="image/png")
+
+
+# ── Physique critique (copy-prompt → CC → POST-back) ─────────────────────────
+#
+# Guardrails against lighting-driven inconsistency:
+#  1. The change verdict is the deterministic 2%-gated measurement, passed in —
+#     the model must not contradict it.
+#  2. Shape/change claims are anchored to the silhouette-derived numbers, not the
+#     photo's pixels (lighting-invariant).
+#  3. The critique is anchored to the measurement basis; the UI only offers a
+#     refresh once the median clears the 2% noise floor, so daily lighting
+#     variation shows the same critique.
+#  4. No body-fat % claims; visible detail is explicitly flagged lighting-dependent.
+
+
+def _latest_body_comp() -> dict:
+    """Current gated body-composition block from the canonical DailyState."""
+    return compute_daily_state(get_read_conn()).get("body_composition", {})
+
+
+def _photo_path(angle: str, d: date) -> str | None:
+    row = get_read_conn().execute(
+        "SELECT file_path FROM progress_photos WHERE photo_date = $d AND angle = $a AND quality_pass",
+        {"d": d, "a": angle},
+    ).fetchone()
+    return str(settings.uploads_dir / row[0]) if row else None
+
+
+def _build_critique_prompt(bc: dict) -> str:
+    w2s, w2h = bc.get("waist_to_shoulder"), bc.get("waist_to_hip")
+    verdict = bc.get("trend_direction") or "baseline"
+    trend = (
+        f"{bc['trend_28d_pct']:+.1f}% over ~28d" if bc.get("trend_28d_pct") is not None else "no trend yet (single session)"
+    )
+    return (
+        "You are giving Rob a physique critique from his progress photos. Follow these "
+        "guardrails exactly — they keep the critique consistent shot-to-shot.\n\n"
+        "## Authoritative measured state (silhouette-derived, lighting-invariant)\n"
+        f"- waist:shoulder ratio = {w2s}\n"
+        f"- waist:hip ratio = {w2h}\n"
+        f"- measured change verdict = **{verdict}** ({trend})\n"
+        f"- noise floor = {GIRTH_NOISE_FRACTION * 100:.0f}% (changes smaller than this are not real)\n"
+        "- goal: lean out while KEEPING strength and size (not generic recomp; he wants to "
+        "stay the heavy, strong athlete)\n\n"
+        "## Rules\n"
+        "1. SECTION 1 — Shape & change (authoritative): base ONLY on the numbers and verdict "
+        "above. You MUST NOT contradict the verdict — if it says 'stable' or 'baseline', do "
+        "not claim he got leaner or softer. Describe proportions and where mass sits. Do NOT "
+        "estimate body-fat %.\n"
+        "2. SECTION 2 — Visible detail (advisory, lighting-dependent): from the attached "
+        "photos, note visible muscle detail/definition. Begin it with 'Lighting-dependent:' "
+        "and make NO change claims here (lighting/pump/angle vary day to day).\n"
+        "3. Be direct and useful, not flattering. Tie advice to the keep-size/lean-out goal.\n\n"
+        "## Return\n"
+        "POST your result to /api/progress-photos/critique as JSON: "
+        '{"verdict": "<leaner|stable|softer|baseline>", "shape_change_md": "<section 1 '
+        'markdown>", "visible_detail_md": "<section 2 markdown>"}\n'
+        "Attach Rob's latest front and side photos to your session before writing section 2."
+    )
+
+
+@router.get("/progress-photos/critique-prompt")
+async def critique_prompt():
+    """Return the grounded critique prompt + the photos to attach + staleness."""
+    bc = _latest_body_comp()
+    if bc.get("waist_to_shoulder") is None:
+        raise HTTPException(404, "no passing front photo yet")
+    latest = date.fromisoformat(bc["as_of"])
+    return {
+        "prompt": _build_critique_prompt(bc),
+        "attach_photos": {
+            "front": _photo_path("front", latest),
+            "side": _photo_path("side", latest),
+        },
+        "basis": {"w2s": bc["waist_to_shoulder"], "w2h": bc["waist_to_hip"]},
+    }
+
+
+class CritiqueSubmission(BaseModel):
+    verdict: str
+    shape_change_md: str
+    visible_detail_md: str | None = None
+
+
+@router.post("/progress-photos/critique")
+async def submit_critique(body: CritiqueSubmission):
+    """Persist a Claude-generated critique, anchored to the current gated state."""
+    bc = _latest_body_comp()
+    async with write_ctx() as conn:
+        conn.execute(
+            "INSERT INTO physique_critiques "
+            "(id, basis_w2s, basis_w2h, verdict, shape_change_md, visible_detail_md) "
+            "VALUES ($id, $w2s, $w2h, $v, $sc, $vd)",
+            {
+                "id": str(uuid.uuid4()),
+                "w2s": bc.get("waist_to_shoulder"),
+                "w2h": bc.get("waist_to_hip"),
+                "v": body.verdict,
+                "sc": body.shape_change_md,
+                "vd": body.visible_detail_md,
+            },
+        )
+    return {"status": "ok"}
+
+
+@router.get("/progress-photos/critique")
+async def latest_critique():
+    """Return the latest critique and whether measurements have moved past noise."""
+    row = get_read_conn().execute(
+        "SELECT created_at, verdict, shape_change_md, visible_detail_md, basis_w2s, basis_w2h "
+        "FROM physique_critiques ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return {"critique": None, "stale": True, "reason": "no critique yet"}
+
+    bc = _latest_body_comp()
+    cur_w2s, cur_w2h = bc.get("waist_to_shoulder"), bc.get("waist_to_hip")
+    stale, reason = False, "up to date — no measured change since last critique"
+    if cur_w2s and row[4]:
+        moved = abs(cur_w2s - row[4]) / row[4] >= GIRTH_NOISE_FRACTION or (
+            cur_w2h and row[5] and abs(cur_w2h - row[5]) / row[5] >= GIRTH_NOISE_FRACTION
+        )
+        if moved:
+            stale, reason = True, "measurements moved beyond the 2% floor — refresh recommended"
+
+    return {
+        "critique": {
+            "created_at": str(row[0]),
+            "verdict": row[1],
+            "shape_change_md": row[2],
+            "visible_detail_md": row[3],
+        },
+        "stale": stale,
+        "reason": reason,
+    }

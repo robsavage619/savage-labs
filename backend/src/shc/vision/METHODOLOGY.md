@@ -111,10 +111,23 @@ DuckDB data — scale/check-in weight and Hevy strength volume. If the photo sig
 the weight/strength signal disagree in direction, the system **flags the contradiction**
 rather than averaging it (per project rule: surface conflicts, fail visibly).
 
-## 6. Optional interpretation layer (deferred)
+## 6. Physique critique (Claude-as-judge) — shipped with consistency guardrails
 
-Any future Claude-as-judge layer receives the measured deltas + aligned silhouettes and
-must tie every claim to a measured number or a named heatmap region. It is gated behind
-the blind-control eval (`tests/test_vision_controls.py`): same-photo-twice must yield
-"no change"; known-direction pairs must call direction correctly. Not shipping in the
-measurement-first milestone.
+A qualitative critique is generated via the copy-prompt → Claude → POST-back flow
+(`/api/progress-photos/critique-prompt` → `/api/progress-photos/critique`). To stop it
+drifting with daily lighting it is **hybrid and anchored**:
+
+1. **Change verdict is not the model's call.** The leaner/stable/softer verdict is the
+   deterministic 2%-gated measurement, passed into the prompt; the model must not
+   contradict it.
+2. **Shape & change (authoritative)** is keyed to the silhouette-derived numbers
+   (lighting-invariant), not the photo's pixels. No body-fat % claims.
+3. **Visible detail (advisory)** comes from the photo and is explicitly labelled
+   *lighting-dependent* with no change claims.
+4. **Anchored to the measurement basis.** A stored critique records the median ratios it
+   was generated against; the UI only offers a refresh once the median clears the 2%
+   floor — so a new photo under different lighting shows the *same* critique. It updates
+   on real measured change, never on lighting.
+
+Backed by the blind-control eval (`tests/test_vision_controls.py`): same-photo-twice
+yields "no change"; known-direction pairs call direction correctly.

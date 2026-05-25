@@ -315,6 +315,68 @@ function ComparePanel() {
   );
 }
 
+function CritiquePanel() {
+  const { data } = useQuery({
+    queryKey: ["progress-critique"],
+    queryFn: () => api.progressCritique(),
+    refetchInterval: 60_000,
+  });
+  const [copied, setCopied] = useState(false);
+
+  const copyPrompt = async () => {
+    const p = await api.progressCritiquePrompt();
+    await navigator.clipboard.writeText(p.prompt);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  };
+
+  const c = data?.critique;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Eyebrow>Physique critique · anchored to measured state</Eyebrow>
+        <button
+          onClick={copyPrompt}
+          className="border rounded px-2 py-0.5 text-[10px] font-mono"
+          style={{ borderColor: "var(--hairline-strong)" }}
+        >
+          {copied ? "copied — run in Claude Code" : "copy critique prompt"}
+        </button>
+      </div>
+
+      {data && (
+        <p className="text-[10px]" style={{ color: data.stale ? "var(--negative)" : "var(--text-faint)" }}>
+          {data.reason}
+        </p>
+      )}
+
+      {c ? (
+        <div className="space-y-2 text-[11.5px] leading-relaxed">
+          <div>
+            <span className="text-[9.5px] font-mono uppercase tracking-wide" style={{ color: "var(--sl-accent)" }}>
+              Shape &amp; change · verdict: {c.verdict}
+            </span>
+            <p className="whitespace-pre-wrap text-[var(--text-primary)]">{c.shape_change_md}</p>
+          </div>
+          {c.visible_detail_md && (
+            <div>
+              <span className="text-[9.5px] font-mono uppercase tracking-wide text-[var(--text-faint)]">
+                Visible detail · lighting-dependent
+              </span>
+              <p className="whitespace-pre-wrap text-[var(--text-muted)]">{c.visible_detail_md}</p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="text-[11px] text-[var(--text-faint)]">
+          No critique yet. Copy the prompt, run it in Claude Code with your latest front &amp; side
+          photos attached, and it posts the critique back here.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ProgressPhotoPanel() {
   const qc = useQueryClient();
   return (
@@ -328,6 +390,7 @@ export function ProgressPhotoPanel() {
         <RatioTrend />
       </div>
       <ComparePanel />
+      <CritiquePanel />
       <p className="text-[10px] text-[var(--text-faint)] leading-relaxed">
         Measurements are deterministic (pose + silhouette geometry), arms excluded,
         normalized to your shoulder→hip span. Lines are a rolling median so one off shot
