@@ -397,7 +397,10 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
     if skin_baseline and skin_baseline[0] is not None:
         m.skin_temp_baseline_28d = round(float(skin_baseline[0]), 2)
         if m.skin_temp is not None:
-            m.skin_temp_delta = round(m.skin_temp - m.skin_temp_baseline_28d, 2)
+            # WHOOP stores skin temp in Celsius. Surface the delta in Fahrenheit
+            # (×9/5 — no +32 offset for a difference) so every consumer and the
+            # report prompt get °F per the project's imperial-units invariant.
+            m.skin_temp_delta = round((m.skin_temp - m.skin_temp_baseline_28d) * 9 / 5, 2)
 
     # Respiratory rate baseline (28d, naps excluded). WHOOP/Bourdillon: a +1 bpm
     # rise above baseline is an early-warning illness sentinel ~4 days out.
@@ -731,14 +734,14 @@ def _checkin(conn, today: date) -> CheckinMetrics:
     today_kg = m.body_weight_kg
     if today_kg is None:
         latest = conn.execute(
-            "SELECT value_num FROM measurements WHERE metric IN ('body_mass', 'weight') "
+            "SELECT value_num FROM measurements WHERE metric IN ('body_mass_kg', 'body_mass', 'weight') "
             "AND value_num IS NOT NULL ORDER BY ts DESC LIMIT 1"
         ).fetchone()
         today_kg = float(latest[0]) if latest and latest[0] else None
     past = conn.execute(
         """
         SELECT value_num FROM measurements
-        WHERE metric IN ('body_mass', 'weight') AND value_num IS NOT NULL
+        WHERE metric IN ('body_mass_kg', 'body_mass', 'weight') AND value_num IS NOT NULL
           AND ts <= (current_date - INTERVAL '28 days')
         ORDER BY ts DESC LIMIT 1
         """
@@ -800,12 +803,12 @@ def _gates(
     if rec.hrv_sigma is not None and rec.hrv_sigma < -1.5:
         g.max_intensity = "low"
         reasons.append(f"HRV {rec.hrv_sigma:+.2f}σ → red — cap intensity LOW")
-    if rec.skin_temp_delta is not None and rec.skin_temp_delta >= 0.5:
-        # Only elevated skin temp (positive delta) signals illness/fever risk.
-        # Negative deltas are normal (cooler environment, less peripheral blood flow).
-        delta_f = rec.skin_temp_delta * 9 / 5
+    if rec.skin_temp_delta is not None and rec.skin_temp_delta >= 0.9:
+        # skin_temp_delta is already °F. 0.9°F ≈ 0.5°C — the illness/fever
+        # threshold. Only elevated (positive) deltas signal risk; negative
+        # deltas are normal (cooler environment, less peripheral blood flow).
         g.max_intensity = "low"
-        reasons.append(f"Skin-temp Δ+{delta_f:.1f}°F above baseline — possible illness, Z2 only")
+        reasons.append(f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline — possible illness, Z2 only")
     if rec.user_calibrating:
         # WHOOP recovery score is unreliable while calibrating — flag it but don't gate.
         reasons.append("WHOOP user_calibrating=true — recovery score may be unreliable")

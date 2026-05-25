@@ -27,6 +27,14 @@ def _migration_files() -> list[Path]:
 
 
 def _apply_migrations(conn: duckdb.DuckDBPyConnection) -> None:
+    """Apply pending migrations, keyed authoritatively by FILENAME version.
+
+    The runner — not the migration body — records the version. Historically some
+    files inserted a mismatched version (0009 inserted 7) or none at all, so they
+    re-ran on every startup; a re-running migration with CREATE OR REPLACE VIEW
+    silently clobbered later migrations' view definitions. Recording the filename
+    version here makes tracking correct regardless of what the SQL body does.
+    """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_version "
         "(version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
@@ -40,7 +48,13 @@ def _apply_migrations(conn: duckdb.DuckDBPyConnection) -> None:
             continue
         log.info("applying migration %s", path.name)
         conn.execute(path.read_text())
-        log.info("migration %s applied", path.name)
+        # Authoritative: record the filename version even if the SQL body
+        # inserted a different one (or none). ON CONFLICT keeps body inserts safe.
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?) ON CONFLICT DO NOTHING",
+            [version],
+        )
+        log.info("migration %s applied (recorded version %d)", path.name, version)
 
 
 def init_db() -> None:

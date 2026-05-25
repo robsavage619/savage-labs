@@ -200,8 +200,8 @@ export function HeaderHUD() {
         {skinTemp != null && (
           <HudStat
             label="Skin Δ"
-            value={`${skinTemp >= 0 ? "+" : ""}${skinTemp.toFixed(2)}°`}
-            color={Math.abs(skinTemp) >= 0.5 ? "var(--negative)" : "var(--text-primary)"}
+            value={`${skinTemp >= 0 ? "+" : ""}${skinTemp.toFixed(1)}°F`}
+            color={Math.abs(skinTemp) >= 0.9 ? "var(--negative)" : "var(--text-primary)"}
           />
         )}
       </div>

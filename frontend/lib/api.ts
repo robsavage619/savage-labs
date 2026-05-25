@@ -13,7 +13,7 @@ export interface RecoveryToday {
   rhr: number;
   skin_temp: number | null;
   skin_temp_baseline_28d?: number | null;
-  skin_temp_delta?: number | null;
+  skin_temp_delta?: number | null; // °F (already converted from WHOOP's Celsius)
 }
 
 export interface RecoveryPoint {

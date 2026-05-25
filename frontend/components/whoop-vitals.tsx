@@ -49,7 +49,7 @@ export function WhoopVitals() {
   const recovery = state?.recovery.score ?? null;
   const hrv = state?.recovery.hrv_ms ?? null;
   const rhr = state?.recovery.rhr ?? null;
-  const skinTempDeltaC = state?.recovery.skin_temp_delta ?? null;
+  const skinTempDeltaF = state?.recovery.skin_temp_delta ?? null;
   const spo2Recovery = state?.recovery.spo2_pct ?? null;
   const userCalibrating = state?.recovery.user_calibrating ?? false;
 
@@ -67,7 +67,7 @@ export function WhoopVitals() {
   const cardioMin = state?.training_load.cardio_min_28d ?? null;
   const z2Min = state?.training_load.cardio_z2_min_7d ?? null;
 
-  const skinTempDeltaF = skinTempDeltaC != null ? skinTempDeltaC * 9 / 5 : null;
+  // skin_temp_delta is already °F from the API.
 
   return (
     <div

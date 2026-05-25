@@ -115,9 +115,9 @@ export function PillarRecovery() {
   const skinTone =
     skinDelta == null
       ? "neutral"
-      : Math.abs(skinDelta) >= 0.5
+      : Math.abs(skinDelta) >= 0.9
         ? "negative"
-        : Math.abs(skinDelta) >= 0.3
+        : Math.abs(skinDelta) >= 0.54
           ? "neutral"
           : "positive";
 
@@ -136,9 +136,9 @@ export function PillarRecovery() {
       tone: rhrElevated > 3 ? "negative" : rhrElevated < -2 ? "positive" : "neutral",
     });
   }
-  if (skinDelta != null && Math.abs(skinDelta) >= 0.5) {
+  if (skinDelta != null && Math.abs(skinDelta) >= 0.9) {
     drivers.push({
-      label: skinDelta > 0 ? `Skin temp +${skinDelta.toFixed(2)}°C — possible illness` : `Skin temp ${skinDelta.toFixed(2)}°C below baseline`,
+      label: skinDelta > 0 ? `Skin temp +${skinDelta.toFixed(1)}°F — possible illness` : `Skin temp ${skinDelta.toFixed(1)}°F below baseline`,
       tone: "negative",
     });
   }
@@ -272,10 +272,10 @@ export function PillarRecovery() {
             <Metric
               value={
                 skinDelta != null
-                  ? `${skinDelta > 0 ? "+" : ""}${skinDelta.toFixed(2)}`
+                  ? `${skinDelta > 0 ? "+" : ""}${skinDelta.toFixed(1)}`
                   : "—"
               }
-              unit="°C"
+              unit="°F"
               size="md"
               tone={skinTone}
             />
@@ -283,9 +283,9 @@ export function PillarRecovery() {
           <p className="text-[10.5px] text-[var(--text-muted)] tabular-nums mt-0.5">
             {skinDelta == null
               ? "no data"
-              : Math.abs(skinDelta) >= 0.5
+              : Math.abs(skinDelta) >= 0.9
                 ? "elevated · illness?"
-                : Math.abs(skinDelta) >= 0.3
+                : Math.abs(skinDelta) >= 0.54
                   ? "watch"
                   : "normal"}
           </p>
