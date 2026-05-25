@@ -110,8 +110,19 @@ session real and ready for the one-tap Hevy push — don't leave it as narrative
 - **Body composition** — waist:shoulder / waist:hip + critique verdict vs lean-out-keep-size.
   No change claims the gated trend doesn't support; no body-fat %.
 
-Write rich markdown: `##` subheads, **bold** key numbers, bullet lists. °F and lbs.
-Direct and analytical, not flattering.
+## Depth — this is the whole point, do NOT write thin
+Each section must REASON, not just list. For every signal: say what it means, WHY it
+matters today, how it connects to the others, and the so-what. Name tensions explicitly
+(e.g. "green recovery but ACWR says overload — here's how I'd resolve it"). A bare bullet
+of numbers is a failure — lead with interpretation and back it with the number, not the
+reverse. Earlier reports were 2-4 substantive sentences (or a short lead paragraph +
+explained bullets) per section; match that. Bullets are scaffolding for analysis, never a
+substitute for it. The body-comp and training sections especially should explain mechanism
+and trade-offs, citing the vault research by concept.
+
+Format in markdown (`**bold**` key numbers, occasional `##` subheads, bullets where they
+genuinely aid structure) but prioritize reasoning density over scannability. °F and lbs.
+Direct and analytical, never flattering or padded.
 
 ## Return — POST to http://127.0.0.1:8000/api/daily/report
 {"mode": "<pre_workout|post_workout>",
