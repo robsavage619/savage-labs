@@ -595,11 +595,14 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         m.cardio_min_28d = int(cardio[0])
 
     # Per-modality breakdown for last 7 days — drives the pickleball_focus signal.
+    # Exclude WHOOP auto-detected non-sport modalities (yoga, meditation) — same
+    # filter the cardio panel applies so the numbers stay consistent.
     modality_rows = conn.execute(
         """
         SELECT modality, COALESCE(SUM(duration_min), 0) AS mins
         FROM cardio_sessions
         WHERE date >= (current_date - INTERVAL '7 days')
+          AND modality NOT IN ('yoga', 'meditation', 'cross country skiing')
         GROUP BY modality
         """
     ).fetchall()

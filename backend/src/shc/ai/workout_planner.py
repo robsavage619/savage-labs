@@ -396,6 +396,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         SELECT modality, SUM(duration_min) AS minutes, COUNT(*) AS sessions, AVG(avg_hr) AS avg_hr
         FROM cardio_sessions
         WHERE date >= (current_date - INTERVAL '28 days')
+          AND modality NOT IN ('yoga', 'meditation', 'cross country skiing')
         GROUP BY modality ORDER BY minutes DESC
         """
     ).fetchall()
