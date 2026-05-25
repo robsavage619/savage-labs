@@ -44,22 +44,17 @@ CREATE TABLE IF NOT EXISTS plan_adherence (
 );
 
 -- True session load = sum of WHOOP `strain` for completed sessions on that day.
--- Excludes WHOOP auto-detected non-training (yoga/meditation/cross country
--- skiing) and strength kinds (tracked separately via Hevy volume below), and
--- low-coverage sessions (strap off >50% of the time; percent_recorded is a
--- 0–1 fraction). Kept in sync with migration 0033 — this definition re-runs on
--- startup, so it must already carry the filters or it would clobber 0033.
+-- NOTE: this is the ORIGINAL, unfiltered definition. The modality + coverage
+-- filters live in migration 0033, which runs later (after 0020 adds the
+-- percent_recorded column) and is the authoritative last writer of this view.
+-- Do not add a percent_recorded reference here — that column doesn't exist yet
+-- at this point in a fresh migration sequence.
 CREATE OR REPLACE VIEW v_session_load AS
 SELECT
     started_at::DATE AS date,
     COALESCE(SUM(w.strain), 0) AS whoop_strain,
     COUNT(DISTINCT w.id) AS sessions
 FROM workouts w
-WHERE COALESCE(w.percent_recorded, 1.0) >= 0.5
-  AND COALESCE(w.kind, '') NOT IN (
-      'yoga', 'meditation', 'cross country skiing',
-      'powerlifting', 'weightlifting'
-  )
 GROUP BY started_at::DATE;
 
 -- Daily total load combining strength volume (Hevy) and WHOOP strain so ACWR

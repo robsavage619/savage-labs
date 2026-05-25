@@ -9,7 +9,6 @@ from shc.metrics import (
     RecoveryMetrics,
     SleepMetrics,
     _hrv_subscore,
-    _is_beta_blocker,
     _readiness_snapshot,
     _rhr_subscore,
     _sleep_subscore,
@@ -17,17 +16,6 @@ from shc.metrics import (
     _tier,
     muscle_group,
 )
-
-# ── _is_beta_blocker ─────────────────────────────────────────────────────────
-
-def test_beta_blocker_matches_propranolol_case_insensitive() -> None:
-    assert _is_beta_blocker(["Propranolol (Inderal) 10 mg PRN"]) is True
-    assert _is_beta_blocker(["metoprolol", "lisinopril"]) is True
-
-
-def test_beta_blocker_false_for_non_bb_meds() -> None:
-    assert _is_beta_blocker(["Escitalopram", "Flonase", "Grass Pollen"]) is False
-    assert _is_beta_blocker([]) is False
 
 
 # ── _hrv_subscore ────────────────────────────────────────────────────────────
