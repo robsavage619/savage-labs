@@ -21,8 +21,9 @@ Design notes
 * Readiness composite is computed here with the β-blocker reweighting so the
   LLM sees the same number the frontend shows.
 * `gates` is a deterministic auto-regulation rule engine. It encodes hard
-  safety/progression rules (red HRV → cap intensity, ACWR > 1.5 → rest, legs
-  in last 48h → reject leg day, propranolol day → shift HR zones, etc.).
+  safety/progression rules (red HRV → cap intensity, ACWR > 1.65 → rest /
+  1.5–1.65 → low / 1.3–1.5 → moderate, legs in last 48h → reject leg day,
+  propranolol day → shift HR zones, etc.).
 """
 
 import json
@@ -879,13 +880,17 @@ def _gates(
     if chk.illness_flag:
         g.max_intensity = "rest"
         reasons.append("Illness flag set — rest day")
-    if load.acwr is not None and load.acwr > 1.5:
+    if load.acwr is not None and load.acwr > 1.65:
         g.max_intensity = "rest"
-        reasons.append(f"ACWR {load.acwr} > 1.5 — overload risk, rest required")
+        reasons.append(f"ACWR {load.acwr} > 1.65 — significant overload, rest required")
+    elif load.acwr is not None and load.acwr > 1.5:
+        if g.max_intensity in ("high", "moderate"):
+            g.max_intensity = "low"
+        reasons.append(f"ACWR {load.acwr} > 1.5 — elevated overload, cap LOW")
     elif load.acwr is not None and load.acwr > 1.3:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
-        reasons.append(f"ACWR {load.acwr} > 1.3 — reduce volume")
+        reasons.append(f"ACWR {load.acwr} > 1.3 — reduce volume, cap MODERATE")
 
     # Yellow tier softens the cap.
     if readiness.tier == "yellow" and g.max_intensity == "high":
