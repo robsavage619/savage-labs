@@ -5,16 +5,21 @@ import pytest
 from shc.ai.workout_planner import GateViolation, validate_plan
 
 
-def _plan(intensity="low", target_rpe=6, exercises=None):
+_UNSET = object()
+
+
+def _plan(intensity="low", target_rpe=_UNSET, exercises=None):
+    rec: dict = {
+        "intensity": intensity,
+        "focus": "test",
+        "rationale": "x",
+        "estimated_duration_min": 40,
+    }
+    if target_rpe is not _UNSET:
+        rec["target_rpe"] = target_rpe
     return {
         "readiness_tier": "yellow",
-        "recommendation": {
-            "intensity": intensity,
-            "focus": "test",
-            "rationale": "x",
-            "estimated_duration_min": 40,
-            "target_rpe": target_rpe,
-        },
+        "recommendation": rec,
         "warmup": [{"name": "Walking", "sets": 1, "reps": 5}],
         "blocks": [{"label": "A", "exercises": exercises or []}],
         "cooldown": "walk",
@@ -119,4 +124,19 @@ def test_intensity_exceeding_gate_rejected() -> None:
 def test_deload_requires_low_rpe() -> None:
     p = _plan(intensity="moderate", target_rpe=9, exercises=[_ex("Face Pull", 40, "8")])
     with pytest.raises(GateViolation):
+        validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)
+
+
+# ── target_rpe absent from recommendation (bug: defaulted to 10, tripped deload gate) ──
+
+def test_deload_passes_when_target_rpe_absent_and_exercise_rpEs_low() -> None:
+    """Recommendation omits target_rpe; gate must derive from exercise rpe_targets (≤7)."""
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 30, "12", rpe_target=2)])
+    assert validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL) is True
+
+
+def test_deload_rejects_when_target_rpe_absent_and_exercise_rpes_high() -> None:
+    """Recommendation omits target_rpe; derived max from exercise rpe_targets (>7) must reject."""
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 30, "12", rpe_target=9)])
+    with pytest.raises(GateViolation, match="RPE"):
         validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)

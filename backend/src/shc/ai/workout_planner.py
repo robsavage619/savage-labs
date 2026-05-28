@@ -692,7 +692,16 @@ def validate_plan(
                         )
         if gates.get("deload_required"):
             # Deload weeks must use moderate-or-lower intensity AND target_rpe <= 7.
-            target_rpe = rec.get("target_rpe", 10)
+            # If the recommendation omits target_rpe, derive it from the highest
+            # per-exercise rpe_target in the plan so a low-RPE plan isn't rejected
+            # because the field was absent (would have defaulted to 10).
+            if (rpe_val := rec.get("target_rpe")) is not None:
+                target_rpe = rpe_val
+            else:
+                target_rpe = max(
+                    (ex.get("rpe_target", 0) for block in blocks for ex in block.get("exercises", [])),
+                    default=0,
+                )
             if order.index(rec["intensity"]) > order.index("moderate") or target_rpe > 7:
                 raise GateViolation(
                     f"Deload required ({gates.get('deload_reason')}) but plan is "
