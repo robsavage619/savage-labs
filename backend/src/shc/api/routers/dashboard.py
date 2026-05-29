@@ -3066,6 +3066,7 @@ def _slim_training_context(conn, today: date, state: dict) -> dict:
         FROM workouts w
         LEFT JOIN workout_sets_dedup ws ON ws.workout_id = w.id AND ws.is_warmup = FALSE
         WHERE w.started_at >= (current_date - INTERVAL '7 days')
+          AND w.kind NOT IN ('yoga', 'meditation', 'mindfulness')
         GROUP BY w.id, d, w.kind
         ORDER BY d DESC
         LIMIT 20

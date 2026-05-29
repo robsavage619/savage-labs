@@ -338,6 +338,11 @@ async def sync_sleep() -> int:
 # Strength modalities already tracked by Hevy — skip mirroring to cardio_sessions.
 _STRENGTH_KINDS: frozenset[str] = frozenset({"powerlifting", "weightlifting"})
 
+# WHOOP auto-detects mindfulness/breathing sessions as these kinds — not real
+# athletic activities. Skip them from cardio_sessions to avoid polluting the
+# cardio mix, ACWR, and health story with non-training signal.
+_EXCLUDED_KINDS: frozenset[str] = frozenset({"yoga", "meditation", "mindfulness"})
+
 _SPORT_NAMES: dict[int, str] = {
     -1: "activity",
     0: "running",
@@ -490,8 +495,8 @@ async def sync_workout() -> int:
                 row,
             )
             # Mirror into cardio_sessions so cardio_age_days / cardio_min_28d stay fresh.
-            # Skip pure strength modalities already tracked by Hevy.
-            if kind not in _STRENGTH_KINDS:
+            # Skip strength (tracked by Hevy) and auto-detected non-sport kinds.
+            if kind not in _STRENGTH_KINDS and kind not in _EXCLUDED_KINDS:
                 # Pre-compute a zone distribution JSON so cardio reports can render it.
                 zone_dist = {
                     "z0": _ms_to_min(zones.get("zone_zero_milli")),
