@@ -219,8 +219,18 @@ class DailyState:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-_PUSH = ("press", "fly", "dip", "pushup", "push-up", "tricep", "shoulder", "overhead", "chest")
-_PULL = ("row", "pull", "curl", "lat", "deadlift", "shrug", "face pull", "rear delt")
+# Order matters — check LEGS and CORE before PUSH/PULL so "leg press" → legs, not push,
+# and "leg curl" → legs, not pull. Compound terms (e.g. "calf raise") must also resolve
+# to legs before the generic "raise" hits push.
+_LEGS = ("squat", " leg ", "leg press", "leg curl", "leg extension", "lunge", "hip ", "glute",
+         "hamstring", "quad", "calf", "rdl", "step-up", "adduct", "abduct", "thigh", "sumo",
+         "hack squat", "split squat", "bulgarian")
+_CORE = ("plank", "crunch", "ab ", "core", "oblique", "sit-up", "rotation", "cable crunch",
+         "ab crunch")
+_PUSH = ("press", "fly", "dip", "pushup", "push-up", "tricep", "overhead", "chest",
+         "front raise", "lateral raise", "side raise", "upright row")
+_PULL = ("row", "pulldown", "pull-up", "pullup", "chin-up", "chinup", "curl", "lat ",
+         "deadlift", "shrug", "face pull", "rear delt", "high pull", "good morning")
 
 # Body-diagram muscle keys mapped to the planner's push/pull/legs taxonomy.
 # Keys must match the frontend `BodyDiagram` regions verbatim.
@@ -254,17 +264,18 @@ def muscle_group(exercise: str) -> str:
     """Classify an exercise into push/pull/legs/core/other.
 
     Single source of truth — previously duplicated in workout_planner and
-    dashboard.
+    dashboard. Legs/core checked FIRST so "leg press" → legs (not push) and
+    "leg curl" → legs (not pull).
     """
     e = exercise.lower()
-    if any(k in e for k in _PUSH):
-        return "push"
-    if any(k in e for k in _PULL):
-        return "pull"
     if any(k in e for k in _LEGS):
         return "legs"
     if any(k in e for k in _CORE):
         return "core"
+    if any(k in e for k in _PUSH):
+        return "push"
+    if any(k in e for k in _PULL):
+        return "pull"
     return "other"
 
 
