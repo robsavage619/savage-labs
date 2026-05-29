@@ -155,12 +155,16 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
         "kind": "strength",
         "notes": notes,
         "content_hash": chash,
+        "routine_id": w.get("routine_id"),
     }
 
     set_rows = []
     for ex in w.get("exercises", []):
         exercise_name = ex.get("title", "Unknown")
         exercise_notes = ex.get("notes") or None
+        template_id = ex.get("exercise_template_id")
+        superset_id = ex.get("superset_id")
+        exercise_index = ex.get("index")
         for idx, s in enumerate(ex.get("sets", [])):
             set_hash = _content_hash("hevy", hevy_id, exercise_name, str(idx))
             set_id = f"hevy_set_{set_hash}"
@@ -168,12 +172,16 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
                 "id": set_id,
                 "workout_id": workout_id,
                 "exercise": exercise_name,
-                "set_idx": idx,
+                "set_idx": s.get("index", idx),
                 "reps": s.get("reps"),
                 "weight_kg": s.get("weight_kg"),
                 "rpe": s.get("rpe"),
+                "duration_seconds": s.get("duration_seconds"),
                 "is_warmup": s.get("type") == "warmup",
                 "exercise_notes": exercise_notes,
+                "exercise_template_id": template_id,
+                "superset_id": superset_id,
+                "exercise_index": exercise_index,
                 "content_hash": set_hash,
             })
     return workout_row, set_rows
@@ -191,12 +199,13 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
 
     conn.execute(
         """
-        INSERT INTO workouts (id, source, started_at, ended_at, kind, notes, content_hash)
-        VALUES ($id, $source, $started_at, $ended_at, $kind, $notes, $content_hash)
+        INSERT INTO workouts (id, source, started_at, ended_at, kind, notes, content_hash, routine_id)
+        VALUES ($id, $source, $started_at, $ended_at, $kind, $notes, $content_hash, $routine_id)
         ON CONFLICT (id) DO UPDATE SET
-            ended_at = EXCLUDED.ended_at,
-            notes = EXCLUDED.notes,
-            content_hash = EXCLUDED.content_hash
+            ended_at       = EXCLUDED.ended_at,
+            notes          = EXCLUDED.notes,
+            content_hash   = EXCLUDED.content_hash,
+            routine_id     = EXCLUDED.routine_id
         WHERE EXCLUDED.content_hash != workouts.content_hash
         """,
         workout_row,
@@ -205,11 +214,19 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
         conn.execute(
             """
             INSERT INTO workout_sets
-                (id, workout_id, exercise, set_idx, reps, weight_kg, rpe, is_warmup, exercise_notes, content_hash)
-            VALUES ($id, $workout_id, $exercise, $set_idx, $reps, $weight_kg, $rpe, $is_warmup, $exercise_notes, $content_hash)
+                (id, workout_id, exercise, set_idx, reps, weight_kg, rpe,
+                 duration_seconds, is_warmup, exercise_notes,
+                 exercise_template_id, superset_id, exercise_index, content_hash)
+            VALUES
+                ($id, $workout_id, $exercise, $set_idx, $reps, $weight_kg, $rpe,
+                 $duration_seconds, $is_warmup, $exercise_notes,
+                 $exercise_template_id, $superset_id, $exercise_index, $content_hash)
             ON CONFLICT (id) DO UPDATE SET
-                exercise_notes = EXCLUDED.exercise_notes
-            WHERE EXCLUDED.exercise_notes IS NOT NULL
+                exercise_notes       = EXCLUDED.exercise_notes,
+                exercise_template_id = EXCLUDED.exercise_template_id,
+                superset_id          = EXCLUDED.superset_id,
+                exercise_index       = EXCLUDED.exercise_index,
+                duration_seconds     = EXCLUDED.duration_seconds
             """,
             s,
         )
