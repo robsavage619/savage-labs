@@ -410,11 +410,24 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             "\n## CARDIO MIX (last 28 days): none logged — fat-loss programming should add Z2 + finisher"
         )
 
-    # Goals.
-    lines.append("\n## GOALS")
-    lines.append("- Primary: get stronger (preserve/build lean mass)")
-    lines.append("- Secondary: burn fat (body recomposition)")
-    lines.append("- Tactic: heavy compounds for strength, density+supersets+finishers for fat loss")
+    lines.append("\n## ATHLETIC IDENTITY + GOALS")
+    lines.append("Rob is 40 years old and refuses to let age define his ceiling. This is not a")
+    lines.append("maintenance program — it is a competitive athletic program designed to reach PEAK form.")
+    lines.append("Age brings wisdom about recovery; it does not lower the ambition.")
+    lines.append("")
+    lines.append("Primary goal: 4.5 → 5.0 DUPR doubles pickleball by end of 2026.")
+    lines.append("  Physical attributes that close the gap: explosive first-step, sustained aerobic output")
+    lines.append("  across 3+ hours of tournament play, upper-body power for drives/resets, mental clarity")
+    lines.append("  late in matches. Every session either builds one of these directly or protects the")
+    lines.append("  ability to train again tomorrow.")
+    lines.append("")
+    lines.append("Secondary goal: build — not just preserve — strength and lean mass concurrently.")
+    lines.append("  Concurrent training (strength + pickleball) is the program. Treat it as such.")
+    lines.append("  Heavy compounds first, density work and finishers for body comp.")
+    lines.append("")
+    lines.append("Design sessions that push. When gates say go, GO. A soft session on a green day is a")
+    lines.append("missed adaptation and an insult to the goal. Respect the gates when they fire — they")
+    lines.append("fire to protect training quality, not to make the program easier.")
 
     if prefs:
         lines.append("\n## EXERCISES TO AVOID/SUBSTITUTE")

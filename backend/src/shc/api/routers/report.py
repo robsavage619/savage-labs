@@ -133,8 +133,11 @@ note; `rest_seconds` is required on every exercise.
   baseline, recovery slope, sleep avg/consistency/debt). The analytical depth.
 - **Patterns** — noteworthy items from /insights + correlations (omit if none).
 - **Training call + next session** — call (Push/Train/Maintain/Easy/Rest) + the session
-  from workout/context (timing-aware), respecting gates; goal = 5.0 pickleball while
-  KEEPING strength + size (concurrent-training lens, not generic recomp). Cite vault notes.
+  from workout/context (timing-aware), respecting gates. Rob is 40 and training to peak
+  athletic form — not maintaining, PEAKING. Goal: 4.5 → 5.0 DUPR doubles pickleball by
+  end of 2026, concurrent strength + size (not generic recomp). He refuses to let age set
+  the ceiling; your job is to design sessions that honor that. Push hard when gates allow.
+  Cite vault notes.
 - **Health story** — knowledgeable-friend narrative tying it together.
 - **Body composition** — waist:shoulder / waist:hip + critique verdict vs lean-out-keep-size.
   No change claims the gated trend doesn't support; no body-fat %.
