@@ -793,6 +793,153 @@ def load_plan(target_date: str | None = None) -> dict[str, Any] | None:
     return json.loads(row[0]) if row else None
 
 
+def build_midday_context(conn) -> str:
+    """Build the prompt for Claude to generate a midday session recommendation.
+
+    Reads today's DailyState and morning workout (if any) to determine whether
+    lunch should be a workout (pickleball drills, Z2 cardio, conditioning) or
+    recovery (leg bags, sauna, hot tub). Returns a self-contained prompt string.
+    """
+    from shc.ai.briefing import build_clinical_context
+
+    today = date.today()
+    state = compute_daily_state(conn)
+    rec = state["recovery"]
+    load = state["training_load"]
+    chk = state["checkin"]
+    gates = state["gates"]
+
+    # Did Rob already lift this morning?
+    morning_row = conn.execute(
+        """
+        SELECT w.started_at, STRING_AGG(DISTINCT ws.exercise, ', ') AS exercises,
+               COUNT(*) AS sets, AVG(ws.rpe) AS avg_rpe
+        FROM workout_sets ws
+        JOIN workouts w ON w.id = ws.workout_id
+        WHERE w.started_at::DATE = current_date
+          AND w.source = 'hevy'
+          AND ws.is_warmup = FALSE
+        GROUP BY w.started_at
+        ORDER BY w.started_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    # Cardio logged today (Apple Health)?
+    cardio_row = conn.execute(
+        "SELECT modality, duration_min, avg_hr FROM cardio_sessions WHERE date = current_date LIMIT 1"
+    ).fetchone()
+
+    lines: list[str] = [
+        f"MIDDAY SESSION RECOMMENDATION — {today.isoformat()} (day of week: {today.strftime('%A')})\n"
+    ]
+
+    clinical = build_clinical_context(conn)
+    if clinical:
+        lines.append(clinical + "\n")
+
+    lines.append("## AVAILABLE NIKE LUNCH-HOUR FACILITIES (60 min window)")
+    lines.append("- Sauna")
+    lines.append("- Hot tub")
+    lines.append("- Leg bags / compression boots")
+    lines.append("(No cold plunge or gym/court access at this location)\n")
+
+    lines.append("## MIDDAY SESSION OPTIONS (all valid — choose the best fit)")
+    lines.append("- Recovery: sauna, hot tub, leg bags (compression) — any combination")
+    lines.append("- Pickleball drills / court skill work (if court available externally)")
+    lines.append("- Zone 2 cardio (bike, treadmill, elliptical) — low HR, fat-burning base")
+    lines.append("- Conditioning / HIIT — metabolic, body-comp push")
+    lines.append("- Mobility / yoga / active stretching\n")
+
+    lines.append("## THIS MORNING'S SESSION")
+    if morning_row:
+        started = morning_row[0]
+        exercises_str = morning_row[1] or ""
+        exercises_preview = exercises_str[:120]
+        avg_rpe = morning_row[3]
+        rpe_str = f" @avg RPE {avg_rpe:.1f}" if avg_rpe else ""
+        # Derive muscle groups from exercise names using the Python helper.
+        ex_names = [e.strip() for e in exercises_str.split(",") if e.strip()]
+        groups = sorted({muscle_group(e) for e in ex_names} - {None})  # type: ignore[misc]
+        groups_str = ", ".join(groups) if groups else "mixed"
+        lines.append(f"- Lifted this morning ({started}): {morning_row[2]} sets{rpe_str}")
+        lines.append(f"- Muscle groups trained: {groups_str}")
+        lines.append(f"- Exercises: {exercises_preview}")
+        lines.append("→ This is a 2-a-day. Recovery modalities carry extra weight.")
+    elif cardio_row:
+        lines.append(f"- Cardio this morning: {cardio_row[0]}, {cardio_row[1]} min, avg HR {cardio_row[2]}")
+    else:
+        lines.append("- No workout logged yet today — midday could be the primary session.")
+
+    lines.append("\n## RECOVERY STATE")
+    if rec["score"] is not None:
+        tier = "GREEN" if rec["score"] >= 67 else ("YELLOW" if rec["score"] >= 34 else "RED")
+        lines.append(f"- WHOOP recovery: {rec['score']:.0f} ({tier})")
+    if rec["hrv_sigma"] is not None:
+        lines.append(f"- HRV: {rec['hrv_ms']:.1f}ms ({rec['hrv_sigma']:+.2f}σ vs 28d baseline)")
+    if load["acwr"] is not None:
+        zone = "SAFE" if 0.8 <= load["acwr"] <= 1.3 else ("⚠ HIGH" if load["acwr"] > 1.3 else "LOW")
+        lines.append(f"- ACWR: {load['acwr']} ({zone})")
+        if load["acwr"] > 1.5:
+            lines.append("  → ACWR > 1.5: NO additional workout load. Recovery only.")
+        elif load["acwr"] > 1.3:
+            lines.append("  → ACWR > 1.3: Keep midday session light — active recovery or Z2 only.")
+
+    chk_parts: list[str] = []
+    if chk.get("soreness_overall") is not None:
+        chk_parts.append(f"soreness {chk['soreness_overall']}/10")
+    if chk.get("energy_level") is not None:
+        chk_parts.append(f"energy {chk['energy_level']}/10")
+    if chk_parts:
+        lines.append(f"- Check-in: {' · '.join(chk_parts)}")
+
+    sore_map = chk.get("muscle_soreness") or {}
+    if sore_map:
+        sore_parts = [f"{k.replace('_', ' ')}" for k, v in sore_map.items() if (v or 0) >= 2]
+        if sore_parts:
+            lines.append(f"- Significant soreness: {', '.join(sore_parts)}")
+
+    lines.append("\n## AUTO-REGULATION GATES")
+    lines.append(f"- Max intensity gate: {gates['max_intensity'].upper()}")
+    if gates.get("deload_required"):
+        lines.append(f"- DELOAD WEEK: {gates.get('deload_reason')} — keep midday light/recovery")
+    for r in gates.get("reasons") or []:
+        lines.append(f"  · {r}")
+
+    lines.append("\n## TRAINING GOAL")
+    lines.append("- Primary: reach peak athletic form — 4.5 → 5.0 DUPR doubles pickleball by end of 2026")
+    lines.append("- Secondary: preserve/build strength and lean mass")
+    lines.append("- This midday session should PUSH Rob toward peak form, but safely.")
+    lines.append("  On a 2-a-day with good recovery: prescribe a real workout (not just passive rest).")
+    lines.append("  On a recovery day or high ACWR: use the thermal/compression tools aggressively.")
+    lines.append("  Never waste a green-light day with minimal effort — the 5.0 goal demands consistent volume.\n")
+
+    lines.append("## OUTPUT — POST THIS JSON TO http://127.0.0.1:8000/api/midday/session")
+    lines.append("""```json
+{
+  "session_type": "workout | recovery | mixed",
+  "title": "<8–12 word title>",
+  "duration_min": 60,
+  "intensity": "high | moderate | low | passive",
+  "activities": [
+    {"name": "<activity>", "duration_min": <n>, "notes": "<execution cues, targets, why>"}
+  ],
+  "rationale": "<2-3 sentences: why this today, referencing morning session + recovery state>",
+  "performance_goal": "<1 sentence: how this advances 5.0 pickleball or peak athletic form>"
+}
+```""")
+    lines.append("")
+    lines.append("Rules:")
+    lines.append("- Total activity duration_min must sum to ≤ 60 (leave 5 min for transition).")
+    lines.append("- Do NOT prescribe strength sets — morning lifting is Hevy-only.")
+    lines.append("- If ACWR > 1.5: session_type must be 'recovery', intensity must be 'passive'.")
+    lines.append("- If ACWR > 1.3: session_type must be 'recovery' or 'mixed', intensity ≤ 'low'.")
+    lines.append("- Cite the performance logic — never prescribe recovery when a workout is the right call.")
+    lines.append("- POST the JSON to the endpoint above. No other output needed.")
+
+    return "\n".join(lines)
+
+
 def load_latest_plan() -> tuple[dict[str, Any], str] | None:
     """Load the most recent stored plan regardless of date.
 

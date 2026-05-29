@@ -3710,3 +3710,85 @@ async def internal_checkpoint() -> dict:
     conn = get_write_conn()
     conn.execute("CHECKPOINT")
     return {"status": "ok"}
+
+
+# ── Midday session endpoints ──────────────────────────────────────────────────
+
+
+class MiddaySessionSubmission(BaseModel):
+    session_type: str           # 'workout' | 'recovery' | 'mixed'
+    title: str
+    duration_min: int
+    intensity: str              # 'high' | 'moderate' | 'low' | 'passive'
+    activities: list[dict]
+    rationale: str
+    performance_goal: str
+
+
+_VALID_SESSION_TYPES = {"workout", "recovery", "mixed"}
+_VALID_INTENSITIES = {"high", "moderate", "low", "passive"}
+
+
+@router.get("/midday/context")
+async def midday_context() -> dict:
+    """Return the prompt Rob pastes into Claude to generate a midday session recommendation."""
+    conn = get_read_conn()
+    try:
+        from shc.ai.workout_planner import build_midday_context
+        prompt = build_midday_context(conn)
+    finally:
+        conn.close()
+    return {"prompt": prompt, "date": date.today().isoformat()}
+
+
+@router.post("/midday/session")
+async def submit_midday_session(body: MiddaySessionSubmission) -> dict:
+    """Accept and persist a Claude-generated midday session recommendation."""
+    if body.session_type not in _VALID_SESSION_TYPES:
+        raise HTTPException(422, f"session_type must be one of {sorted(_VALID_SESSION_TYPES)}")
+    if body.intensity not in _VALID_INTENSITIES:
+        raise HTTPException(422, f"intensity must be one of {sorted(_VALID_INTENSITIES)}")
+    if not body.activities:
+        raise HTTPException(422, "activities list cannot be empty")
+    total_min = sum(a.get("duration_min", 0) for a in body.activities)
+    if total_min > 65:
+        raise HTTPException(422, f"Total activity duration {total_min} min exceeds 65-min cap")
+
+    rec = {
+        "title": body.title,
+        "duration_min": body.duration_min,
+        "intensity": body.intensity,
+        "activities": body.activities,
+        "rationale": body.rationale,
+        "performance_goal": body.performance_goal,
+    }
+    async with write_ctx() as conn:
+        conn.execute(
+            """
+            INSERT INTO midday_sessions (session_date, session_type, recommendation, source, generated_at)
+            VALUES (current_date, $type, $rec, 'claude', now())
+            ON CONFLICT (session_date) DO UPDATE SET
+                session_type     = EXCLUDED.session_type,
+                recommendation   = EXCLUDED.recommendation,
+                source           = EXCLUDED.source,
+                generated_at     = EXCLUDED.generated_at
+            """,
+            {"type": body.session_type, "rec": json.dumps(rec)},
+        )
+    return {"status": "ok", "date": date.today().isoformat()}
+
+
+@router.get("/midday/session/today")
+async def get_midday_session() -> dict:
+    """Return today's midday session recommendation, or null if none generated yet."""
+    conn = get_read_conn()
+    try:
+        row = conn.execute(
+            "SELECT session_type, recommendation FROM midday_sessions WHERE session_date = current_date"
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {"session": None}
+    rec = json.loads(row[1]) if isinstance(row[1], str) else row[1]
+    return {"session": {"session_type": row[0], **rec}}

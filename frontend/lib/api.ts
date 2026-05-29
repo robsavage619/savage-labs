@@ -489,6 +489,22 @@ export interface WorkoutBlock {
   exercises: WorkoutExercise[];
 }
 
+export interface MiddayActivity {
+  name: string;
+  duration_min: number;
+  notes: string;
+}
+
+export interface MiddaySession {
+  session_type: "workout" | "recovery" | "mixed";
+  title: string;
+  duration_min: number;
+  intensity: "high" | "moderate" | "low" | "passive";
+  activities: MiddayActivity[];
+  rationale: string;
+  performance_goal: string;
+}
+
 export interface WorkoutPlan {
   generated_at: string;
   source: "claude" | "claude_code" | "fallback" | string;
@@ -555,6 +571,10 @@ export const api = {
     if (!r.ok) throw new Error(`workoutDelete ${r.status}`);
     return r.json() as Promise<{ status: string; date: string }>;
   },
+  middaySessionToday: () =>
+    get<{ session: MiddaySession | null }>("/api/midday/session/today"),
+  middayContext: () =>
+    get<{ prompt: string; date: string }>("/api/midday/context"),
   syncAll: async () => {
     const [whoop, hevy] = await Promise.allSettled([
       fetch(`${BASE}/auth/whoop/sync`, { method: "POST" }).then((r) => r.json()),

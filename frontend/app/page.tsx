@@ -25,6 +25,7 @@ import { CollapsibleSection } from "@/components/collapsible-section";
 import { GoalScorecard } from "@/components/goal-scorecard";
 import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
 import { DailyReport } from "@/components/daily-report";
+import { MiddaySessionCard } from "@/components/midday-session-card";
 
 export default function Dashboard() {
   return (
@@ -83,6 +84,10 @@ export default function Dashboard() {
 
           <ErrorBoundary label="Next workout">
             <NextWorkoutCard />
+          </ErrorBoundary>
+
+          <ErrorBoundary label="Midday session">
+            <MiddaySessionCard />
           </ErrorBoundary>
 
           <section id="signals" className="scroll-mt-20 grid grid-cols-1 lg:grid-cols-3 gap-4">
