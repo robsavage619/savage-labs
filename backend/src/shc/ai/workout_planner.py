@@ -845,6 +845,10 @@ def build_midday_context(conn) -> str:
     lines.append("(No cold plunge or gym/court access at this location)\n")
 
     lines.append("## MIDDAY SESSION OPTIONS (all valid — choose the best fit)")
+    lines.append("- Accessory lift: 8–10 working sets targeting a DIFFERENT muscle group from this morning")
+    lines.append("  (e.g. AM push → noon pull accessories; AM legs → noon upper body; AM pull → noon arms/shoulders)")
+    lines.append("  Only valid when: ACWR ≤ 1.3, recovery GREEN, no deload, ≥4h since morning session.")
+    lines.append("  Rob logs this in Hevy himself — prescribe exact exercises, sets, reps, RPE targets.")
     lines.append("- Recovery: sauna, hot tub, leg bags (compression) — any combination")
     lines.append("- Pickleball drills / court skill work (if court available externally)")
     lines.append("- Zone 2 cardio (bike, treadmill, elliptical) — low HR, fat-burning base")
@@ -865,7 +869,10 @@ def build_midday_context(conn) -> str:
         lines.append(f"- Lifted this morning ({started}): {morning_row[2]} sets{rpe_str}")
         lines.append(f"- Muscle groups trained: {groups_str}")
         lines.append(f"- Exercises: {exercises_preview}")
-        lines.append("→ This is a 2-a-day. Recovery modalities carry extra weight.")
+        lines.append(
+            "→ This is a 2-a-day. A second lift is on the table if recovery is GREEN and ACWR ≤ 1.3 "
+            "— target a DIFFERENT muscle group. Otherwise use recovery modalities."
+        )
     elif cardio_row:
         lines.append(f"- Cardio this morning: {cardio_row[0]}, {cardio_row[1]} min, avg HR {cardio_row[2]}")
     else:
@@ -931,10 +938,13 @@ def build_midday_context(conn) -> str:
     lines.append("")
     lines.append("Rules:")
     lines.append("- Total activity duration_min must sum to ≤ 60 (leave 5 min for transition).")
-    lines.append("- Do NOT prescribe strength sets — morning lifting is Hevy-only.")
+    lines.append("- Accessory lift (2-a-day strength): ONLY valid when ACWR ≤ 1.3 AND recovery GREEN AND no deload.")
+    lines.append("  Must target a different muscle group than this morning. Cap at 8–10 work sets.")
+    lines.append("  For lift activities, use notes to prescribe: exercise, sets × reps, weight/RPE target.")
+    lines.append("  Rob logs these in Hevy — use exact Hevy exercise names where possible.")
     lines.append("- If ACWR > 1.5: session_type must be 'recovery', intensity must be 'passive'.")
-    lines.append("- If ACWR > 1.3: session_type must be 'recovery' or 'mixed', intensity ≤ 'low'.")
-    lines.append("- Cite the performance logic — never prescribe recovery when a workout is the right call.")
+    lines.append("- If ACWR > 1.3: session_type must be 'recovery' or 'mixed', intensity ≤ 'low'. No lifting.")
+    lines.append("- Never prescribe recovery when a lift or workout is the right call — push toward peak form.")
     lines.append("- POST the JSON to the endpoint above. No other output needed.")
 
     return "\n".join(lines)
