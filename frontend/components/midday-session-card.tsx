@@ -195,11 +195,15 @@ export function MiddaySessionCard() {
   return (
     <div id="midday-session" className="shc-card shc-enter p-5">
       <div className="flex items-center justify-between mb-4">
-        <div>
-          <Eyebrow>Midday Session</Eyebrow>
-          <h2 className="text-[15px] font-semibold text-[var(--text-primary)] mt-0.5">
-            Nike Lunch Hour
-          </h2>
+        <div className="flex items-center gap-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/nike-swoosh.png" alt="Nike" className="h-5 w-auto opacity-90" />
+          <div>
+            <Eyebrow>Midday Session</Eyebrow>
+            <h2 className="text-[15px] font-semibold text-[var(--text-primary)] mt-0.5">
+              Nike Lunch Hour
+            </h2>
+          </div>
         </div>
         {session && (
           <button
