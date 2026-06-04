@@ -268,81 +268,71 @@ async def get_training_context() -> dict[str, str]:
 async def get_muscle_volume() -> dict[str, Any]:
     """Per-muscle weekly set counts vs MEV/MAV/MRV targets from the active mesocycle.
 
-    Joins workout_sets_dedup → exercise_muscle_map to group sets by muscle.
-    Falls back gracefully if exercise_muscle_map is empty (returns empty muscles list).
+    Volume is credited per muscle via ``exercise_muscle_map`` (primary 1.0,
+    each secondary 0.5) by :func:`shc.training.volume.weekly_muscle_volume` —
+    the corrected single source of truth (see migration 0040).
     """
+    from shc.training.volume import (
+        build_muscle_report,
+        unmapped_exercises,
+        weekly_muscle_volume,
+    )
+
     conn = get_read_conn()
     try:
-        # Current week Mon–Sun window
         today = date.today()
-        week_start = today - timedelta(days=today.weekday())
+        week_start = today - timedelta(days=today.weekday())  # Monday
 
         state = ensure_active_mesocycle(conn)
         targets = volume_targets(conn, state.id)
+        actuals = weekly_muscle_volume(conn, week_start)
+        report = build_muscle_report(actuals, targets)
 
-        # Check if exercise_muscle_map table exists (created by migration 0025)
-        table_exists = conn.execute(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_name = 'exercise_muscle_map'"
-        ).fetchone()[0]
-
-        muscles: list[dict[str, Any]] = []
-        unmapped_exercises: list[str] = []
-
-        if table_exists:
-            rows = conn.execute(
-                """
-                SELECT
-                    m.primary_muscle,
-                    COUNT(DISTINCT ws.id) AS work_sets
-                FROM workout_sets_dedup ws
-                JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
-                WHERE ws.started_at::DATE >= ?
-                  AND NOT ws.is_warmup
-                  AND ws.weight_kg > 0 AND ws.reps > 0
-                GROUP BY m.primary_muscle
-                ORDER BY m.primary_muscle
-                """,
-                [week_start.isoformat()],
-            ).fetchall()
-            muscle_sets = {r[0]: int(r[1]) for r in rows}
-
-            # Find exercises in this week that lack a muscle mapping
-            unmapped = conn.execute(
-                """
-                SELECT DISTINCT ws.exercise
-                FROM workout_sets_dedup ws
-                LEFT JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
-                WHERE ws.started_at::DATE >= ?
-                  AND NOT ws.is_warmup
-                  AND ws.weight_kg > 0 AND ws.reps > 0
-                  AND m.exercise_name IS NULL
-                ORDER BY ws.exercise
-                """,
-                [week_start.isoformat()],
-            ).fetchall()
-            unmapped_exercises = [r[0] for r in unmapped]
-
-            # All known muscles (union of mapped sets + target keys)
-            all_muscles = sorted(set(muscle_sets.keys()) | set(targets.keys()))
-            for muscle in all_muscles:
-                t = targets.get(muscle)
-                muscles.append(
-                    {
-                        "muscle": muscle,
-                        "weekly_sets": muscle_sets.get(muscle, 0),
-                        "mev": t.mev if t else None,
-                        "mav": t.mav if t else None,
-                        "mrv": t.mrv if t else None,
-                    }
-                )
-
+        muscles = [
+            {
+                "muscle": r.muscle,
+                "weekly_sets": r.actual_sets,
+                "mev": r.mev,
+                "mav": r.mav,
+                "mrv": r.mrv,
+                "status": r.status,
+            }
+            for r in report
+        ]
         return {
             "as_of": today.isoformat(),
             "week_start": week_start.isoformat(),
             "mesocycle_id": state.id,
             "muscles": muscles,
-            "unmapped_exercises": unmapped_exercises,
+            "unmapped_exercises": unmapped_exercises(conn, week_start),
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/training/prescription")
+async def get_prescription() -> dict[str, Any]:
+    """This week's self-learning per-muscle volume prescription + rationale.
+
+    Deterministic output of the autoregulation controller
+    (:func:`shc.training.autoregulation.weekly_prescription`): for each targeted
+    muscle, the set target the engine set from Rob's performance + recovery, the
+    action (add/hold/cut/deload) and why; plus lift progressions and an exercise
+    menu for muscles needing volume.
+    """
+    from dataclasses import asdict
+
+    from shc.training.autoregulation import weekly_prescription
+
+    conn = get_read_conn()
+    try:
+        rx = weekly_prescription(conn)
+        return {
+            "week_start": rx.week_start.isoformat(),
+            "mesocycle_id": rx.mesocycle_id,
+            "muscles": [asdict(m) for m in rx.muscles],
+            "lift_progressions": rx.lift_progressions,
+            "exercise_menu": rx.exercise_menu,
         }
     finally:
         conn.close()

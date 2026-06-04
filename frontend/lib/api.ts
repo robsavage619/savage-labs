@@ -843,6 +843,28 @@ export const api = {
       }[];
       unmapped_exercises: string[];
     }>("/api/training/muscle-volume"),
+  prescription: () =>
+    get<{
+      week_start: string;
+      mesocycle_id: string;
+      muscles: {
+        muscle: string;
+        current_sets: number;
+        target_sets: number;
+        delta: number;
+        action: "add" | "hold" | "cut" | "deload";
+        reason: string;
+        emphasis: boolean;
+      }[];
+      lift_progressions: {
+        exercise: string;
+        e1rm_lbs: number;
+        perf_score: number | null;
+        trend: string | null;
+        recommendation: string;
+      }[];
+      exercise_menu: Record<string, string[]>;
+    }>("/api/training/prescription"),
   pickleballTrend: (days = 90) =>
     get<{
       as_of: string;

@@ -57,14 +57,15 @@ Intensity = Literal["high", "moderate", "low", "rest"]
 
 # ── DTOs (plain dicts via asdict — DuckDB / FastAPI friendly) ────────────────
 
+
 @dataclass
 class RecoveryMetrics:
-    score: float | None = None              # WHOOP recovery 0-100
+    score: float | None = None  # WHOOP recovery 0-100
     score_date: str | None = None
     hrv_ms: float | None = None
     hrv_baseline_28d: float | None = None
     hrv_sd_28d: float | None = None
-    hrv_sigma: float | None = None          # σ deviation from 28d baseline
+    hrv_sigma: float | None = None  # σ deviation from 28d baseline
     rhr: int | None = None
     rhr_7d_avg: float | None = None
     rhr_baseline_28d: float | None = None
@@ -72,10 +73,14 @@ class RecoveryMetrics:
     skin_temp: float | None = None
     skin_temp_baseline_28d: float | None = None
     skin_temp_delta: float | None = None
-    spo2_pct: float | None = None            # WHOOP recovery-night SpO2 (clinical: <95% sleep-disordered breathing)
-    user_calibrating: bool | None = None     # WHOOP still calibrating — score is unreliable
+    spo2_pct: float | None = (
+        None  # WHOOP recovery-night SpO2 (clinical: <95% sleep-disordered breathing)
+    )
+    user_calibrating: bool | None = None  # WHOOP still calibrating — score is unreliable
     respiratory_rate_baseline_28d: float | None = None
-    respiratory_rate_delta: float | None = None  # bpm above 28d baseline (Bourdillon: +1 bpm = illness sentinel)
+    respiratory_rate_delta: float | None = (
+        None  # bpm above 28d baseline (Bourdillon: +1 bpm = illness sentinel)
+    )
 
 
 @dataclass
@@ -84,7 +89,7 @@ class SleepMetrics:
     avg_7d: float | None = None
     consistency_stdev_7d: float | None = None
     debt_7d_h: float | None = None
-    deep_pct_last: float | None = None       # OSA-aware: deep sleep matters more than duration
+    deep_pct_last: float | None = None  # OSA-aware: deep sleep matters more than duration
     deep_min_last: float | None = None
     rem_min_last: float | None = None
     light_min_last: float | None = None
@@ -98,22 +103,32 @@ class SleepMetrics:
     in_bed_min_last: float | None = None
     no_data_min_last: float | None = None
     sleep_needed_min_last: float | None = None
-    sleep_need_baseline_min_last: float | None = None   # base sleep need for body
-    sleep_need_debt_min_last: float | None = None       # added need from accumulated debt
-    sleep_need_strain_min_last: float | None = None     # added need from yesterday's strain
-    sleep_need_nap_min_last: float | None = None        # credit from naps
-    respiratory_rate_last: float | None = None          # breaths/min during sleep
-    midpoint_local_h_last: float | None = None   # decimal local hours, 0-24
-    midpoint_stdev_h_7d: float | None = None     # social jet-lag proxy
-    spo2_avg_last: float | None = None       # < 95% is a clinical flag for sleep-disordered breathing
-    score: float | None = None               # 0-100 composite (duration + deep% + spo2)
+    sleep_need_baseline_min_last: float | None = None  # base sleep need for body
+    sleep_need_debt_min_last: float | None = None  # added need from accumulated debt
+    sleep_need_strain_min_last: float | None = None  # added need from yesterday's strain
+    sleep_need_nap_min_last: float | None = None  # credit from naps
+    respiratory_rate_last: float | None = None  # breaths/min during sleep
+    midpoint_local_h_last: float | None = None  # decimal local hours, 0-24
+    midpoint_stdev_h_7d: float | None = None  # social jet-lag proxy
+    spo2_avg_last: float | None = None  # < 95% is a clinical flag for sleep-disordered breathing
+    score: float | None = None  # 0-100 composite (duration + deep% + spo2)
 
 
 @dataclass
 class TrainingLoadMetrics:
-    acute_load_7d: float | None = None       # composite_load mean over 7d
-    chronic_load_28d: float | None = None    # composite_load mean over 28d
-    acwr: float | None = None                # acute / chronic, true Gabbett
+    acute_load_7d: float | None = None  # composite_load mean over 7d
+    chronic_load_28d: float | None = None  # composite_load mean over 28d
+    acwr: float | None = None  # acute / chronic, true Gabbett (pooled, display)
+    # Modality-split ACWR. Pooled composite ACWR is blind to *which* system is
+    # overloaded — a pickleball spike inflates it and rest-gates lifting that
+    # isn't overloaded. Resistance ACWR (Hevy tonnes) governs lifting intensity;
+    # conditioning ACWR (WHOOP strain: pickleball/cardio) governs court/cardio.
+    resistance_acwr: float | None = None
+    resistance_acute_7d: float | None = None
+    resistance_chronic_28d: float | None = None
+    conditioning_acwr: float | None = None
+    conditioning_acute_7d: float | None = None
+    conditioning_chronic_28d: float | None = None
     last_session_date: str | None = None
     days_since_last: int | None = None
     days_since_legs: int = 99
@@ -125,10 +140,12 @@ class TrainingLoadMetrics:
     legs_sets_28d: int = 0
     cardio_min_28d: int = 0
     cardio_z2_min_7d: int = 0
-    cardio_zone_min_7d: dict[str, float] = field(default_factory=dict)  # {z0:.., z1:.., ..., z5:..} from WHOOP
-    max_hr_measured: int | None = None       # WHOOP-measured max HR (preferred over Tanaka formula)
-    max_hr_tanaka: int | None = None         # 208 - 0.7 × age (population formula, fallback)
-    pickleball_min_7d: int = 0               # primary sport for Rob's 4.5→5.0 climb
+    cardio_zone_min_7d: dict[str, float] = field(
+        default_factory=dict
+    )  # {z0:.., z1:.., ..., z5:..} from WHOOP
+    max_hr_measured: int | None = None  # WHOOP-measured max HR (preferred over Tanaka formula)
+    max_hr_tanaka: int | None = None  # 208 - 0.7 × age (population formula, fallback)
+    pickleball_min_7d: int = 0  # primary sport for Rob's 4.5→5.0 climb
     pickleball_min_28d: int = 0
     cardio_modality_min_7d: dict[str, int] = field(default_factory=dict)  # per-sport minutes
 
@@ -140,10 +157,10 @@ class CheckinMetrics:
     body_weight_kg: float | None = None
     body_weight_trend_4wk: float | None = None  # % change vs 28d ago
     soreness_overall: int | None = None
-    sleep_quality: int | None = None             # 1-10
-    energy: int | None = None                    # 1-10
-    stress: int | None = None                    # 1-10
-    motivation: int | None = None                # 1-10
+    sleep_quality: int | None = None  # 1-10
+    energy: int | None = None  # 1-10
+    stress: int | None = None  # 1-10
+    motivation: int | None = None  # 1-10
     illness_flag: bool = False
     travel_flag: bool = False
     muscle_soreness: dict[str, int] = field(default_factory=dict)
@@ -151,7 +168,7 @@ class CheckinMetrics:
 
 @dataclass
 class ReadinessSnapshot:
-    score: float | None = None              # 0-100 composite
+    score: float | None = None  # 0-100 composite
     tier: Tier | None = None
     weights: dict[str, float] = field(default_factory=dict)
     components: dict[str, float | None] = field(default_factory=dict)
@@ -165,12 +182,13 @@ class AutoRegGates:
     These are HARD constraints — the LLM may produce creative content WITHIN
     these gates but plans that violate them are auto-regenerated or rejected.
     """
+
     max_intensity: Intensity = "high"
     forbid_muscle_groups: list[str] = field(default_factory=list)  # e.g. ["legs"] if rested < 48h
     deload_required: bool = False
     deload_reason: str | None = None
-    hr_zone_shift_bpm: int = 0               # subtract from prescribed HR zones (propranolol days)
-    kcal_multiplier: float = 1.0             # multiply HR-derived kcal estimates
+    hr_zone_shift_bpm: int = 0  # subtract from prescribed HR zones (propranolol days)
+    kcal_multiplier: float = 1.0  # multiply HR-derived kcal estimates
     e1rm_regression_4wk_pct: float | None = None
     reasons: list[str] = field(default_factory=list)
 
@@ -195,13 +213,13 @@ class BodyComposition:
     goal), never as a hard gate.
     """
 
-    as_of: str | None = None              # latest passing front-photo date
+    as_of: str | None = None  # latest passing front-photo date
     n_photos: int = 0
     waist_to_shoulder: float | None = None  # rolling median of recent shots
     waist_to_hip: float | None = None
-    trend_28d_pct: float | None = None      # signed % change in waist:shoulder
-    trend_direction: str | None = None      # 'leaner' | 'softer' | 'stable' | None
-    note: str | None = None                 # factual cross-reference vs weight
+    trend_28d_pct: float | None = None  # signed % change in waist:shoulder
+    trend_direction: str | None = None  # 'leaner' | 'softer' | 'stable' | None
+    note: str | None = None  # factual cross-reference vs weight
 
 
 @dataclass
@@ -222,15 +240,69 @@ class DailyState:
 # Order matters — check LEGS and CORE before PUSH/PULL so "leg press" → legs, not push,
 # and "leg curl" → legs, not pull. Compound terms (e.g. "calf raise") must also resolve
 # to legs before the generic "raise" hits push.
-_LEGS = ("squat", " leg ", "leg press", "leg curl", "leg extension", "lunge", "hip ", "glute",
-         "hamstring", "quad", "calf", "rdl", "step-up", "adduct", "abduct", "thigh", "sumo",
-         "hack squat", "split squat", "bulgarian")
-_CORE = ("plank", "crunch", "ab ", "core", "oblique", "sit-up", "rotation", "cable crunch",
-         "ab crunch")
-_PUSH = ("press", "fly", "dip", "pushup", "push-up", "tricep", "overhead", "chest",
-         "front raise", "lateral raise", "side raise", "upright row")
-_PULL = ("row", "pulldown", "pull-up", "pullup", "chin-up", "chinup", "curl", "lat ",
-         "deadlift", "shrug", "face pull", "rear delt", "high pull", "good morning")
+_LEGS = (
+    "squat",
+    " leg ",
+    "leg press",
+    "leg curl",
+    "leg extension",
+    "lunge",
+    "hip ",
+    "glute",
+    "hamstring",
+    "quad",
+    "calf",
+    "rdl",
+    "step-up",
+    "adduct",
+    "abduct",
+    "thigh",
+    "sumo",
+    "hack squat",
+    "split squat",
+    "bulgarian",
+)
+_CORE = (
+    "plank",
+    "crunch",
+    "ab ",
+    "core",
+    "oblique",
+    "sit-up",
+    "rotation",
+    "cable crunch",
+    "ab crunch",
+)
+_PUSH = (
+    "press",
+    "fly",
+    "dip",
+    "pushup",
+    "push-up",
+    "tricep",
+    "overhead",
+    "chest",
+    "front raise",
+    "lateral raise",
+    "side raise",
+    "upright row",
+)
+_PULL = (
+    "row",
+    "pulldown",
+    "pull-up",
+    "pullup",
+    "chin-up",
+    "chinup",
+    "curl",
+    "lat ",
+    "deadlift",
+    "shrug",
+    "face pull",
+    "rear delt",
+    "high pull",
+    "good morning",
+)
 
 # Body-diagram muscle keys mapped to the planner's push/pull/legs taxonomy.
 # Keys must match the frontend `BodyDiagram` regions verbatim.
@@ -285,7 +357,9 @@ def _hrv_subscore(sigma: float | None) -> float | None:
     return max(0.0, min(100.0, 50.0 + sigma * 25.0))
 
 
-def _sleep_subscore(hours: float | None, deep_pct: float | None, spo2: float | None) -> float | None:
+def _sleep_subscore(
+    hours: float | None, deep_pct: float | None, spo2: float | None
+) -> float | None:
     if hours is None:
         return None
     # Duration component (60% weight in OSA-off-CPAP context).
@@ -371,6 +445,7 @@ def _tier(score: float | None) -> Tier | None:
 
 
 # ── Section builders ─────────────────────────────────────────────────────────
+
 
 def _recovery(conn, today: date) -> RecoveryMetrics:
     rec = conn.execute(
@@ -553,23 +628,29 @@ def _sleep(conn, today: date) -> SleepMetrics:
 def _training_load(conn, today: date) -> TrainingLoadMetrics:
     m = TrainingLoadMetrics()
     load_rows = conn.execute(
-        "SELECT date, composite_load FROM v_daily_load WHERE date >= $s ORDER BY date",
+        "SELECT date, composite_load, whoop_strain, hevy_tonnes "
+        "FROM v_daily_load WHERE date >= $s ORDER BY date",
         {"s": (today - timedelta(days=28)).isoformat()},
     ).fetchall()
     if load_rows:
-        recent = [float(r[1] or 0) for r in load_rows if r[0] >= today - timedelta(days=7)]
-        chronic = [float(r[1] or 0) for r in load_rows]
         # Mean over the *window length*, not just non-zero days, so ACWR
-        # correctly drops on rest weeks.
-        if chronic:
-            m.acute_load_7d = round(sum(recent) / 7.0, 2)
-            m.chronic_load_28d = round(sum(chronic) / 28.0, 2)
-            if m.chronic_load_28d > 0:
-                m.acwr = round(m.acute_load_7d / m.chronic_load_28d, 2)
+        # correctly drops on rest weeks. Computed per arm: composite (pooled,
+        # display), conditioning (WHOOP strain), resistance (Hevy tonnes).
+        # ACWR is scale-invariant within an arm, so the tonnes/strain unit
+        # mismatch doesn't matter — only each arm's own 7d:28d ratio does.
+        def _arm_acwr(idx: int) -> tuple[float, float, float | None]:
+            recent = [float(r[idx] or 0) for r in load_rows if r[0] >= today - timedelta(days=7)]
+            window = [float(r[idx] or 0) for r in load_rows]
+            acute = round(sum(recent) / 7.0, 2)
+            chronic = round(sum(window) / 28.0, 2)
+            ratio = round(acute / chronic, 2) if chronic > 0 else None
+            return acute, chronic, ratio
 
-    last_session = conn.execute(
-        "SELECT MAX(started_at::DATE) FROM workouts"
-    ).fetchone()
+        m.acute_load_7d, m.chronic_load_28d, m.acwr = _arm_acwr(1)
+        m.conditioning_acute_7d, m.conditioning_chronic_28d, m.conditioning_acwr = _arm_acwr(2)
+        m.resistance_acute_7d, m.resistance_chronic_28d, m.resistance_acwr = _arm_acwr(3)
+
+    last_session = conn.execute("SELECT MAX(started_at::DATE) FROM workouts").fetchone()
     if last_session and last_session[0]:
         m.last_session_date = str(last_session[0])
         m.days_since_last = (today - last_session[0]).days
@@ -595,7 +676,11 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         "SELECT MAX(date) FROM cardio_sessions WHERE modality = 'pickleball'"
     ).fetchone()
     if pb_last_row and pb_last_row[0]:
-        pb_date = pb_last_row[0] if isinstance(pb_last_row[0], date) else date.fromisoformat(str(pb_last_row[0]))
+        pb_date = (
+            pb_last_row[0]
+            if isinstance(pb_last_row[0], date)
+            else date.fromisoformat(str(pb_last_row[0]))
+        )
         if "legs" not in last_by_group or pb_date > last_by_group["legs"]:
             last_by_group["legs"] = pb_date
 
@@ -629,9 +714,7 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         GROUP BY modality
         """
     ).fetchall()
-    m.cardio_modality_min_7d = {
-        (r[0] or "unknown"): int(r[1] or 0) for r in modality_rows
-    }
+    m.cardio_modality_min_7d = {(r[0] or "unknown"): int(r[1] or 0) for r in modality_rows}
     m.pickleball_min_7d = m.cardio_modality_min_7d.get("pickleball", 0)
     pb28_row = conn.execute(
         """
@@ -740,6 +823,7 @@ def _checkin(conn, today: date) -> CheckinMetrics:
             raw = row[10]
             if isinstance(raw, str):
                 import json as _json
+
                 try:
                     raw = _json.loads(raw)
                 except _json.JSONDecodeError:
@@ -785,15 +869,21 @@ def _readiness_snapshot(
         "sleep": sleep.score,
         "rhr": _rhr_subscore(rec.rhr, rec.rhr_baseline_28d),
         "subj": _subj_subscore(
-            chk.energy, chk.stress, chk.soreness_overall,
-            chk.sleep_quality, chk.motivation,
+            chk.energy,
+            chk.stress,
+            chk.soreness_overall,
+            chk.sleep_quality,
+            chk.motivation,
         ),
     }
     present = [(k, v) for k, v in components.items() if v is not None]
     if not present:
         return ReadinessSnapshot(
-            score=None, tier=None, weights=weights,
-            components=components, beta_blocker_adjusted=beta_blocker,
+            score=None,
+            tier=None,
+            weights=weights,
+            components=components,
+            beta_blocker_adjusted=beta_blocker,
         )
     wsum = sum(weights[k] for k, _ in present) or 1.0
     score = sum(weights[k] / wsum * v for k, v in present)
@@ -831,7 +921,9 @@ def _gates(
         # threshold. Only elevated (positive) deltas signal risk; negative
         # deltas are normal (cooler environment, less peripheral blood flow).
         g.max_intensity = "low"
-        reasons.append(f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline — possible illness, Z2 only")
+        reasons.append(
+            f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline — possible illness, Z2 only"
+        )
     if rec.user_calibrating:
         # WHOOP recovery score is unreliable while calibrating — flag it but don't gate.
         reasons.append("WHOOP user_calibrating=true — recovery score may be unreliable")
@@ -871,9 +963,7 @@ def _gates(
     if sleep.efficiency_pct_last is not None and sleep.efficiency_pct_last < 75:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
-        reasons.append(
-            f"Sleep efficiency {sleep.efficiency_pct_last:.0f}% < 75% — cap MODERATE"
-        )
+        reasons.append(f"Sleep efficiency {sleep.efficiency_pct_last:.0f}% < 75% — cap MODERATE")
     if sleep.disturbance_count_last is not None and sleep.disturbance_count_last >= 12:
         # Highly fragmented night → poor restoration even with adequate hours.
         if g.max_intensity == "high":
@@ -891,17 +981,37 @@ def _gates(
     if chk.illness_flag:
         g.max_intensity = "rest"
         reasons.append("Illness flag set — rest day")
-    if load.acwr is not None and load.acwr > 1.65:
+    # ACWR gates — modality-split (Gabbett thresholds applied per arm).
+    # Lifting intensity is governed by the RESISTANCE arm (Hevy). A CONDITIONING
+    # spike (pickleball/cardio) must not rest-gate the barbell, so it holds
+    # court/cardio and forbids legs (pickleball = lateral lower-body stimulus)
+    # rather than capping global intensity. This prevents a heavy pickleball
+    # week from grounding under-stimulated upper-body lifting.
+    res = load.resistance_acwr
+    if res is not None and res > 1.65:
         g.max_intensity = "rest"
-        reasons.append(f"ACWR {load.acwr} > 1.65 — significant overload, rest required")
-    elif load.acwr is not None and load.acwr > 1.5:
+        reasons.append(f"Resistance ACWR {res} > 1.65 — lifting overload, rest required")
+    elif res is not None and res > 1.5:
         if g.max_intensity in ("high", "moderate"):
             g.max_intensity = "low"
-        reasons.append(f"ACWR {load.acwr} > 1.5 — elevated overload, cap LOW")
-    elif load.acwr is not None and load.acwr > 1.3:
+        reasons.append(f"Resistance ACWR {res} > 1.5 — elevated lifting load, cap LOW")
+    elif res is not None and res > 1.3:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
-        reasons.append(f"ACWR {load.acwr} > 1.3 — reduce volume, cap MODERATE")
+        reasons.append(f"Resistance ACWR {res} > 1.3 — reduce lifting volume, cap MODERATE")
+
+    cond = load.conditioning_acwr
+    if cond is not None and cond > 1.5:
+        # Court/cardio overload. Protect the lower body that absorbs court load;
+        # leave upper-body lifting available.
+        if "legs" not in g.forbid_muscle_groups:
+            g.forbid_muscle_groups.append("legs")
+        reasons.append(
+            f"Conditioning ACWR {cond} > 1.5 — court/cardio overload; hold "
+            "pickleball + hard cardio, legs off today (upper-body lifting OK)"
+        )
+    elif cond is not None and cond > 1.3:
+        reasons.append(f"Conditioning ACWR {cond} > 1.3 — ease off added pickleball/cardio volume")
 
     # Yellow tier softens the cap.
     if readiness.tier == "yellow" and g.max_intensity == "high":
@@ -984,15 +1094,36 @@ def _gates(
 # Free-weight compound patterns that make a meaningful "primary strength lift".
 # e1RM on these tracks real strength; machine/cable/isolation work does not.
 _STRENGTH_PATTERNS = (
-    "bench press", "squat", "deadlift", "overhead press", "military press",
-    "bent over row", "pendlay row", "meadows row", "t bar row", "hip thrust",
-    "good morning", "lunge", "split squat", "chin up", "pull up", "push press",
+    "bench press",
+    "squat",
+    "deadlift",
+    "overhead press",
+    "military press",
+    "bent over row",
+    "pendlay row",
+    "meadows row",
+    "t bar row",
+    "hip thrust",
+    "good morning",
+    "lunge",
+    "split squat",
+    "chin up",
+    "pull up",
+    "push press",
 )
 # Equipment/markers that disqualify a lift as a strength-tracking primary:
 # machines and cables fix the path (load ≠ effort), "goblet" caps load by grip.
 _NOT_STRENGTH = (
-    "machine", "smith", "cable", "hammerstrength", "iso-lateral", "assisted",
-    "band", "suspension", "pec deck", "goblet",
+    "machine",
+    "smith",
+    "cable",
+    "hammerstrength",
+    "iso-lateral",
+    "assisted",
+    "band",
+    "suspension",
+    "pec deck",
+    "goblet",
 )
 
 
@@ -1085,7 +1216,9 @@ def _deload_in_cooldown(conn, today: date, window: int = DELOAD_COOLDOWN_DAYS) -
     return bool(row and row[0])
 
 
-def _freshness(conn, today: date, rec: RecoveryMetrics, sleep: SleepMetrics, load: TrainingLoadMetrics) -> DataFreshness:
+def _freshness(
+    conn, today: date, rec: RecoveryMetrics, sleep: SleepMetrics, load: TrainingLoadMetrics
+) -> DataFreshness:
     f = DataFreshness()
     if rec.score_date:
         f.whoop_age_days = (today - date.fromisoformat(rec.score_date)).days
@@ -1107,6 +1240,7 @@ def _freshness(conn, today: date, rec: RecoveryMetrics, sleep: SleepMetrics, loa
 
 # ── Public entry point ───────────────────────────────────────────────────────
 
+
 def _body_composition(conn, today: date) -> BodyComposition:
     """Leanness trend from passing front-view progress photos.
 
@@ -1127,9 +1261,7 @@ def _body_composition(conn, today: date) -> BodyComposition:
         """
     ).fetchall()
     series = [
-        (r[0], float(r[1]), float(r[2]))
-        for r in rows
-        if r[1] is not None and r[2] is not None
+        (r[0], float(r[1]), float(r[2])) for r in rows if r[1] is not None and r[2] is not None
     ]
     if not series:
         return BodyComposition()
@@ -1153,9 +1285,7 @@ def _body_composition(conn, today: date) -> BodyComposition:
             trend_pct = round((cur_w2s - ref) / ref * 100, 2)
             # ISAK 2% noise floor — below it, no real change.
             direction = (
-                "stable"
-                if abs(trend_pct) < 2.0
-                else ("leaner" if trend_pct < 0 else "softer")
+                "stable" if abs(trend_pct) < 2.0 else ("leaner" if trend_pct < 0 else "softer")
             )
 
     return BodyComposition(
@@ -1210,9 +1340,7 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
     e1rm = _e1rm_regression(conn, today)
     e1rm_pct, e1rm_lift = e1rm if e1rm else (None, None)
     deload_cooldown = _deload_in_cooldown(conn, today)
-    gates = _gates(
-        rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift
-    )
+    gates = _gates(rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift)
     freshness = _freshness(conn, today, rec, sleep, load)
 
     body_comp = _body_composition(conn, today)

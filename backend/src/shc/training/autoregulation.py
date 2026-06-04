@@ -1,0 +1,328 @@
+from __future__ import annotations
+
+"""Self-learning volume autoregulation — the prescriptive control loop.
+
+Deterministic, per-muscle, runs weekly. For each muscle it decides next week's
+working-set target by combining Rob's own logged signals — the Renaissance
+Periodization / Israetel set-progression logic, made data-driven:
+
+    progressing + recovered      → ADD sets toward MRV
+    stalled (flat e1RM)          → ADD a set to break the stall (until MRV)
+    regressing / under-recovered → CUT toward MEV
+    at/over MRV                  → HOLD or flag DELOAD
+
+On top of the base tree:
+  * Lagging-emphasis bias — EMPHASIS muscles (biceps, glutes) ramp faster and
+    floor at MAV, never sitting at maintenance volume.
+  * Interference debit — when conditioning/pickleball load is high, lower-body
+    volume is held back so court load doesn't blow the leg recovery budget.
+
+No LLM is involved. The output (:func:`weekly_prescription`) is the structured
+program the chat assembles the actual session from.
+"""
+
+import json
+import logging
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+
+import duckdb
+
+from shc.training.mesocycle import (
+    _iso_week_start,
+    active_mesocycle,
+    score_exercise,
+    volume_targets,
+)
+from shc.training.volume import build_muscle_report, weekly_muscle_volume
+
+log = logging.getLogger(__name__)
+
+# Lagging muscles Rob wants prioritized — floor at MAV, add faster. Static for
+# v1; Phase 3 will derive emphasis from a measured per-muscle development index.
+EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes"})
+
+# Lower-body muscles whose recovery competes with pickleball/cardio conditioning.
+LOWER_BODY: frozenset[str] = frozenset({"quads", "hamstrings", "glutes", "calves", "adductors"})
+
+# Soreness severity (1 mild / 2 moderate / 3 acute) at/above which a muscle is
+# treated as under-recovered for volume decisions.
+SORENESS_BLOCK = 2.0
+
+# Max set-count change per muscle per week — RP progression ramps gradually, so a
+# muscle far below its floor climbs over several weeks rather than in one jump.
+MAX_WEEKLY_STEP = 4
+
+
+@dataclass
+class MusclePrescription:
+    muscle: str
+    current_sets: float
+    target_sets: int
+    delta: int
+    action: str  # 'add' | 'hold' | 'cut' | 'deload'
+    reason: str
+    emphasis: bool = False
+
+
+@dataclass
+class Prescription:
+    week_start: date
+    mesocycle_id: str
+    muscles: list[MusclePrescription] = field(default_factory=list)
+    lift_progressions: list[dict] = field(default_factory=list)
+    exercise_menu: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _recent_soreness(conn: duckdb.DuckDBPyConnection, days: int = 7) -> dict[str, float]:
+    """Mean per-muscle soreness severity over the last ``days`` check-ins."""
+    rows = conn.execute(
+        """
+        SELECT muscle_soreness
+        FROM daily_checkin
+        WHERE date >= ? AND muscle_soreness IS NOT NULL
+        """,
+        [(date.today() - timedelta(days=days)).isoformat()],
+    ).fetchall()
+    acc: dict[str, list[float]] = {}
+    for (raw,) in rows:
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for muscle, sev in data.items():
+            if sev is not None:
+                acc.setdefault(muscle, []).append(float(sev))
+    return {m: sum(v) / len(v) for m, v in acc.items() if v}
+
+
+def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str) -> int | None:
+    """Aggregate Israetel perf score (1–5) for a muscle's mapped exercises.
+
+    Returns the best (max) recent score across exercises whose ``primary_muscle``
+    is ``muscle`` — a muscle is "progressing" if any of its main lifts is. None
+    when no exercise has enough history to score.
+    """
+    exercises = [
+        r[0]
+        for r in conn.execute(
+            "SELECT exercise_name FROM exercise_muscle_map WHERE primary_muscle = ?",
+            [muscle],
+        ).fetchall()
+    ]
+    scores = [ps.perf_score for ex in exercises if (ps := score_exercise(conn, ex)) is not None]
+    return max(scores) if scores else None
+
+
+def _conditioning_pressure(conn: duckdb.DuckDBPyConnection) -> float | None:
+    """Conditioning ACWR — proxy for how much pickleball/cardio load is live.
+
+    Read lazily from the daily state; None if unavailable. > 1.3 means the
+    lower body is already absorbing meaningful court/cardio stimulus.
+    """
+    try:
+        from shc.metrics import compute_daily_state
+
+        return compute_daily_state(conn)["training_load"].get("conditioning_acwr")
+    except Exception as exc:  # noqa: BLE001 — state optional; missing → no debit
+        log.debug("conditioning pressure unavailable: %s", exc)
+        return None
+
+
+def _decide(
+    muscle: str,
+    current: float,
+    mev: int,
+    mav: int,
+    mrv: int,
+    perf: int | None,
+    soreness: float,
+    conditioning_acwr: float | None,
+) -> MusclePrescription:
+    """Apply the RP set-progression tree + emphasis + interference for one muscle.
+
+    ``action`` is derived from the final delta so it can never contradict the
+    target, and every change is clamped to ``MAX_WEEKLY_STEP`` so volume ramps.
+    """
+    emphasis = muscle in EMPHASIS_MUSCLES
+    grow_floor = mav if emphasis else mev  # healthy muscles shouldn't sit below this
+    cur = round(current)
+    under_recovered = soreness >= SORENESS_BLOCK
+    leg_interference = (
+        muscle in LOWER_BODY and conditioning_acwr is not None and conditioning_acwr > 1.3
+    )
+
+    if perf is not None and perf <= 2:
+        # Regressing — cut toward MEV (the real minimum, even for emphasis muscles).
+        desired = max(mev, cur - 2)
+        reason = f"regressing (perf {perf}/5) → cut toward MEV"
+    elif under_recovered:
+        desired = max(mev, cur - 1)
+        reason = f"under-recovered (soreness {soreness:.1f}/3) → back off a set"
+    elif cur >= mrv:
+        desired = mrv
+        reason = "at MRV — volume ceiling; hold (deload candidate next block)"
+    elif leg_interference:
+        # Pickleball/cardio IS the leg stimulus this week — hold in place.
+        desired = cur
+        reason = f"court/cardio load high (cond. ACWR {conditioning_acwr:.2f}) → hold leg volume"
+    elif perf is not None and perf >= 4:
+        desired = cur + (2 if emphasis else 1)
+        reason = f"progressing (perf {perf}/5){' + emphasis' if emphasis else ''} → add toward MRV"
+    elif perf == 3:
+        desired = cur + 1
+        reason = "stalled e1RM → +1 set to break the stall"
+    elif cur < grow_floor:
+        # No performance signal yet, but below the floor it should be training at.
+        desired = grow_floor
+        floor_name = "MAV (emphasis)" if emphasis else "MEV"
+        reason = f"below {floor_name} → ramping up to minimum effective volume"
+    else:
+        desired = cur
+        reason = "in range, no clear signal — hold and gather data"
+
+    # Clamp to MRV and to a single-week step, then derive the action from the delta.
+    target = max(0, min(mrv, desired))
+    target = max(cur - MAX_WEEKLY_STEP, min(cur + MAX_WEEKLY_STEP, target))
+    delta = target - cur
+    action = "add" if delta > 0 else "cut" if delta < 0 else "hold"
+
+    return MusclePrescription(
+        muscle=muscle,
+        current_sets=round(current, 1),
+        target_sets=target,
+        delta=delta,
+        action=action,
+        reason=reason,
+        emphasis=emphasis,
+    )
+
+
+def _exercise_menu(
+    conn: duckdb.DuckDBPyConnection, muscles: list[str], per_muscle: int = 4
+) -> dict[str, list[str]]:
+    """Candidate exercises per muscle, Rob's history first, excluding 'no' prefs."""
+    avoid = {
+        r[0]
+        for r in conn.execute(
+            "SELECT exercise FROM exercise_preferences WHERE status = 'no'"
+        ).fetchall()
+    }
+    menu: dict[str, list[str]] = {}
+    for muscle in muscles:
+        rows = conn.execute(
+            """
+            SELECT m.exercise_name,
+                   COALESCE(MAX(ws.started_at), '1900-01-01'::TIMESTAMP) AS last_done
+            FROM exercise_muscle_map m
+            LEFT JOIN workout_sets_dedup ws ON ws.exercise = m.exercise_name
+            WHERE m.primary_muscle = ?
+            GROUP BY m.exercise_name
+            ORDER BY last_done DESC
+            """,
+            [muscle],
+        ).fetchall()
+        picks = [r[0] for r in rows if r[0] not in avoid][:per_muscle]
+        if picks:
+            menu[muscle] = picks
+    return menu
+
+
+def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
+    """Build this week's per-muscle volume prescription from Rob's logged data.
+
+    The deterministic program: every targeted muscle gets a set target + action +
+    reason; lagging lifts get a progression call; muscles needing volume get an
+    exercise menu. The chat assembles the actual session from this.
+    """
+    state = active_mesocycle(conn)
+    meso_id = state.id if state else ""
+    this_week = _iso_week_start(date.today())
+
+    targets = volume_targets(conn, meso_id)
+    actuals = weekly_muscle_volume(conn, this_week)
+    report = build_muscle_report(actuals, targets)
+    soreness = _recent_soreness(conn)
+    conditioning_acwr = _conditioning_pressure(conn)
+
+    muscle_rx: list[MusclePrescription] = []
+    for r in report:
+        if r.mev is None or r.mav is None or r.mrv is None:
+            continue  # untargeted muscle — no landmark to progress against
+        muscle_rx.append(
+            _decide(
+                muscle=r.muscle,
+                current=r.actual_sets,
+                mev=r.mev,
+                mav=r.mav,
+                mrv=r.mrv,
+                perf=_muscle_performance(conn, r.muscle),
+                soreness=soreness.get(r.muscle, 0.0),
+                conditioning_acwr=conditioning_acwr,
+            )
+        )
+    # Emphasis first, then the muscles being grown, then the rest.
+    muscle_rx.sort(key=lambda m: (not m.emphasis, m.action != "add", m.muscle))
+
+    # Lifts to progress: recently-trained exercises with a clear add/deload call.
+    lift_progressions: list[dict] = []
+    recent = conn.execute(
+        """
+        SELECT DISTINCT exercise FROM workout_sets_dedup
+        WHERE started_at::DATE >= ? AND weight_kg > 0 AND reps > 0
+        """,
+        [(this_week - timedelta(days=14)).isoformat()],
+    ).fetchall()
+    for (ex,) in recent:
+        ps = score_exercise(conn, ex)
+        if ps is None:
+            continue
+        lift_progressions.append(
+            {
+                "exercise": ex,
+                "e1rm_lbs": round(ps.e1rm_lbs),
+                "perf_score": ps.perf_score,
+                "trend": ps.trend,
+                "recommendation": ps.recommendation,
+            }
+        )
+
+    # Exercise menu for muscles that need volume (adding, or below MAV).
+    need_volume = [m.muscle for m in muscle_rx if m.action == "add" or m.emphasis]
+    menu = _exercise_menu(conn, need_volume)
+
+    return Prescription(
+        week_start=this_week,
+        mesocycle_id=meso_id,
+        muscles=muscle_rx,
+        lift_progressions=lift_progressions,
+        exercise_menu=menu,
+    )
+
+
+def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
+    """Markdown block injected into the workout planner — the build order."""
+    rx = weekly_prescription(conn)
+    if not rx.muscles:
+        return ""
+    lines = [
+        "## THIS WEEK'S PRESCRIPTION (build the session from this)",
+        "Per-muscle volume targets the engine set from your performance + recovery.",
+        "Prioritize muscles marked ADD and ★ emphasis; respect HOLD/CUT.",
+        "",
+        "| Muscle | Now | → Target | Action | Why |",
+        "|--------|-----|----------|--------|-----|",
+    ]
+    for m in rx.muscles:
+        star = " ★" if m.emphasis else ""
+        lines.append(
+            f"| {m.muscle}{star} | {m.current_sets:g} | {m.target_sets} "
+            f"({m.delta:+d}) | {m.action.upper()} | {m.reason} |"
+        )
+    if rx.exercise_menu:
+        lines.append("\n**Exercise menu for muscles needing volume** (your history first):")
+        for muscle, exs in rx.exercise_menu.items():
+            lines.append(f"- {muscle}: {', '.join(exs)}")
+    return "\n".join(lines)

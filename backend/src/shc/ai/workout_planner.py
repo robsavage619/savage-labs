@@ -40,8 +40,9 @@ def load_vault_research(
     extra_signals: set[str] | None = None,
     keyword_hints: list[str] | None = None,
 ) -> str:
-    return _vault_context(state=state, extra_signals=extra_signals,
-                          keyword_hints=keyword_hints, limit=limit)
+    return _vault_context(
+        state=state, extra_signals=extra_signals, keyword_hints=keyword_hints, limit=limit
+    )
 
 
 def get_vault_research(state: dict[str, Any] | None = None) -> str:
@@ -74,10 +75,14 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
 
     real_today = date.today()
     if planning_date is None:
-        planning_date = (real_today + timedelta(days=1)) if _workout_logged_today(conn) else real_today
+        planning_date = (
+            (real_today + timedelta(days=1)) if _workout_logged_today(conn) else real_today
+        )
 
     today = planning_date
-    state = compute_daily_state(conn, planning_date=planning_date if planning_date != real_today else None)
+    state = compute_daily_state(
+        conn, planning_date=planning_date if planning_date != real_today else None
+    )
     rec = state["recovery"]
     sleep = state["sleep"]
     load = state["training_load"]
@@ -162,8 +167,10 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     recent_vol = sum(vols[half:]) / max(len(vols) - half, 1) if vols else 0
     vol_trend_pct = round((recent_vol - prior_vol) / prior_vol * 100, 1) if prior_vol > 0 else 0
     vol_trend_label = (
-        f"+{vol_trend_pct}% (INCREASING — monitor ACWR)" if vol_trend_pct > 15
-        else f"{vol_trend_pct}% (stable)" if -10 <= vol_trend_pct <= 15
+        f"+{vol_trend_pct}% (INCREASING — monitor ACWR)"
+        if vol_trend_pct > 15
+        else f"{vol_trend_pct}% (stable)"
+        if -10 <= vol_trend_pct <= 15
         else f"{vol_trend_pct}% (decreasing)"
     )
 
@@ -219,7 +226,9 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             f"- Composite readiness: {readiness['score']:.0f}/100 ({readiness['tier']}){adj}"
         )
     if rec["score"] is not None:
-        tier = "🟢 GREEN" if rec["score"] >= 67 else ("🟡 YELLOW" if rec["score"] >= 34 else "🔴 RED")
+        tier = (
+            "🟢 GREEN" if rec["score"] >= 67 else ("🟡 YELLOW" if rec["score"] >= 34 else "🔴 RED")
+        )
         lines.append(f"- WHOOP recovery: {rec['score']:.0f} ({tier}) — {rec['score_date']}")
     if rec["hrv_sigma"] is not None:
         lines.append(
@@ -227,15 +236,26 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             f" · deviation {rec['hrv_sigma']:+.2f}σ"
         )
     if sleep["last_hours"] is not None:
-        deep = f", deep {sleep['deep_pct_last']*100:.0f}%" if sleep["deep_pct_last"] else ""
+        deep = f", deep {sleep['deep_pct_last'] * 100:.0f}%" if sleep["deep_pct_last"] else ""
         spo2 = f", SpO₂ {sleep['spo2_avg_last']:.1f}%" if sleep["spo2_avg_last"] else ""
         avg = f" · 7d avg {sleep['avg_7d']:.1f}h" if sleep["avg_7d"] else ""
         lines.append(f"- Sleep last night: {sleep['last_hours']:.1f}h{deep}{spo2}{avg}")
     if load["acwr"] is not None:
         zone = "safe" if 0.8 <= load["acwr"] <= 1.3 else ("⚠ HIGH" if load["acwr"] > 1.3 else "low")
         lines.append(
-            f"- ACWR (true Gabbett): {load['acwr']} ({zone}) — "
+            f"- ACWR (true Gabbett, pooled): {load['acwr']} ({zone}) — "
             f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_28d']:.1f}"
+        )
+
+        def _zone(v: float | None) -> str:
+            if v is None:
+                return "n/a"
+            return "safe" if 0.8 <= v <= 1.3 else ("⚠ HIGH" if v > 1.3 else "low")
+
+        res, cond = load.get("resistance_acwr"), load.get("conditioning_acwr")
+        lines.append(
+            f"  · split → resistance (lifting): {res} ({_zone(res)}) — GATES INTENSITY · "
+            f"conditioning (pickleball/cardio): {cond} ({_zone(cond)}) — gates court/legs"
         )
     if rec["rhr_7d_avg"] is not None:
         lines.append(
@@ -306,11 +326,14 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             target_rpe = adherence_row[3]
             lines.append(
                 f"- Adherence: {comp:.0f}% sets completed"
-                if comp is not None else "- Adherence: not yet logged"
+                if comp is not None
+                else "- Adherence: not yet logged"
             )
             if actual_rpe and target_rpe:
                 delta = actual_rpe - target_rpe
-                lines.append(f"- RPE delivered: {actual_rpe:.1f} vs target {target_rpe:.1f} ({delta:+.1f})")
+                lines.append(
+                    f"- RPE delivered: {actual_rpe:.1f} vs target {target_rpe:.1f} ({delta:+.1f})"
+                )
 
     # Muscle-group rest status.
     lines.append("\n## MUSCLE GROUP REST STATUS")
@@ -401,7 +424,9 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         """
     ).fetchall()
     if cardio_rows:
-        lines.append(f"\n## CARDIO MIX (last 28 days — {load['cardio_min_28d']} min total, {load['cardio_z2_min_7d']} Z2 min in last 7d)")
+        lines.append(
+            f"\n## CARDIO MIX (last 28 days — {load['cardio_min_28d']} min total, {load['cardio_z2_min_7d']} Z2 min in last 7d)"
+        )
         for mod, mins, sess, avg_hr in cardio_rows:
             hr_str = f", avg HR {int(avg_hr)}" if avg_hr else ""
             lines.append(f"- {mod}: {int(mins or 0)} min over {sess} sessions{hr_str}")
@@ -410,23 +435,36 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             "\n## CARDIO MIX (last 28 days): none logged — fat-loss programming should add Z2 + finisher"
         )
 
-    lines.append("\n## ATHLETIC IDENTITY + GOALS")
-    lines.append("Rob is 40 years old and refuses to let age define his ceiling. This is not a")
-    lines.append("maintenance program — it is a competitive athletic program designed to reach PEAK form.")
-    lines.append("Age brings wisdom about recovery; it does not lower the ambition.")
+    lines.append("\n## MISSION + GOALS")
+    lines.append("Rob is 40 and refuses to let age define his ceiling. This is not a maintenance")
+    lines.append("program — it is a hypertrophy program engineered to build muscle. Age brings")
+    lines.append("wisdom about recovery; it does not lower the ambition.")
     lines.append("")
-    lines.append("Primary goal: 4.5 → 5.0 DUPR doubles pickleball by end of 2026.")
-    lines.append("  Physical attributes that close the gap: explosive first-step, sustained aerobic output")
-    lines.append("  across 3+ hours of tournament play, upper-body power for drives/resets, mental clarity")
-    lines.append("  late in matches. Every session either builds one of these directly or protects the")
-    lines.append("  ability to train again tomorrow.")
+    lines.append("PRIMARY GOAL: build muscle. Engineer the physique through per-muscle volume")
+    lines.append("  progression — drive each muscle through MEV→MAV→MRV, add stimulus where it's")
+    lines.append("  productive, back off where recovery says so. The PER-MUSCLE VOLUME table and")
+    lines.append("  THIS WEEK'S PRESCRIPTION below are the program — build the session from them.")
+    lines.append("  Emphasis: biceps and glutes are lagging and prioritized — bias direct volume")
+    lines.append("  toward them whenever the gates and recovery allow.")
     lines.append("")
-    lines.append("Secondary goal: build — not just preserve — strength and lean mass concurrently.")
-    lines.append("  Concurrent training (strength + pickleball) is the program. Treat it as such.")
-    lines.append("  Heavy compounds first, density work and finishers for body comp.")
+    lines.append("BODY-COMP: strict recomp at maintenance — build muscle and lean out at the same")
+    lines.append("  time. Heavy compounds first for the strength base, then targeted hypertrophy")
+    lines.append("  volume for the lagging and emphasis muscles.")
     lines.append("")
-    lines.append("Design sessions that push. When gates say go, GO. A soft session on a green day is a")
-    lines.append("missed adaptation and an insult to the goal. Respect the gates when they fire — they")
+    lines.append("CARDIO is a supporting track — Z2 aerobic base + conditioning finishers for work")
+    lines.append("  capacity, recovery, and the fat-loss side of recomp. It serves the build; it")
+    lines.append("  never displaces a lift on a green day.")
+    lines.append("")
+    lines.append("PICKLEBALL is logged load only — Rob trains his own court skills. Treat his play")
+    lines.append("  purely as a leg/conditioning stimulus that debits lower-body recovery; never")
+    lines.append("  program drills, court work, or DUPR goals.")
+    lines.append("")
+    lines.append(
+        "Design sessions that push. When gates say go, GO. A soft session on a green day is a"
+    )
+    lines.append(
+        "missed adaptation and an insult to the goal. Respect the gates when they fire — they"
+    )
     lines.append("fire to protect training quality, not to make the program easier.")
 
     if prefs:
@@ -454,7 +492,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             lines.append("These are comments you wrote in Hevy after completing exercises.")
             lines.append("Use them to adjust load, cues, form, or exercise selection today.")
             for exercise, session_date, note in note_rows:
-                lines.append(f"- {exercise} ({session_date}): \"{note}\"")
+                lines.append(f'- {exercise} ({session_date}): "{note}"')
     except Exception as _e:
         log.debug("exercise notes unavailable: %s", _e)
 
@@ -465,10 +503,13 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         ).fetchall()
         if hevy_tmpl_rows:
             from collections import defaultdict
+
             by_group: dict[str, list[str]] = defaultdict(list)
             for title, pmg in hevy_tmpl_rows:
                 by_group[pmg or "Other"].append(title)
-            lines.append(f"\n## AVAILABLE HEVY EXERCISES ({len(hevy_tmpl_rows)} total — use VERBATIM names)")
+            lines.append(
+                f"\n## AVAILABLE HEVY EXERCISES ({len(hevy_tmpl_rows)} total — use VERBATIM names)"
+            )
             for group in sorted(by_group):
                 lines.append(f"### {group}")
                 for ex in by_group[group]:
@@ -479,11 +520,22 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     # ── Mesocycle + progression context ──────────────────────────────────────
     try:
         from shc.training.mesocycle import mesocycle_context_block
+
         meso_block = mesocycle_context_block(conn)
         if meso_block:
             lines.append("\n" + meso_block)
     except Exception as _e:
         log.debug("mesocycle context unavailable: %s", _e)
+
+    # ── Self-learning prescription — the per-muscle build order ───────────────
+    try:
+        from shc.training.autoregulation import prescription_context_block
+
+        rx_block = prescription_context_block(conn)
+        if rx_block:
+            lines.append("\n" + rx_block)
+    except Exception as _e:
+        log.debug("prescription context unavailable: %s", _e)
 
     # ── Vault research — catalog + excerpts ───────────────────────────────────
     extra: set[str] = set()
@@ -506,6 +558,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         ).fetchone()
         if sore_row and sore_row[0]:
             import json as _json
+
             sore_map = _json.loads(sore_row[0]) if isinstance(sore_row[0], str) else sore_row[0]
             hints.extend(k for k, v in sore_map.items() if (v or 0) >= 2)
     except Exception:
@@ -519,12 +572,18 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     # binding constraints sit adjacent to where the plan is reasoned, not buried
     # above a wall of research (lost-in-the-middle mitigation).
     lines.append("\n## ⚠ CONSTRAINT RECAP (read before planning — these are HARD)")
-    lines.append(f"- Max intensity: **{gates['max_intensity'].upper()}** · load ceiling **{cap_pct}% of e1RM**")
+    lines.append(
+        f"- Max intensity: **{gates['max_intensity'].upper()}** · load ceiling **{cap_pct}% of e1RM**"
+    )
     if gates["forbid_muscle_groups"]:
         lines.append(f"- Forbidden muscle groups: {', '.join(gates['forbid_muscle_groups'])}")
     if gates["deload_required"]:
-        lines.append(f"- DELOAD REQUIRED — ≤moderate intensity, target RPE ≤7 ({gates['deload_reason']})")
-    lines.append("- Cite vault notes by exact `filename.md`; every citation must be a real catalog note.")
+        lines.append(
+            f"- DELOAD REQUIRED — ≤moderate intensity, target RPE ≤7 ({gates['deload_reason']})"
+        )
+    lines.append(
+        "- Cite vault notes by exact `filename.md`; every citation must be a real catalog note."
+    )
 
     vault = load_vault_research(state, extra_signals=extra, keyword_hints=hints)
     if vault:
@@ -534,6 +593,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
 
 
 # ── Validation + auto-regulation gate ────────────────────────────────────────
+
 
 class GateViolation(ValueError):
     """Raised when a plan violates a hard auto-regulation gate."""
@@ -650,9 +710,7 @@ def validate_plan(
         raise ValueError(f"Invalid readiness_tier: {plan.get('readiness_tier')!r}")
     rec = plan.get("recommendation", {})
     if rec.get("intensity") not in {"high", "moderate", "low", "rest"}:
-        raise ValueError(
-            f"Invalid intensity: {rec.get('intensity')!r} — must be string enum"
-        )
+        raise ValueError(f"Invalid intensity: {rec.get('intensity')!r} — must be string enum")
     if not rec.get("focus"):
         raise ValueError("recommendation.focus is empty")
     blocks = plan.get("blocks", [])
@@ -665,9 +723,7 @@ def validate_plan(
             raise ValueError(f"Block {i} ({block.get('label')!r}) has no exercises")
         for j, ex in enumerate(block["exercises"]):
             if not ex.get("name"):
-                raise ValueError(
-                    f"Block {i} exercise {j} missing 'name' (got 'exercise'?)"
-                )
+                raise ValueError(f"Block {i} exercise {j} missing 'name' (got 'exercise'?)")
             if ex.get("rest_seconds") is None:
                 raise ValueError(
                     f"Block {i} exercise {j} ({ex.get('name')!r}) missing required 'rest_seconds'"
@@ -712,7 +768,11 @@ def validate_plan(
                 target_rpe = rpe_val
             else:
                 target_rpe = max(
-                    (ex.get("rpe_target", 0) for block in blocks for ex in block.get("exercises", [])),
+                    (
+                        ex.get("rpe_target", 0)
+                        for block in blocks
+                        for ex in block.get("exercises", [])
+                    ),
                     default=0,
                 )
             if order.index(rec["intensity"]) > order.index("moderate") or target_rpe > 7:
@@ -751,6 +811,7 @@ def validate_plan(
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 
+
 def _floor_loggable_rpe(plan: dict[str, Any]) -> None:
     """Raise sub-6 RPE targets to 6 on loaded lifts, in place.
 
@@ -770,7 +831,9 @@ def _floor_loggable_rpe(plan: dict[str, Any]) -> None:
         rec["target_rpe"] = floor
 
 
-async def save_plan(plan: dict[str, Any], source: str = "claude", target_date: date | None = None) -> None:
+async def save_plan(
+    plan: dict[str, Any], source: str = "claude", target_date: date | None = None
+) -> None:
     """Persist a validated plan to workout_plans for the target date (defaults to today)."""
     _floor_loggable_rpe(plan)
     today = (target_date or date.today()).isoformat()
@@ -810,7 +873,7 @@ def build_midday_context(conn) -> str:
     """Build the prompt for Claude to generate a midday session recommendation.
 
     Reads today's DailyState and morning workout (if any) to determine whether
-    lunch should be a workout (pickleball drills, Z2 cardio, conditioning) or
+    lunch should be a workout (accessory lift, Z2 cardio, conditioning) or
     recovery (leg bags, sauna, hot tub). Returns a self-contained prompt string.
     """
     from shc.ai.briefing import build_clinical_context
@@ -858,12 +921,19 @@ def build_midday_context(conn) -> str:
     lines.append("(No cold plunge or gym/court access at this location)\n")
 
     lines.append("## MIDDAY SESSION OPTIONS (all valid — choose the best fit)")
-    lines.append("- Accessory lift: 8–10 working sets targeting a DIFFERENT muscle group from this morning")
-    lines.append("  (e.g. AM push → noon pull accessories; AM legs → noon upper body; AM pull → noon arms/shoulders)")
-    lines.append("  Only valid when: ACWR ≤ 1.3, recovery GREEN, no deload, ≥4h since morning session.")
-    lines.append("  Rob logs this in Hevy himself — prescribe exact exercises, sets, reps, RPE targets.")
+    lines.append(
+        "- Accessory lift: 8–10 working sets targeting a DIFFERENT muscle group from this morning"
+    )
+    lines.append(
+        "  (e.g. AM push → noon pull accessories; AM legs → noon upper body; AM pull → noon arms/shoulders)"
+    )
+    lines.append(
+        "  Only valid when: ACWR ≤ 1.3, recovery GREEN, no deload, ≥4h since morning session."
+    )
+    lines.append(
+        "  Rob logs this in Hevy himself — prescribe exact exercises, sets, reps, RPE targets."
+    )
     lines.append("- Recovery: sauna, hot tub, leg bags (compression) — any combination")
-    lines.append("- Pickleball drills / court skill work (if court available externally)")
     lines.append("- Zone 2 cardio (bike, treadmill, elliptical) — low HR, fat-burning base")
     lines.append("- Conditioning / HIIT — metabolic, body-comp push")
     lines.append("- Mobility / yoga / active stretching\n")
@@ -887,7 +957,9 @@ def build_midday_context(conn) -> str:
             "— target a DIFFERENT muscle group. Otherwise use recovery modalities."
         )
     elif cardio_row:
-        lines.append(f"- Cardio this morning: {cardio_row[0]}, {cardio_row[1]} min, avg HR {cardio_row[2]}")
+        lines.append(
+            f"- Cardio this morning: {cardio_row[0]}, {cardio_row[1]} min, avg HR {cardio_row[2]}"
+        )
     else:
         lines.append("- No workout logged yet today — midday could be the primary session.")
 
@@ -926,31 +998,44 @@ def build_midday_context(conn) -> str:
     for r in gates.get("reasons") or []:
         lines.append(f"  · {r}")
 
-    lines.append("\n## ATHLETIC DEVELOPMENT MANDATE")
-    lines.append("Rob is training to peak athletic form. This is not a wellness routine — it is a competitive")
-    lines.append("athletic program. The midday session is a CORE training block, not a bonus.")
+    lines.append("\n## TRAINING MANDATE")
+    lines.append(
+        "Rob is training to build muscle. This is not a wellness routine — it is a hypertrophy"
+    )
+    lines.append("program. The midday session is a CORE training block, not a bonus.")
     lines.append("")
-    lines.append("Primary goal: 4.5 → 5.0 DUPR doubles pickleball by end of 2026.")
-    lines.append("What separates 4.5 from 5.0: court speed, sustained aerobic output across 3+ hours of")
-    lines.append("tournament play, explosive first-step quickness, and hand-speed under pressure.")
-    lines.append("Every midday session is a direct investment in one or more of those attributes.")
+    lines.append("Primary goal: build muscle — drive per-muscle volume through MEV→MAV→MRV, with")
+    lines.append("biceps and glutes prioritized as lagging-emphasis muscles. Body-comp: strict")
+    lines.append("recomp at maintenance (build muscle, lean out concurrently).")
     lines.append("")
-    lines.append("Secondary goal: preserve and build strength + lean mass concurrently.")
-    lines.append("")
-    lines.append("DEFAULT TO WORK. Recovery is prescribed when the body signals it (ACWR, HRV, gates).")
-    lines.append("When those signals are clear, it is prescribed aggressively — thermal + compression is")
+    lines.append(
+        "DEFAULT TO WORK. Recovery is prescribed when the body signals it (ACWR, HRV, gates)."
+    )
+    lines.append(
+        "When those signals are clear, it is prescribed aggressively — thermal + compression is"
+    )
     lines.append("not passive rest, it is active recovery that accelerates adaptation.")
-    lines.append("When signals are green, a real training stimulus is REQUIRED. A walk and a stretch")
+    lines.append(
+        "When signals are green, a real training stimulus is REQUIRED. A walk and a stretch"
+    )
     lines.append("on a green-light day is a missed adaptation window and a failure of this system.")
     lines.append("")
-    lines.append("Specific midday contributions to the 5.0 goal:")
-    lines.append("- Z2 cardio (130–145 bpm): builds the aerobic base that sustains pickleball output in sets 3–5")
-    lines.append("- Conditioning/HIIT: trains the explosive recovery between points that defines 5.0 court coverage")
-    lines.append("- Pickleball drills: direct skill reps — the only way to close the technical gap")
-    lines.append("- 2-a-day accessory lift: accelerates hypertrophy and maintains the strength base")
-    lines.append("  that makes shot power and court movement sustainable at higher intensities")
+    lines.append("Specific midday contributions to the build:")
+    lines.append(
+        "- 2-a-day accessory lift: the highest-value midday option — add direct volume to a"
+    )
+    lines.append("  lagging/emphasis muscle (biceps, glutes) or any muscle below MAV for the week.")
+    lines.append(
+        "- Z2 cardio (130–145 bpm): aerobic base + the fat-loss side of recomp, low recovery cost"
+    )
+    lines.append(
+        "- Conditioning/HIIT: work capacity and conditioning — keep it from cutting into lifting recovery"
+    )
     lines.append("- Recovery (when gated): maximizes adaptation from the morning session and")
-    lines.append("  ensures the next session quality is high — not a rest day, a prep day\n")
+    lines.append("  ensures the next session quality is high — not a rest day, a prep day")
+    lines.append(
+        "Pickleball is logged load only — Rob handles court skills himself; never program drills.\n"
+    )
 
     lines.append("## OUTPUT — POST THIS JSON TO http://127.0.0.1:8000/api/midday/session")
     lines.append("""```json
@@ -963,19 +1048,27 @@ def build_midday_context(conn) -> str:
     {"name": "<activity>", "duration_min": <n>, "notes": "<execution cues, targets, why>"}
   ],
   "rationale": "<2-3 sentences: why this today, referencing morning session + recovery state>",
-  "performance_goal": "<1 sentence: how this advances 5.0 pickleball or peak athletic form>"
+  "performance_goal": "<1 sentence: how this advances the muscle-building goal>"
 }
 ```""")
     lines.append("")
     lines.append("Rules:")
     lines.append("- Total activity duration_min must sum to ≤ 60 (leave 5 min for transition).")
-    lines.append("- Accessory lift (2-a-day strength): ONLY valid when ACWR ≤ 1.3 AND recovery GREEN AND no deload.")
+    lines.append(
+        "- Accessory lift (2-a-day strength): ONLY valid when ACWR ≤ 1.3 AND recovery GREEN AND no deload."
+    )
     lines.append("  Must target a different muscle group than this morning. Cap at 8–10 work sets.")
-    lines.append("  For lift activities, use notes to prescribe: exercise, sets × reps, weight/RPE target.")
+    lines.append(
+        "  For lift activities, use notes to prescribe: exercise, sets × reps, weight/RPE target."
+    )
     lines.append("  Rob logs these in Hevy — use exact Hevy exercise names where possible.")
     lines.append("- If ACWR > 1.5: session_type must be 'recovery', intensity must be 'passive'.")
-    lines.append("- If ACWR > 1.3: session_type must be 'recovery' or 'mixed', intensity ≤ 'low'. No lifting.")
-    lines.append("- Never prescribe recovery when a lift or workout is the right call — push toward peak form.")
+    lines.append(
+        "- If ACWR > 1.3: session_type must be 'recovery' or 'mixed', intensity ≤ 'low'. No lifting."
+    )
+    lines.append(
+        "- Never prescribe recovery when a lift or workout is the right call — push the build."
+    )
     lines.append("- POST the JSON to the endpoint above. No other output needed.")
 
     return "\n".join(lines)

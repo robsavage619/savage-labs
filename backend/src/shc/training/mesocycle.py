@@ -21,6 +21,7 @@ import duckdb
 
 log = logging.getLogger(__name__)
 
+
 # Epley 1RM estimate
 def _epley(weight_kg: float, reps: int) -> float:
     return weight_kg * (1 + reps / 30.0)
@@ -46,14 +47,15 @@ class WeeklyE1RM:
 @dataclass
 class ProgressionScore:
     """Israetel 1–5 performance score for a single exercise this week."""
+
     exercise: str
     week_start: date
     e1rm_kg: float
     e1rm_lbs: float
     work_sets: int
-    perf_score: int          # 1=regression  3=stalled  5=PR
-    trend: str               # 'progressing' | 'stalled' | 'regressing'
-    recommendation: str      # 'add weight' | 'hold' | 'deload'
+    perf_score: int  # 1=regression  3=stalled  5=PR
+    trend: str  # 'progressing' | 'stalled' | 'regressing'
+    recommendation: str  # 'add weight' | 'hold' | 'deload'
     history: list[WeeklyE1RM] = field(default_factory=list)
 
 
@@ -63,7 +65,7 @@ class MesocycleState:
     started_on: date
     planned_weeks: int
     status: str
-    week_number: int         # 1-based current week
+    week_number: int  # 1-based current week
     weeks_remaining: int
     is_deload_week: bool
     deload_trigger: str | None
@@ -172,10 +174,7 @@ def weekly_e1rm(
         """,
         [exercise, n_weeks],
     ).fetchall()
-    return [
-        WeeklyE1RM(r[0], r[1], r[2], r[3], r[4])
-        for r in reversed(rows)
-    ]
+    return [WeeklyE1RM(r[0], r[1], r[2], r[3], r[4]) for r in reversed(rows)]
 
 
 def _score_from_delta(pct_change: float) -> tuple[int, str]:
@@ -238,8 +237,10 @@ def score_exercise(
         e1rm_kg = history[-1].e1rm_kg
         work_sets = history[-1].work_sets
 
-    prev_e1rm = history[-1].e1rm_kg if history[-1].week_start < this_week else (
-        history[-2].e1rm_kg if len(history) >= 2 else e1rm_kg
+    prev_e1rm = (
+        history[-1].e1rm_kg
+        if history[-1].week_start < this_week
+        else (history[-2].e1rm_kg if len(history) >= 2 else e1rm_kg)
     )
     pct_change = (e1rm_kg - prev_e1rm) / prev_e1rm * 100 if prev_e1rm else 0.0
     perf_score, trend = _score_from_delta(pct_change)
@@ -323,50 +324,10 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
     log.info("compute_all_scores: updated %d exercises for week %s", len(exercises), this_week)
 
 
-def _actual_sets_this_week(
-    conn: duckdb.DuckDBPyConnection,
-    muscle_groups: list[str],
-    week_start: date,
-) -> dict[str, int]:
-    """Return total working sets per muscle group for the current week.
-
-    Uses a simple keyword match on exercise for grouping — good enough
-    for context injection; the AI can reason about the rest.
-    """
-    # Pull all exercise names trained this week with set counts
-    rows = conn.execute(
-        """
-        SELECT exercise, COUNT(*) AS sets
-        FROM workout_sets_dedup
-        WHERE started_at::DATE >= ? AND started_at::DATE < ?
-          AND weight_kg > 0 AND reps > 0
-        GROUP BY exercise
-        """,
-        [week_start, week_start + timedelta(days=7)],
-    ).fetchall()
-
-    _KEYWORDS: dict[str, list[str]] = {
-        "push":      ["bench", "press", "push", "fly", "dip", "tricep", "chest"],
-        "pull":      ["row", "pull", "chin", "lat", "curl", "bicep", "deadlift"],
-        "legs":      ["squat", "lunge", "leg", "hip", "glute", "hamstring", "calf", "rdl"],
-        "core":      ["plank", "crunch", "ab", "core", "oblique"],
-        "shoulders": ["lateral", "shoulder", "delt", "overhead", "ohp", "shrug"],
-        "arms":      ["curl", "tricep", "extension", "hammer", "preacher"],
-    }
-
-    totals: dict[str, int] = {mg: 0 for mg in muscle_groups}
-    for ex_name, sets in rows:
-        lower = ex_name.lower()
-        for mg, kws in _KEYWORDS.items():
-            if mg in totals and any(k in lower for k in kws):
-                totals[mg] += sets
-                break
-    return totals
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Context block for workout_planner.py
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     """Return a markdown block injected into the workout planner prompt."""
@@ -374,24 +335,23 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     if state is None:
         return "## MESOCYCLE\nNo active mesocycle — start a new block.\n"
 
+    from shc.training.volume import build_muscle_report, weekly_muscle_volume
+
     targets = volume_targets(conn, state.id)
     this_week = _iso_week_start(date.today())
-    actuals = _actual_sets_this_week(conn, list(targets.keys()), this_week)
+    actuals = weekly_muscle_volume(conn, this_week)
+    report = build_muscle_report(actuals, targets)
 
-    # Volume table
+    # Per-muscle volume table (anatomical; primary 1.0 + secondary 0.5 credit).
     vol_rows: list[str] = []
-    for mg, t in targets.items():
-        actual = actuals.get(mg, 0)
-        if actual < t.mev:
-            status = "BELOW MEV"
-        elif actual < t.mav:
-            status = "in range"
-        elif actual <= t.mrv:
-            status = "approaching MRV"
+    for r in report:
+        if r.mev is None:
+            mav_str, landmarks = "—", "untargeted"
         else:
-            status = "OVER MRV — reduce"
+            mav_str, landmarks = str(r.mav), f"{r.mev}/{r.mrv}"
         vol_rows.append(
-            f"| {mg:<12} | {actual:>6} | {t.mav:>6} | {t.mev:>5} | {t.mrv:>5} | {status} |"
+            f"| {r.muscle:<12} | {r.actual_sets:>6.1f} | {mav_str:>6} | "
+            f"{landmarks:>8} | {r.status} |"
         )
 
     # Per-exercise progression table (exercises trained in last 2 weeks)
@@ -419,16 +379,20 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
             f"e1RM {e1rm_lbs} lbs ({ps.work_sets} sets this week)"
         )
 
-    block_label = "DELOAD WEEK" if state.is_deload_week else f"Week {state.week_number} of {state.planned_weeks} (accumulation)"
+    block_label = (
+        "DELOAD WEEK"
+        if state.is_deload_week
+        else f"Week {state.week_number} of {state.planned_weeks} (accumulation)"
+    )
     lines = [
         "## MESOCYCLE POSITION",
         f"- Block status: {block_label}",
         f"- Block started: {state.started_on}",
         f"- Weeks remaining in accumulation: {state.weeks_remaining}",
         "",
-        "## VOLUME TARGETS THIS WEEK (sets)",
-        "| Muscle group | Actual | Target | MEV | MRV | Status |",
-        "|--------------|--------|--------|-----|-----|--------|",
+        "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 0.5)",
+        "| Muscle | Actual | MAV | MEV/MRV | Status |",
+        "|--------------|--------|--------|----------|--------|",
         *vol_rows,
         "",
     ]

@@ -137,7 +137,7 @@ def test_clean_inputs_leave_high() -> None:
 
 def test_acwr_above_1_65_forces_rest() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.acwr = 1.7
+    load.resistance_acwr = 1.7  # lifting load gates intensity (pooled acwr is display-only)
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "rest"
 
@@ -145,14 +145,14 @@ def test_acwr_above_1_65_forces_rest() -> None:
 def test_acwr_1_5_to_1_65_caps_low() -> None:
     # Concurrent athletes routinely run 1.5–1.65; graduated step, not full rest.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.acwr = 1.55
+    load.resistance_acwr = 1.55
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "low"
 
 
 def test_acwr_above_1_3_caps_moderate() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.acwr = 1.4
+    load.resistance_acwr = 1.4
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "moderate"
 

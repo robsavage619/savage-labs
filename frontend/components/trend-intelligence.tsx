@@ -24,6 +24,7 @@ import { PatternsPane } from "@/components/patterns-pane";
 import { PerformanceCurvePane } from "@/components/performance-curve";
 import { PickleballPane } from "@/components/pickleball-panel";
 import { MuscleVolumePanel } from "@/components/muscle-volume-panel";
+import { PrescriptionPanel } from "@/components/prescription-panel";
 
 const TABS = ["Recovery", "Body", "Patterns", "Insights", "Performance", "Sport", "Clinical"] as const;
 type Tab = (typeof TABS)[number];
@@ -486,6 +487,7 @@ function InsightsPane() {
       </p>
       <ReadinessDecomposition />
       <VolumeLandmarks />
+      <PrescriptionPanel />
       <MuscleVolumePanel />
       <SleepDoseResponse />
       <ACWRDeloadCard />

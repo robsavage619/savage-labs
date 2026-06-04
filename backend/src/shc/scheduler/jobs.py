@@ -19,6 +19,19 @@ async def _dupr_sync_safe() -> None:
         log.exception("DUPR sync failed")
 
 
+async def _recompute_scores() -> None:
+    """Nightly job: refresh per-exercise e1RM + Israetel performance scores.
+
+    The autoregulation controller's volume decisions read these scores, so they
+    must be current before the next plan is generated.
+    """
+    from shc.db.schema import write_ctx
+    from shc.training.mesocycle import compute_all_scores
+
+    async with write_ctx() as conn:
+        compute_all_scores(conn)
+
+
 async def _recompute_adherence() -> None:
     """Nightly job: link yesterday's plan to the workout that actually executed it."""
     import json
@@ -125,6 +138,17 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         hour=4,
         minute=15,
         id="adherence_recompute",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    # Performance scores feed the autoregulation controller — recompute nightly,
+    # after Hevy has synced and before the morning plan is generated.
+    scheduler.add_job(
+        _recompute_scores,
+        "cron",
+        hour=4,
+        minute=0,
+        id="scores_recompute",
         replace_existing=True,
         misfire_grace_time=3600,
     )
