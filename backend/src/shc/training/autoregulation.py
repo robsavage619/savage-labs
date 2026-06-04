@@ -221,8 +221,10 @@ def _decide(
     grow_floor = (mev + (mav - mev) // 2) if emphasis else mev
     cur = round(current)
     under_recovered = soreness >= SORENESS_BLOCK
+    # Uncoupled conditioning ACWR runs higher than the old coupled scale (M2);
+    # graded leg-volume hold kicks in above 1.5, below the gate's >1.8 forbid.
     leg_interference = (
-        muscle in LOWER_BODY and conditioning_acwr is not None and conditioning_acwr > 1.3
+        muscle in LOWER_BODY and conditioning_acwr is not None and conditioning_acwr > 1.5
     )
 
     if perf is not None and perf <= 2:

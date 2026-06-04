@@ -15,6 +15,7 @@ from shc.metrics import (
 
 # ── _is_strength_lift ────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -33,11 +34,11 @@ def test_strength_lift_accepts_free_weight_compounds(name: str) -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        "Low Cable Fly Crossovers",      # the bug: old "primary" was this
+        "Low Cable Fly Crossovers",  # the bug: old "primary" was this
         "Hammerstrength Shoulder Press",
         "Leg Extension (Machine)",
-        "Lateral Raise (Dumbbell)",      # isolation, not a strength pattern
-        "Goblet Squat",                  # grip-capped load
+        "Lateral Raise (Dumbbell)",  # isolation, not a strength pattern
+        "Goblet Squat",  # grip-capped load
         "Chin Up (Assisted)",
         "Lat Pulldown (Cable)",
     ],
@@ -47,6 +48,7 @@ def test_strength_lift_rejects_machines_cables_isolation(name: str) -> None:
 
 
 # ── load_cap_pct ─────────────────────────────────────────────────────────────
+
 
 def test_load_cap_deload_is_lowest() -> None:
     assert load_cap_pct({"deload_required": True, "max_intensity": "low"}) == 70
@@ -70,6 +72,7 @@ def test_deload_overrides_intensity_in_cap() -> None:
 
 # ── _gates deload trigger (the loop we fixed) ────────────────────────────────
 
+
 def _baseline_gate_inputs():
     return (
         RecoveryMetrics(),
@@ -82,16 +85,32 @@ def _baseline_gate_inputs():
 
 def test_deload_fires_on_regression_when_not_in_cooldown() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    g = _gates(rec, sleep, load, chk, readiness, -6.0, deload_cooldown=False,
-               e1rm_lift="Bench Press (Barbell)")
+    g = _gates(
+        rec,
+        sleep,
+        load,
+        chk,
+        readiness,
+        -6.0,
+        deload_cooldown=False,
+        e1rm_lift="Bench Press (Barbell)",
+    )
     assert g.deload_required is True
     assert "Bench Press (Barbell)" in g.deload_reason
 
 
 def test_deload_suppressed_during_cooldown() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    g = _gates(rec, sleep, load, chk, readiness, -34.2, deload_cooldown=True,
-               e1rm_lift="Bench Press (Barbell)")
+    g = _gates(
+        rec,
+        sleep,
+        load,
+        chk,
+        readiness,
+        -34.2,
+        deload_cooldown=True,
+        e1rm_lift="Bench Press (Barbell)",
+    )
     assert g.deload_required is False
     assert g.deload_reason is None
     # regression is still recorded for transparency
@@ -114,6 +133,7 @@ def test_no_deload_when_regression_none() -> None:
 
 # ── a couple of sanity checks on the legitimate intensity gates ──────────────
 
+
 def test_skin_temp_elevation_caps_low() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
     rec.skin_temp_delta = 1.0  # °C above baseline
@@ -135,26 +155,34 @@ def test_clean_inputs_leave_high() -> None:
     assert g.deload_required is False
 
 
-def test_acwr_above_1_65_forces_rest() -> None:
+def test_acwr_rest_threshold_uncoupled_scale() -> None:
+    # Bands recalibrated to the uncoupled ACWR scale (M2): rest above 2.0.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.resistance_acwr = 1.7  # lifting load gates intensity (pooled acwr is display-only)
+    load.resistance_acwr = 2.1  # resistance arm gates intensity (pooled is display-only)
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "rest"
 
 
-def test_acwr_1_5_to_1_65_caps_low() -> None:
-    # Concurrent athletes routinely run 1.5–1.65; graduated step, not full rest.
+def test_acwr_low_threshold_uncoupled_scale() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.resistance_acwr = 1.55
+    load.resistance_acwr = 1.85
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "low"
 
 
-def test_acwr_above_1_3_caps_moderate() -> None:
+def test_acwr_moderate_threshold_uncoupled_scale() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.resistance_acwr = 1.6
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "moderate"
+
+
+def test_acwr_below_moderate_leaves_high() -> None:
+    # 1.4 was "moderate" on the coupled scale; on the uncoupled scale it's normal.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
     load.resistance_acwr = 1.4
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert g.max_intensity == "moderate"
+    assert g.max_intensity == "high"
 
 
 def test_acwr_in_safe_band_leaves_high() -> None:

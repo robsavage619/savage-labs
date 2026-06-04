@@ -6,6 +6,21 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-06-03 — Sports-science panel review: muscle taxonomy + signal-quality decisions
+
+**Context.** A panel of sports-science reviewers audited the self-learning hypertrophy engine and flagged a cluster of modeling choices that needed to be either fixed or documented as intentional.
+
+**Decisions (the ones worth recording — the fixes live in code/migrations 0040–0045):**
+- **Muscle taxonomy folds are intentional.** `abductors → glutes` (hip abduction ≈ glute medius), `brachialis → biceps` (elbow flexor trained with biceps, not a body-diagram region), Hevy `shoulders → side_delts` as the generic-delt fallback (specific presses overridden to `front_delts` in 0043). These collapse a few distinct muscles to keep the volume vocabulary aligned with the frontend BodyDiagram / `daily_checkin` soreness keys. Accepted loss of granularity.
+- **Conditioning interference is graded, not a single cliff.** The autoregulation controller *holds* leg volume when `conditioning_acwr > 1.3` (graded debit), and the metrics gate *forbids* legs only at `> 1.5` (a genuine spike). Two tiers by design — don't collapse them.
+- **e1RM is a strength proxy used as a coarse productivity signal, not a hypertrophy measurement.** It feeds add/hold/cut only as a multi-week trend with a ≥3-week minimum and a noise-aware dead-band; the physique pipeline (waist:shoulder) is the body-composition signal, treated as multi-month confirmatory, not a primary driver.
+
+**Why.** Future-me will re-encounter these as "bugs" and try to un-fold them. They're deliberate trade-offs grounded in the panel review.
+
+**Consequences.** Per-muscle volume vocabulary is fixed at the BodyDiagram set; new exercises map into it. Roadmap items 3/4 (individualized landmarks, physique outer loop) still pending.
+
+---
+
 ## 2026-05-24 — Vault retrieval: semantic (model2vec) + lexical, with citation validation
 
 **Context.** Vault retrieval (`shc.ai.vault`) was purely lexical — tag→signal maps and substring matching over ~529 notes. Vocabulary mismatch silently dropped relevant research ("parasympathetic withdrawal" never matched the `hrv_anomaly` signal). The briefing path retrieved blind (no hints). And `vault_insights` citations were never validated — the model (or the decorative fallback) could cite any filename, real or invented.

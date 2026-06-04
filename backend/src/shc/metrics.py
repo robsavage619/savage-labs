@@ -21,9 +21,9 @@ Design notes
 * Readiness composite is computed here with the β-blocker reweighting so the
   LLM sees the same number the frontend shows.
 * `gates` is a deterministic auto-regulation rule engine. It encodes hard
-  safety/progression rules (red HRV → cap intensity, ACWR > 1.65 → rest /
-  1.5–1.65 → low / 1.3–1.5 → moderate, legs in last 48h → reject leg day,
-  propranolol day → shift HR zones, etc.).
+  safety/progression rules (red HRV → cap intensity, resistance ACWR on the
+  uncoupled scale → rest/low/moderate per RES_ACWR_* thresholds, legs in last
+  48h → reject leg day, propranolol day → shift HR zones, etc.).
 """
 
 import json
@@ -53,6 +53,21 @@ _ROB_AGE = 40
 # "use RPE not HR" on dosing days). These magnitudes are heuristic priors.
 DEFAULT_WEIGHTS = {"hrv": 0.40, "sleep": 0.30, "rhr": 0.20, "subj": 0.10}
 BETA_BLOCKER_WEIGHTS = {"hrv": 0.15, "sleep": 0.50, "rhr": 0.10, "subj": 0.25}
+
+# Minimum valid nights before a 28-day autonomic baseline (HRV, skin temp) is
+# trusted — a thin baseline gives an unstable mean/SD that can fire gates at
+# random (panel review M7/M13).
+BASELINE_MIN_N = 14
+
+# ACWR gate thresholds on the UNCOUPLED scale (see _arm_acwr). Uncoupled ratios
+# run systematically higher than the coupled form these bands were first set
+# against, so they're shifted up (panel review M2). These are HEURISTIC priors
+# for an N=1 athlete whose chronic baseline is noise-dominated — the resistance
+# arm is a FATIGUE/overreaching signal, not a validated injury-risk gate;
+# personal calibration from Rob's own load history is Phase 3. Conditioning keeps
+# stronger (field-sport) evidence behind the leg-load language.
+RES_ACWR_REST, RES_ACWR_LOW, RES_ACWR_MOD = 2.0, 1.8, 1.5
+COND_ACWR_FORBID_LEGS = 1.8
 
 Tier = Literal["green", "yellow", "red"]
 Intensity = Literal["high", "moderate", "low", "rest"]
@@ -148,7 +163,7 @@ class TrainingLoadMetrics:
     )  # {z0:.., z1:.., ..., z5:..} from WHOOP
     max_hr_measured: int | None = None  # WHOOP-measured max HR (preferred over Tanaka formula)
     max_hr_tanaka: int | None = None  # 208 - 0.7 × age (population formula, fallback)
-    pickleball_min_7d: int = 0  # primary sport for Rob's 4.5→5.0 climb
+    pickleball_min_7d: int = 0  # logged conditioning load only (not a programmed goal)
     pickleball_min_28d: int = 0
     cardio_modality_min_7d: dict[str, int] = field(default_factory=dict)  # per-sport minutes
 
@@ -462,14 +477,17 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
         "FROM recovery ORDER BY date DESC LIMIT 1"
     ).fetchone()
     hrv_base = conn.execute(
-        "SELECT hrv, hrv_28d_avg, hrv_28d_sd FROM v_hrv_baseline_28d ORDER BY date DESC LIMIT 1"
+        "SELECT hrv, hrv_28d_avg, hrv_28d_sd, hrv_28d_n "
+        "FROM v_hrv_baseline_28d ORDER BY date DESC LIMIT 1"
     ).fetchone()
     rhr_rows = conn.execute(
         "SELECT date, rhr FROM recovery WHERE date >= $s AND rhr IS NOT NULL ORDER BY date",
         {"s": (today - timedelta(days=28)).isoformat()},
     ).fetchall()
+    # Skin-temp baseline + its N — a 2-night baseline must not fire the illness
+    # gate, so callers require BASELINE_MIN_N valid nights (panel review M13).
     skin_baseline = conn.execute(
-        "SELECT AVG(skin_temp) FROM recovery WHERE skin_temp IS NOT NULL "
+        "SELECT AVG(skin_temp), COUNT(skin_temp) FROM recovery WHERE skin_temp IS NOT NULL "
         "AND date >= (current_date - INTERVAL '28 days')"
     ).fetchone()
 
@@ -483,10 +501,14 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
         m.spo2_pct = float(rec[5]) if rec[5] is not None else None
         m.user_calibrating = bool(rec[6]) if rec[6] is not None else None
     if hrv_base:
-        m.hrv_baseline_28d = float(hrv_base[1]) if hrv_base[1] is not None else None
-        m.hrv_sd_28d = float(hrv_base[2]) if hrv_base[2] is not None else None
-        if m.hrv_ms and m.hrv_baseline_28d and m.hrv_sd_28d and m.hrv_sd_28d > 0:
-            m.hrv_sigma = round((m.hrv_ms - m.hrv_baseline_28d) / m.hrv_sd_28d, 2)
+        hrv_n = int(hrv_base[3]) if hrv_base[3] is not None else 0
+        # Require a minimum number of valid nights — a thin baseline gives an
+        # unstable mean/SD, and hrv_sigma gates intensity (panel review M7/M13).
+        if hrv_n >= BASELINE_MIN_N:
+            m.hrv_baseline_28d = float(hrv_base[1]) if hrv_base[1] is not None else None
+            m.hrv_sd_28d = float(hrv_base[2]) if hrv_base[2] is not None else None
+            if m.hrv_ms and m.hrv_baseline_28d and m.hrv_sd_28d and m.hrv_sd_28d > 0:
+                m.hrv_sigma = round((m.hrv_ms - m.hrv_baseline_28d) / m.hrv_sd_28d, 2)
 
     rhr_vals = [float(r[1]) for r in rhr_rows]
     if rhr_vals:
@@ -498,7 +520,8 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
             m.rhr_elevated_pct = round(
                 (m.rhr_7d_avg - m.rhr_baseline_28d) / m.rhr_baseline_28d * 100.0, 1
             )
-    if skin_baseline and skin_baseline[0] is not None:
+    skin_n = int(skin_baseline[1]) if skin_baseline and skin_baseline[1] is not None else 0
+    if skin_baseline and skin_baseline[0] is not None and skin_n >= BASELINE_MIN_N:
         m.skin_temp_baseline_28d = round(float(skin_baseline[0]), 2)
         if m.skin_temp is not None:
             # WHOOP stores skin temp in Celsius. Surface the delta in Fahrenheit
@@ -1002,26 +1025,32 @@ def _gates(
     # rather than capping global intensity. This prevents a heavy pickleball
     # week from grounding under-stimulated upper-body lifting.
     res = load.resistance_acwr
-    if res is not None and res > 1.65:
+    if res is not None and res > RES_ACWR_REST:
         g.max_intensity = "rest"
-        reasons.append(f"Resistance ACWR {res} > 1.65 — lifting overload, rest required")
-    elif res is not None and res > 1.5:
+        reasons.append(
+            f"Resistance ACWR {res} > {RES_ACWR_REST} — lifting fatigue spike, rest required"
+        )
+    elif res is not None and res > RES_ACWR_LOW:
         if g.max_intensity in ("high", "moderate"):
             g.max_intensity = "low"
-        reasons.append(f"Resistance ACWR {res} > 1.5 — elevated lifting load, cap LOW")
-    elif res is not None and res > 1.3:
+        reasons.append(
+            f"Resistance ACWR {res} > {RES_ACWR_LOW} — elevated lifting fatigue, cap LOW"
+        )
+    elif res is not None and res > RES_ACWR_MOD:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
-        reasons.append(f"Resistance ACWR {res} > 1.3 — reduce lifting volume, cap MODERATE")
+        reasons.append(
+            f"Resistance ACWR {res} > {RES_ACWR_MOD} — accumulating fatigue, cap MODERATE"
+        )
 
     cond = load.conditioning_acwr
-    if cond is not None and cond > 1.5:
+    if cond is not None and cond > COND_ACWR_FORBID_LEGS:
         # Court/cardio overload. Protect the lower body that absorbs court load;
         # leave upper-body lifting available.
         if "legs" not in g.forbid_muscle_groups:
             g.forbid_muscle_groups.append("legs")
         reasons.append(
-            f"Conditioning ACWR {cond} > 1.5 — court/cardio overload; hold "
+            f"Conditioning ACWR {cond} > {COND_ACWR_FORBID_LEGS} — court/cardio overload; hold "
             "pickleball + hard cardio, legs off today (upper-body lifting OK)"
         )
     elif cond is not None and cond > 1.3:
@@ -1058,9 +1087,26 @@ def _gates(
                 continue
             acute = [m for m, s in items if s >= 3]
             moderate = [m for m, s in items if s == 2]
-            if acute:
+            # Soreness/DOMS is the weakest recovery signal (Damas 2016) — it
+            # dissociates from actual readiness — so it no longer hard-forbids a
+            # group on its own (panel review M11). Acute soreness forbids ONLY
+            # when an objective channel corroborates (readiness yellow/red or
+            # HRV ≥1σ below baseline); otherwise it just caps intensity.
+            objective_under_recovery = readiness.tier in ("yellow", "red") or (
+                rec.hrv_sigma is not None and rec.hrv_sigma < -1.0
+            )
+            if acute and objective_under_recovery:
                 g.forbid_muscle_groups.append(grp)
-                reasons.append(f"{grp.title()} acute soreness ({', '.join(acute)})")
+                reasons.append(
+                    f"{grp.title()} acute soreness ({', '.join(acute)}) + objective "
+                    "under-recovery — rest group"
+                )
+            elif acute and g.max_intensity == "high":
+                g.max_intensity = "moderate"
+                reasons.append(
+                    f"{grp.title()} acute soreness ({', '.join(acute)}), subjective only — "
+                    "cap MODERATE, not forbidden"
+                )
             elif len(moderate) >= 2 and g.max_intensity == "high":
                 g.max_intensity = "moderate"
                 reasons.append(
