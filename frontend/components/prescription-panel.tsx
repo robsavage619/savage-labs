@@ -30,7 +30,7 @@ const ACTION_STYLE: Record<Action, { color: string; bg: string }> = {
   add: { color: "var(--positive)", bg: "oklch(0.62 0.16 145 / 0.12)" },
   hold: { color: "var(--text-faint)", bg: "transparent" },
   cut: { color: "var(--warn)", bg: "oklch(0.65 0.16 80 / 0.12)" },
-  deload: { color: "var(--negative)", bg: "oklch(0.55 0.22 25 / 0.12)" },
+  deload: { color: "var(--negative)", bg: "oklch(0.55 0.22 25 / 0.16)" },
 };
 
 function label(muscle: string): string {
@@ -67,6 +67,20 @@ export function PrescriptionPanel() {
         <Eyebrow>This week&apos;s prescription · wk of {weekLabel}</Eyebrow>
         <span className="text-[10px] text-[var(--text-faint)]">auto-regulated</span>
       </div>
+
+      {data.deload?.recommended && (
+        <div
+          className="rounded-sm px-2.5 py-1.5 text-[11px] leading-snug"
+          style={{
+            color: "var(--negative)",
+            border: "1px solid var(--negative)",
+            background: "oklch(0.55 0.22 25 / 0.12)",
+          }}
+        >
+          <span className="font-medium uppercase tracking-wide">Deload week</span> — {data.deload.reason}.
+          Volume halved toward MEV; keep loads moderate (RPE ≤7).
+        </div>
+      )}
 
       <div className="space-y-2.5">
         {ordered.map((m) => {

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from shc.training.autoregulation import _decide, weekly_prescription
+from shc.training.autoregulation import _decide, deload_check, weekly_prescription
 from shc.training.mesocycle import _iso_week_start
+from shc.training.volume import MuscleVolume
 
 # Landmarks used across cases: chest 10/16/22, biceps 8/14/20, quads 8/14/20.
 
@@ -81,6 +82,40 @@ def test_stall_breaks_with_one_set():
     rx = _d("chest", current=14, perf=3)
     assert rx.action == "add"
     assert rx.delta == 1
+
+
+def _mv(muscle, actual, mev=10, mav=16, mrv=22):
+    return MuscleVolume(muscle, actual, mev, mav, mrv, "in range")
+
+
+def test_deload_fires_on_broad_regression():
+    perfs = {"chest": 2, "lats": 1, "quads": 2, "biceps": 4}
+    report = [_mv(m, 12) for m in perfs]
+    dl = deload_check(perfs, report)
+    assert dl["recommended"] is True
+    assert "regressing" in dl["reason"]
+
+
+def test_deload_fires_when_many_at_mrv():
+    perfs = {"chest": 4, "lats": 4, "quads": 4}
+    report = [_mv("chest", 22), _mv("lats", 22), _mv("quads", 23)]
+    dl = deload_check(perfs, report)
+    assert dl["recommended"] is True
+    assert "MRV" in dl["reason"]
+
+
+def test_no_deload_without_systemic_signal():
+    perfs = {"chest": 4, "lats": 2, "quads": 5}  # one regressing — below threshold
+    report = [_mv(m, 12) for m in perfs]
+    assert deload_check(perfs, report)["recommended"] is False
+
+
+def test_decide_deload_halves_volume():
+    rx = _d("chest", current=18, perf=5, mev=10, mav=16, mrv=22)
+    assert rx.action == "add"  # sanity: normally it would grow
+    dl = _decide("chest", 18, 10, 16, 22, perf=5, soreness=0.0, conditioning_acwr=None, deload=True)
+    assert dl.action == "deload"
+    assert dl.target_sets == 10  # round(18*0.5)=9, floored at MEV 10
 
 
 def test_weekly_prescription_smoke(conn, seed):

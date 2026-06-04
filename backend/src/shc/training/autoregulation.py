@@ -7,13 +7,17 @@ working-set target by combining Rob's own logged signals — the Renaissance
 Periodization / Israetel set-progression logic, made data-driven:
 
     progressing + recovered      → ADD sets toward MRV
-    stalled (flat e1RM)          → ADD a set to break the stall (until MRV)
+    stalled (flat e1RM trend)    → ADD a set to break the stall (until MRV)
     regressing / under-recovered → CUT toward MEV
-    at/over MRV                  → HOLD or flag DELOAD
+    at/over MRV                  → HOLD (ceiling)
 
 On top of the base tree:
+  * Fatigue deload — when several muscles regress or hit MRV at once, a real
+    fatigue-driven deload (:func:`deload_check`) halves volume toward MEV. This
+    overrides the per-muscle tree and is independent of the calendar mesocycle.
   * Lagging-emphasis bias — EMPHASIS muscles (biceps, glutes) ramp faster and
-    floor at MAV, never sitting at maintenance volume.
+    floor at the MEV–MAV midpoint (not MAV — that would skip the accumulation
+    runway).
   * Interference debit — when conditioning/pickleball load is high, lower-body
     volume is held back so court load doesn't blow the leg recovery budget.
 
@@ -74,9 +78,39 @@ class MusclePrescription:
 class Prescription:
     week_start: date
     mesocycle_id: str
+    deload: dict = field(default_factory=dict)  # {recommended, reason, triggers}
     muscles: list[MusclePrescription] = field(default_factory=list)
     lift_progressions: list[dict] = field(default_factory=list)
     exercise_menu: dict[str, list[str]] = field(default_factory=dict)
+
+
+# Number of muscles that must independently signal fatigue to trigger a deload.
+DELOAD_MUSCLE_THRESHOLD = 3
+
+
+def deload_check(
+    perfs: dict[str, int | None],
+    report: list[MuscleVolume],
+) -> dict:
+    """Decide whether a fatigue-driven deload is warranted from real signals.
+
+    A deload fires when training is broadly unproductive or maxed out, NOT on a
+    calendar (panel review M4): ≥``DELOAD_MUSCLE_THRESHOLD`` muscles regressing
+    (perf ≤ 2), or that many at/over MRV. Returns the recommendation + the
+    specific triggers so the prescription can explain itself.
+    """
+    regressing = sorted(m for m, p in perfs.items() if p is not None and p <= 2)
+    at_mrv = sorted(r.muscle for r in report if r.mrv is not None and r.actual_sets >= r.mrv)
+    triggers: list[str] = []
+    if len(regressing) >= DELOAD_MUSCLE_THRESHOLD:
+        triggers.append(f"{len(regressing)} muscles regressing ({', '.join(regressing[:5])})")
+    if len(at_mrv) >= DELOAD_MUSCLE_THRESHOLD:
+        triggers.append(f"{len(at_mrv)} muscles at/over MRV ({', '.join(at_mrv[:5])})")
+    return {
+        "recommended": bool(triggers),
+        "reason": "; ".join(triggers) if triggers else "no systemic fatigue signal",
+        "triggers": triggers,
+    }
 
 
 def _recent_soreness(conn: duckdb.DuckDBPyConnection, days: int = 7) -> dict[str, float]:
@@ -157,14 +191,31 @@ def _decide(
     perf: int | None,
     soreness: float,
     conditioning_acwr: float | None,
+    deload: bool = False,
 ) -> MusclePrescription:
     """Apply the RP set-progression tree + emphasis + interference for one muscle.
 
     ``action`` is derived from the final delta so it can never contradict the
     target, and every change is clamped asymmetrically (``MAX_WEEKLY_ADD`` up,
     ``MAX_WEEKLY_CUT`` down) so volume ramps gradually but can back off faster.
+    When ``deload`` is set, the normal tree is bypassed: volume is halved toward
+    MEV in a single deliberate drop (the step clamp does not apply to a deload).
     """
     emphasis = muscle in EMPHASIS_MUSCLES
+
+    if deload:
+        cur0 = round(current)
+        target = max(0, min(mrv, max(mev, round(cur0 * 0.5))))
+        return MusclePrescription(
+            muscle=muscle,
+            current_sets=round(current, 1),
+            target_sets=target,
+            delta=target - cur0,
+            action="deload",
+            reason="deload week — volume ~halved toward MEV to shed accumulated fatigue",
+            emphasis=emphasis,
+        )
+
     # Emphasis muscles floor at the MEV–MAV midpoint (keeps an accumulation
     # runway), not at MAV; everything else floors at MEV (panel review M3).
     grow_floor = (mev + (mav - mev) // 2) if emphasis else mev
@@ -267,20 +318,23 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
     soreness = _recent_soreness(conn)
     conditioning_acwr = _conditioning_pressure(conn)
 
+    targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
+    perfs = {r.muscle: _muscle_performance(conn, r.muscle) for r in targeted}
+    deload = deload_check(perfs, targeted)
+
     muscle_rx: list[MusclePrescription] = []
-    for r in report:
-        if r.mev is None or r.mav is None or r.mrv is None:
-            continue  # untargeted muscle — no landmark to progress against
+    for r in targeted:
         muscle_rx.append(
             _decide(
                 muscle=r.muscle,
                 current=r.actual_sets,
-                mev=r.mev,
-                mav=r.mav,
-                mrv=r.mrv,
-                perf=_muscle_performance(conn, r.muscle),
+                mev=r.mev,  # type: ignore[arg-type]
+                mav=r.mav,  # type: ignore[arg-type]
+                mrv=r.mrv,  # type: ignore[arg-type]
+                perf=perfs[r.muscle],
                 soreness=soreness.get(r.muscle, 0.0),
                 conditioning_acwr=conditioning_acwr,
+                deload=deload["recommended"],
             )
         )
     # Emphasis first, then the muscles being grown, then the rest.
@@ -316,6 +370,7 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
     return Prescription(
         week_start=this_week,
         mesocycle_id=meso_id,
+        deload=deload,
         muscles=muscle_rx,
         lift_progressions=lift_progressions,
         exercise_menu=menu,
@@ -327,10 +382,16 @@ def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     rx = weekly_prescription(conn)
     if not rx.muscles:
         return ""
-    lines = [
-        "## THIS WEEK'S PRESCRIPTION (build the session from this)",
+    lines = ["## THIS WEEK'S PRESCRIPTION (build the session from this)"]
+    if rx.deload.get("recommended"):
+        lines.append(
+            f"⚠ **DELOAD WEEK** — {rx.deload['reason']}. Volume is halved toward MEV "
+            "across the board; keep loads moderate (RPE ≤7) and treat this as a "
+            "fatigue-shedding week, not an accumulation week."
+        )
+    lines += [
         "Per-muscle volume targets the engine set from your performance + recovery.",
-        "Prioritize muscles marked ADD and ★ emphasis; respect HOLD/CUT.",
+        "Prioritize muscles marked ADD and ★ emphasis; respect HOLD/CUT/DELOAD.",
         "",
         "| Muscle | Now | → Target | Action | Why |",
         "|--------|-----|----------|--------|-----|",

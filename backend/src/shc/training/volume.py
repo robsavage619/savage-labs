@@ -24,7 +24,21 @@ import duckdb
 
 log = logging.getLogger(__name__)
 
+# Indirect (secondary) volume credit per set. Genuine synergists worked hard by a
+# compound (glutes/hams off a squat) get the standard 0.5; the elbow flexors/
+# extensors get less, because they're rarely the limiting factor on a press/row
+# and over-crediting them off compounds suppresses the direct arm volume the
+# biceps-emphasis goal wants (panel review M1).
 SECONDARY_CREDIT = 0.5
+ARM_SECONDARY_CREDIT = 0.3
+_ARM_MUSCLES = ("biceps", "triceps", "forearms")
+
+# Hypertrophy stimulating-rep window. Sets outside 5–30 reps don't count toward
+# the MEV/MAV/MRV landmarks, which are calibrated to this range (panel review M1).
+# (No RIR gate: Hevy floors its RPE picker at 6 — i.e. RIR ≤ 4 — so every logged
+# Hevy set is already inside the stimulating range by construction.)
+_REP_MIN, _REP_MAX = 5, 30
+_STIMULATING = f"ws.reps BETWEEN {_REP_MIN} AND {_REP_MAX}"
 
 
 @dataclass
@@ -46,9 +60,10 @@ def weekly_muscle_volume(
 ) -> dict[str, float]:
     """Credited working sets per muscle for the [week_start, week_end) window.
 
-    Primary muscle gets 1.0 per set; each secondary gets ``SECONDARY_CREDIT``.
-    Exercises absent from ``exercise_muscle_map`` contribute nothing (they show
-    up via :func:`unmapped_exercises`).
+    Primary muscle gets 1.0 per set; each secondary gets ``ARM_SECONDARY_CREDIT``
+    for elbow flexors/extensors else ``SECONDARY_CREDIT``. Only warmup-free,
+    loaded sets inside the 5–30 rep stimulating window count. Exercises absent
+    from ``exercise_muscle_map`` contribute nothing (see :func:`unmapped_exercises`).
 
     Args:
         conn: Open DuckDB connection.
@@ -62,28 +77,30 @@ def weekly_muscle_volume(
     params = [week_start.isoformat(), end.isoformat()]
 
     primary = conn.execute(
-        """
+        f"""
         SELECT m.primary_muscle, COUNT(*)::DOUBLE AS sets
         FROM workout_sets_dedup ws
         JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
         WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
-          AND NOT ws.is_warmup AND ws.weight_kg > 0 AND ws.reps > 0
+          AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
         GROUP BY m.primary_muscle
         """,
         params,
     ).fetchall()
 
     secondary = conn.execute(
-        """
-        SELECT u.sec AS muscle, COUNT(*) * ? AS credit
+        f"""
+        SELECT u.sec AS muscle,
+               SUM(CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
+                        THEN {ARM_SECONDARY_CREDIT} ELSE {SECONDARY_CREDIT} END) AS credit
         FROM workout_sets_dedup ws
         JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
         CROSS JOIN UNNEST(m.secondary_muscles) AS u(sec)
         WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
-          AND NOT ws.is_warmup AND ws.weight_kg > 0 AND ws.reps > 0
+          AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
         GROUP BY u.sec
         """,
-        [SECONDARY_CREDIT, *params],
+        params,
     ).fetchall()
 
     totals: dict[str, float] = defaultdict(float)

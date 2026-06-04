@@ -330,6 +330,7 @@ async def get_prescription() -> dict[str, Any]:
         return {
             "week_start": rx.week_start.isoformat(),
             "mesocycle_id": rx.mesocycle_id,
+            "deload": rx.deload,
             "muscles": [asdict(m) for m in rx.muscles],
             "lift_progressions": rx.lift_progressions,
             "exercise_menu": rx.exercise_menu,

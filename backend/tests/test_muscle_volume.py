@@ -11,7 +11,7 @@ from shc.training.volume import (
 
 
 def test_secondary_muscle_credit(conn, seed):
-    """A working set credits primary 1.0 and each secondary 0.5.
+    """Primary gets 1.0; an ARM secondary gets the reduced 0.3 (panel review M1).
 
     'Pull-Up' maps to lats (primary) + biceps (secondary) after migration 0040
     normalizes the legacy 'back' key.
@@ -22,7 +22,25 @@ def test_secondary_muscle_credit(conn, seed):
     vol = weekly_muscle_volume(conn, _iso_week_start(today))
 
     assert vol["lats"] == 3.0  # primary, full credit
-    assert vol["biceps"] == 1.5  # secondary, 0.5 × 3 sets
+    assert vol["biceps"] == round(0.3 * 3, 1)  # arm secondary, reduced credit
+
+
+def test_non_arm_secondary_keeps_half_credit(conn, seed):
+    today = date.today()
+    # Hip Thrust → glutes primary, hamstrings secondary (a genuine synergist).
+    seed.workout(today, "Hip Thrust (Barbell)", [(100.0, 8)] * 4)
+    vol = weekly_muscle_volume(conn, _iso_week_start(today))
+    assert vol["glutes"] == 4.0
+    assert vol["hamstrings"] == 2.0  # 0.5 × 4, not reduced
+
+
+def test_rep_window_excludes_heavy_singles(conn, seed):
+    """Sets below 5 reps don't count toward hypertrophy landmarks (M1)."""
+    today = date.today()
+    seed.workout(today, "Bicep Curl (Barbell)", [(40.0, 3), (40.0, 3)])  # heavy, <5 reps
+    seed.workout(today, "Bicep Curl (Barbell)", [(25.0, 10)])  # in window
+    vol = weekly_muscle_volume(conn, _iso_week_start(today))
+    assert vol["biceps"] == 1.0  # only the 10-rep set counts
 
 
 def test_warmups_and_empty_sets_excluded(conn, seed):

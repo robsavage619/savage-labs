@@ -847,6 +847,7 @@ export const api = {
     get<{
       week_start: string;
       mesocycle_id: string;
+      deload: { recommended?: boolean; reason?: string; triggers?: string[] };
       muscles: {
         muscle: string;
         current_sets: number;
