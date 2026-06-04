@@ -38,8 +38,11 @@ from shc.training.volume import build_muscle_report, weekly_muscle_volume
 
 log = logging.getLogger(__name__)
 
-# Lagging muscles Rob wants prioritized — floor at MAV, add faster. Static for
-# v1; Phase 3 will derive emphasis from a measured per-muscle development index.
+# Lagging muscles Rob wants prioritized — they RAMP FASTER (+2/wk) and floor at
+# the MEV–MAV midpoint, not at MEV. They do NOT start at MAV: MAV is the maximum
+# adaptive volume, not a baseline, and starting there removes the low-fatigue
+# accumulation runway (panel review M3). Static for v1; Phase 3 will derive
+# emphasis from a measured per-muscle development index.
 EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes"})
 
 # Lower-body muscles whose recovery competes with pickleball/cardio conditioning.
@@ -49,9 +52,11 @@ LOWER_BODY: frozenset[str] = frozenset({"quads", "hamstrings", "glutes", "calves
 # treated as under-recovered for volume decisions.
 SORENESS_BLOCK = 2.0
 
-# Max set-count change per muscle per week — RP progression ramps gradually, so a
-# muscle far below its floor climbs over several weeks rather than in one jump.
-MAX_WEEKLY_STEP = 4
+# Weekly set-count change is ASYMMETRIC (panel review M10): adding volume is
+# gated by recovery so it ramps slowly (RP accumulation is +1–2/wk), but cutting
+# is a safety/fatigue response that may need to move faster on a bad read.
+MAX_WEEKLY_ADD = 2
+MAX_WEEKLY_CUT = 4
 
 
 @dataclass
@@ -99,11 +104,13 @@ def _recent_soreness(conn: duckdb.DuckDBPyConnection, days: int = 7) -> dict[str
 
 
 def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str) -> int | None:
-    """Aggregate Israetel perf score (1–5) for a muscle's mapped exercises.
+    """Set-weighted central tendency of Israetel perf scores for a muscle.
 
-    Returns the best (max) recent score across exercises whose ``primary_muscle``
-    is ``muscle`` — a muscle is "progressing" if any of its main lifts is. None
-    when no exercise has enough history to score.
+    Averages the perf score across exercises whose ``primary_muscle`` is
+    ``muscle``, weighted by each exercise's recent work-set count, then rounds.
+    Weighting by volume keeps a single fluke PR on a minor accessory from
+    speaking for the whole muscle — the upward-bias failure of the old ``max()``
+    aggregation (panel review C1). None when no exercise has enough history.
     """
     exercises = [
         r[0]
@@ -112,8 +119,18 @@ def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str) -> int | N
             [muscle],
         ).fetchall()
     ]
-    scores = [ps.perf_score for ex in exercises if (ps := score_exercise(conn, ex)) is not None]
-    return max(scores) if scores else None
+    weighted = 0.0
+    total_w = 0.0
+    for ex in exercises:
+        ps = score_exercise(conn, ex)
+        if ps is None:
+            continue
+        w = max(1, ps.work_sets)  # never zero-weight a scored lift
+        weighted += ps.perf_score * w
+        total_w += w
+    if total_w == 0:
+        return None
+    return round(weighted / total_w)
 
 
 def _conditioning_pressure(conn: duckdb.DuckDBPyConnection) -> float | None:
@@ -144,10 +161,13 @@ def _decide(
     """Apply the RP set-progression tree + emphasis + interference for one muscle.
 
     ``action`` is derived from the final delta so it can never contradict the
-    target, and every change is clamped to ``MAX_WEEKLY_STEP`` so volume ramps.
+    target, and every change is clamped asymmetrically (``MAX_WEEKLY_ADD`` up,
+    ``MAX_WEEKLY_CUT`` down) so volume ramps gradually but can back off faster.
     """
     emphasis = muscle in EMPHASIS_MUSCLES
-    grow_floor = mav if emphasis else mev  # healthy muscles shouldn't sit below this
+    # Emphasis muscles floor at the MEV–MAV midpoint (keeps an accumulation
+    # runway), not at MAV; everything else floors at MEV (panel review M3).
+    grow_floor = (mev + (mav - mev) // 2) if emphasis else mev
     cur = round(current)
     under_recovered = soreness >= SORENESS_BLOCK
     leg_interference = (
@@ -177,15 +197,15 @@ def _decide(
     elif cur < grow_floor:
         # No performance signal yet, but below the floor it should be training at.
         desired = grow_floor
-        floor_name = "MAV (emphasis)" if emphasis else "MEV"
-        reason = f"below {floor_name} → ramping up to minimum effective volume"
+        floor_name = "emphasis floor" if emphasis else "MEV"
+        reason = f"below {floor_name} → ramping up toward productive volume"
     else:
         desired = cur
         reason = "in range, no clear signal — hold and gather data"
 
-    # Clamp to MRV and to a single-week step, then derive the action from the delta.
+    # Clamp to MRV, then to the asymmetric weekly step, then derive the action.
     target = max(0, min(mrv, desired))
-    target = max(cur - MAX_WEEKLY_STEP, min(cur + MAX_WEEKLY_STEP, target))
+    target = max(cur - MAX_WEEKLY_CUT, min(cur + MAX_WEEKLY_ADD, target))
     delta = target - cur
     action = "add" if delta > 0 else "cut" if delta < 0 else "hold"
 

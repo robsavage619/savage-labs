@@ -614,10 +614,15 @@ def load_cap_pct(gates: dict[str, Any]) -> int:
 
 
 def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
-    """Best Epley e1RM (kg) per exercise over the window. Basis for target load."""
+    """Best Epley e1RM (kg) per exercise over the window. Basis for target load.
+
+    Reps are capped at 12 before estimating — Epley overestimates above ~10–12
+    reps, so an uncapped MAX floats the ceiling up on fluky high-rep sets and
+    partly defeats the deload guard it feeds (panel review M16).
+    """
     rows = conn.execute(
         """
-        SELECT ws.exercise, MAX(ws.weight_kg * (1 + ws.reps / 30.0)) AS e1rm_kg
+        SELECT ws.exercise, MAX(ws.weight_kg * (1 + LEAST(ws.reps, 12) / 30.0)) AS e1rm_kg
         FROM workout_sets ws
         JOIN workouts w ON w.id = ws.workout_id
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL AND ws.reps > 0

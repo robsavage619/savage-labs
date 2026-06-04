@@ -48,10 +48,26 @@ def test_leg_interference_holds_volume():
 
 
 def test_emphasis_below_floor_ramps_up():
-    # Below the MAV floor (12) with no perf signal → ramp up, capped at +4/week.
+    # Emphasis floor is the MEV-MAV midpoint (6+3=9), NOT MAV; ramp capped at
+    # +2/week (MAX_WEEKLY_ADD), so 4 → 6 this week, not a jump to the floor.
     rx = _d("glutes", current=4, perf=None, mev=6, mav=12, mrv=16)
     assert rx.action == "add"
-    assert rx.delta == 4  # MAX_WEEKLY_STEP, not a 4→12 jump
+    assert rx.delta == 2
+
+
+def test_emphasis_does_not_start_at_mav():
+    # Regression guard for M3: an emphasis muscle sitting AT its midpoint floor
+    # (8 + (14-8)//2 = 11) with no signal must HOLD — not chase MAV (14).
+    rx = _d("biceps", current=11, perf=None, mev=8, mav=14, mrv=20)
+    assert rx.action == "hold"
+    assert rx.target_sets == 11
+
+
+def test_add_step_capped_at_two():
+    # M10: even a big desired jump (below-floor ramp) adds at most MAX_WEEKLY_ADD.
+    rx = _d("chest", current=2, perf=None, mev=10, mav=16, mrv=22)
+    assert rx.action == "add"
+    assert rx.delta == 2  # 2 → 4, not 2 → 10
 
 
 def test_action_never_contradicts_delta():

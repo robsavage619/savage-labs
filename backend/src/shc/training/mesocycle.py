@@ -177,84 +177,90 @@ def weekly_e1rm(
     return [WeeklyE1RM(r[0], r[1], r[2], r[3], r[4]) for r in reversed(rows)]
 
 
-def _score_from_delta(pct_change: float) -> tuple[int, str]:
-    """Map e1RM week-over-week % change to Israetel 1–5 score + trend label."""
-    if pct_change >= 2.5:
+# e1RM scoring is deliberately conservative: a hypertrophy controller must not
+# chase noise. Epley overestimates above ~10–12 reps, so reps are capped before
+# estimating; and the performance signal is a multi-week TREND (OLS slope), never
+# a single-week delta whose ~2–5% error (RIR/rep-selection/CNS state) swamps real
+# change. See the sports-science panel review (C1).
+_EPLEY_REP_CAP = 12
+# Best estimated 1RM for a set, reps capped so high-rep sets don't inflate it.
+_CAPPED_E1RM = f"weight_kg * (1 + LEAST(reps, {_EPLEY_REP_CAP}) / 30.0)"
+
+
+def _trend_pct_per_week(e1rms: list[float]) -> float:
+    """OLS slope of an e1RM series (oldest→newest) as % of its mean per week."""
+    n = len(e1rms)
+    if n < 2:
+        return 0.0
+    mean_y = sum(e1rms) / n
+    if mean_y == 0:
+        return 0.0
+    mean_x = (n - 1) / 2.0
+    num = sum((i - mean_x) * (y - mean_y) for i, y in enumerate(e1rms))
+    den = sum((i - mean_x) ** 2 for i in range(n))
+    slope = num / den if den else 0.0
+    return slope / mean_y * 100.0
+
+
+def _score_from_trend(pct_per_week: float) -> tuple[int, str]:
+    """Map a multi-week e1RM trend (%/week) to an Israetel 1–5 score + label.
+
+    Bands sit on a noise-averaged OLS slope over ≥3 completed weeks, not a single
+    delta — so the tight ±0.5%/wk 'stalled' band is defensible: the averaging has
+    already removed the single-week measurement error a delta-band would absorb.
+    """
+    if pct_per_week >= 1.0:
         return 5, "progressing"
-    if pct_change >= 0.5:
+    if pct_per_week >= 0.5:
         return 4, "progressing"
-    if pct_change >= -0.5:
+    if pct_per_week >= -0.5:
         return 3, "stalled"
-    if pct_change >= -2.0:
+    if pct_per_week >= -1.0:
         return 2, "regressing"
     return 1, "regressing"
 
 
-def _recommendation(score: int, work_sets: int, mrv: int | None) -> str:
+def _recommendation(score: int) -> str:
+    """LOAD-only guidance. Set-count decisions belong to the autoregulation
+    controller (single source of truth) — this never recommends adding sets."""
     if score >= 4:
-        return "add weight"
+        return "add load"
     if score == 3:
-        return "hold weight" if (mrv is None or work_sets < mrv) else "add sets"
-    if score <= 2:
-        return "deload or swap exercise"
-    return "hold weight"
+        return "hold load"
+    return "reduce load or swap exercise"
 
 
 def score_exercise(
     conn: duckdb.DuckDBPyConnection,
     exercise: str,
-    mrv: int | None = None,
 ) -> ProgressionScore | None:
-    """Compute this week's performance score for one exercise.
+    """Score an exercise from the TREND of its weekly e1RM over completed weeks.
 
-    Returns None if fewer than 2 weeks of data exist.
+    Uses the OLS slope across the last up to 6 COMPLETED weeks — the in-progress
+    week is excluded, since a partial week understates the best set and would bias
+    the call by training-day timing. Returns None until ≥3 completed weeks exist:
+    with less, the trend is indistinguishable from noise and the controller should
+    hold and gather data rather than guess (panel review C1).
     """
-    history = weekly_e1rm(conn, exercise, n_weeks=8)
-    if len(history) < 2:
+    this_week = _iso_week_start(date.today())
+    history = [h for h in weekly_e1rm(conn, exercise, n_weeks=8) if h.week_start < this_week]
+    if len(history) < 3:
         return None
 
-    this_week = _iso_week_start(date.today())
-
-    # Compute this week's e1RM from raw sets if not already stored
-    live_row = conn.execute(
-        """
-        SELECT
-            MAX(weight_kg * (1 + reps / 30.0)) AS e1rm,
-            COUNT(*)                            AS sets
-        FROM workout_sets_dedup
-        WHERE exercise = ?
-          AND started_at::DATE >= ? AND started_at::DATE < ?
-          AND weight_kg > 0 AND reps > 0
-        """,
-        [exercise, this_week, this_week + timedelta(days=7)],
-    ).fetchone()
-
-    if live_row and live_row[0]:
-        e1rm_kg = live_row[0]
-        work_sets = live_row[1]
-    else:
-        # Fall back to most recent stored value
-        e1rm_kg = history[-1].e1rm_kg
-        work_sets = history[-1].work_sets
-
-    prev_e1rm = (
-        history[-1].e1rm_kg
-        if history[-1].week_start < this_week
-        else (history[-2].e1rm_kg if len(history) >= 2 else e1rm_kg)
-    )
-    pct_change = (e1rm_kg - prev_e1rm) / prev_e1rm * 100 if prev_e1rm else 0.0
-    perf_score, trend = _score_from_delta(pct_change)
-    rec = _recommendation(perf_score, work_sets, mrv)
+    series = [h.e1rm_kg for h in history[-6:]]
+    pct_per_week = _trend_pct_per_week(series)
+    perf_score, trend = _score_from_trend(pct_per_week)
+    latest = history[-1]
 
     return ProgressionScore(
         exercise=exercise,
         week_start=this_week,
-        e1rm_kg=e1rm_kg,
-        e1rm_lbs=e1rm_kg * 2.20462,
-        work_sets=work_sets,
+        e1rm_kg=latest.e1rm_kg,
+        e1rm_lbs=latest.e1rm_kg * 2.20462,
+        work_sets=latest.work_sets,
         perf_score=perf_score,
         trend=trend,
-        recommendation=rec,
+        recommendation=_recommendation(perf_score),
         history=history,
     )
 
@@ -280,47 +286,39 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
     ]
 
     for ex in exercises:
+        # Always store THIS week's rep-capped best-set e1RM + work sets, so the
+        # weekly series the trend is built from accumulates one row per week.
+        row = conn.execute(
+            f"""
+            SELECT MAX({_CAPPED_E1RM}), COUNT(*)
+            FROM workout_sets_dedup
+            WHERE exercise = ?
+              AND started_at::DATE >= ? AND started_at::DATE < ?
+              AND weight_kg > 0 AND reps > 0
+            """,
+            [ex, this_week, this_week + timedelta(days=7)],
+        ).fetchone()
+        if not row or not row[0]:
+            continue
+        # Score comes from the trend over COMPLETED weeks (excludes this one);
+        # None until ≥3 weeks of history — store the e1RM with a null score.
         ps = score_exercise(conn, ex)
-        if ps is None:
-            # First time seeing this exercise — store raw e1RM with no score
-            row = conn.execute(
-                """
-                SELECT MAX(weight_kg * (1 + reps / 30.0)), COUNT(*)
-                FROM workout_sets_dedup
-                WHERE exercise = ?
-                  AND started_at::DATE >= ? AND started_at::DATE < ?
-                  AND weight_kg > 0 AND reps > 0
-                """,
-                [ex, this_week, this_week + timedelta(days=7)],
-            ).fetchone()
-            if row and row[0]:
-                conn.execute(
-                    """
-                    INSERT INTO exercise_weekly_e1rm
-                        (exercise, week_start, e1rm_kg, work_sets, perf_score, trend, computed_at)
-                    VALUES (?, ?, ?, ?, NULL, NULL, now())
-                    ON CONFLICT (exercise, week_start) DO UPDATE SET
-                        e1rm_kg = excluded.e1rm_kg,
-                        work_sets = excluded.work_sets,
-                        computed_at = now()
-                    """,
-                    [ex, this_week, row[0], row[1]],
-                )
-        else:
-            conn.execute(
-                """
-                INSERT INTO exercise_weekly_e1rm
-                    (exercise, week_start, e1rm_kg, work_sets, perf_score, trend, computed_at)
-                VALUES (?, ?, ?, ?, ?, ?, now())
-                ON CONFLICT (exercise, week_start) DO UPDATE SET
-                    e1rm_kg = excluded.e1rm_kg,
-                    work_sets = excluded.work_sets,
-                    perf_score = excluded.perf_score,
-                    trend = excluded.trend,
-                    computed_at = now()
-                """,
-                [ex, ps.week_start, ps.e1rm_kg, ps.work_sets, ps.perf_score, ps.trend],
-            )
+        perf_score = ps.perf_score if ps else None
+        trend = ps.trend if ps else None
+        conn.execute(
+            """
+            INSERT INTO exercise_weekly_e1rm
+                (exercise, week_start, e1rm_kg, work_sets, perf_score, trend, computed_at)
+            VALUES (?, ?, ?, ?, ?, ?, now())
+            ON CONFLICT (exercise, week_start) DO UPDATE SET
+                e1rm_kg = excluded.e1rm_kg,
+                work_sets = excluded.work_sets,
+                perf_score = excluded.perf_score,
+                trend = excluded.trend,
+                computed_at = now()
+            """,
+            [ex, this_week, row[0], row[1], perf_score, trend],
+        )
     log.info("compute_all_scores: updated %d exercises for week %s", len(exercises), this_week)
 
 
