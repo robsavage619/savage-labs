@@ -47,9 +47,12 @@ PROPRANOLOL_KCAL_MULT = 1.25
 _ROB_AGE = 40
 
 # Readiness weights — collapsed from frontend lib/readiness.ts so they live in
-# exactly one place.
+# exactly one place. On propranolol days BOTH autonomic channels are corrupted —
+# the β-blocker blunts HRV AND lowers RHR by 10–25 bpm — so both are down-weighted
+# and trust shifts to sleep + subjective (panel review M8; personal_context says
+# "use RPE not HR" on dosing days). These magnitudes are heuristic priors.
 DEFAULT_WEIGHTS = {"hrv": 0.40, "sleep": 0.30, "rhr": 0.20, "subj": 0.10}
-BETA_BLOCKER_WEIGHTS = {"hrv": 0.20, "sleep": 0.40, "rhr": 0.25, "subj": 0.15}
+BETA_BLOCKER_WEIGHTS = {"hrv": 0.15, "sleep": 0.50, "rhr": 0.10, "subj": 0.25}
 
 Tier = Literal["green", "yellow", "red"]
 Intensity = Literal["high", "moderate", "low", "rest"]
@@ -398,11 +401,17 @@ def _sleep_subscore(
     return 0.5 * dur + 0.3 * deep_score + 0.2 * spo2_score
 
 
-def _rhr_subscore(today: float | None, baseline: float | None) -> float | None:
-    if today is None or not baseline:
+def _rhr_subscore(rhr_7d: float | None, baseline: float | None) -> float | None:
+    """Readiness contribution from resting HR vs its 28d baseline.
+
+    Fed the SMOOTHED 7-day RHR (not a single night) and a gentler slope so a
+    single noisy night doesn't crater readiness — a +10% elevation now reads 25,
+    not 0 (panel review M12).
+    """
+    if rhr_7d is None or not baseline:
         return None
-    pct = (today - baseline) / baseline
-    return max(0.0, min(100.0, 50.0 - pct * 500.0))
+    pct = (rhr_7d - baseline) / baseline
+    return max(0.0, min(100.0, 50.0 - pct * 250.0))
 
 
 def _subj_subscore(
@@ -633,18 +642,23 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         {"s": (today - timedelta(days=28)).isoformat()},
     ).fetchall()
     if load_rows:
-        # Mean over the *window length*, not just non-zero days, so ACWR
-        # correctly drops on rest weeks. Computed per arm: composite (pooled,
-        # display), conditioning (WHOOP strain), resistance (Hevy tonnes).
-        # ACWR is scale-invariant within an arm, so the tonnes/strain unit
-        # mismatch doesn't matter — only each arm's own 7d:28d ratio does.
+        # UNCOUPLED ACWR (panel review M2): chronic is the 21 days BEFORE the
+        # acute window (days 8–28), not the full 28 that contain it. The coupled
+        # form (acute ⊂ chronic) compresses ratios toward 1.0 and dampens the
+        # very spikes the gate exists to catch (Lolli 2019; Windt & Gabbett 2019).
+        # Mean over the window length (not just non-zero days) so ACWR drops on
+        # rest weeks. Per arm: composite (pooled, display), conditioning (WHOOP
+        # strain), resistance (Hevy tonnes); scale-invariant within an arm.
+        acute_cut = today - timedelta(days=7)
+
         def _arm_acwr(idx: int) -> tuple[float, float, float | None]:
-            recent = [float(r[idx] or 0) for r in load_rows if r[0] >= today - timedelta(days=7)]
-            window = [float(r[idx] or 0) for r in load_rows]
-            acute = round(sum(recent) / 7.0, 2)
-            chronic = round(sum(window) / 28.0, 2)
+            recent = [float(r[idx] or 0) for r in load_rows if r[0] >= acute_cut]
+            prior = [float(r[idx] or 0) for r in load_rows if r[0] < acute_cut]
+            acute = sum(recent) / 7.0
+            chronic = sum(prior) / 21.0
+            # Ratio from RAW means — rounding chronic first can zero a small arm.
             ratio = round(acute / chronic, 2) if chronic > 0 else None
-            return acute, chronic, ratio
+            return round(acute, 2), round(chronic, 2), ratio
 
         m.acute_load_7d, m.chronic_load_28d, m.acwr = _arm_acwr(1)
         m.conditioning_acute_7d, m.conditioning_chronic_28d, m.conditioning_acwr = _arm_acwr(2)
@@ -867,7 +881,7 @@ def _readiness_snapshot(
     components: dict[str, float | None] = {
         "hrv": _hrv_subscore(rec.hrv_sigma),
         "sleep": sleep.score,
-        "rhr": _rhr_subscore(rec.rhr, rec.rhr_baseline_28d),
+        "rhr": _rhr_subscore(rec.rhr_7d_avg or rec.rhr, rec.rhr_baseline_28d),
         "subj": _subj_subscore(
             chk.energy,
             chk.stress,
@@ -1299,16 +1313,26 @@ def _body_composition(conn, today: date) -> BodyComposition:
 
 
 def _body_comp_note(bc: BodyComposition, weight_trend_4wk: float | None) -> str | None:
-    """Factual cross-reference of leanness trend against weight (no advice)."""
+    """Factual cross-reference of leanness trend against weight (no advice).
+
+    Recomp-aware so it agrees with the photo-endpoint corroboration logic
+    (panel review M9): waist-leaner WHILE weight rises is a signal CONFLICT, not
+    "recomp on track" — the same (Δwaist, Δweight) must not get opposite verdicts.
+    """
     if not bc.trend_direction or weight_trend_4wk is None:
         return None
     wt = weight_trend_4wk
-    if bc.trend_direction == "leaner" and wt >= -1.0:
+    if bc.trend_direction == "leaner":
+        if wt > 1.0:
+            return (
+                "waist trending leaner but weight rising — signals disagree; "
+                "don't read as fat loss without more data"
+            )
+        if wt < -1.0:
+            return "waist and weight both down — leaning out; verify strength/size are holding"
         return "waist trending leaner while weight held — recomp on track (size kept, fat down)"
     if bc.trend_direction == "softer" and wt > 0:
         return "waist and weight both up — drifting toward fat gain"
-    if bc.trend_direction == "leaner" and wt < -1.0:
-        return "waist and weight both down — leaning out; verify strength/size are holding"
     if bc.trend_direction == "stable":
         return f"waist stable (within 2% noise), weight trend {wt:+.1f}%"
     return f"waist {bc.trend_direction}, weight trend {wt:+.1f}%"

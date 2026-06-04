@@ -20,6 +20,7 @@ from shc.metrics import (
 
 # ── _hrv_subscore ────────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "sigma,expected",
     [(None, None), (0.0, 50.0), (1.0, 75.0), (2.0, 100.0), (-2.0, 0.0), (5.0, 100.0)],
@@ -29,6 +30,7 @@ def test_hrv_subscore(sigma, expected) -> None:
 
 
 # ── _rhr_subscore ────────────────────────────────────────────────────────────
+
 
 def test_rhr_subscore_none_inputs() -> None:
     assert _rhr_subscore(None, 50) is None
@@ -40,12 +42,16 @@ def test_rhr_subscore_at_baseline_is_midpoint() -> None:
     assert _rhr_subscore(50, 50) == 50.0
 
 
-def test_rhr_subscore_lower_rhr_scores_higher() -> None:
-    assert _rhr_subscore(45, 50) == 100.0   # 10% below → clamps high
-    assert _rhr_subscore(55, 50) == 0.0      # 10% above → clamps low
+def test_rhr_subscore_softened_slope() -> None:
+    # Slope softened 500→250 so a single elevation doesn't crater readiness (M12).
+    assert _rhr_subscore(45, 50) == 75.0  # 10% below → +25 over midpoint
+    assert _rhr_subscore(55, 50) == 25.0  # 10% above → −25, not 0
+    assert _rhr_subscore(40, 50) == 100.0  # 20% below still clamps high
+    assert _rhr_subscore(60, 50) == 0.0  # 20% above clamps low
 
 
 # ── _subj_subscore ───────────────────────────────────────────────────────────
+
 
 def test_subj_subscore_none_when_no_inputs() -> None:
     assert _subj_subscore(None, None, None) is None
@@ -59,6 +65,7 @@ def test_subj_subscore_inverts_stress_and_soreness() -> None:
 
 
 # ── _sleep_subscore ──────────────────────────────────────────────────────────
+
 
 def test_sleep_subscore_none_hours() -> None:
     assert _sleep_subscore(None, 0.2, 97) is None
@@ -80,10 +87,18 @@ def test_sleep_subscore_deep_falls_back_to_duration() -> None:
 
 # ── _tier ────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "score,tier",
-    [(None, None), (90, "green"), (67, "green"), (66.9, "yellow"), (34, "yellow"),
-     (33.9, "red"), (0, "red")],
+    [
+        (None, None),
+        (90, "green"),
+        (67, "green"),
+        (66.9, "yellow"),
+        (34, "yellow"),
+        (33.9, "red"),
+        (0, "red"),
+    ],
 )
 def test_tier_thresholds(score, tier) -> None:
     assert _tier(score) == tier
@@ -91,9 +106,11 @@ def test_tier_thresholds(score, tier) -> None:
 
 # ── _readiness_snapshot ──────────────────────────────────────────────────────
 
+
 def test_readiness_none_when_no_components() -> None:
-    snap = _readiness_snapshot(RecoveryMetrics(), SleepMetrics(), CheckinMetrics(),
-                               beta_blocker=False)
+    snap = _readiness_snapshot(
+        RecoveryMetrics(), SleepMetrics(), CheckinMetrics(), beta_blocker=False
+    )
     assert snap.score is None
     assert snap.tier is None
 
@@ -107,14 +124,15 @@ def test_readiness_single_component_equals_that_component() -> None:
 
 
 def test_readiness_uses_default_weights_without_beta_blocker() -> None:
-    snap = _readiness_snapshot(RecoveryMetrics(hrv_sigma=0.0), SleepMetrics(score=80),
-                               CheckinMetrics(), beta_blocker=False)
+    snap = _readiness_snapshot(
+        RecoveryMetrics(hrv_sigma=0.0), SleepMetrics(score=80), CheckinMetrics(), beta_blocker=False
+    )
     assert snap.weights == DEFAULT_WEIGHTS
     assert snap.beta_blocker_adjusted is False
 
 
 def test_readiness_reweights_under_beta_blocker() -> None:
-    """Beta-blocker blunts HRV, so HRV weight drops and sleep/RHR rise."""
+    """Beta-blocker corrupts BOTH HRV and RHR, so both drop and sleep/subj rise (M8)."""
     rec = RecoveryMetrics(hrv_sigma=0.0)
     sleep = SleepMetrics(score=80)
     default = _readiness_snapshot(rec, sleep, CheckinMetrics(), beta_blocker=False)
@@ -126,6 +144,7 @@ def test_readiness_reweights_under_beta_blocker() -> None:
 
 
 # ── muscle_group ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "exercise,group",
