@@ -887,14 +887,15 @@ def calibrate_deload_trigger(conn: duckdb.DuckDBPyConnection) -> dict[str, objec
             "using_population_defaults": True,
         }
 
-    # Placeholder: infrastructure is built, fitting would go here.
-    # When ≥3 deloads exist, compute:
-    #   - Mean regressing-muscle count in the week before each deload
-    #   - Mean ACWR in the week before each deload
-    # and use those as personal thresholds.
+    # Stub: infrastructure is present, fitting logic is not yet implemented.
+    # Returns honest status so callers don't assume personal thresholds are active.
+    n_events = len(deloads)
     return {
-        "status": "fitted",
-        "n_events": len(deloads),
-        "message": "Fitted from historical deload events.",
-        "using_population_defaults": False,
+        "status": "stub",
+        "n_events": n_events,
+        "message": (
+            f"{n_events} deload events on record — fitting not yet implemented. "
+            "Using population default (DELOAD_MUSCLE_THRESHOLD=3)."
+        ),
+        "using_population_defaults": True,
     }

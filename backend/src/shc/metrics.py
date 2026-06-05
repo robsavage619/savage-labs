@@ -1084,11 +1084,11 @@ def _gates(
     # Muscle-group recovery.
     for grp in ("legs", "push", "pull"):
         rest = getattr(load, f"days_since_{grp}")
-        # Compound legs need 72h, others 48h.
-        threshold = 2 if grp == "legs" else 1
+        # Compound legs need ≥3d rest (72h); push/pull need ≥2d (48h).
+        threshold = 3 if grp == "legs" else 2
         if rest is not None and rest < threshold:
             g.forbid_muscle_groups.append(grp)
-            reasons.append(f"{grp.title()} {rest}d ago — needs ≥{threshold + 1}d rest")
+            reasons.append(f"{grp.title()} {rest}d ago — needs ≥{threshold}d rest")
 
     # Per-muscle soreness from body-diagram check-in.
     # Severity 3 (acute) on any muscle in a group → forbid that group.
