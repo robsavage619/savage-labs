@@ -7,9 +7,10 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from shc.api.deps import require_admin_key
 from shc.ai.briefing import build_daily_context, store_briefing
 from shc.ai.workout_planner import (
     GateViolation,
@@ -280,7 +281,7 @@ async def get_checkin_today() -> dict:
     }
 
 
-@router.post("/checkin")
+@router.post("/checkin", dependencies=[Depends(require_admin_key)])
 async def post_checkin(body: CheckinSubmission) -> dict:
     """Upsert today's daily check-in. Drives the auto-regulation gates."""
     for k, v in (
@@ -336,7 +337,7 @@ async def post_checkin(body: CheckinSubmission) -> dict:
 
 # ── Plan adherence (closed-loop tracking) ────────────────────────────────────
 
-@router.post("/training/adherence/recompute")
+@router.post("/training/adherence/recompute", dependencies=[Depends(require_admin_key)])
 async def recompute_adherence() -> dict:
     """Recompute yesterday's plan-vs-execution adherence row.
 
@@ -1188,7 +1189,7 @@ class CardioLog(BaseModel):
     notes: str | None = None
 
 
-@router.post("/cardio/log")
+@router.post("/cardio/log", dependencies=[Depends(require_admin_key)])
 async def cardio_log(body: CardioLog) -> dict:
     """Log a cardio session (pickleball, walking, biking, etc.)."""
     import hashlib
@@ -1209,7 +1210,7 @@ async def cardio_log(body: CardioLog) -> dict:
     return {"status": "ok", "id": cid, "date": d}
 
 
-@router.delete("/cardio/log/{cid}")
+@router.delete("/cardio/log/{cid}", dependencies=[Depends(require_admin_key)])
 async def cardio_delete(cid: str) -> dict:
     async with write_ctx() as conn:
         conn.execute("DELETE FROM cardio_sessions WHERE id = $id", {"id": cid})
@@ -1418,7 +1419,7 @@ class MedicationIn(BaseModel):
     frequency: str | None = None
 
 
-@router.post("/clinical/medication")
+@router.post("/clinical/medication", dependencies=[Depends(require_admin_key)])
 async def add_medication(body: MedicationIn) -> dict:
     """Add an active medication. Used to bootstrap the medications table so
     the dashboard's beta-blocker awareness works."""
@@ -2253,7 +2254,7 @@ async def lab_findings_latest() -> list[dict]:
     ]
 
 
-@router.post("/lab/run")
+@router.post("/lab/run", dependencies=[Depends(require_admin_key)])
 async def lab_run() -> dict:
     """Execute every enabled hypothesis and persist findings."""
     from shc import lab as _lab
@@ -2624,7 +2625,7 @@ async def workout_context() -> dict:
     return {"context": context, "plan_date": plan_date.isoformat()}
 
 
-@router.post("/workout/plan")
+@router.post("/workout/plan", dependencies=[Depends(require_admin_key)])
 async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     """Accept a Claude-generated workout plan, validate it, persist it, and
     optionally push it to Hevy as a routine.
@@ -2682,7 +2683,7 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     return {"status": "ok", "date": plan_date_iso, "hevy": hevy_result}
 
 
-@router.delete("/workout/plan")
+@router.delete("/workout/plan", dependencies=[Depends(require_admin_key)])
 async def delete_workout_plan(target_date: str | None = Query(default=None)) -> dict:
     """Delete a stored workout plan (defaults to today). Used to discard test/bad plans."""
     d = target_date or date.today().isoformat()
@@ -3171,7 +3172,7 @@ def _table_exists(conn, name: str) -> bool:
         return False
 
 
-@router.post("/briefing")
+@router.post("/briefing", dependencies=[Depends(require_admin_key)])
 async def submit_briefing(body: BriefingSubmission) -> dict:
     """Accept a Claude-generated daily briefing and persist it."""
     valid_calls = {"Push", "Train", "Maintain", "Easy", "Rest"}
@@ -3211,7 +3212,7 @@ async def get_health_story() -> dict:
     }
 
 
-@router.post("/health-story")
+@router.post("/health-story", dependencies=[Depends(require_admin_key)])
 async def post_health_story(body: HealthStorySubmission) -> dict:
     """Accept a Claude-generated narrative health story and persist it."""
     if not body.narrative.strip():
@@ -3606,7 +3607,7 @@ async def training_after_action() -> dict:
     }
 
 
-@router.post("/workout/retrospective")
+@router.post("/workout/retrospective", dependencies=[Depends(require_admin_key)])
 async def submit_retrospective(body: RetrospectiveSubmission) -> dict:
     """Store a Claude-generated workout retrospective."""
     async with write_ctx() as conn:
@@ -3702,7 +3703,7 @@ async def latest_retrospective() -> dict:
     }
 
 
-@router.post("/internal/checkpoint")
+@router.post("/internal/checkpoint", dependencies=[Depends(require_admin_key)])
 async def internal_checkpoint() -> dict:
     """Force a DuckDB WAL checkpoint so a clean shutdown preserves all writes.
 
@@ -3742,7 +3743,7 @@ async def midday_context() -> dict:
     return {"prompt": prompt, "date": date.today().isoformat()}
 
 
-@router.post("/midday/session")
+@router.post("/midday/session", dependencies=[Depends(require_admin_key)])
 async def submit_midday_session(body: MiddaySessionSubmission) -> dict:
     """Accept and persist a Claude-generated midday session recommendation."""
     if body.session_type not in _VALID_SESSION_TYPES:

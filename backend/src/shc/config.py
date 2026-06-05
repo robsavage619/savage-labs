@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
     apple_webhook_key: str | None = Field(default=None)
 
+    # Shared admin key for all mutating API endpoints (POST/PUT/DELETE).
+    # Falls back to apple_webhook_key so existing deployments need no new env var.
+    # Set SHC_ADMIN_KEY in .env for an independent secret.
+    shc_admin_key: str | None = Field(default=None)
+
+    @property
+    def effective_admin_key(self) -> str | None:
+        return self.shc_admin_key or self.apple_webhook_key
+
     # Server
     host: str = "127.0.0.1"  # uvicorn bind address; overridden to 0.0.0.0 in dev-restart.sh
     port: int = 8000

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn
 from shc.ingest import hevy as hevy_ingest
 
@@ -40,7 +41,7 @@ async def hevy_status() -> dict:
     }
 
 
-@router.post("/hevy/sync")
+@router.post("/hevy/sync", dependencies=[Depends(require_admin_key)])
 async def hevy_sync() -> dict:
     """Trigger an immediate Hevy workout sync."""
     try:
@@ -53,7 +54,7 @@ async def hevy_sync() -> dict:
         raise HTTPException(status_code=502, detail=f"Hevy API error: {e}") from e
 
 
-@router.post("/hevy/sync-templates")
+@router.post("/hevy/sync-templates", dependencies=[Depends(require_admin_key)])
 async def hevy_sync_templates() -> dict:
     """Refresh the exercise template cache from Hevy."""
     try:
@@ -66,7 +67,7 @@ async def hevy_sync_templates() -> dict:
         raise HTTPException(status_code=502, detail=f"Hevy API error: {e}") from e
 
 
-@router.post("/hevy/push-routine")
+@router.post("/hevy/push-routine", dependencies=[Depends(require_admin_key)])
 async def hevy_push_routine(regen: bool = Query(default=False)) -> dict:
     """Push today's AI workout plan to Hevy as a routine.
 

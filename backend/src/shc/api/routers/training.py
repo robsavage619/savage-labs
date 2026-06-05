@@ -13,9 +13,10 @@ from datetime import date, timedelta
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
 from shc.training.mesocycle import (
     advance_mesocycle,
@@ -234,7 +235,7 @@ async def get_progression(weeks: int = 4) -> dict[str, Any]:
         conn.close()
 
 
-@router.post("/training/mesocycle/advance")
+@router.post("/training/mesocycle/advance", dependencies=[Depends(require_admin_key)])
 async def post_advance(req: AdvanceRequest) -> dict[str, Any]:
     async with write_ctx() as conn:
         new_state = advance_mesocycle(conn, trigger=req.trigger)
@@ -246,7 +247,7 @@ async def post_advance(req: AdvanceRequest) -> dict[str, Any]:
     }
 
 
-@router.post("/training/scores/recompute")
+@router.post("/training/scores/recompute", dependencies=[Depends(require_admin_key)])
 async def post_recompute() -> dict[str, Any]:
     async with write_ctx() as conn:
         compute_all_scores(conn)
@@ -494,7 +495,7 @@ def dupr_rating() -> dict[str, Any]:
     }
 
 
-@router.post("/pickleball/dupr/sync")
+@router.post("/pickleball/dupr/sync", dependencies=[Depends(require_admin_key)])
 async def dupr_sync() -> dict[str, Any]:
     """Pull the current DUPR rating and store today's snapshot."""
     from shc.ingest import dupr
@@ -507,7 +508,7 @@ async def dupr_sync() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
 
 
-@router.post("/pickleball/dupr/sync-matches")
+@router.post("/pickleball/dupr/sync-matches", dependencies=[Depends(require_admin_key)])
 async def dupr_sync_matches() -> dict[str, Any]:
     """Pull full DUPR match history and upsert into dupr_matches."""
     from shc.ingest import dupr

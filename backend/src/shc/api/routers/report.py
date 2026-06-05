@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
 from shc.ingest import dupr, hevy, whoop
 from shc.metrics import compute_daily_state
@@ -26,7 +27,7 @@ log = logging.getLogger(__name__)
 _VALID_CALLS = {"Push", "Train", "Maintain", "Easy", "Rest"}
 
 
-@router.post("/sync/all")
+@router.post("/sync/all", dependencies=[Depends(require_admin_key)])
 async def sync_all() -> dict:
     """Force a fresh pull from every connected source before reporting.
 
@@ -193,7 +194,7 @@ class DailyReportSubmission(BaseModel):
     model: str = "claude"
 
 
-@router.post("/daily/report")
+@router.post("/daily/report", dependencies=[Depends(require_admin_key)])
 async def submit_daily_report(body: DailyReportSubmission) -> dict:
     """Persist a Claude-generated unified daily report (one row per day)."""
     if body.training_call and body.training_call not in _VALID_CALLS:
