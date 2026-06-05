@@ -110,6 +110,21 @@ def test_no_deload_without_systemic_signal():
     assert deload_check(perfs, report)["recommended"] is False
 
 
+def test_regressing_below_mev_adds_not_cuts():
+    # current=4 < MEV=10 while regressing (perf=2) → action must be add (toward MEV),
+    # not cut (which would drive volume negative). Reason must not say "cut".
+    rx = _d("traps", current=4, perf=2, mev=10, mav=16, mrv=22)
+    assert rx.action == "add", f"expected add, got {rx.action}"
+    assert rx.target_sets > 4, "target should be higher than current when below MEV"
+    assert "cut" not in rx.reason.lower() or "build" in rx.reason.lower()
+
+
+def test_regressing_above_mev_cuts():
+    rx = _d("chest", current=18, perf=2)
+    assert rx.action == "cut"
+    assert rx.target_sets < 18
+
+
 def test_decide_deload_halves_volume():
     rx = _d("chest", current=18, perf=5, mev=10, mav=16, mrv=22)
     assert rx.action == "add"  # sanity: normally it would grow
