@@ -228,9 +228,13 @@ def _decide(
     )
 
     if perf is not None and perf <= 2:
-        # Regressing — cut toward MEV (the real minimum, even for emphasis muscles).
+        # Regressing — target MEV. If already below MEV, ramp up to it
+        # (more productive minimum volume is the remedy); if above, cut toward it.
         desired = max(mev, cur - 2)
-        reason = f"regressing (perf {perf}/5) → cut toward MEV"
+        if cur < mev:
+            reason = f"regressing (perf {perf}/5) but below MEV → build to minimum productive volume"
+        else:
+            reason = f"regressing (perf {perf}/5) → cut toward MEV"
     elif under_recovered:
         desired = max(mev, cur - 1)
         reason = f"under-recovered (soreness {soreness:.1f}/3) → back off a set"
