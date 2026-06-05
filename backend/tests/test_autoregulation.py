@@ -137,7 +137,9 @@ def test_decide_deload_halves_volume():
     assert rx.action == "add"  # sanity: normally it would grow
     dl = _decide("chest", 18, 10, 16, 22, perf=5, soreness=0.0, conditioning_acwr=None, deload=True)
     assert dl.action == "deload"
-    assert dl.target_sets == 10  # round(18*0.5)=9, floored at MEV 10
+    # Bug 2 fix: floor is round(mev*0.4)=4, not mev=10.
+    # round(18*0.5)=9, max(4, 9)=9 — real deload below MEV so fatigue clears.
+    assert dl.target_sets == 9
 
 
 def test_weekly_prescription_smoke(conn, seed):
