@@ -346,8 +346,6 @@ MUSCLE_TO_GROUP: dict[str, str] = {
     "abs": "core",
     "lower_back": "core",
 }
-_LEGS = ("squat", "leg", "lunge", "hip", "glute", "hamstring", "quad", "calf", "rdl", "step-up")
-_CORE = ("plank", "crunch", "ab ", "core", "oblique", "sit-up", "rotation")
 
 
 def muscle_group(exercise: str) -> str:

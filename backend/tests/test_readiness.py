@@ -159,6 +159,11 @@ def test_readiness_reweights_under_beta_blocker() -> None:
         ("Romanian Deadlift (Dumbbell)", "pull"),
         ("Goblet Squat", "legs"),
         ("Standing Calf Raise (Machine)", "legs"),
+        # Shadow-bug regression: deleted duplicate _LEGS at ~349 lacked "adduct",
+        # which would have made these fall through to "other".
+        ("Bulgarian Split Squat (Dumbbell)", "legs"),
+        ("Hip Adduction (Machine)", "legs"),
+        ("Seated Leg Curl (Machine)", "legs"),
         ("Plank", "core"),
         ("Walking", "other"),
     ],
