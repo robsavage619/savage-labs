@@ -121,7 +121,7 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
     if (
         "tricep" in n
         or "pushdown" in n
-        or ("dip" in n and "machine" in n)
+        or "dip" in n   # bench dip, machine dip, ring dip, etc.
         or ("overhead" in n and "extension" in n)
         or "skull" in n
     ):
@@ -153,6 +153,8 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         or "iron cross" in n
         or "band pullapart" in n
         or "clamshell" in n
+        or "scapular" in n      # scapular retraction, scapular squeeze
+        or "shoulder squeeze" in n
     ):
         return "rear_delts", ["traps"]
     if "shrug" in n:
@@ -187,10 +189,14 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         or "sit-up" in n
         or "twist" in n
         or "leg raise" in n
+        or "knee raise" in n
+        or "leg pull-in" in n
+        or "leg pull in" in n
         or "wood chop" in n
         or "side bend" in n
         or "scissor" in n
         or "flutter kick" in n
+        or "mountain climber" in n
         or "medicine ball slam" in n
         or "med ball slam" in n
         or "landmine rotation" in n
@@ -198,6 +204,16 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         or "cable rotation" in n
     ):
         return "abs", []
+
+    # ── Hip flexor / glute band work ──────────────────────────────────────────
+    if "hip flexor" in n:
+        return "quads", []  # hip flexors assist quads; no dedicated canonical key
+    if "fire hydrant" in n:
+        return "glutes", ["adductors"]
+
+    # ── High pull (band/cable) → traps + upper back ───────────────────────────
+    if "high pull" in n:
+        return "traps", ["rear_delts"]
 
     return None
 

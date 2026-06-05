@@ -16,7 +16,6 @@ parameter overrides a population default (audit trail).
 """
 
 import logging
-from datetime import date
 
 import duckdb
 
@@ -58,8 +57,10 @@ def fit_volume_landmarks(
     rows = conn.execute(
         """
         SELECT
-            SUM(e.work_sets)    AS weekly_sets,
-            AVG(e.perf_score)   AS mean_perf
+            SUM(e.work_sets)                            AS weekly_sets,
+            -- Set-weighted perf: high-volume exercises dominate the signal,
+            -- same logic as _muscle_performance (panel review C1).
+            SUM(e.perf_score * e.work_sets) / SUM(e.work_sets) AS weighted_perf
         FROM exercise_weekly_e1rm e
         JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
         WHERE m.primary_muscle = ?
@@ -95,7 +96,7 @@ def fit_volume_landmarks(
         return None
 
     # Productive weeks: average perf ≥ 3.0 (not regressing on average).
-    productive_vols = sorted(v for v, p in zip(volumes, perfs) if p >= 3.0)
+    productive_vols = sorted(v for v, p in zip(volumes, perfs, strict=True) if p >= 3.0)
 
     if len(productive_vols) < 4:  # need at least 4 to get meaningful percentiles
         log.debug(
