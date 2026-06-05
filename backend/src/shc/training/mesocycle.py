@@ -8,7 +8,8 @@ Public API:
     volume_targets(conn, meso_id)    → dict[str, VolumeTarget]
     weekly_e1rm(conn, exercise, n)   → list[WeeklyE1RM]
     score_exercise(conn, exercise)   → ProgressionScore
-    compute_all_scores(conn)         → None  (writes to exercise_weekly_e1rm)
+    backfill_weekly_e1rm(conn)       → None  (upsert history into exercise_weekly_e1rm)
+    compute_all_scores(conn)         → None  (backfill + score this week)
     mesocycle_context_block(conn)    → str   (markdown injected into planner)
     advance_mesocycle(conn, trigger) → MesocycleState
 """
@@ -265,11 +266,40 @@ def score_exercise(
     )
 
 
+def backfill_weekly_e1rm(conn: duckdb.DuckDBPyConnection) -> None:
+    """Populate e1rm_kg + work_sets for every (exercise, ISO-week) from history.
+
+    Does NOT overwrite perf_score/trend so previously computed scores are
+    preserved.  Safe to call repeatedly — uses ON CONFLICT DO UPDATE only for
+    the raw e1RM fields.
+    """
+    rows = conn.execute(
+        f"""
+        INSERT INTO exercise_weekly_e1rm
+            (exercise, week_start, e1rm_kg, work_sets, perf_score, trend, computed_at)
+        SELECT exercise,
+               date_trunc('week', started_at)::DATE AS week_start,
+               MAX({_CAPPED_E1RM})                  AS e1rm_kg,
+               COUNT(*)                             AS work_sets,
+               NULL, NULL, now()
+        FROM workout_sets_dedup
+        WHERE weight_kg > 0 AND reps > 0
+        GROUP BY exercise, date_trunc('week', started_at)::DATE
+        ON CONFLICT (exercise, week_start) DO UPDATE SET
+            e1rm_kg    = excluded.e1rm_kg,
+            work_sets  = excluded.work_sets,
+            computed_at = now()
+        """
+    ).rowcount
+    log.info("backfill_weekly_e1rm: upserted %d (exercise, week) rows", rows)
+
+
 def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
     """Recompute e1RM + performance scores for every exercise trained this week.
 
     Writes results into exercise_weekly_e1rm (upsert).
     """
+    backfill_weekly_e1rm(conn)
     this_week = _iso_week_start(date.today())
 
     exercises = [
