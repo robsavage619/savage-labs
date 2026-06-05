@@ -72,6 +72,7 @@ class MusclePrescription:
     action: str  # 'add' | 'hold' | 'cut' | 'deload'
     reason: str
     emphasis: bool = False
+    landmark_source: str = "population"  # 'population' | 'personal' | 'personal_floored'
 
 
 @dataclass
@@ -192,6 +193,7 @@ def _decide(
     soreness: float,
     conditioning_acwr: float | None,
     deload: bool = False,
+    landmark_source: str = "population",
 ) -> MusclePrescription:
     """Apply the RP set-progression tree + emphasis + interference for one muscle.
 
@@ -202,6 +204,15 @@ def _decide(
     MEV in a single deliberate drop (the step clamp does not apply to a deload).
     """
     emphasis = muscle in EMPHASIS_MUSCLES
+
+    # Append landmark source to reason for auditing — tells the planner (and Rob)
+    # whether the MEV/MRV boundaries come from personal data or RP population norms.
+    def _src_tag() -> str:
+        if landmark_source == "personal":
+            return f" [personal MEV={mev}/MRV={mrv}]"
+        if landmark_source == "personal_floored":
+            return f" [personal MEV={mev}, MRV={mrv}↑ floored — may be undertrained]"
+        return ""
 
     if deload:
         cur0 = round(current)
@@ -214,6 +225,7 @@ def _decide(
             action="deload",
             reason="deload week — volume ~halved toward MEV to shed accumulated fatigue",
             emphasis=emphasis,
+            landmark_source=landmark_source,
         )
 
     # Emphasis muscles floor at the MEV–MAV midpoint (keeps an accumulation
@@ -232,7 +244,9 @@ def _decide(
         # (more productive minimum volume is the remedy); if above, cut toward it.
         desired = max(mev, cur - 2)
         if cur < mev:
-            reason = f"regressing (perf {perf}/5) but below MEV → build to minimum productive volume"
+            reason = (
+                f"regressing (perf {perf}/5) but below MEV → build to minimum productive volume"
+            )
         else:
             reason = f"regressing (perf {perf}/5) → cut toward MEV"
     elif under_recovered:
@@ -272,8 +286,9 @@ def _decide(
         target_sets=target,
         delta=delta,
         action=action,
-        reason=reason,
+        reason=reason + _src_tag(),
         emphasis=emphasis,
+        landmark_source=landmark_source,
     )
 
 
@@ -330,6 +345,7 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
 
     muscle_rx: list[MusclePrescription] = []
     for r in targeted:
+        vt = targets.get(r.muscle)
         muscle_rx.append(
             _decide(
                 muscle=r.muscle,
@@ -341,6 +357,7 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
                 soreness=soreness.get(r.muscle, 0.0),
                 conditioning_acwr=conditioning_acwr,
                 deload=deload["recommended"],
+                landmark_source=vt.source if vt else "population",
             )
         )
     # Emphasis first, then the muscles being grown, then the rest.

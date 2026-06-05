@@ -302,16 +302,22 @@ async def get_self_learning_status() -> dict[str, Any]:
         landmarks = []
         for mg, mev_d, mav_d, mrv_d in global_rows:
             p = personal_map.get(mg)
+            fit_mrv = p[3] if p else mrv_d
+            # "undertrained" when personal MRV hasn't reached population MAV —
+            # means Rob has only explored the low-volume half of the productive range.
+            undertrained = bool(p and fit_mrv < mav_d)
             landmarks.append(
                 {
                     "muscle": mg,
                     "source": "personal" if p else "population",
                     "mev": p[1] if p else mev_d,
                     "mav": p[2] if p else mav_d,
-                    "mrv": p[3] if p else mrv_d,
+                    "mrv": fit_mrv,
                     "population_mev": mev_d,
+                    "population_mav": mav_d,
                     "population_mrv": mrv_d,
                     "fitted_at": str(p[4]) if p else None,
+                    "undertrained": undertrained,
                 }
             )
 

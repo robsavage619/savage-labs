@@ -38,6 +38,7 @@ class VolumeTarget:
     mev: int
     mav: int
     mrv: int
+    source: str = "population"  # 'population' | 'personal' | 'personal_floored'
 
 
 @dataclass
@@ -156,11 +157,24 @@ def volume_targets(
         ORDER BY mesocycle_id ASC
         """
     ).fetchall()
-    targets: dict[str, VolumeTarget] = {}
+    # Build two passes: global defaults first, then personal overrides.
+    defaults: dict[str, VolumeTarget] = {}
+    personal: dict[str, VolumeTarget] = {}
     for mg, mev, mav, mrv, mid in rows:
-        # '' = global defaults; exact meso_id match = scoped override
-        if mid == "" or mid == (meso_id or ""):
-            targets[mg] = VolumeTarget(mg, mev, mav, mrv)
+        if mid == "":
+            defaults[mg] = VolumeTarget(mg, mev, mav, mrv, source="population")
+        elif mid == (meso_id or ""):
+            personal[mg] = VolumeTarget(mg, mev, mav, mrv, source="personal")
+
+    targets: dict[str, VolumeTarget] = dict(defaults)
+    for mg, vt in personal.items():
+        pop = defaults.get(mg)
+        # If the fitted MRV is below 50% of the population MRV, flag as
+        # undertrained — the fit is measuring habit, not physiology.
+        if pop and vt.mrv < pop.mrv * 0.5:
+            targets[mg] = VolumeTarget(mg, vt.mev, vt.mav, vt.mrv, source="personal_floored")
+        else:
+            targets[mg] = vt
     return targets
 
 
@@ -546,6 +560,7 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     n_total = sum(1 for r in report if r.mev is not None)
     try:
         from shc.training.self_learning import read_acwr_bands
+
         acwr_src = "personal (fitted)" if read_acwr_bands(conn) else "population defaults"
     except Exception:
         acwr_src = "unknown"

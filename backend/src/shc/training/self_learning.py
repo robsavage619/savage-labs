@@ -101,7 +101,8 @@ def fit_volume_landmarks(
     if len(productive_vols) < 4:  # need at least 4 to get meaningful percentiles
         log.debug(
             "fit_volume_landmarks(%s): only %d productive weeks — skip",
-            muscle, len(productive_vols),
+            muscle,
+            len(productive_vols),
         )
         return None
 
@@ -136,12 +137,36 @@ def persist_volume_landmarks(
         if result is None:
             continue
 
-        # Read the population default to log the delta.
+        # Read the population default to log the delta and apply MRV floor.
         default = conn.execute(
             "SELECT mev_sets, mav_sets, mrv_sets FROM muscle_volume_targets "
             "WHERE muscle_group = ? AND mesocycle_id = ''",
             [muscle],
         ).fetchone()
+
+        mrv = result["mrv"]
+        floored = False
+        if default:
+            pop_mrv = default[2]
+            mrv_floor = round(pop_mrv * 0.5)
+            if mrv < mrv_floor:
+                # Personal MRV is below 50% of population MRV → this muscle is
+                # chronically undertrained, not physiologically limited. Floor the
+                # MRV so the engine can push toward the real productive zone.
+                log.warning(
+                    "UNDERTRAINED %s: fitted MRV=%d is only %.0f%% of population MRV=%d "
+                    "— flooring to %d to allow exploration",
+                    muscle,
+                    mrv,
+                    mrv / pop_mrv * 100,
+                    pop_mrv,
+                    mrv_floor,
+                )
+                mrv = mrv_floor
+                floored = True
+
+        # Recompute MAV if MRV was floored.
+        mav = (result["mev"] + mrv) // 2
 
         conn.execute(
             """
@@ -154,29 +179,31 @@ def persist_volume_landmarks(
                 mrv_sets   = excluded.mrv_sets,
                 updated_at = now()
             """,
-            [muscle, result["mev"], result["mav"], result["mrv"], meso_id],
+            [muscle, result["mev"], mav, mrv, meso_id],
         )
         stored += 1
 
         if default:
+            floor_note = " [MRV FLOORED — likely undertrained]" if floored else ""
             log.info(
-                "personal landmark %s: MEV %d→%d  MAV %d→%d  MRV %d→%d  (meso %s)",
+                "personal landmark %s: MEV %d→%d  MAV %d→%d  MRV %d→%d%s  (meso %s)",
                 muscle,
                 default[0],
                 result["mev"],
                 default[1],
-                result["mav"],
+                mav,
                 default[2],
-                result["mrv"],
+                mrv,
+                floor_note,
                 meso_id[:8],
             )
         else:
             log.info(
-                "personal landmark %s: MEV=%d MAV=%d MRV=%d (no population default to compare)",
+                "personal landmark %s: MEV=%d MAV=%d MRV=%d (no population default)",
                 muscle,
                 result["mev"],
-                result["mav"],
-                result["mrv"],
+                mav,
+                mrv,
             )
 
     log.info(
