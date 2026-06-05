@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
+from shc.training.self_learning import read_acwr_bands
 from shc.training.mesocycle import (
     advance_mesocycle,
     compute_all_scores,
@@ -252,6 +253,97 @@ async def post_recompute() -> dict[str, Any]:
     async with write_ctx() as conn:
         compute_all_scores(conn)
     return {"ok": True, "message": "Scores recomputed for current week"}
+
+
+@router.get("/training/self-learning/status")
+async def get_self_learning_status() -> dict[str, Any]:
+    """Show which personal parameters are active vs population defaults.
+
+    Surfaces fitted ACWR bands, per-muscle landmark overrides, scored-weeks
+    coverage, and when the last fit ran — making the self-learning engine
+    auditable without reading the DB directly.
+    """
+    from shc.metrics import (
+        COND_ACWR_FORBID_LEGS,
+        RES_ACWR_LOW,
+        RES_ACWR_MOD,
+        RES_ACWR_REST,
+    )
+
+    conn = get_read_conn()
+    try:
+        meso = ensure_active_mesocycle(conn)
+        meso_id = meso.id
+
+        # ACWR bands: personal vs population defaults.
+        personal_bands = read_acwr_bands(conn)
+        population_bands = {
+            "RES_ACWR_REST": RES_ACWR_REST,
+            "RES_ACWR_LOW": RES_ACWR_LOW,
+            "RES_ACWR_MOD": RES_ACWR_MOD,
+            "COND_ACWR_FORBID_LEGS": COND_ACWR_FORBID_LEGS,
+        }
+        acwr_meta_row = conn.execute(
+            "SELECT MIN(fitted_at), MAX(sample_weeks) FROM personal_acwr_bands"
+        ).fetchone()
+
+        # Volume landmarks: personal overrides vs global defaults.
+        global_rows = conn.execute(
+            "SELECT muscle_group, mev_sets, mav_sets, mrv_sets "
+            "FROM muscle_volume_targets WHERE mesocycle_id = '' ORDER BY muscle_group"
+        ).fetchall()
+        personal_rows = conn.execute(
+            "SELECT muscle_group, mev_sets, mav_sets, mrv_sets, updated_at "
+            "FROM muscle_volume_targets WHERE mesocycle_id = ? ORDER BY muscle_group",
+            [meso_id],
+        ).fetchall()
+        personal_map = {r[0]: r for r in personal_rows}
+
+        landmarks = []
+        for mg, mev_d, mav_d, mrv_d in global_rows:
+            p = personal_map.get(mg)
+            landmarks.append(
+                {
+                    "muscle": mg,
+                    "source": "personal" if p else "population",
+                    "mev": p[1] if p else mev_d,
+                    "mav": p[2] if p else mav_d,
+                    "mrv": p[3] if p else mrv_d,
+                    "population_mev": mev_d,
+                    "population_mrv": mrv_d,
+                    "fitted_at": str(p[4]) if p else None,
+                }
+            )
+
+        # Per-muscle scored-week coverage.
+        coverage_rows = conn.execute(
+            """
+            SELECT m.primary_muscle,
+                   COUNT(*) AS scored_weeks,
+                   MAX(e.week_start) AS latest_week
+            FROM exercise_weekly_e1rm e
+            JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
+            WHERE e.perf_score IS NOT NULL
+            GROUP BY m.primary_muscle
+            ORDER BY m.primary_muscle
+            """
+        ).fetchall()
+        coverage = {r[0]: {"scored_weeks": r[1], "latest_week": str(r[2])} for r in coverage_rows}
+
+        return {
+            "acwr_bands": {
+                "source": "personal" if personal_bands else "population",
+                "active": personal_bands or population_bands,
+                "population": population_bands,
+                "fitted_at": str(acwr_meta_row[0]) if acwr_meta_row and acwr_meta_row[0] else None,
+                "sample_weeks": acwr_meta_row[1] if acwr_meta_row else None,
+            },
+            "volume_landmarks": landmarks,
+            "coverage": coverage,
+            "mesocycle_id": meso_id,
+        }
+    finally:
+        conn.close()
 
 
 @router.get("/training/context")

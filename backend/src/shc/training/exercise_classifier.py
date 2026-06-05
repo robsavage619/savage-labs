@@ -94,6 +94,18 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
     ):
         return "quads", ["glutes", "hamstrings"]
 
+    # ── Lower back / back extension ──────────────────────────────────────────
+    if "back extension" in n or "hyperextension" in n or "bird dog" in n:
+        return "lower_back", []
+
+    # ── Pullover (lats primary, chest secondary) ──────────────────────────────
+    if "pullover" in n:
+        return "lats", ["chest"]
+
+    # ── Glute / posterior-chain hybrids ──────────────────────────────────────
+    if "kettlebell swing" in n or "kb swing" in n:
+        return "glutes", ["hamstrings", "lower_back"]
+
     # ── Arms ─────────────────────────────────────────────────────────────────
     if "reverse curl" in n:
         return "forearms", ["biceps"]
@@ -128,11 +140,20 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         return "chest", ["front_delts", "triceps"]
 
     # ── Shoulders ────────────────────────────────────────────────────────────
-    if "lateral raise" in n or "side raise" in n:
+    if "lateral raise" in n or "side raise" in n or "shoulder raise" in n:
         return "side_delts", []
     if "front raise" in n:
         return "front_delts", []
-    if "rear delt" in n or "reverse fly" in n or "face pull" in n:
+    if (
+        "rear delt" in n
+        or "reverse fly" in n
+        or "face pull" in n
+        or "internal rotation" in n
+        or "external rotation" in n
+        or "iron cross" in n
+        or "band pullapart" in n
+        or "clamshell" in n
+    ):
         return "rear_delts", ["traps"]
     if "shrug" in n:
         return "traps", []
@@ -145,6 +166,7 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         or "pulldown" in n
         or "pull-up" in n
         or "pullup" in n
+        or "pull down" in n
         or "chin" in n
         or "high row" in n
         or "iso row" in n
@@ -165,6 +187,15 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         or "sit-up" in n
         or "twist" in n
         or "leg raise" in n
+        or "wood chop" in n
+        or "side bend" in n
+        or "scissor" in n
+        or "flutter kick" in n
+        or "medicine ball slam" in n
+        or "med ball slam" in n
+        or "landmine rotation" in n
+        or "core rotation" in n
+        or "cable rotation" in n
     ):
         return "abs", []
 
