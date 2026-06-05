@@ -427,6 +427,10 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
     backfill_exercise_map(conn)
     backfill_weekly_e1rm(conn)
     backfill_perf_scores(conn)
+    # Retroactively apply tonnage blend to stalled rows that predate the tonnage column.
+    from shc.training.self_learning import regrade_stalled_with_tonnage_blend
+
+    regrade_stalled_with_tonnage_blend(conn)
     this_week = _iso_week_start(date.today())
 
     exercises = [
@@ -565,6 +569,28 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     except Exception:
         acwr_src = "unknown"
 
+    # Signal quality for the confidence column in the volume table.
+    from shc.training.self_learning import compute_all_muscle_signal_quality
+
+    sq = compute_all_muscle_signal_quality(conn)
+
+    # Rebuild vol_rows with confidence column.
+    vol_rows_conf: list[str] = []
+    for r in report:
+        if r.mev is None:
+            mav_str, landmarks = "—", "untargeted"
+        else:
+            fitted = "*" if r.muscle in personal_muscles else ""
+            mav_str = str(r.mav)
+            landmarks = f"{r.mev}/{r.mrv}{fitted}"
+        muscle_sq = sq.get(r.muscle, {})
+        conf = muscle_sq.get("confidence", 0.0)
+        conf_str = f"{conf:.0%}" if conf else "—"
+        vol_rows_conf.append(
+            f"| {r.muscle:<12} | {r.actual_sets:>6.1f} | {mav_str:>6} | "
+            f"{landmarks:>9} | {r.status} | {conf_str} |"
+        )
+
     lines = [
         "## MESOCYCLE POSITION",
         f"- Block status: {block_label}",
@@ -574,9 +600,9 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         f"ACWR gates from {acwr_src}",
         "",
         "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 0.5; * = fitted to Rob's data)",
-        "| Muscle | Actual | MAV | MEV/MRV | Status |",
-        "|--------------|--------|--------|----------|---------|",
-        *vol_rows,
+        "| Muscle | Actual | MAV | MEV/MRV | Status | Confidence |",
+        "|--------------|--------|--------|----------|---------|------------|",
+        *vol_rows_conf,
         "",
     ]
     if prog_rows:

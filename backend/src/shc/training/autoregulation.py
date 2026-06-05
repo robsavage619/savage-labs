@@ -73,6 +73,8 @@ class MusclePrescription:
     reason: str
     emphasis: bool = False
     landmark_source: str = "population"  # 'population' | 'personal' | 'personal_floored'
+    confidence: float = 0.0  # 0–1; how much to trust this call
+    scored_weeks: int = 0  # raw sample size behind the confidence estimate
 
 
 @dataclass
@@ -343,23 +345,31 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
     perfs = {r.muscle: _muscle_performance(conn, r.muscle) for r in targeted}
     deload = deload_check(perfs, targeted)
 
+    # Confidence + signal quality — tells planner and Rob how much to trust each call.
+    from shc.training.self_learning import compute_all_muscle_signal_quality
+
+    signal_quality = compute_all_muscle_signal_quality(conn)
+
     muscle_rx: list[MusclePrescription] = []
     for r in targeted:
         vt = targets.get(r.muscle)
-        muscle_rx.append(
-            _decide(
-                muscle=r.muscle,
-                current=r.actual_sets,
-                mev=r.mev,  # type: ignore[arg-type]
-                mav=r.mav,  # type: ignore[arg-type]
-                mrv=r.mrv,  # type: ignore[arg-type]
-                perf=perfs[r.muscle],
-                soreness=soreness.get(r.muscle, 0.0),
-                conditioning_acwr=conditioning_acwr,
-                deload=deload["recommended"],
-                landmark_source=vt.source if vt else "population",
-            )
+        sq = signal_quality.get(r.muscle, {})
+        rx = _decide(
+            muscle=r.muscle,
+            current=r.actual_sets,
+            mev=r.mev,  # type: ignore[arg-type]
+            mav=r.mav,  # type: ignore[arg-type]
+            mrv=r.mrv,  # type: ignore[arg-type]
+            perf=perfs[r.muscle],
+            soreness=soreness.get(r.muscle, 0.0),
+            conditioning_acwr=conditioning_acwr,
+            deload=deload["recommended"],
+            landmark_source=vt.source if vt else "population",
         )
+        rx.confidence = float(sq.get("confidence", 0.0))
+        rx.scored_weeks = int(sq.get("scored_weeks", 0))
+        muscle_rx.append(rx)
+
     # Emphasis first, then the muscles being grown, then the rest.
     muscle_rx.sort(key=lambda m: (not m.emphasis, m.action != "add", m.muscle))
 

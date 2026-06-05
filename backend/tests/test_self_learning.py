@@ -8,11 +8,14 @@ import pytest
 
 from shc.training.self_learning import (
     _percentile,
+    compute_all_muscle_signal_quality,
+    compute_muscle_signal_quality,
     fit_acwr_bands,
     fit_volume_landmarks,
     persist_acwr_bands,
     persist_volume_landmarks,
     read_acwr_bands,
+    regrade_stalled_with_tonnage_blend,
 )
 
 
@@ -152,6 +155,108 @@ def test_read_acwr_bands_partial_returns_none(conn) -> None:
         " VALUES ('resistance', 'rest', 2.0, 10)"
     )
     assert read_acwr_bands(conn) is None
+
+
+# ── persist_volume_landmarks ─────────────────────────────────────────────────
+
+
+# ── regrade_stalled_with_tonnage_blend ───────────────────────────────────────
+
+
+def test_regrade_upgrades_stalled_row_with_rising_tonnage(conn) -> None:
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=10)
+    # Seed 7 consecutive weeks with rising tonnage but flat e1RM → perf should be 3.
+    # Then verify regrade upgrades the 7th week to 4.
+    for i in range(7):
+        tonnage = 1000.0 * (1 + i * 0.02)  # rising ~2%/week
+        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, 5, perf=3, tonnage=tonnage)
+
+    upgraded = regrade_stalled_with_tonnage_blend(conn)
+    assert upgraded > 0, "should upgrade at least one stalled row with rising tonnage"
+
+    # All upgraded rows should now have perf=4.
+    rows = conn.execute(
+        "SELECT week_start, perf_score FROM exercise_weekly_e1rm "
+        "WHERE exercise='Curl' ORDER BY week_start"
+    ).fetchall()
+    scores = [r[1] for r in rows]
+    assert 4 in scores, "at least one row should be upgraded to perf=4"
+    assert 3 not in scores or all(
+        s != 3 for s in scores[3:]
+    ), "later rows with rising tonnage should be upgraded"
+
+
+def test_regrade_does_not_touch_flat_tonnage(conn) -> None:
+    _seed_muscle_map(conn, "Press", "chest")
+    base = _monday(date.today()) - timedelta(weeks=8)
+    # Flat tonnage — should NOT be upgraded.
+    for i in range(7):
+        _seed_e1rm(conn, "Press", base + timedelta(weeks=i), 80.0, 5, perf=3, tonnage=1000.0)
+
+    upgraded = regrade_stalled_with_tonnage_blend(conn)
+    assert upgraded == 0, "flat tonnage should not trigger upgrade"
+
+
+def test_regrade_does_not_touch_non_stalled_rows(conn) -> None:
+    _seed_muscle_map(conn, "Row", "lats")
+    base = _monday(date.today()) - timedelta(weeks=8)
+    # Already progressing (perf=4) with rising tonnage — must not be touched.
+    for i in range(7):
+        _seed_e1rm(conn, "Row", base + timedelta(weeks=i), 100.0, 5, perf=4,
+                   tonnage=2000.0 * (1 + i * 0.03))
+
+    upgraded = regrade_stalled_with_tonnage_blend(conn)
+    assert upgraded == 0, "progressing rows must not be re-graded"
+
+
+# ── compute_muscle_signal_quality ─────────────────────────────────────────────
+
+
+def test_signal_quality_empty_returns_zero(conn) -> None:
+    result = compute_muscle_signal_quality(conn, "biceps")
+    assert result["confidence"] == 0.0
+    assert result["scored_weeks"] == 0
+
+
+def test_signal_quality_stable_signal_gives_high_stability(conn) -> None:
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=40)
+    # 35 weeks of perfectly consistent perf=4 (stable signal).
+    for i in range(35):
+        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, 5, perf=4)
+
+    result = compute_muscle_signal_quality(conn, "biceps")
+    assert result["signal_stability"] >= 0.9, "perfectly stable signal should score high"
+    assert result["scored_weeks"] == 35
+    assert result["confidence"] >= 0.55  # 35 weeks → size_factor=0.65, stability≥0.9 → conf≥0.58
+
+
+def test_signal_quality_noisy_signal_gives_low_stability(conn) -> None:
+    _seed_muscle_map(conn, "Squat", "quads")
+    base = _monday(date.today()) - timedelta(weeks=40)
+    # Alternating 1/5 — maximally noisy.
+    for i in range(35):
+        _seed_e1rm(conn, "Squat", base + timedelta(weeks=i), 100.0, 5,
+                   perf=5 if i % 2 == 0 else 1)
+
+    result = compute_muscle_signal_quality(conn, "quads")
+    assert result["signal_stability"] < 0.2, "alternating signal should score very low"
+
+
+def test_compute_all_muscle_signal_quality_returns_all_muscles(conn) -> None:
+    _seed_muscle_map(conn, "Curl", "biceps")
+    _seed_muscle_map(conn, "Press", "chest")
+    base = _monday(date.today()) - timedelta(weeks=5)
+    for i in range(4):
+        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, 5, perf=4)
+        _seed_e1rm(conn, "Press", base + timedelta(weeks=i), 80.0, 5, perf=3)
+
+    result = compute_all_muscle_signal_quality(conn)
+    assert "biceps" in result
+    assert "chest" in result
+    assert result["biceps"]["scored_weeks"] == 4
+    assert result["chest"]["scored_weeks"] == 4
 
 
 # ── persist_volume_landmarks ─────────────────────────────────────────────────

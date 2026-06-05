@@ -387,3 +387,161 @@ def fit_all(conn: duckdb.DuckDBPyConnection, meso_id: str) -> None:
         landmarks_stored,
         "stored" if bands_stored else "skipped (insufficient data)",
     )
+
+
+# ── Retroactive tonnage blend ─────────────────────────────────────────────────
+
+
+def regrade_stalled_with_tonnage_blend(conn: duckdb.DuckDBPyConnection) -> int:
+    """Retroactively upgrade perf_score=3 rows where prior tonnage trend warrants it.
+
+    The tonnage blend in score_exercise upgrades "stalled" e1RM to "progressing"
+    when weekly tonnage (weight×reps) is rising ≥0.5%/week — a hypertrophy signal
+    the e1RM alone misses.  The original backfill pre-dated the tonnage column, so
+    ~1,100 stalled rows from backfill_perf_scores are missing this upgrade.
+
+    Only modifies rows where: perf_score=3 AND the prior 6-week tonnage series
+    has ≥3 values AND _trend_pct_per_week(tonnage_series) ≥ 0.5.
+    Does NOT touch perf_score ≠ 3 rows (preserves progressing/regressing).
+    """
+    from shc.training.mesocycle import _trend_pct_per_week
+
+    exercises = [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT DISTINCT exercise
+            FROM exercise_weekly_e1rm
+            WHERE perf_score = 3 AND weekly_tonnage_kg IS NOT NULL
+            ORDER BY exercise
+            """
+        ).fetchall()
+    ]
+
+    upgraded = 0
+    for ex in exercises:
+        rows = conn.execute(
+            """
+            SELECT week_start, perf_score, weekly_tonnage_kg
+            FROM exercise_weekly_e1rm
+            WHERE exercise = ?
+            ORDER BY week_start
+            """,
+            [ex],
+        ).fetchall()
+
+        weeks = [r[0] for r in rows]
+        scores = [r[1] for r in rows]
+        tonnages = [float(r[2]) if r[2] is not None else None for r in rows]
+
+        for i in range(len(rows)):
+            if scores[i] != 3:
+                continue  # only re-evaluate stalled rows
+            prior_t = [t for t in tonnages[max(0, i - 6) : i] if t is not None]
+            if len(prior_t) < 3:
+                continue
+            if _trend_pct_per_week(prior_t) >= 0.5:
+                conn.execute(
+                    "UPDATE exercise_weekly_e1rm SET perf_score = 4, trend = 'progressing' "
+                    "WHERE exercise = ? AND week_start = ?",
+                    [ex, weeks[i].isoformat()],
+                )
+                upgraded += 1
+
+    log.info(
+        "regrade_stalled_with_tonnage_blend: upgraded %d/%d stalled rows to 'progressing'",
+        upgraded,
+        sum(
+            1
+            for r in conn.execute(
+                "SELECT COUNT(*) FROM exercise_weekly_e1rm WHERE perf_score IS NOT NULL"
+            ).fetchall()
+        ),
+    )
+    return upgraded
+
+
+# ── Confidence + signal quality ───────────────────────────────────────────────
+
+
+def compute_muscle_signal_quality(
+    conn: duckdb.DuckDBPyConnection,
+    muscle: str,
+) -> dict[str, float | int]:
+    """Compute confidence and signal stability for a muscle's prescription.
+
+    Returns:
+        scored_weeks: int — total weeks with a perf_score for this muscle
+        signal_stability: float [0–1] — fraction of consecutive week-pairs where
+            the trend direction doesn't dramatically flip (|perf_W − perf_W+1| ≤ 1).
+            High stability → the trend model is a reliable predictor.
+        confidence: float [0–1] — combined metric used to weight prescriptions.
+            Derived from scored_weeks (sample size) × signal_stability (noise level).
+    """
+    rows = conn.execute(
+        """
+        SELECT e.week_start, AVG(e.perf_score) AS muscle_perf
+        FROM exercise_weekly_e1rm e
+        JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
+        WHERE m.primary_muscle = ?
+          AND e.perf_score IS NOT NULL
+        GROUP BY e.week_start
+        ORDER BY e.week_start
+        """,
+        [muscle],
+    ).fetchall()
+
+    n = len(rows)
+    if n == 0:
+        return {"scored_weeks": 0, "signal_stability": 0.0, "confidence": 0.0}
+
+    # Signal stability: consecutive pairs where perf doesn't swing > 1 point.
+    perfs = [float(r[1]) for r in rows]
+    if len(perfs) >= 2:
+        stable = sum(1 for a, b in zip(perfs[:-1], perfs[1:], strict=True) if abs(a - b) <= 1.0)
+        stability = stable / (len(perfs) - 1)
+    else:
+        stability = 0.5  # single week — no basis to judge
+
+    # Confidence from sample size — asymptotic approach to 0.95.
+    # < 10 weeks: 0.30  |  10–29: 0.50  |  30–59: 0.65  |  60–119: 0.75
+    # 120–299: 0.85  |  300+: 0.90  (biological noise caps ~0.90)
+    if n < 10:
+        size_factor = 0.30
+    elif n < 30:
+        size_factor = 0.50
+    elif n < 60:
+        size_factor = 0.65
+    elif n < 120:
+        size_factor = 0.75
+    elif n < 300:
+        size_factor = 0.85
+    else:
+        size_factor = 0.90
+
+    confidence = round(size_factor * stability, 2)
+
+    return {
+        "scored_weeks": n,
+        "signal_stability": round(stability, 2),
+        "confidence": confidence,
+    }
+
+
+def compute_all_muscle_signal_quality(
+    conn: duckdb.DuckDBPyConnection,
+) -> dict[str, dict[str, float | int]]:
+    """Return signal quality metrics for every muscle that has scored data."""
+    muscles = [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT DISTINCT m.primary_muscle
+            FROM exercise_weekly_e1rm e
+            JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
+            WHERE e.perf_score IS NOT NULL
+            ORDER BY m.primary_muscle
+            """
+        ).fetchall()
+    ]
+    return {m: compute_muscle_signal_quality(conn, m) for m in muscles}

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
-from shc.training.self_learning import read_acwr_bands
+from shc.training.self_learning import compute_all_muscle_signal_quality, read_acwr_bands
 from shc.training.mesocycle import (
     advance_mesocycle,
     compute_all_scores,
@@ -321,20 +321,15 @@ async def get_self_learning_status() -> dict[str, Any]:
                 }
             )
 
-        # Per-muscle scored-week coverage.
-        coverage_rows = conn.execute(
-            """
-            SELECT m.primary_muscle,
-                   COUNT(*) AS scored_weeks,
-                   MAX(e.week_start) AS latest_week
-            FROM exercise_weekly_e1rm e
-            JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
-            WHERE e.perf_score IS NOT NULL
-            GROUP BY m.primary_muscle
-            ORDER BY m.primary_muscle
-            """
-        ).fetchall()
-        coverage = {r[0]: {"scored_weeks": r[1], "latest_week": str(r[2])} for r in coverage_rows}
+        # Per-muscle signal quality (confidence + stability).
+        signal_quality = compute_all_muscle_signal_quality(conn)
+
+        # Merge coverage into landmarks for a single per-muscle object.
+        for lm in landmarks:
+            sq = signal_quality.get(lm["muscle"], {})
+            lm["scored_weeks"] = int(sq.get("scored_weeks", 0))
+            lm["signal_stability"] = float(sq.get("signal_stability", 0.0))
+            lm["confidence"] = float(sq.get("confidence", 0.0))
 
         return {
             "acwr_bands": {
@@ -345,7 +340,6 @@ async def get_self_learning_status() -> dict[str, Any]:
                 "sample_weeks": acwr_meta_row[1] if acwr_meta_row else None,
             },
             "volume_landmarks": landmarks,
-            "coverage": coverage,
             "mesocycle_id": meso_id,
         }
     finally:
