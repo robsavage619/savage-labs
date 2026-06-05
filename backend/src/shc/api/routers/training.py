@@ -18,7 +18,12 @@ from pydantic import BaseModel
 
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
-from shc.training.self_learning import compute_all_muscle_signal_quality, read_acwr_bands
+from shc.training.self_learning import (
+    calibrate_deload_trigger,
+    prescription_accuracy,
+    read_acwr_bands,
+    read_signal_quality_cache,
+)
 from shc.training.mesocycle import (
     advance_mesocycle,
     compute_all_scores,
@@ -321,15 +326,27 @@ async def get_self_learning_status() -> dict[str, Any]:
                 }
             )
 
-        # Per-muscle signal quality (confidence + stability).
-        signal_quality = compute_all_muscle_signal_quality(conn)
+        # Signal quality from materialized cache.
+        signal_quality = read_signal_quality_cache(conn)
 
-        # Merge coverage into landmarks for a single per-muscle object.
+        # Merge signal quality into landmarks.
         for lm in landmarks:
             sq = signal_quality.get(lm["muscle"], {})
             lm["scored_weeks"] = int(sq.get("scored_weeks", 0))
             lm["signal_stability"] = float(sq.get("signal_stability", 0.0))
             lm["confidence"] = float(sq.get("confidence", 0.0))
+
+        # Prescription accuracy (retroactive backtesting + logged outcomes).
+        accuracy = prescription_accuracy(conn)
+
+        # Deload trigger calibration status.
+        deload_cal = calibrate_deload_trigger(conn)
+
+        # RPE data coverage — explain why RPE-adjusted ACWR isn't active.
+        rpe_row = conn.execute(
+            "SELECT COUNT(*) FILTER (WHERE rpe IS NOT NULL), COUNT(*) FROM workout_sets_dedup"
+        ).fetchone()
+        rpe_pct = round(rpe_row[0] / rpe_row[1] * 100, 1) if rpe_row and rpe_row[1] else 0
 
         return {
             "acwr_bands": {
@@ -338,8 +355,15 @@ async def get_self_learning_status() -> dict[str, Any]:
                 "population": population_bands,
                 "fitted_at": str(acwr_meta_row[0]) if acwr_meta_row and acwr_meta_row[0] else None,
                 "sample_weeks": acwr_meta_row[1] if acwr_meta_row else None,
+                "rpe_adjusted": False,
+                "rpe_adjusted_blocked": (
+                    f"RPE logged on only {rpe_pct}% of sets — "
+                    "need >50% coverage for meaningful RPE-adjusted load signal"
+                ),
             },
             "volume_landmarks": landmarks,
+            "prescription_accuracy": accuracy,
+            "deload_calibration": deload_cal,
             "mesocycle_id": meso_id,
         }
     finally:
@@ -427,6 +451,8 @@ async def get_prescription() -> dict[str, Any]:
             "muscles": [asdict(m) for m in rx.muscles],
             "lift_progressions": rx.lift_progressions,
             "exercise_menu": rx.exercise_menu,
+            "session_split": rx.session_split,
+            "protein_gate": rx.protein_gate,
         }
     finally:
         conn.close()

@@ -287,11 +287,17 @@ def score_exercise(
     increasing volume from being misread as "stalled" (Phase 3 audit finding).
     """
     this_week = as_of if as_of is not None else _iso_week_start(date.today())
-    history = weekly_e1rm(conn, exercise, n_weeks=8, before=this_week)
+    # Fetch up to 14 weeks so the dynamic window can use 12 weeks for deep history.
+    history = weekly_e1rm(conn, exercise, n_weeks=14, before=this_week)
     if len(history) < 3:
         return None
 
-    series = [h.e1rm_kg for h in history[-6:]]
+    # Dynamic OLS window: advanced lifters gain strength slowly; a 6-week
+    # window produces too much noise for exercises progressing <0.5%/week.
+    # Longer window reduces false "stalled" calls for experienced athletes.
+    n = len(history)
+    window = 12 if n >= 24 else (9 if n >= 12 else 6)
+    series = [h.e1rm_kg for h in history[-window:]]
     pct_per_week = _trend_pct_per_week(series)
     perf_score, trend = _score_from_trend(pct_per_week)
 
@@ -485,6 +491,24 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
     # Phase 3: fit personal landmarks + ACWR bands from the now-populated data.
     state = active_mesocycle(conn)
     fit_all(conn, state.id if state else "")
+
+    # Materialize signal quality cache (avoids per-request recomputation).
+    from shc.training.self_learning import (
+        materialize_signal_quality,
+        record_prescription,
+        score_prescription_outcomes,
+    )
+
+    materialize_signal_quality(conn)
+
+    # Score any logged prescriptions from 3 weeks ago.
+    score_prescription_outcomes(conn)
+
+    # Log this week's prescription for future accuracy tracking.
+    from shc.training.autoregulation import weekly_prescription
+
+    rx = weekly_prescription(conn)
+    record_prescription(conn, rx)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

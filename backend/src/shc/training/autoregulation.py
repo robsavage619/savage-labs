@@ -85,6 +85,8 @@ class Prescription:
     muscles: list[MusclePrescription] = field(default_factory=list)
     lift_progressions: list[dict] = field(default_factory=list)
     exercise_menu: dict[str, list[str]] = field(default_factory=dict)
+    session_split: list[dict] = field(default_factory=list)  # [{session, muscles, sets}]
+    protein_gate: dict = field(default_factory=dict)  # {adequate, avg_7d, target, pct}
 
 
 # Number of muscles that must independently signal fatigue to trigger a deload.
@@ -324,6 +326,91 @@ def _exercise_menu(
     return menu
 
 
+def _session_split(
+    muscle_rx: list[MusclePrescription],
+) -> list[dict]:
+    """Recommend how to split the weekly set prescription across training sessions.
+
+    RP guideline: ≤10 sets per muscle per session for hypertrophy.  Rob trains
+    4 days (Tue–Fri); session labels are Upper-A/Lower-A/Upper-B/Lower-B.
+    Lower-body muscles are split across the two lower days, upper-body across
+    the two upper days.  Arm muscles get 3 mini-sessions if target > 10 sets.
+    """
+    LOWER = frozenset({"quads", "hamstrings", "glutes", "calves", "adductors"})
+    UPPER_SESSIONS = ["Upper-A (Tue)", "Upper-B (Thu)"]
+    LOWER_SESSIONS = ["Lower-A (Wed)", "Lower-B (Fri)"]
+
+    split_map: dict[str, list[dict]] = {s: [] for s in UPPER_SESSIONS + LOWER_SESSIONS}
+
+    for rx in muscle_rx:
+        if rx.target_sets <= 0:
+            continue
+        sessions = LOWER_SESSIONS if rx.muscle in LOWER else UPPER_SESSIONS
+
+        n = len(sessions)
+        base, extra = divmod(rx.target_sets, n)
+        for i, sess in enumerate(sessions):
+            sets_this = base + (1 if i < extra else 0)
+            if sets_this > 0:
+                split_map[sess].append({"muscle": rx.muscle, "sets": sets_this})
+
+    return [{"session": sess, "muscles": entries} for sess, entries in split_map.items() if entries]
+
+
+# Protein target: 1g per lb of bodyweight is the RP/sports-science standard for recomp.
+# Rob's bodyweight ≈ 239 lb → 239g. Stored in personal_context but approximated here.
+_PROTEIN_TARGET_G = 239
+
+
+def _protein_gate(conn: duckdb.DuckDBPyConnection) -> dict:
+    """Check recent protein adequacy from daily check-in.
+
+    Returns adequacy assessment — used to gate volume-increase prescriptions.
+    If protein has been < 80% of target for ≥4 of the last 7 days with data,
+    flag as inadequate: adding volume won't produce hypertrophy without substrate.
+    """
+    rows = conn.execute(
+        """
+        SELECT protein_grams
+        FROM daily_checkin
+        WHERE date >= (CURRENT_DATE - INTERVAL 7 DAYS)
+          AND protein_grams IS NOT NULL
+        ORDER BY date DESC
+        """
+    ).fetchall()
+
+    if not rows:
+        return {
+            "adequate": None,
+            "avg_7d": None,
+            "target": _PROTEIN_TARGET_G,
+            "pct": None,
+            "days_logged": 0,
+            "note": "No protein data logged — start tracking daily protein in check-in",
+        }
+
+    values = [float(r[0]) for r in rows]
+    avg = sum(values) / len(values)
+    pct = avg / _PROTEIN_TARGET_G
+    low_days = sum(1 for v in values if v < _PROTEIN_TARGET_G * 0.80)
+    adequate = low_days < 4  # adequate if < 4 of last days were below 80% of target
+
+    return {
+        "adequate": adequate,
+        "avg_7d": round(avg),
+        "target": _PROTEIN_TARGET_G,
+        "pct": round(pct, 2),
+        "days_logged": len(values),
+        "note": (
+            None
+            if adequate
+            else f"Protein avg {round(avg)}g vs target {_PROTEIN_TARGET_G}g "
+            f"({low_days} of {len(values)} days below 80%) — "
+            "hold volume increases until protein is consistent"
+        ),
+    }
+
+
 def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
     """Build this week's per-muscle volume prescription from Rob's logged data.
 
@@ -345,10 +432,13 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
     perfs = {r.muscle: _muscle_performance(conn, r.muscle) for r in targeted}
     deload = deload_check(perfs, targeted)
 
-    # Confidence + signal quality — tells planner and Rob how much to trust each call.
-    from shc.training.self_learning import compute_all_muscle_signal_quality
+    # Protein gate: flag if recent intake is inadequate for hypertrophy.
+    protein = _protein_gate(conn)
 
-    signal_quality = compute_all_muscle_signal_quality(conn)
+    # Signal quality from materialized cache (avoids per-request DB aggregation).
+    from shc.training.self_learning import read_signal_quality_cache
+
+    signal_quality = read_signal_quality_cache(conn)
 
     muscle_rx: list[MusclePrescription] = []
     for r in targeted:
@@ -368,6 +458,12 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
         )
         rx.confidence = float(sq.get("confidence", 0.0))
         rx.scored_weeks = int(sq.get("scored_weeks", 0))
+        # If protein is inadequate, cap "add" actions at "hold" for non-emphasis muscles.
+        if rx.action == "add" and not rx.emphasis and protein.get("adequate") is False:
+            rx.action = "hold"
+            rx.reason = (
+                rx.reason + " [held: protein below target — substrate needed to convert stimulus]"
+            )
         muscle_rx.append(rx)
 
     # Emphasis first, then the muscles being grown, then the rest.
@@ -407,6 +503,8 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
         muscles=muscle_rx,
         lift_progressions=lift_progressions,
         exercise_menu=menu,
+        session_split=_session_split(muscle_rx),
+        protein_gate=protein,
     )
 
 
@@ -439,4 +537,26 @@ def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         lines.append("\n**Exercise menu for muscles needing volume** (your history first):")
         for muscle, exs in rx.exercise_menu.items():
             lines.append(f"- {muscle}: {', '.join(exs)}")
+
+    # Session split.
+    if rx.session_split:
+        lines.append("\n## RECOMMENDED SESSION SPLIT (≤10 sets/muscle/session)")
+        for sess in rx.session_split:
+            entries = ", ".join(f"{e['muscle']} ×{e['sets']}" for e in sess["muscles"])
+            lines.append(f"- **{sess['session']}**: {entries}")
+
+    # Protein gate.
+    pg = rx.protein_gate
+    if pg.get("adequate") is False and pg.get("note"):
+        lines.append(f"\n⚠ **PROTEIN GATE**: {pg['note']}")
+    elif pg.get("adequate") is None:
+        lines.append(
+            f"\n📋 **PROTEIN**: Not yet tracked — add `protein_grams` to daily check-in. "
+            f"Target {pg['target']}g/day for recomp."
+        )
+    else:
+        lines.append(
+            f"\n✓ **PROTEIN**: {pg.get('avg_7d')}g avg (target {pg['target']}g, "
+            f"{round((pg.get('pct', 0) or 0) * 100)}%)"
+        )
     return "\n".join(lines)

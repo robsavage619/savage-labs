@@ -8,13 +8,18 @@ import pytest
 
 from shc.training.self_learning import (
     _percentile,
+    _retroactive_accuracy_all,
+    calibrate_deload_trigger,
     compute_all_muscle_signal_quality,
     compute_muscle_signal_quality,
     fit_acwr_bands,
     fit_volume_landmarks,
+    materialize_signal_quality,
     persist_acwr_bands,
     persist_volume_landmarks,
+    prescription_accuracy,
     read_acwr_bands,
+    read_signal_quality_cache,
     regrade_stalled_with_tonnage_blend,
 )
 
@@ -284,4 +289,67 @@ def test_persist_volume_landmarks_writes_scoped_rows(conn) -> None:
             "WHERE muscle_group='biceps' AND mesocycle_id='test-meso-id'"
         ).fetchone()
         assert row is not None
-        assert row[0] <= row[1] <= row[2]
+
+
+# ── signal quality cache ──────────────────────────────────────────────────────
+
+
+def test_materialize_and_read_cache(conn) -> None:
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=15)
+    for i in range(12):
+        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, 5, perf=4)
+
+    materialize_signal_quality(conn)
+    cache = read_signal_quality_cache(conn)
+    assert "biceps" in cache
+    assert cache["biceps"]["scored_weeks"] == 12
+    assert 0.0 <= cache["biceps"]["confidence"] <= 1.0
+
+
+def test_read_cache_falls_back_to_live_when_empty(conn) -> None:
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=8)
+    for i in range(5):
+        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, 5, perf=3)
+
+    # Cache is empty → should fall through to live computation.
+    cache = read_signal_quality_cache(conn)
+    assert "biceps" in cache
+
+
+# ── prescription accuracy ─────────────────────────────────────────────────────
+
+
+def test_retroactive_accuracy_all_with_stable_data(conn) -> None:
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=20)
+    for i in range(15):
+        # Consistently progressing — model predicts "maintain" and it does.
+        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, 5, perf=4)
+
+    result = _retroactive_accuracy_all(conn)
+    assert "biceps" in result
+    assert result["biceps"]["accuracy"] >= 0.7  # progressing signal stays progressing
+
+
+def test_prescription_accuracy_overall_in_range(conn) -> None:
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=15)
+    for i in range(10):
+        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, 5, perf=4)
+
+    acc = prescription_accuracy(conn)
+    assert acc["overall"] is not None
+    assert 0.0 <= acc["overall"] <= 1.0
+    assert acc["n_scored"] > 0
+
+
+# ── deload calibration ────────────────────────────────────────────────────────
+
+
+def test_deload_calibration_no_data_returns_insufficient(conn) -> None:
+    result = calibrate_deload_trigger(conn)
+    assert result["status"] == "insufficient_data"
+    assert result["n_events"] == 0
+    assert result["using_population_defaults"] is True

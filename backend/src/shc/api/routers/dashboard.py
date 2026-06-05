@@ -79,7 +79,9 @@ async def recovery_today() -> dict:
         "skin_temp_baseline_28d": round(base, 2) if base else None,
         # °F delta (×9/5, no offset for a difference) — matches DailyState and
         # the project's imperial-units invariant.
-        "skin_temp_delta": round((float(row[4]) - base) * 9 / 5, 2) if (row[4] is not None and base) else None,
+        "skin_temp_delta": round((float(row[4]) - base) * 9 / 5, 2)
+        if (row[4] is not None and base)
+        else None,
     }
 
 
@@ -220,11 +222,12 @@ async def state_today() -> dict:
 
 # ── Daily check-in (β-blocker, soreness, body weight, illness/travel flags) ──
 
+
 class CheckinSubmission(BaseModel):
-    date: str | None = None                     # ISO date override for backfilling past days
+    date: str | None = None  # ISO date override for backfilling past days
     propranolol_taken: bool | None = None
     body_weight_kg: float | None = None
-    soreness_overall: int | None = None         # 1-10
+    soreness_overall: int | None = None  # 1-10
     sleep_quality_1_10: int | None = None
     energy_1_10: int | None = None
     stress_1_10: int | None = None
@@ -233,6 +236,7 @@ class CheckinSubmission(BaseModel):
     travel_flag: bool | None = None
     notes: str | None = None
     muscle_soreness: dict[str, int] | None = None  # {muscle_key: severity 1-3}
+    protein_grams: int | None = None  # total protein consumed today (grams)
 
     @staticmethod
     def _validate_1_10(v: int | None, name: str) -> int | None:
@@ -302,8 +306,8 @@ async def post_checkin(body: CheckinSubmission) -> dict:
             INSERT INTO daily_checkin
                 (date, propranolol_taken, body_weight_kg, soreness_overall,
                  sleep_quality_1_10, energy_1_10, stress_1_10, motivation_1_10,
-                 illness_flag, travel_flag, notes, muscle_soreness)
-            VALUES ($dt, $prop, $wt, $sor, $sq, $en, $st, $mo, $ill, $tr, $no, $ms)
+                 illness_flag, travel_flag, notes, muscle_soreness, protein_grams)
+            VALUES ($dt, $prop, $wt, $sor, $sq, $en, $st, $mo, $ill, $tr, $no, $ms, $prot)
             ON CONFLICT (date) DO UPDATE SET
                 propranolol_taken = COALESCE(EXCLUDED.propranolol_taken, daily_checkin.propranolol_taken),
                 body_weight_kg    = COALESCE(EXCLUDED.body_weight_kg, daily_checkin.body_weight_kg),
@@ -315,7 +319,8 @@ async def post_checkin(body: CheckinSubmission) -> dict:
                 illness_flag      = COALESCE(EXCLUDED.illness_flag, daily_checkin.illness_flag),
                 travel_flag       = COALESCE(EXCLUDED.travel_flag, daily_checkin.travel_flag),
                 notes             = COALESCE(EXCLUDED.notes, daily_checkin.notes),
-                muscle_soreness   = COALESCE(EXCLUDED.muscle_soreness, daily_checkin.muscle_soreness)
+                muscle_soreness   = COALESCE(EXCLUDED.muscle_soreness, daily_checkin.muscle_soreness),
+                protein_grams     = COALESCE(EXCLUDED.protein_grams, daily_checkin.protein_grams)
             """,
             {
                 "dt": target_date,
@@ -330,12 +335,14 @@ async def post_checkin(body: CheckinSubmission) -> dict:
                 "tr": body.travel_flag,
                 "no": body.notes,
                 "ms": ms_json,
+                "prot": body.protein_grams,
             },
         )
     return {"status": "ok", "date": target_date}
 
 
 # ── Plan adherence (closed-loop tracking) ────────────────────────────────────
+
 
 @router.post("/training/adherence/recompute", dependencies=[Depends(require_admin_key)])
 async def recompute_adherence() -> dict:
@@ -385,8 +392,7 @@ async def recompute_adherence() -> dict:
         sets_done = int(actual[1]) if actual and actual[1] else 0
         actual_rpe = float(actual[2]) if actual and actual[2] else None
         completion_pct = (
-            round(sets_done / prescribed_sets * 100, 1)
-            if prescribed_sets > 0 else None
+            round(sets_done / prescribed_sets * 100, 1) if prescribed_sets > 0 else None
         )
 
         conn.execute(
@@ -452,8 +458,7 @@ async def stats_summary() -> dict:
     conn = get_read_conn()
     try:
         rec_rows = conn.execute(
-            "SELECT date, score, hrv, rhr FROM recovery "
-            "WHERE date >= $since ORDER BY date",
+            "SELECT date, score, hrv, rhr FROM recovery WHERE date >= $since ORDER BY date",
             {"since": (today - timedelta(days=90)).isoformat()},
         ).fetchall()
         hrv_rows = conn.execute(
@@ -489,9 +494,7 @@ async def stats_summary() -> dict:
     rhr_baseline = sum(rhrs_28) / len(rhrs_28) if rhrs_28 else None
     rhr_7avg = sum(rhrs_7) / len(rhrs_7) if rhrs_7 else None
     rhr_elevated_pct = (
-        ((rhr_7avg - rhr_baseline) / rhr_baseline * 100.0)
-        if (rhr_baseline and rhr_7avg)
-        else None
+        ((rhr_7avg - rhr_baseline) / rhr_baseline * 100.0) if (rhr_baseline and rhr_7avg) else None
     )
 
     hrv_sigma = None
@@ -503,19 +506,13 @@ async def stats_summary() -> dict:
             hrv_sigma = (hrv_today - hrv_baseline) / hrv_sd
 
     sleep_hours_7 = [float(r[1]) for r in sleep_rows[-7:] if r[1] is not None]
-    sleep_consistency = (
-        statistics.pstdev(sleep_hours_7) if len(sleep_hours_7) >= 2 else None
-    )
+    sleep_consistency = statistics.pstdev(sleep_hours_7) if len(sleep_hours_7) >= 2 else None
     sleep_avg_7 = sum(sleep_hours_7) / len(sleep_hours_7) if sleep_hours_7 else None
-    sleep_debt_7 = (
-        sum(max(0.0, 8.0 - h) for h in sleep_hours_7) if sleep_hours_7 else None
-    )
+    sleep_debt_7 = sum(max(0.0, 8.0 - h) for h in sleep_hours_7) if sleep_hours_7 else None
 
     rec_trend_slope = _linreg_slope(scores_7) if len(scores_7) >= 3 else 0.0
 
-    recovery_streak = _streak(
-        [(r[0], (r[1] or 0) > 60) for r in rec_rows[-30:]]
-    )
+    recovery_streak = _streak([(r[0], (r[1] or 0) > 60) for r in rec_rows[-30:]])
     sleep_streak_rows = [(r[0], (float(r[1]) if r[1] else 0) >= 7.0) for r in sleep_rows[-30:]]
     sleep_streak = _streak(sleep_streak_rows)
 
@@ -545,9 +542,7 @@ async def stats_summary() -> dict:
             "sleep_above_7h": sleep_streak,
         },
         "personal_bests": {
-            "best_hrv": (
-                {"date": str(best_hrv[0]), "hrv": best_hrv[2]} if best_hrv else None
-            ),
+            "best_hrv": ({"date": str(best_hrv[0]), "hrv": best_hrv[2]} if best_hrv else None),
             "lowest_rhr": (
                 {"date": str(lowest_rhr[0]), "rhr": lowest_rhr[3]} if lowest_rhr else None
             ),
@@ -588,7 +583,9 @@ async def momentum() -> dict:
     rec_this = [r[1] for r in rec_rows if r[0] >= this_start and r[1] is not None]
     rec_last = [r[1] for r in rec_rows if last_start <= r[0] <= last_end and r[1] is not None]
     slp_this = [float(r[1]) for r in sleep_rows if r[0] >= this_start and r[1] is not None]
-    slp_last = [float(r[1]) for r in sleep_rows if last_start <= r[0] <= last_end and r[1] is not None]
+    slp_last = [
+        float(r[1]) for r in sleep_rows if last_start <= r[0] <= last_end and r[1] is not None
+    ]
     ses_this = len([r for r in session_rows if r[0] >= this_start])
     ses_last = len([r for r in session_rows if last_start <= r[0] <= last_end])
 
@@ -643,9 +640,11 @@ async def insights() -> list[dict]:
     # nights tend to FOLLOW hard-training days, so depressed next-day HRV is
     # likely driven by the prior load, not the extra sleep. The rigorous,
     # pre-registered version of this test lives in the lab engine (lab.py).
-    _ls = _lab_welch(long_sleep_next_hrv, short_sleep_next_hrv) if (
-        len(long_sleep_next_hrv) >= 5 and len(short_sleep_next_hrv) >= 5
-    ) else None
+    _ls = (
+        _lab_welch(long_sleep_next_hrv, short_sleep_next_hrv)
+        if (len(long_sleep_next_hrv) >= 5 and len(short_sleep_next_hrv) >= 5)
+        else None
+    )
     if _ls is not None and _ls[1] < 0.10:
         delta = sum(long_sleep_next_hrv) / len(long_sleep_next_hrv) - sum(
             short_sleep_next_hrv
@@ -740,8 +739,23 @@ async def insights() -> list[dict]:
             peak_date_str = str(peak_row[0])[:10]
             wt_at_peak = None
             if wt_rows:
-                nearest = min(wt_rows, key=lambda r: abs((date.fromisoformat(str(r[0])[:10]) - date.fromisoformat(peak_date_str)).days))
-                if abs((date.fromisoformat(str(nearest[0])[:10]) - date.fromisoformat(peak_date_str)).days) <= 365:
+                nearest = min(
+                    wt_rows,
+                    key=lambda r: abs(
+                        (
+                            date.fromisoformat(str(r[0])[:10]) - date.fromisoformat(peak_date_str)
+                        ).days
+                    ),
+                )
+                if (
+                    abs(
+                        (
+                            date.fromisoformat(str(nearest[0])[:10])
+                            - date.fromisoformat(peak_date_str)
+                        ).days
+                    )
+                    <= 365
+                ):
                     wt_at_peak = nearest[1]
             wt_current = wt_rows[-1][1] if wt_rows else None
             wt_note = ""
@@ -754,15 +768,18 @@ async def insights() -> list[dict]:
                     f" Weight gain (+{wt_delta_kg:.0f}kg) accounts for ~{abs(wt_effect):.1f} mL/kg/min; "
                     f"true aerobic fitness decline is ~{abs(true_fitness_delta):.1f} mL/kg/min."
                 )
-            items.insert(0, {
-                "headline": f"VO₂ max down {abs(delta):.1f} mL/kg/min from {peak:.1f} peak ({peak_date})",
-                "body": (
-                    f"Current {current:.1f} vs peak {peak:.1f} mL/kg/min — "
-                    f"~4× the expected age-related rate of decline (0.4/yr).{wt_note} "
-                    f"Priority: zone 2 cardio 3×/wk and progressive weight reduction."
-                ),
-                "polarity": "negative",
-            })
+            items.insert(
+                0,
+                {
+                    "headline": f"VO₂ max down {abs(delta):.1f} mL/kg/min from {peak:.1f} peak ({peak_date})",
+                    "body": (
+                        f"Current {current:.1f} vs peak {peak:.1f} mL/kg/min — "
+                        f"~4× the expected age-related rate of decline (0.4/yr).{wt_note} "
+                        f"Priority: zone 2 cardio 3×/wk and progressive weight reduction."
+                    ),
+                    "polarity": "negative",
+                },
+            )
 
     if not items:
         items.append(
@@ -780,12 +797,10 @@ async def personal_bests() -> dict:
     conn = get_read_conn()
     try:
         top_hrv = conn.execute(
-            "SELECT date, hrv FROM recovery WHERE hrv IS NOT NULL "
-            "ORDER BY hrv DESC LIMIT 5"
+            "SELECT date, hrv FROM recovery WHERE hrv IS NOT NULL ORDER BY hrv DESC LIMIT 5"
         ).fetchall()
         low_rhr = conn.execute(
-            "SELECT date, rhr FROM recovery WHERE rhr IS NOT NULL "
-            "ORDER BY rhr ASC LIMIT 5"
+            "SELECT date, rhr FROM recovery WHERE rhr IS NOT NULL ORDER BY rhr ASC LIMIT 5"
         ).fetchall()
         top_sleep = conn.execute(
             "SELECT night_date, epoch(ts_out - ts_in) / 3600.0 AS h "
@@ -912,7 +927,9 @@ async def training_heatmap(weeks: int = Query(104, gt=0, le=260)) -> list[dict]:
     for r in rows:
         vol = r[2] or 0
         intensity = min(4, int((vol / max_vol) * 4) + 1) if vol > 0 else 0
-        result.append({"date": str(r[0]), "intensity": intensity, "sets": r[1], "volume_kg": round(vol, 1)})
+        result.append(
+            {"date": str(r[0]), "intensity": intensity, "sets": r[1], "volume_kg": round(vol, 1)}
+        )
     return result
 
 
@@ -940,7 +957,10 @@ async def training_weekly(weeks: int = Query(52, gt=0, le=260)) -> list[dict]:
         ).fetchall()
     finally:
         conn.close()
-    return [{"week": str(r[0]), "sets": r[1], "volume_kg": round(r[2] or 0, 1), "sessions": r[3]} for r in rows]
+    return [
+        {"week": str(r[0]), "sets": r[1], "volume_kg": round(r[2] or 0, 1), "sessions": r[3]}
+        for r in rows
+    ]
 
 
 @router.get("/training/prs")
@@ -1020,21 +1040,25 @@ async def training_prs(n: int = Query(15, gt=0, le=1000)) -> list[dict]:
     for ex, pr_kg, pr_reps, pr_date, last in rows:
         reps = int(pr_reps or 1)
         est_1rm_kg = float(pr_kg) * (1 + reps / 30.0)
-        out.append({
-            "exercise": ex,
-            "pr_lbs": round(pr_kg * 2.20462, 1),
-            "pr_kg": round(pr_kg, 1),
-            "pr_reps": reps,
-            "pr_date": str(pr_date),
-            "est_1rm_lbs": round(est_1rm_kg * 2.20462, 1),
-            "est_1rm_kg": round(est_1rm_kg, 1),
-            "last_performed": str(last),
-        })
+        out.append(
+            {
+                "exercise": ex,
+                "pr_lbs": round(pr_kg * 2.20462, 1),
+                "pr_kg": round(pr_kg, 1),
+                "pr_reps": reps,
+                "pr_date": str(pr_date),
+                "est_1rm_lbs": round(est_1rm_kg * 2.20462, 1),
+                "est_1rm_kg": round(est_1rm_kg, 1),
+                "last_performed": str(last),
+            }
+        )
     return out
 
 
 @router.get("/training/exercise-last")
-async def training_exercise_last(exercise: str = Query(..., description="Exercise name (substring, case-insensitive)")) -> dict:
+async def training_exercise_last(
+    exercise: str = Query(..., description="Exercise name (substring, case-insensitive)"),
+) -> dict:
     """Return the most recent working set for an exercise — used as the
     plan-vs-history anchor on the Next Workout view (`last: 185×5 @ RPE 8`).
     """
@@ -1153,7 +1177,11 @@ async def training_overload_signal() -> dict:
         conn.close()
 
     if not rows:
-        return {"overload_pct": None, "trend": "insufficient_data", "recent_sessions_per_week": None}
+        return {
+            "overload_pct": None,
+            "trend": "insufficient_data",
+            "recent_sessions_per_week": None,
+        }
 
     weeks_vol = [float(r[1] or 0) for r in rows]
     half = len(weeks_vol) // 2
@@ -1165,9 +1193,12 @@ async def training_overload_signal() -> dict:
     sessions_per_week = sum(days_recent) / max(len(days_recent), 1) if days_recent else None
 
     trend = (
-        "progressing" if overload_pct and overload_pct > 5
-        else "maintaining" if overload_pct and overload_pct > -5
-        else "deloading" if overload_pct is not None
+        "progressing"
+        if overload_pct and overload_pct > 5
+        else "maintaining"
+        if overload_pct and overload_pct > -5
+        else "deloading"
+        if overload_pct is not None
         else "insufficient_data"
     )
 
@@ -1194,6 +1225,7 @@ async def cardio_log(body: CardioLog) -> dict:
     """Log a cardio session (pickleball, walking, biking, etc.)."""
     import hashlib
     import uuid
+
     d = body.date or date.today().isoformat()
     cid = str(uuid.uuid4())
     payload = f"{d}|{body.modality}|{body.duration_min}|{body.avg_hr}|{body.rpe}|{body.notes or ''}"
@@ -1205,7 +1237,15 @@ async def cardio_log(body: CardioLog) -> dict:
               (id, date, modality, duration_min, avg_hr, rpe, zone_distribution_json, content_hash)
             VALUES ($id, $d, $m, $dur, $hr, $rpe, NULL, $h)
             """,
-            {"id": cid, "d": d, "m": body.modality, "dur": body.duration_min, "hr": body.avg_hr, "rpe": body.rpe, "h": chash},
+            {
+                "id": cid,
+                "d": d,
+                "m": body.modality,
+                "dur": body.duration_min,
+                "hr": body.avg_hr,
+                "rpe": body.rpe,
+                "h": chash,
+            },
         )
     return {"status": "ok", "id": cid, "date": d}
 
@@ -1271,32 +1311,36 @@ async def cardio_recent(days: int = Query(60, gt=0, le=365)) -> dict:
 
     items = []
     for sid, day, start, end, kind, strain, avg_hr, max_hr, kcal, source, dur in sessions:
-        items.append({
-            "id": sid,
-            "date": str(day),
-            "started_at": str(start) if start else None,
-            "kind": (kind or "workout").lower(),
-            "strain": round(float(strain), 1) if strain is not None else None,
-            "avg_hr": int(avg_hr) if avg_hr is not None else None,
-            "max_hr": int(max_hr) if max_hr is not None else None,
-            "kcal": round(float(kcal)) if kcal is not None else None,
-            "duration_min": round(float(dur)) if dur is not None else None,
-            "source": source,
-        })
+        items.append(
+            {
+                "id": sid,
+                "date": str(day),
+                "started_at": str(start) if start else None,
+                "kind": (kind or "workout").lower(),
+                "strain": round(float(strain), 1) if strain is not None else None,
+                "avg_hr": int(avg_hr) if avg_hr is not None else None,
+                "max_hr": int(max_hr) if max_hr is not None else None,
+                "kcal": round(float(kcal)) if kcal is not None else None,
+                "duration_min": round(float(dur)) if dur is not None else None,
+                "source": source,
+            }
+        )
     for cid, day, mod, dur, avg_hr, rpe, zones_json in cardio:
-        items.append({
-            "id": cid,
-            "date": str(day),
-            "started_at": None,
-            "kind": (mod or "cardio").lower(),
-            "strain": None,
-            "avg_hr": int(avg_hr) if avg_hr is not None else None,
-            "max_hr": None,
-            "kcal": None,
-            "duration_min": int(dur) if dur is not None else None,
-            "source": "manual",
-            "rpe": float(rpe) if rpe is not None else None,
-        })
+        items.append(
+            {
+                "id": cid,
+                "date": str(day),
+                "started_at": None,
+                "kind": (mod or "cardio").lower(),
+                "strain": None,
+                "avg_hr": int(avg_hr) if avg_hr is not None else None,
+                "max_hr": None,
+                "kcal": None,
+                "duration_min": int(dur) if dur is not None else None,
+                "source": "manual",
+                "rpe": float(rpe) if rpe is not None else None,
+            }
+        )
 
     items.sort(key=lambda r: r["date"], reverse=True)
 
@@ -1351,8 +1395,7 @@ async def training_muscle_balance(weeks: int = Query(4, gt=0, le=52)) -> dict:
         conn.close()
 
     buckets: dict[str, dict] = {
-        g: {"sets": 0, "volume_kg": 0.0}
-        for g in ("push", "pull", "legs", "core", "other")
+        g: {"sets": 0, "volume_kg": 0.0} for g in ("push", "pull", "legs", "core", "other")
     }
     for ex, sets_, vol in rows:
         g = _muscle_group(ex)
@@ -1424,6 +1467,7 @@ async def add_medication(body: MedicationIn) -> dict:
     """Add an active medication. Used to bootstrap the medications table so
     the dashboard's beta-blocker awareness works."""
     import uuid
+
     async with write_ctx() as conn:
         conn.execute(
             "INSERT INTO medications (id, name, dose, frequency, started) VALUES ($id, $n, $d, $f, current_date)",
@@ -1451,18 +1495,20 @@ def _group_panels(rows: list) -> list[dict]:
             display = f"{round(float(value), 3)}"
         else:
             display = "—"
-        grouped[key]["results"].append({
-            "name": name,
-            "value": round(float(value), 3) if value is not None else None,
-            "value_text": value_text,
-            "display": display,
-            "unit": unit,
-            "ref_low": rl,
-            "ref_high": rh,
-            "ref_text": ref_text,
-            "is_abnormal": bool(abn) if abn is not None else False,
-            "loinc": loinc,
-        })
+        grouped[key]["results"].append(
+            {
+                "name": name,
+                "value": round(float(value), 3) if value is not None else None,
+                "value_text": value_text,
+                "display": display,
+                "unit": unit,
+                "ref_low": rl,
+                "ref_high": rh,
+                "ref_text": ref_text,
+                "is_abnormal": bool(abn) if abn is not None else False,
+                "loinc": loinc,
+            }
+        )
     return list(grouped.values())
 
 
@@ -1546,14 +1592,16 @@ async def clinical_overview() -> dict:
     history_by_name: dict[str, list[dict]] = {}
     for r in all_labs:
         name, value, unit, rl, rh, ts = r
-        history_by_name.setdefault(name, []).append({
-            "value": round(float(value), 2),
-            "unit": unit,
-            "ref_low": rl,
-            "ref_high": rh,
-            "collected_at": str(ts) if ts else None,
-            "flag": _flag(float(value), rl, rh),
-        })
+        history_by_name.setdefault(name, []).append(
+            {
+                "value": round(float(value), 2),
+                "unit": unit,
+                "ref_low": rl,
+                "ref_high": rh,
+                "collected_at": str(ts) if ts else None,
+                "flag": _flag(float(value), rl, rh),
+            }
+        )
 
     return {
         "conditions": [
@@ -1676,7 +1724,9 @@ async def clinical_risk() -> dict:
     finally:
         conn.close()
 
-    lab_by_name = {r[0]: {"value": float(r[1]), "ref_high": r[4], "collected_at": r[5]} for r in labs}
+    lab_by_name = {
+        r[0]: {"value": float(r[1]), "ref_high": r[4], "collected_at": r[5]} for r in labs
+    }
     vital_by_metric = {r[0]: {"value": float(r[1]), "ts": r[3]} for r in vitals}
     active_conditions = [r[0] for r in conditions]
 
@@ -1720,47 +1770,55 @@ async def clinical_risk() -> dict:
     sbp = vital_by_metric.get("blood_pressure_systolic")
     dbp = vital_by_metric.get("blood_pressure_diastolic")
     if sbp and dbp:
-        cardiometabolic.append({
-            "key": "bp",
-            "label": "Blood pressure",
-            "value": f"{int(sbp['value'])}/{int(dbp['value'])}",
-            "unit": "mmHg",
-            "ts": str(sbp["ts"]),
-            "zone": _classify_bp(sbp["value"], dbp["value"]),
-        })
+        cardiometabolic.append(
+            {
+                "key": "bp",
+                "label": "Blood pressure",
+                "value": f"{int(sbp['value'])}/{int(dbp['value'])}",
+                "unit": "mmHg",
+                "ts": str(sbp["ts"]),
+                "zone": _classify_bp(sbp["value"], dbp["value"]),
+            }
+        )
 
     bmi = vital_by_metric.get("bmi")
     if bmi:
-        cardiometabolic.append({
-            "key": "bmi",
-            "label": "BMI",
-            "value": f"{bmi['value']:.1f}",
-            "unit": "kg/m²",
-            "ts": str(bmi["ts"]),
-            "zone": _classify_bmi(bmi["value"]),
-        })
+        cardiometabolic.append(
+            {
+                "key": "bmi",
+                "label": "BMI",
+                "value": f"{bmi['value']:.1f}",
+                "unit": "kg/m²",
+                "ts": str(bmi["ts"]),
+                "zone": _classify_bmi(bmi["value"]),
+            }
+        )
 
     ldl = lab_by_name.get("LDL Cholesterol (calc)")
     if ldl:
-        cardiometabolic.append({
-            "key": "ldl",
-            "label": "LDL-C",
-            "value": f"{ldl['value']:.0f}",
-            "unit": "mg/dL",
-            "ts": str(ldl["collected_at"]),
-            "zone": _classify_ldl(ldl["value"]),
-        })
+        cardiometabolic.append(
+            {
+                "key": "ldl",
+                "label": "LDL-C",
+                "value": f"{ldl['value']:.0f}",
+                "unit": "mg/dL",
+                "ts": str(ldl["collected_at"]),
+                "zone": _classify_ldl(ldl["value"]),
+            }
+        )
 
     a1c = lab_by_name.get("HbA1c")
     if a1c:
-        cardiometabolic.append({
-            "key": "a1c",
-            "label": "HbA1c",
-            "value": f"{a1c['value']:.1f}",
-            "unit": "%",
-            "ts": str(a1c["collected_at"]),
-            "zone": _classify_a1c(a1c["value"]),
-        })
+        cardiometabolic.append(
+            {
+                "key": "a1c",
+                "label": "HbA1c",
+                "value": f"{a1c['value']:.1f}",
+                "unit": "%",
+                "ts": str(a1c["collected_at"]),
+                "zone": _classify_a1c(a1c["value"]),
+            }
+        )
 
     # Overdue labs
     overdue: list[dict] = []
@@ -1774,14 +1832,16 @@ async def clinical_risk() -> dict:
         days = (today - last).days
         due_at_days = months * 30
         if days > due_at_days:
-            overdue.append({
-                "name": name,
-                "last_value": rec["value"],
-                "last_date": str(last),
-                "days_overdue": days - due_at_days,
-                "interval_months": months,
-                "months_since": round(days / 30, 1),
-            })
+            overdue.append(
+                {
+                    "name": name,
+                    "last_value": rec["value"],
+                    "last_date": str(last),
+                    "days_overdue": days - due_at_days,
+                    "interval_months": months,
+                    "months_since": round(days / 30, 1),
+                }
+            )
     overdue.sort(key=lambda x: -x["days_overdue"])
 
     # Medication advisories — surface only when the condition trigger applies (or always for plain info).
@@ -1794,11 +1854,13 @@ async def clinical_risk() -> dict:
                     cond_trigger = it.get("applies_when_condition")
                     if cond_trigger and not any(cond_trigger in c for c in active_conditions):
                         continue
-                    advisories.append({
-                        "med": med_name.split("(")[0].strip(),
-                        "severity": it["severity"],
-                        "text": it["text"],
-                    })
+                    advisories.append(
+                        {
+                            "med": med_name.split("(")[0].strip(),
+                            "severity": it["severity"],
+                            "text": it["text"],
+                        }
+                    )
 
     # Adherence/onset-window chips for newer meds.
     onset_windows: list[dict] = []
@@ -1810,16 +1872,20 @@ async def clinical_risk() -> dict:
         lower = med_name.lower()
         for key, full_effect_days in onset_thresholds_days.items():
             if key in lower:
-                onset_windows.append({
-                    "med": med_name.split("(")[0].strip(),
-                    "days_since_start": days,
-                    "full_effect_days": full_effect_days,
-                    "phase": (
-                        "onset" if days < min(28, full_effect_days // 2) else
-                        "active" if days < full_effect_days else
-                        "established"
-                    ),
-                })
+                onset_windows.append(
+                    {
+                        "med": med_name.split("(")[0].strip(),
+                        "days_since_start": days,
+                        "full_effect_days": full_effect_days,
+                        "phase": (
+                            "onset"
+                            if days < min(28, full_effect_days // 2)
+                            else "active"
+                            if days < full_effect_days
+                            else "established"
+                        ),
+                    }
+                )
                 break
 
     return {
@@ -1852,7 +1918,9 @@ async def body_trend() -> list[dict]:
         ).fetchall()
     finally:
         conn.close()
-    return [{"date": str(r[0]), "kg": round(r[1], 2), "lbs": round(r[1] * 2.20462, 1)} for r in rows]
+    return [
+        {"date": str(r[0]), "kg": round(r[1], 2), "lbs": round(r[1] * 2.20462, 1)} for r in rows
+    ]
 
 
 @router.get("/body/vo2max")
@@ -1884,7 +1952,8 @@ async def body_vo2max() -> list[dict]:
         if apple_rows:
             return [
                 {"date": str(r[0]), "vo2max": round(float(r[1]), 1), "source": "apple_watch"}
-                for r in apple_rows if r[1]
+                for r in apple_rows
+                if r[1]
             ]
 
         # Fall back to Uth-Sørensen estimation from WHOOP RHR
@@ -1977,10 +2046,7 @@ async def whoop_patterns() -> dict:
             {"day": DOW_LABELS[int(r[0]) % 7], "avg_recovery": round(r[1], 1), "n": r[2]}
             for r in dow_rows
         ],
-        "distribution": [
-            {"bucket": r[0], "n": r[1]}
-            for r in dist_rows
-        ],
+        "distribution": [{"bucket": r[0], "n": r[1]} for r in dist_rows],
         "sleep_vs_recovery": [
             {
                 "date": str(r[0]),
@@ -1992,7 +2058,12 @@ async def whoop_patterns() -> dict:
             for r in scatter_rows
         ],
         "trend_90d": [
-            {"date": str(r[0]), "recovery": r[1], "hrv": round(r[2], 1) if r[2] else None, "rhr": r[3]}
+            {
+                "date": str(r[0]),
+                "recovery": r[1],
+                "hrv": round(r[2], 1) if r[2] else None,
+                "rhr": r[3],
+            }
             for r in trend_rows
         ],
     }
@@ -2041,10 +2112,7 @@ async def body_rhr_trend(days: int = Query(90, gt=0, le=365)) -> list[dict]:
     apple_map = {str(r[0]): round(r[1], 1) for r in apple_rows}
     whoop_map = {str(r[0]): r[1] for r in whoop_rows}
     all_dates = sorted(set(apple_map) | set(whoop_map))
-    return [
-        {"date": d, "apple": apple_map.get(d), "whoop": whoop_map.get(d)}
-        for d in all_dates
-    ]
+    return [{"date": d, "apple": apple_map.get(d), "whoop": whoop_map.get(d)} for d in all_dates]
 
 
 @router.get("/fueling/today")
@@ -2116,9 +2184,7 @@ async def fueling_today() -> dict:
 
     protein_g = sums.get("dietary_protein_g") or None
     protein_per_kg = (
-        round(protein_g / body_mass_kg, 2)
-        if (protein_g is not None and body_mass_kg)
-        else None
+        round(protein_g / body_mass_kg, 2) if (protein_g is not None and body_mass_kg) else None
     )
     # Athletic target: 1.6-2.2 g/kg body mass
     protein_target_g = round(body_mass_kg * 1.8, 0) if body_mass_kg else None
@@ -2144,10 +2210,18 @@ async def fueling_today() -> dict:
         "fat_g": round(sums.get("dietary_fat_g"), 1) if sums.get("dietary_fat_g") else None,
         "fiber_g": round(sums.get("dietary_fiber_g"), 1) if sums.get("dietary_fiber_g") else None,
         "sugar_g": round(sums.get("dietary_sugar_g"), 1) if sums.get("dietary_sugar_g") else None,
-        "water_ml": round(sums.get("dietary_water_ml"), 0) if sums.get("dietary_water_ml") else None,
-        "water_oz": round(sums.get("dietary_water_ml") / 29.5735, 1) if sums.get("dietary_water_ml") else None,
-        "sodium_mg": round(sums.get("dietary_sodium_mg"), 0) if sums.get("dietary_sodium_mg") else None,
-        "caffeine_mg": round(sums.get("dietary_caffeine_mg"), 0) if sums.get("dietary_caffeine_mg") else None,
+        "water_ml": round(sums.get("dietary_water_ml"), 0)
+        if sums.get("dietary_water_ml")
+        else None,
+        "water_oz": round(sums.get("dietary_water_ml") / 29.5735, 1)
+        if sums.get("dietary_water_ml")
+        else None,
+        "sodium_mg": round(sums.get("dietary_sodium_mg"), 0)
+        if sums.get("dietary_sodium_mg")
+        else None,
+        "caffeine_mg": round(sums.get("dietary_caffeine_mg"), 0)
+        if sums.get("dietary_caffeine_mg")
+        else None,
         "has_diet_data": kcal_in is not None or protein_g is not None,
         "has_body_comp_data": bf is not None or lbm is not None,
     }
@@ -2190,14 +2264,16 @@ async def fueling_trend(days: int = Query(14, gt=0, le=90)) -> list[dict]:
         kcal_in = m.get("dietary_energy_kcal") or None
         kcal_out = (m.get("active_energy_kcal", 0) + m.get("basal_energy_kcal", 0)) or None
         protein = m.get("dietary_protein_g") or None
-        out.append({
-            "date": d,
-            "kcal_in": round(kcal_in, 0) if kcal_in else None,
-            "kcal_out": round(kcal_out, 0) if kcal_out else None,
-            "balance": round(kcal_in - kcal_out, 0) if (kcal_in and kcal_out) else None,
-            "protein_g": round(protein, 1) if protein else None,
-            "protein_per_kg": round(protein / last_bw, 2) if (protein and last_bw) else None,
-        })
+        out.append(
+            {
+                "date": d,
+                "kcal_in": round(kcal_in, 0) if kcal_in else None,
+                "kcal_out": round(kcal_out, 0) if kcal_out else None,
+                "balance": round(kcal_in - kcal_out, 0) if (kcal_in and kcal_out) else None,
+                "protein_g": round(protein, 1) if protein else None,
+                "protein_per_kg": round(protein / last_bw, 2) if (protein and last_bw) else None,
+            }
+        )
     return out
 
 
@@ -2213,8 +2289,13 @@ async def lab_questions() -> list[dict]:
         conn.close()
     return [
         {
-            "id": r[0], "title": r[1], "hypothesis": r[2], "test_type": r[3],
-            "window_days": r[4], "vault_ref": r[5], "enabled": bool(r[6]),
+            "id": r[0],
+            "title": r[1],
+            "hypothesis": r[2],
+            "test_type": r[3],
+            "window_days": r[4],
+            "vault_ref": r[5],
+            "enabled": bool(r[6]),
         }
         for r in rows
     ]
@@ -2244,11 +2325,18 @@ async def lab_findings_latest() -> list[dict]:
         conn.close()
     return [
         {
-            "id": r[0], "title": r[1], "hypothesis": r[2], "vault_ref": r[3],
+            "id": r[0],
+            "title": r[1],
+            "hypothesis": r[2],
+            "vault_ref": r[3],
             "test_type": r[4],
             "run_at": r[5].isoformat() if r[5] else None,
-            "n": r[6], "effect_size": r[7], "effect_unit": r[8], "p_value": r[9],
-            "verdict": r[10], "summary": r[11],
+            "n": r[6],
+            "effect_size": r[7],
+            "effect_unit": r[8],
+            "p_value": r[9],
+            "verdict": r[10],
+            "summary": r[11],
         }
         for r in rows
     ]
@@ -2258,6 +2346,7 @@ async def lab_findings_latest() -> list[dict]:
 async def lab_run() -> dict:
     """Execute every enabled hypothesis and persist findings."""
     from shc import lab as _lab
+
     async with write_ctx() as conn:
         findings = _lab.run_all(conn)
         _lab.persist(conn, findings)
@@ -2333,8 +2422,7 @@ async def clinical_research_insights() -> dict:
         # lnRMSSD weekly trend (Buchheit 2014) — log-transformed HRV mean,
         # rolling 7d, with cv% (week-over-week noise floor).
         hrv_rows = conn.execute(
-            "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL "
-            "ORDER BY date",
+            "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL ORDER BY date",
             {"s": (today - timedelta(days=28)).isoformat()},
         ).fetchall()
         ln_means: list[float] = []
@@ -2342,7 +2430,7 @@ async def clinical_research_insights() -> dict:
         if len(hrv_rows) >= 14:
             ln_vals = [math.log(float(r[1])) for r in hrv_rows if r[1] and r[1] > 0]
             for i in range(7, len(ln_vals)):
-                window = ln_vals[i - 7:i]
+                window = ln_vals[i - 7 : i]
                 m = sum(window) / 7
                 ln_means.append(m)
                 if m > 0:
@@ -2427,9 +2515,12 @@ async def clinical_research_insights() -> dict:
             "a1c": _band(a1c, 5.7, 6.5),
             # HDL is inverted — lower is worse
             "hdl_low": (
-                2 if hdl is not None and float(hdl) < 35
-                else 1 if hdl is not None and float(hdl) < 40
-                else 0 if hdl is not None
+                2
+                if hdl is not None and float(hdl) < 35
+                else 1
+                if hdl is not None and float(hdl) < 40
+                else 0
+                if hdl is not None
                 else None
             ),
         }
@@ -2506,9 +2597,12 @@ async def clinical_research_insights() -> dict:
         "sleep_regularity_index": {
             "value": sri,
             "interpretation": (
-                "tight" if sri is not None and sri >= 80
-                else "moderate" if sri is not None and sri >= 60
-                else "scattered" if sri is not None
+                "tight"
+                if sri is not None and sri >= 80
+                else "moderate"
+                if sri is not None and sri >= 60
+                else "scattered"
+                if sri is not None
                 else None
             ),
             "ref": "Phillips 2017 — Scientific Reports",
@@ -2530,9 +2624,12 @@ async def clinical_research_insights() -> dict:
             "components": {k: v for k, v in bands.items() if v is not None},
             "n_markers": len(scored_bands),
             "interpretation": (
-                "low" if allostatic_score is not None and allostatic_score < 3
-                else "moderate" if allostatic_score is not None and allostatic_score < 6
-                else "elevated" if allostatic_score is not None
+                "low"
+                if allostatic_score is not None and allostatic_score < 3
+                else "moderate"
+                if allostatic_score is not None and allostatic_score < 6
+                else "elevated"
+                if allostatic_score is not None
                 else None
             ),
             "ref": "Seeman 2001 — JAMA",
@@ -2547,8 +2644,10 @@ async def clinical_research_insights() -> dict:
         "z2_hr_consistency": {
             "cv_pct": hr_drift_pct,
             "interpretation": (
-                "stable" if hr_drift_pct is not None and hr_drift_pct < 5
-                else "drifting" if hr_drift_pct is not None
+                "stable"
+                if hr_drift_pct is not None and hr_drift_pct < 5
+                else "drifting"
+                if hr_drift_pct is not None
                 else None
             ),
             "ref": "Maffetone — aerobic-fitness drift proxy",
@@ -2610,6 +2709,7 @@ _muscle_group = _mg
 
 _WORKOUT_CACHE: dict[str, dict] = {}
 
+
 # kept for reference by the Ollama fallback path only
 @router.get("/workout/context")
 async def workout_context() -> dict:
@@ -2640,14 +2740,21 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
             plan_date = date.fromisoformat(body.plan_date)
         else:
             from shc.ai.workout_planner import _workout_logged_today
+
             real_today = date.today()
-            plan_date = (real_today + timedelta(days=1)) if _workout_logged_today(conn) else real_today
-        state = compute_daily_state(conn, planning_date=plan_date if plan_date != date.today() else None)
+            plan_date = (
+                (real_today + timedelta(days=1)) if _workout_logged_today(conn) else real_today
+            )
+        state = compute_daily_state(
+            conn, planning_date=plan_date if plan_date != date.today() else None
+        )
         from shc.ai.workout_planner import e1rm_by_exercise
+
         e1rm_ceilings = e1rm_by_exercise(conn, plan_date)
     finally:
         conn.close()
     from shc.ai.vault import valid_citation_filenames
+
     try:
         validate_plan(
             body.plan,
@@ -2678,6 +2785,7 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     hevy_result = None
     if body.push_to_hevy:
         from shc.ingest.hevy import push_routine
+
         hevy_result = await push_routine(plan_with_meta)
 
     return {"status": "ok", "date": plan_date_iso, "hevy": hevy_result}
@@ -2756,7 +2864,9 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
     hrv_today = hrv_base[0] if hrv_base else None
     hrv_avg = hrv_base[1] if hrv_base else None
     hrv_sd = hrv_base[2] if hrv_base else None
-    hrv_sigma = round((hrv_today - hrv_avg) / hrv_sd, 2) if (hrv_today and hrv_avg and hrv_sd) else None
+    hrv_sigma = (
+        round((hrv_today - hrv_avg) / hrv_sd, 2) if (hrv_today and hrv_avg and hrv_sd) else None
+    )
     sleep_hours = round(float(sleep_row[0]), 1) if sleep_row and sleep_row[0] else None
     _today = date.today()
     _recent_load = [float(r[1] or 0) for r in load_rows if r[0] >= _today - timedelta(days=7)]
@@ -2771,8 +2881,7 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
         if g not in group_last_day or row[0] > date.fromisoformat(str(group_last_day[g])):
             group_last_day[g] = str(row[0])
     days_since: dict[str, int] = {
-        g: (date.today() - date.fromisoformat(last)).days
-        for g, last in group_last_day.items()
+        g: (date.today() - date.fromisoformat(last)).days for g, last in group_last_day.items()
     }
 
     return _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today)
@@ -2856,89 +2965,113 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
 
     blocks: list[dict] = []
     if primary:
-        blocks.append({
-            "label": "Primary — Compound",
-            "exercises": [
-                to_exercise(
-                    name, wkg, sets, reps_str, rpe,
-                    f"~{int(weight_pct*100)}% of working weight ({round(wkg * 2.20462)} lbs)" if tier != "green" else "Working weight",
-                )
-                for name, wkg in primary
-            ],
-        })
+        blocks.append(
+            {
+                "label": "Primary — Compound",
+                "exercises": [
+                    to_exercise(
+                        name,
+                        wkg,
+                        sets,
+                        reps_str,
+                        rpe,
+                        f"~{int(weight_pct * 100)}% of working weight ({round(wkg * 2.20462)} lbs)"
+                        if tier != "green"
+                        else "Working weight",
+                    )
+                    for name, wkg in primary
+                ],
+            }
+        )
     if accessories:
-        blocks.append({
-            "label": "Accessory",
-            "exercises": [
-                to_exercise(
-                    name, wkg, accessory_sets, "10–12" if tier != "red" else "12–15", max(5.0, rpe - 1),
-                    "Slow eccentric, full ROM",
-                )
-                for name, wkg in accessories
-            ],
-        })
+        blocks.append(
+            {
+                "label": "Accessory",
+                "exercises": [
+                    to_exercise(
+                        name,
+                        wkg,
+                        accessory_sets,
+                        "10–12" if tier != "red" else "12–15",
+                        max(5.0, rpe - 1),
+                        "Slow eccentric, full ROM",
+                    )
+                    for name, wkg in accessories
+                ],
+            }
+        )
     if not blocks:
         # Cold-start guard: no working weights yet for this group.
-        blocks = [{
-            "label": "Primary",
-            "exercises": [{
-                "name": f"{focus} compound (your choice)",
-                "sets": sets,
-                "reps": reps_str,
-                "rpe_target": rpe,
-                "notes": "No working weight on file for this group yet — pick a movement and log a set.",
-            }],
-        }]
+        blocks = [
+            {
+                "label": "Primary",
+                "exercises": [
+                    {
+                        "name": f"{focus} compound (your choice)",
+                        "sets": sets,
+                        "reps": reps_str,
+                        "rpe_target": rpe,
+                        "notes": "No working weight on file for this group yet — pick a movement and log a set.",
+                    }
+                ],
+            }
+        ]
 
     # ── Conditioning / metabolic finisher (fat-loss layer) ──
     # Avoids high-impact options because of forefoot overload + gait asymmetry.
     if tier == "green":
-        blocks.append({
-            "label": "Metabolic Finisher",
-            "exercises": [
-                {
-                    "name": "Kettlebell Swing",
-                    "sets": 5,
-                    "reps": "20",
-                    "weight_lbs": 53,
-                    "rpe_target": 8.0,
-                    "notes": "EMOM 5 min, 60s rest. Drive with hips.",
-                },
-                {
-                    "name": "Sled Push",
-                    "sets": 4,
-                    "reps": "20m",
-                    "rpe_target": 8.0,
-                    "notes": "Heavy. Walk back. ~6 min.",
-                },
-            ],
-        })
+        blocks.append(
+            {
+                "label": "Metabolic Finisher",
+                "exercises": [
+                    {
+                        "name": "Kettlebell Swing",
+                        "sets": 5,
+                        "reps": "20",
+                        "weight_lbs": 53,
+                        "rpe_target": 8.0,
+                        "notes": "EMOM 5 min, 60s rest. Drive with hips.",
+                    },
+                    {
+                        "name": "Sled Push",
+                        "sets": 4,
+                        "reps": "20m",
+                        "rpe_target": 8.0,
+                        "notes": "Heavy. Walk back. ~6 min.",
+                    },
+                ],
+            }
+        )
     elif tier == "yellow":
-        blocks.append({
-            "label": "Conditioning · Z2/Z3",
-            "exercises": [
-                {
-                    "name": "Bike (upright or recumbent)",
-                    "sets": 1,
-                    "reps": "10 min",
-                    "rpe_target": 6.0,
-                    "notes": "Steady tempo. Use RPE 6 as intensity guide.",
-                },
-            ],
-        })
+        blocks.append(
+            {
+                "label": "Conditioning · Z2/Z3",
+                "exercises": [
+                    {
+                        "name": "Bike (upright or recumbent)",
+                        "sets": 1,
+                        "reps": "10 min",
+                        "rpe_target": 6.0,
+                        "notes": "Steady tempo. Use RPE 6 as intensity guide.",
+                    },
+                ],
+            }
+        )
     else:  # red
-        blocks.append({
-            "label": "Active Recovery · Zone 2",
-            "exercises": [
-                {
-                    "name": "Walk or easy bike",
-                    "sets": 1,
-                    "reps": "20 min",
-                    "rpe_target": 3.0,
-                    "notes": "Conversational pace. Builds aerobic base without taxing recovery.",
-                },
-            ],
-        })
+        blocks.append(
+            {
+                "label": "Active Recovery · Zone 2",
+                "exercises": [
+                    {
+                        "name": "Walk or easy bike",
+                        "sets": 1,
+                        "reps": "20 min",
+                        "rpe_target": 3.0,
+                        "notes": "Conversational pace. Builds aerobic base without taxing recovery.",
+                    },
+                ],
+            }
+        )
 
     rationale = (
         f"{focus_group.capitalize()} last trained {most_rested[1]} days ago — most recovered."
@@ -2946,7 +3079,9 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         else "No recent training history — full body recommended."
     )
     if tier == "red":
-        rationale += " Recovery low → working at 65% to preserve adaptation without taxing the system."
+        rationale += (
+            " Recovery low → working at 65% to preserve adaptation without taxing the system."
+        )
     elif tier == "yellow":
         rationale += " Moderate effort, 85% of working weights."
 
@@ -2969,7 +3104,12 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         "warmup": [
             {"name": "Joint circles (neck → ankles)", "duration_sec": 120},
             {"name": "Bodyweight squats", "sets": 2, "reps": 15, "notes": "Focus on depth"},
-            {"name": f"{focus_group.capitalize()}-specific activation", "sets": 2, "reps": 12, "notes": "50% of working weight"},
+            {
+                "name": f"{focus_group.capitalize()}-specific activation",
+                "sets": 2,
+                "reps": 12,
+                "notes": "50% of working weight",
+            },
         ],
         "blocks": blocks,
         "cooldown": "5 min mobility — target trained muscle groups",
@@ -2978,13 +3118,14 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
             "ACWR 0.8–1.3 minimizes injury risk (`gabbett-2016-training-injury-prevention-paradox.md`) — current: "
             + (f"{acwr:.2f}" if acwr else "unknown"),
             "HRV-guided training outperforms fixed-load programs (`kiviniemi-2007-hrv-guided-endurance-training.md`)",
-            f"{int(weight_pct*100)}% of working weight at {sets}×{reps_str} matches DUP {tier} day prescription "
+            f"{int(weight_pct * 100)}% of working weight at {sets}×{reps_str} matches DUP {tier} day prescription "
             "(`progressive-overload-strength.md`).",
         ],
     }
 
 
 # ── Briefing ──────────────────────────────────────────────────────────────────
+
 
 @router.get("/briefing/context")
 async def briefing_context() -> dict:
@@ -3184,6 +3325,7 @@ async def submit_briefing(body: BriefingSubmission) -> dict:
 
 # ── Health story (chat-driven narrative briefing) ────────────────────────────
 
+
 class HealthStorySubmission(BaseModel):
     narrative: str
     sources: list[str] = []
@@ -3235,6 +3377,7 @@ async def post_health_story(body: HealthStorySubmission) -> dict:
 
 
 # ── Lift progression ──────────────────────────────────────────────────────────
+
 
 @router.get("/training/progression")
 async def lift_progression(
@@ -3326,6 +3469,7 @@ async def lift_stalls(min_sessions: int = Query(default=4, ge=2, le=20)) -> list
 
     # Group by exercise and check for stall
     from itertools import groupby
+
     stalls = []
     for exercise, group in groupby(rows, key=lambda r: r[0]):
         sessions = list(group)
@@ -3336,21 +3480,24 @@ async def lift_stalls(min_sessions: int = Query(default=4, ge=2, le=20)) -> list
         mn, mx = min(weights), max(weights)
         variation = (mx - mn) / mn if mn > 0 else 0
         if variation < 0.02:  # < 2% change = stalled
-            stalls.append({
-                "exercise": exercise,
-                "min_kg": round(mn, 2),
-                "max_kg": round(mx, 2),
-                "min_lbs": round(mn * 2.20462, 1),
-                "max_lbs": round(mx * 2.20462, 1),
-                "sessions_checked": min_sessions,
-                "total_sessions_on_record": total,
-            })
+            stalls.append(
+                {
+                    "exercise": exercise,
+                    "min_kg": round(mn, 2),
+                    "max_kg": round(mx, 2),
+                    "min_lbs": round(mn * 2.20462, 1),
+                    "max_lbs": round(mx * 2.20462, 1),
+                    "sessions_checked": min_sessions,
+                    "total_sessions_on_record": total,
+                }
+            )
 
     stalls.sort(key=lambda x: -x["total_sessions_on_record"])
     return stalls
 
 
 # ── Workout retrospective ─────────────────────────────────────────────────────
+
 
 @router.get("/workout/recent")
 async def recent_workouts(limit: int = Query(default=10, gt=0, le=50)) -> list[dict]:
@@ -3379,8 +3526,7 @@ async def recent_workouts(limit: int = Query(default=10, gt=0, le=50)) -> list[d
         ).fetchall()
         # Fetch which ones already have a retrospective
         retro_ids = {
-            r[0]
-            for r in conn.execute("SELECT workout_id FROM workout_retrospectives").fetchall()
+            r[0] for r in conn.execute("SELECT workout_id FROM workout_retrospectives").fetchall()
         }
     finally:
         conn.close()
@@ -3471,13 +3617,14 @@ async def training_after_action() -> dict:
                         target_reps = reps_raw
                     elif isinstance(reps_raw, str):
                         import re as _re
+
                         m = _re.search(r"(\d+)", reps_raw)
                         target_reps = int(m.group(1)) if m else None
                     plan_targets[name] = {
                         "target_reps": target_reps,
                         "target_weight_lbs": ex.get("weight_lbs"),
                         "target_weight_kg": ex.get("weight_kg")
-                            or (ex.get("weight_lbs") * 0.453592 if ex.get("weight_lbs") else None),
+                        or (ex.get("weight_lbs") * 0.453592 if ex.get("weight_lbs") else None),
                         "target_rpe": ex.get("rpe_target"),
                         "target_sets": ex.get("sets"),
                         "block": block.get("label"),
@@ -3493,11 +3640,17 @@ async def training_after_action() -> dict:
 
     out: list[dict] = []
     for canon, exname, sets_n, avg_reps, min_reps, avg_wt, max_wt, avg_rpe in actuals:
-        plan_target = plan_targets.get((exname or "").lower().strip()) or plan_targets.get(canon.lower().strip()) or {}
+        plan_target = (
+            plan_targets.get((exname or "").lower().strip())
+            or plan_targets.get(canon.lower().strip())
+            or {}
+        )
         target_reps = plan_target.get("target_reps")
         target_rpe = plan_target.get("target_rpe")
         target_weight_lbs = plan_target.get("target_weight_lbs") or (
-            round(plan_target.get("target_weight_kg") * LB_PER_KG) if plan_target.get("target_weight_kg") else None
+            round(plan_target.get("target_weight_kg") * LB_PER_KG)
+            if plan_target.get("target_weight_kg")
+            else None
         )
         actual_weight_lbs = round(float(max_wt or 0) * LB_PER_KG, 1) if max_wt else None
         avg_rpe_val = round(float(avg_rpe), 1) if avg_rpe is not None else None
@@ -3511,14 +3664,22 @@ async def training_after_action() -> dict:
         # overshoot. Clamp the comparison to the floor to avoid spurious drops.
         HEVY_RPE_FLOOR = 6.0
         cmp_target = max(target_rpe, HEVY_RPE_FLOOR) if target_rpe is not None else None
-        rpe_gap = (avg_rpe_val - cmp_target) if (avg_rpe_val is not None and cmp_target is not None) else None
+        rpe_gap = (
+            (avg_rpe_val - cmp_target)
+            if (avg_rpe_val is not None and cmp_target is not None)
+            else None
+        )
         if rpe_gap is not None:
             if rpe_gap >= 2:
                 delta_pct = -10
-                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — fatigue ahead of plan")
+                reason_parts.append(
+                    f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — fatigue ahead of plan"
+                )
             elif rpe_gap >= 1:
                 delta_pct = -5
-                reason_parts.append(f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — harder than planned")
+                reason_parts.append(
+                    f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — harder than planned"
+                )
             elif rpe_gap <= -2:
                 delta_pct = 2.5
                 reason_parts.append(f"avg RPE {avg_rpe_val} vs target {cmp_target:g} — too easy")
@@ -3526,10 +3687,19 @@ async def training_after_action() -> dict:
         if target_reps is not None and min_reps is not None and (target_reps - min_reps) >= 2:
             if delta_pct >= 0:
                 delta_pct = -5
-                reason_parts.append(f"missed reps by {target_reps - int(min_reps)} on at least one set")
+                reason_parts.append(
+                    f"missed reps by {target_reps - int(min_reps)} on at least one set"
+                )
 
         # On-target & RPE met or unknown: nudge up 2.5% if reps were hit AND RPE under target
-        if delta_pct == 0 and rpe_gap is not None and rpe_gap < 0 and target_reps is not None and min_reps is not None and min_reps >= target_reps:
+        if (
+            delta_pct == 0
+            and rpe_gap is not None
+            and rpe_gap < 0
+            and target_reps is not None
+            and min_reps is not None
+            and min_reps >= target_reps
+        ):
             delta_pct = 2.5
             reason_parts.append("hit all reps under target RPE — small progression")
 
@@ -3539,28 +3709,39 @@ async def training_after_action() -> dict:
             next_lbs = _round_to_2_5(base_lbs * (1 + delta_pct / 100))
 
         verdict = (
-            "drop" if delta_pct < 0 else "progress" if delta_pct > 0 else "repeat"
-            if (target_reps is not None or target_rpe is not None) else "no_plan_target"
+            "drop"
+            if delta_pct < 0
+            else "progress"
+            if delta_pct > 0
+            else "repeat"
+            if (target_reps is not None or target_rpe is not None)
+            else "no_plan_target"
         )
 
-        out.append({
-            "exercise": exname,
-            "block": plan_target.get("block"),
-            "sets": int(sets_n),
-            "avg_reps": round(float(avg_reps), 1) if avg_reps is not None else None,
-            "min_reps": int(min_reps) if min_reps is not None else None,
-            "target_reps": target_reps,
-            "actual_weight_lbs": actual_weight_lbs,
-            "target_weight_lbs": target_weight_lbs,
-            "avg_rpe": avg_rpe_val,
-            "target_rpe": target_rpe,
-            "delta_pct": delta_pct,
-            "next_session_lbs": next_lbs,
-            "verdict": verdict,
-            "reason": "; ".join(reason_parts) if reason_parts else (
-                "On target — repeat planned weight" if (target_rpe or target_reps) else "No plan target on file — log RPE in Hevy for autoreg"
-            ),
-        })
+        out.append(
+            {
+                "exercise": exname,
+                "block": plan_target.get("block"),
+                "sets": int(sets_n),
+                "avg_reps": round(float(avg_reps), 1) if avg_reps is not None else None,
+                "min_reps": int(min_reps) if min_reps is not None else None,
+                "target_reps": target_reps,
+                "actual_weight_lbs": actual_weight_lbs,
+                "target_weight_lbs": target_weight_lbs,
+                "avg_rpe": avg_rpe_val,
+                "target_rpe": target_rpe,
+                "delta_pct": delta_pct,
+                "next_session_lbs": next_lbs,
+                "verdict": verdict,
+                "reason": "; ".join(reason_parts)
+                if reason_parts
+                else (
+                    "On target — repeat planned weight"
+                    if (target_rpe or target_reps)
+                    else "No plan target on file — log RPE in Hevy for autoreg"
+                ),
+            }
+        )
 
     # Ground the retrospective in vault research, selected by execution signals
     # derived from the verdicts (not just recovery state). Same retrieval engine
@@ -3574,7 +3755,12 @@ async def training_after_action() -> dict:
     no_rpe_logged = bool(out) and all(e["avg_rpe"] is None for e in out)
 
     if "drop" in verdicts or "missed reps" in reasons:
-        hints += ["effective reps", "proximity to failure", "load selection", "repetitions in reserve"]
+        hints += [
+            "effective reps",
+            "proximity to failure",
+            "load selection",
+            "repetitions in reserve",
+        ]
     if "harder than planned" in reasons or "fatigue ahead" in reasons:
         extra_signals.add("deload")
         hints += ["fatigue management", "autoregulation", "stimulus to fatigue ratio"]
@@ -3718,10 +3904,10 @@ async def internal_checkpoint() -> dict:
 
 
 class MiddaySessionSubmission(BaseModel):
-    session_type: str           # 'workout' | 'recovery' | 'mixed'
+    session_type: str  # 'workout' | 'recovery' | 'mixed'
     title: str
     duration_min: int
-    intensity: str              # 'high' | 'moderate' | 'low' | 'passive'
+    intensity: str  # 'high' | 'moderate' | 'low' | 'passive'
     activities: list[dict]
     rationale: str
     performance_goal: str
@@ -3737,6 +3923,7 @@ async def midday_context() -> dict:
     conn = get_read_conn()
     try:
         from shc.ai.workout_planner import build_midday_context
+
         prompt = build_midday_context(conn)
     finally:
         conn.close()

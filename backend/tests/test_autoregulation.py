@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from datetime import date
 
-from shc.training.autoregulation import _decide, deload_check, weekly_prescription
+from shc.training.autoregulation import (
+    _decide,
+    _protein_gate,
+    _session_split,
+    deload_check,
+    weekly_prescription,
+    MusclePrescription,
+)
 from shc.training.mesocycle import _iso_week_start
 from shc.training.volume import MuscleVolume
 
@@ -147,3 +154,88 @@ def test_weekly_prescription_smoke(conn, seed):
     biceps = next((m for m in rx.muscles if m.muscle == "biceps"), None)
     assert biceps is not None
     assert biceps.emphasis is True
+    # New fields
+    assert isinstance(rx.session_split, list)
+    assert isinstance(rx.protein_gate, dict)
+    assert "target" in rx.protein_gate
+
+
+def _make_rx(muscle: str, target: int, action: str = "add") -> MusclePrescription:
+    return MusclePrescription(
+        muscle=muscle, current_sets=float(target - 1), target_sets=target,
+        delta=1, action=action, reason="test",
+    )
+
+
+# ── _session_split ────────────────────────────────────────────────────────────
+
+
+def test_session_split_upper_muscles_on_upper_days() -> None:
+    rx = [_make_rx("biceps", 12), _make_rx("chest", 10)]
+    split = _session_split(rx)
+    all_sessions = {s["session"] for s in split}
+    assert "Upper-A (Tue)" in all_sessions or "Upper-B (Thu)" in all_sessions
+    # No biceps or chest on lower days
+    for sess in split:
+        if "Lower" in sess["session"]:
+            assert all(e["muscle"] not in ("biceps", "chest") for e in sess["muscles"])
+
+
+def test_session_split_lower_muscles_on_lower_days() -> None:
+    rx = [_make_rx("quads", 10), _make_rx("hamstrings", 8)]
+    split = _session_split(rx)
+    for sess in split:
+        if "Upper" in sess["session"]:
+            assert all(e["muscle"] not in ("quads", "hamstrings") for e in sess["muscles"])
+
+
+def test_session_split_respects_10_set_ceiling() -> None:
+    # 17 biceps sets → should be split across 2 upper sessions, each ≤10.
+    rx = [_make_rx("biceps", 17)]
+    split = _session_split(rx)
+    for sess in split:
+        for entry in sess["muscles"]:
+            assert entry["sets"] <= 10, f"{sess['session']} has {entry['sets']} biceps sets > 10"
+
+
+def test_session_split_zero_target_excluded() -> None:
+    rx = [_make_rx("abs", 0)]
+    split = _session_split(rx)
+    for sess in split:
+        assert not any(e["muscle"] == "abs" for e in sess["muscles"])
+
+
+# ── _protein_gate ─────────────────────────────────────────────────────────────
+
+
+def test_protein_gate_no_data_returns_none_adequate(conn) -> None:
+    result = _protein_gate(conn)
+    assert result["adequate"] is None
+    assert result["days_logged"] == 0
+    assert "note" in result
+
+
+def test_protein_gate_adequate_when_above_target(conn) -> None:
+    from datetime import timedelta
+    today = date.today()
+    for i in range(5):
+        conn.execute(
+            "INSERT INTO daily_checkin (date, created_at, protein_grams) VALUES (?, now(), ?)",
+            [(today - timedelta(days=i)).isoformat(), 250],
+        )
+    result = _protein_gate(conn)
+    assert result["adequate"] is True
+    assert result["avg_7d"] == 250
+
+
+def test_protein_gate_inadequate_when_below_target(conn) -> None:
+    from datetime import timedelta
+    today = date.today()
+    for i in range(6):
+        conn.execute(
+            "INSERT INTO daily_checkin (date, created_at, protein_grams) VALUES (?, now(), ?)",
+            [(today - timedelta(days=i)).isoformat(), 150],  # 150g < 80% of 239 = 191g
+        )
+    result = _protein_gate(conn)
+    assert result["adequate"] is False
+    assert "note" in result and result["note"]

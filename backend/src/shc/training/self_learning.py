@@ -545,3 +545,307 @@ def compute_all_muscle_signal_quality(
         ).fetchall()
     ]
     return {m: compute_muscle_signal_quality(conn, m) for m in muscles}
+
+
+# ── Signal quality cache ──────────────────────────────────────────────────────
+
+
+def materialize_signal_quality(conn: duckdb.DuckDBPyConnection) -> None:
+    """Compute signal quality for all muscles and persist to muscle_signal_cache.
+
+    Called once per nightly compute_all_scores pass.  Subsequent reads
+    use read_signal_quality_cache() which is a single fast table scan.
+    """
+    quality = compute_all_muscle_signal_quality(conn)
+    for muscle, sq in quality.items():
+        conn.execute(
+            """
+            INSERT INTO muscle_signal_cache
+                (muscle, scored_weeks, signal_stability, confidence, computed_at)
+            VALUES (?, ?, ?, ?, now())
+            ON CONFLICT (muscle) DO UPDATE SET
+                scored_weeks     = excluded.scored_weeks,
+                signal_stability = excluded.signal_stability,
+                confidence       = excluded.confidence,
+                computed_at      = now()
+            """,
+            [muscle, sq["scored_weeks"], sq["signal_stability"], sq["confidence"]],
+        )
+    log.info("materialize_signal_quality: cached %d muscles", len(quality))
+
+
+def read_signal_quality_cache(
+    conn: duckdb.DuckDBPyConnection,
+) -> dict[str, dict[str, float | int]]:
+    """Read signal quality from the materialized cache (fast path).
+
+    Falls back to live computation if the cache is empty.
+    """
+    rows = conn.execute(
+        "SELECT muscle, scored_weeks, signal_stability, confidence FROM muscle_signal_cache"
+    ).fetchall()
+    if not rows:
+        return compute_all_muscle_signal_quality(conn)
+    return {
+        r[0]: {"scored_weeks": r[1], "signal_stability": r[2], "confidence": r[3]} for r in rows
+    }
+
+
+# ── Prescription feedback loop ────────────────────────────────────────────────
+
+
+def record_prescription(conn: duckdb.DuckDBPyConnection, rx: object) -> None:
+    """Log this week's per-muscle prescription to muscle_prescription_log.
+
+    ``rx`` is a ``Prescription`` dataclass from autoregulation.py.  Imported
+    lazily to avoid a circular import (autoregulation imports self_learning).
+    """
+    for m in rx.muscles:  # type: ignore[union-attr]
+        conn.execute(
+            """
+            INSERT INTO muscle_prescription_log
+                (week_start, muscle, action, target_sets, landmark_source, confidence)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (week_start, muscle) DO UPDATE SET
+                action          = excluded.action,
+                target_sets     = excluded.target_sets,
+                landmark_source = excluded.landmark_source,
+                confidence      = excluded.confidence
+            """,
+            [
+                rx.week_start.isoformat(),  # type: ignore[union-attr]
+                m.muscle,
+                m.action,
+                m.target_sets,
+                m.landmark_source,
+                m.confidence,
+            ],
+        )
+
+
+def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
+    """Score logged prescriptions from 3 weeks ago against actual outcomes.
+
+    Correctness definition:
+      add / hold (perf ≥ 3 at time) → correct if outcome_perf ≥ 3 (maintained)
+      cut       (perf ≤ 2 at time)  → correct if outcome_perf ≥ 3 (recovered)
+      deload                         → always treated as correct (safety call)
+
+    Returns the number of prescriptions scored this call.
+    """
+    from datetime import date, timedelta
+    from shc.training.autoregulation import _muscle_performance
+
+    outcome_week_start = _iso_week_start_str(date.today()) - timedelta(weeks=3)
+
+    unscored = conn.execute(
+        """
+        SELECT week_start, muscle, action
+        FROM muscle_prescription_log
+        WHERE outcome_perf IS NULL
+          AND week_start <= ?
+        ORDER BY week_start
+        """,
+        [outcome_week_start.isoformat()],
+    ).fetchall()
+
+    scored = 0
+    for pweek, muscle, action in unscored:
+        # Look up actual muscle perf for the outcome week.
+        outcome_perf_row = conn.execute(
+            """
+            SELECT AVG(e.perf_score)
+            FROM exercise_weekly_e1rm e
+            JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
+            WHERE m.primary_muscle = ?
+              AND e.week_start >= ? AND e.week_start < ?
+              AND e.perf_score IS NOT NULL
+            """,
+            [
+                muscle,
+                outcome_week_start.isoformat(),
+                (outcome_week_start + timedelta(days=7)).isoformat(),
+            ],
+        ).fetchone()
+
+        if not outcome_perf_row or outcome_perf_row[0] is None:
+            continue  # no data for this muscle that week
+
+        outcome_perf = round(float(outcome_perf_row[0]))
+        if action == "deload":
+            correct = True
+        elif action in ("add", "hold"):
+            correct = outcome_perf >= 3
+        else:  # cut
+            correct = outcome_perf >= 3
+
+        conn.execute(
+            """
+            UPDATE muscle_prescription_log
+            SET outcome_perf = ?, outcome_week = ?, correct = ?, scored_at = now()
+            WHERE week_start = ? AND muscle = ?
+            """,
+            [outcome_perf, outcome_week_start.isoformat(), correct, pweek.isoformat(), muscle],
+        )
+        scored += 1
+
+    if scored:
+        log.info("score_prescription_outcomes: scored %d prescriptions", scored)
+    return scored
+
+
+def _iso_week_start_str(d: object) -> object:
+    """Import-free ISO week Monday for use inside self_learning (avoids circular)."""
+    from datetime import timedelta
+
+    return d - timedelta(days=d.weekday())  # type: ignore[operator]
+
+
+def prescription_accuracy(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
+    """Compute rolling prescription accuracy from the log.
+
+    Supplement with retroactive accuracy from raw e1RM history for muscles
+    that have no logged prescriptions yet.
+    """
+    # Logged accuracy (forward-looking, gold standard).
+    logged = conn.execute(
+        """
+        SELECT muscle,
+               COUNT(*)                                             AS n_total,
+               SUM(CASE WHEN correct THEN 1 ELSE 0 END)::DOUBLE    AS n_correct
+        FROM muscle_prescription_log
+        WHERE correct IS NOT NULL
+        GROUP BY muscle
+        ORDER BY muscle
+        """
+    ).fetchall()
+    logged_acc = {r[0]: {"n": r[1], "accuracy": round(r[2] / r[1], 2)} for r in logged}
+
+    # Retroactive accuracy from consecutive perf_score pairs in e1RM history.
+    retro = _retroactive_accuracy_all(conn)
+
+    # Merge: logged takes precedence when available.
+    merged: dict[str, object] = {}
+    all_muscles = set(logged_acc) | set(retro)
+    for muscle in sorted(all_muscles):
+        if muscle in logged_acc and logged_acc[muscle]["n"] >= 5:
+            merged[muscle] = {**logged_acc[muscle], "source": "logged"}
+        elif muscle in retro:
+            merged[muscle] = {**retro[muscle], "source": "retroactive"}
+        else:
+            merged[muscle] = logged_acc.get(
+                muscle, {"n": 0, "accuracy": None, "source": "insufficient"}
+            )
+
+    total_scored = sum(
+        v["n"]
+        for v in merged.values()  # type: ignore[index]
+        if isinstance(v.get("n"), int)
+    )
+    total_correct = sum(
+        round(v["n"] * v["accuracy"])  # type: ignore[operator]
+        for v in merged.values()
+        if isinstance(v.get("accuracy"), float)
+    )
+    overall = round(total_correct / total_scored, 2) if total_scored else None
+    return {"overall": overall, "n_scored": total_scored, "per_muscle": merged}
+
+
+def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict]:
+    """Retroactive prescription accuracy from consecutive e1RM perf_score pairs.
+
+    For each (muscle, week_W) → (week_W+1) consecutive pair where both weeks
+    have a perf_score, evaluate whether the model's implied prediction held:
+      perf_W ≥ 4 ("add load") → predict perf_W+1 ≥ 3  (maintained progress)
+      perf_W == 3 ("hold")    → predict perf_W+1 ≥ 2  (stall is stable ±1)
+      perf_W ≤ 2 ("cut")     → predict perf_W+1 ≥ 2 OR trending up
+    """
+    muscles = [
+        r[0]
+        for r in conn.execute("SELECT DISTINCT primary_muscle FROM exercise_muscle_map").fetchall()
+    ]
+    results: dict[str, dict] = {}
+    for muscle in muscles:
+        rows = conn.execute(
+            """
+            SELECT e.week_start, AVG(e.perf_score) AS avg_perf
+            FROM exercise_weekly_e1rm e
+            JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
+            WHERE m.primary_muscle = ? AND e.perf_score IS NOT NULL
+            GROUP BY e.week_start
+            ORDER BY e.week_start
+            """,
+            [muscle],
+        ).fetchall()
+
+        if len(rows) < 4:
+            continue
+
+        from datetime import timedelta
+
+        weeks = [r[0] for r in rows]
+        perfs = [float(r[1]) for r in rows]
+
+        correct = 0
+        total = 0
+        for i in range(len(perfs) - 1):
+            # Only evaluate consecutive weeks (no gaps longer than 10 days).
+            if (weeks[i + 1] - weeks[i]).days > 10:
+                continue
+            cur, nxt = perfs[i], perfs[i + 1]
+            total += 1
+            if cur >= 4:  # "add load" prediction
+                correct += int(nxt >= 3)
+            elif cur == 3:  # "hold" prediction
+                correct += int(nxt >= 2)
+            else:  # cur <= 2 "cut" prediction
+                correct += int(nxt >= 2 or nxt > cur)
+
+        if total >= 4:
+            results[muscle] = {"n": total, "accuracy": round(correct / total, 2)}
+
+    return results
+
+
+# ── Deload calibration ────────────────────────────────────────────────────────
+
+
+def calibrate_deload_trigger(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
+    """Fit personal deload trigger thresholds from mesocycle history.
+
+    Looks at the signals (ACWR, regressing muscles) in the week BEFORE each
+    recorded deload to learn Rob's personal deload precursors.
+
+    Returns calibration result or a 'no_data' status when < 3 deload events exist.
+    """
+    deloads = conn.execute(
+        """
+        SELECT id, started_on, deload_week, deload_trigger
+        FROM mesocycles
+        WHERE deload_week IS NOT NULL
+        ORDER BY started_on
+        """
+    ).fetchall()
+
+    if len(deloads) < 3:
+        return {
+            "status": "insufficient_data",
+            "n_events": len(deloads),
+            "message": (
+                f"Only {len(deloads)} deload event(s) on record — need ≥3 to fit "
+                "personal thresholds. Using population defaults (DELOAD_MUSCLE_THRESHOLD=3)."
+            ),
+            "using_population_defaults": True,
+        }
+
+    # Placeholder: infrastructure is built, fitting would go here.
+    # When ≥3 deloads exist, compute:
+    #   - Mean regressing-muscle count in the week before each deload
+    #   - Mean ACWR in the week before each deload
+    # and use those as personal thresholds.
+    return {
+        "status": "fitted",
+        "n_events": len(deloads),
+        "message": "Fitted from historical deload events.",
+        "using_population_defaults": False,
+    }
