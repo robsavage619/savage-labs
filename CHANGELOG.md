@@ -4,6 +4,66 @@ All notable changes to this project. Dates are commit dates (Pacific time).
 
 ---
 
+## 2026-06-04
+
+### Added
+
+- **Self-learning hypertrophy engine — Phase 1–3 complete.** The training controller now fits personal parameters from Rob's own training history rather than relying on Renaissance Periodization population defaults.
+
+  **Engine wake-up (#1):** `backfill_weekly_e1rm()` upserted 7,910 rows across 234 exercises and 361 weeks of history (back to 2015). `compute_all_scores` now backtests perf_scores across all historical weeks, not just the current one.
+
+  **Volume mapping (#2):** New `exercise_classifier.py` — deterministic keyword rules covering all 17 canonical muscle keys. Went from 65% unmapped sets (trailing 90d) to 0%. Emphasis muscles (biceps, glutes, hamstrings) are now fully visible to the prescription controller. `backfill_exercise_map()` runs each nightly cycle; `_warn_if_high_unmapped()` fires loudly when >20% of 90d working sets lack a mapping.
+
+  **Phase 3 self-learning (#3):** `fit_volume_landmarks()` fits personal MEV/MRV per muscle from the P20/P80 of productive weeks (2-year lookback, set-weighted perf). `fit_acwr_bands()` fits ACWR gate thresholds from 369 weeks of Rob's resistance load history (P65/P80/P90). Results: biceps MEV 8→11, ACWR LOW 1.8→1.48, ACWR MOD 1.5→1.22. Both re-fit each nightly run and persist to `muscle_volume_targets` (mesocycle-scoped) and `personal_acwr_bands`. `_gates()` in `metrics.py` reads personal bands from the DB with fallback to population constants.
+
+  **Tonnage blend:** `score_exercise` upgrades flat e1RM (score=3) to "progressing" (score=4) when weekly tonnage trend ≥0.5%/week — prevents a hypertrophy block from being misread as a stall. `regrade_stalled_with_tonnage_blend()` retroactively applied the blend to 1,123 historical stalled rows.
+
+- **Confidence quantification.** `compute_muscle_signal_quality()` returns `scored_weeks`, `signal_stability` (fraction of consecutive weeks where trend direction is consistent), and `confidence` (0–1). Materialized to `muscle_signal_cache` each nightly run; read via fast cache path in prescription and context block. Each `MusclePrescription` now carries `confidence` and `scored_weeks` fields. Planner context block has a Confidence column per muscle. Range: biceps 0.68 (315 weeks), lower_back 0.28 (10 weeks).
+
+- **MRV floor for undertrained muscles.** When the fitted MRV < 50% of population MRV, `persist_volume_landmarks()` floors it to 50% and warns loudly. This prevents a self-reinforcing low-volume loop for muscles Rob has never pushed past low volume. The `VolumeTarget.source` field carries `'personal'`, `'personal_floored'`, or `'population'` through to `MusclePrescription.landmark_source` and the prescription reason string.
+
+- **Prescription reason transparency.** Reason strings now include the landmark source inline: `"stalled e1RM → +1 set [personal MEV=11/MRV=20]"` or `"[personal MEV=3, MRV=10↑ floored — may be undertrained]"`. The planner sees exactly what data backed each call.
+
+- **Undertrained flag in self-learning status.** `GET /api/training/self-learning/status` now surfaces `undertrained: true` when personal MRV < population MAV (muscle hasn't explored the upper half of its productive range). 9 of 15 muscles currently flagged.
+
+- **Feedback loop.** `muscle_prescription_log` table records each week's per-muscle prescription. `score_prescription_outcomes()` grades logged prescriptions 3 weeks later by comparing to actual perf outcomes. `prescription_accuracy()` computes retroactive accuracy from 1,844 historical consecutive perf-score pairs: 86% overall. Per-muscle scores surfaced in the status endpoint. Forward-looking accuracy accumulates as weeks pass.
+
+- **Session split.** `_session_split()` distributes the weekly set prescription across Upper-A (Tue) / Lower-A (Wed) / Upper-B (Thu) / Lower-B (Fri) with ≤10 sets per muscle per session. Exposed in `Prescription.session_split`, the prescription API response, and the planner context block.
+
+- **Protein gate.** `protein_grams` added to `daily_checkin` schema and `POST /checkin` API. `_protein_gate()` reads the last 7 days; if protein has been <80% of 239g target on ≥4 days, non-emphasis volume-increase prescriptions are held: `"[held: protein below target — substrate needed to convert stimulus]"`. Planner context block surfaces protein status (target, average, adequacy) on every call.
+
+- **Deload calibration infrastructure.** `calibrate_deload_trigger()` built and wired to the status endpoint. Currently returns `"insufficient_data"` (0 deload events on record). Fits automatically when ≥3 deloads are logged; uses population defaults until then.
+
+- **Dynamic OLS trend window.** `score_exercise()` now uses 12-week trend for exercises with ≥24 weeks of history, 9-week for ≥12, 6-week otherwise. Reduces false "stalled" calls for exercises where gains are <0.5%/week — common for advanced lifters 9+ years in.
+
+- **Exercise classifier expansion.** `exercise_classifier.py` extended with 28 new rules covering: back extensions, pullover→lats, kettlebell swing→glutes, shoulder raise→side_delts, internal/external rotation→rear_delts, clamshell, band pullaparts, scapular retraction, bench dip→triceps, wood chop/side bend/scissor/mountain climber/fire hydrant→abs, high pull→traps, hip flexor→quads, and more. Unclassifiable count dropped from 61→~24 (remaining are intentional: plyometrics, cardio, mobility).
+
+- **Self-learning observability endpoint.** `GET /api/training/self-learning/status` exposes: ACWR source (personal vs population + why RPE-adjusted is blocked), per-muscle volume landmarks with population comparison and undertrained flag, prescription accuracy (overall + per-muscle + source), deload calibration status, signal quality (scored_weeks, stability, confidence) per muscle.
+
+- **Security (#7).** `api/deps.py` — `require_admin_key` FastAPI dependency backed by `settings.effective_admin_key` (falls back to `APPLE_WEBHOOK_KEY`). Applied to all 26 mutating POST/PUT/DELETE endpoints across hevy.py, training.py, report.py, and dashboard.py. GET endpoints remain open. New `shc_admin_key` settings field; fallback means no .env change required for existing deployments.
+
+### Fixed
+
+- **Shadowing `_LEGS`/`_CORE` tuples** — Duplicate definitions at ~line 349 of `metrics.py` lacked `"adduct"`, `"abduct"`, `"bulgarian"` etc., silently routing hip-adduction and split-squat exercises to `"other"`. Deleted; 3 regression tests added.
+
+- **`v_daily_load` double-counting** — View joined `workout_sets` (raw); now joins `workout_sets_dedup` so Fitbod+Hevy overlap days don't double the resistance ACWR signal. Migration 0046.
+
+- **Hevy `ON CONFLICT` dropped edits** — `workout_sets` upsert was not updating `reps`, `weight_kg`, or `rpe` on conflict, silently discarding edits made in the Hevy app. Added all three to the UPDATE set.
+
+- **Prescription reason contradicted action** — When current sets < MEV while regressing (perf ≤ 2), the desired target is MEV (ramp up), not a cut. Old reason said "cut toward MEV" while action was "add". Now: `"regressing (perf 2/5) but below MEV → build to minimum productive volume"`.
+
+- **Signal quality computed on every request** — `compute_all_muscle_signal_quality()` was called on every `/training/prescription` and `/training/context` hit (16 DB aggregations per call). Now materialized to `muscle_signal_cache` in `compute_all_scores` and read via a single table scan.
+
+### Migrations
+
+`0046` v_daily_load uses workout_sets_dedup · `0047` weekly_tonnage_kg column + personal_acwr_bands table · `0048` muscle_signal_cache + muscle_prescription_log tables · `0049` protein_grams on daily_checkin
+
+### Tests
+
+214 passing (was 164 at session start). New files: `test_scoring.py` (17 tests), `test_self_learning.py` (18 tests). Extended: `test_autoregulation.py` (+11), `test_readiness.py` (+3), `test_training_load.py` (+1).
+
+---
+
 ## 2026-05-23
 
 ### Added

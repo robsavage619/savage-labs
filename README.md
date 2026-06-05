@@ -22,7 +22,7 @@
 </td>
 <td>
 
-[![Claude](https://img.shields.io/badge/Claude-Opus_4.7-1e1e2e?style=for-the-badge&logo=anthropic&logoColor=f5c2e7&labelColor=1e1e2e&color=f5c2e7)](https://anthropic.com/)
+[![Claude](https://img.shields.io/badge/Claude-Opus_4.8-1e1e2e?style=for-the-badge&logo=anthropic&logoColor=f5c2e7&labelColor=1e1e2e&color=f5c2e7)](https://anthropic.com/)
 [![Obsidian](https://img.shields.io/badge/Obsidian-RAG-1e1e2e?style=for-the-badge&logo=obsidian&logoColor=cba6f7&labelColor=1e1e2e&color=cba6f7)](https://obsidian.md/)
 [![License](https://img.shields.io/badge/License-MIT-1e1e2e?style=for-the-badge&labelColor=1e1e2e&color=a6e3a1)](LICENSE)
 
@@ -297,6 +297,46 @@ RECENT LABS (last 20, with ref ranges)
 ```
 
 On top of that, the system prompt encodes drug-class interpretation rules — what SSRIs do to HRV, what beta-blockers do to heart rate zones, what inhaled corticosteroids flag for. Claude doesn't have to figure out my situation from general pharmacology knowledge; I tell it exactly what's relevant.
+
+---
+
+### Self-Learning Hypertrophy Engine
+
+The training controller doesn't use population defaults for long. Every nightly job builds a personal model of how Rob's body responds to volume — fitting parameters directly from his logged history, replacing generic RP landmarks with empirical ones.
+
+**What it fits:**
+
+| Parameter | Population default | Personal (fitted) | How |
+|---|---|---|---|
+| Biceps MEV | 8 sets | 11 sets | P20 of productive weeks |
+| Biceps MRV | 20 sets | 20 sets | P80 of productive weeks |
+| ACWR rest threshold | 2.0 | 2.02 | P90 of historical resistance ratios |
+| ACWR low threshold | 1.8 | 1.48 | P80 of historical resistance ratios |
+| ACWR mod threshold | 1.5 | 1.22 | P65 of historical resistance ratios |
+
+**The scoring pipeline** (runs nightly + on-demand):
+
+```
+backfill_exercise_map()        → classify unmapped exercises → muscle
+backfill_weekly_e1rm()         → e1RM + tonnage for every (exercise, week)
+backfill_perf_scores()         → OLS trend → Israetel 1–5 score per week
+regrade_stalled_with_tonnage() → upgrade flat e1RM + rising tonnage → 4
+fit_volume_landmarks()         → P20/P80 of productive weeks → MEV/MRV
+fit_acwr_bands()               → P65/P80/P90 of 369 historical weeks
+materialize_signal_quality()   → scored_weeks × stability → confidence
+record_prescription()          → log this week's calls
+score_prescription_outcomes()  → grade logged calls 3 weeks later
+```
+
+**Confidence quantification.** Each muscle prescription carries a `confidence` score (0–1) derived from two signals: scored-week count (sample size) and signal stability (fraction of consecutive weeks where trend doesn't flip dramatically). Biceps at 315 scored weeks scores 0.68; lower back at 10 weeks scores 0.28. The planner context block surfaces these so Claude knows when to trust the data versus hedge.
+
+**Retroactive validation.** The engine backtests itself: for 1,844 consecutive (week_W, week_W+1) perf-score pairs across 16 muscles, it evaluates whether the implied prediction held. Overall accuracy: 86%. Per-muscle scores are surfaced at `GET /api/training/self-learning/status`.
+
+**Session split.** The weekly set prescription is distributed across four sessions (Upper-A Tue / Lower-A Wed / Upper-B Thu / Lower-B Fri) with ≤10 sets per muscle per session — the RP hypertrophy threshold for a single training stimulus.
+
+**Protein gate.** When `protein_grams` is logged in the daily check-in and has been consistently below 80% of the 239g target for ≥4 of the last 7 days, volume-increase prescriptions for non-emphasis muscles are held. Adding sets when substrate is inadequate produces fatigue, not growth.
+
+**What it's honest about.** Muscles that have never been pushed above 50% of their population MRV are flagged `undertrained` — the system is measuring training habit, not physiology. Their fitted MRV is floored at 50% of population so the prescription pushes exploration rather than locking in a low ceiling. The API surfaces which muscles have robust personal fits vs which are still on population defaults.
 
 ---
 
@@ -887,12 +927,12 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 |---|---|
 | Language | Python 3.12 |
 | Framework | FastAPI 0.115 |
-| Database | DuckDB 1.1 (encrypted, 27 migrations) |
+| Database | DuckDB 1.1 (encrypted, 49 migrations) |
 | Background | APScheduler 3.10 |
 | HTTP | httpx 0.28 (async) |
 | XML | lxml 5 (Apple Health CCDA) |
 | Credentials | macOS Keychain via `keyring` |
-| AI | Anthropic SDK 0.40 (Claude Opus 4.7) |
+| AI | Claude Opus 4.8 (chat-driven, no SDK calls in backend) |
 | Fallback | OpenAI client → Ollama |
 | Validation | Pydantic v2 |
 | Packaging | uv + pyproject.toml |
@@ -918,7 +958,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 </tr>
 </table>
 
-**Infrastructure:** Honcho (`Procfile`) — API `:8000`, frontend `:3000` · GitHub Actions CI (ruff, pyright, pytest on push to main)
+**Infrastructure:** `dev-restart.sh` — API `:8000`, frontend `:3000`, WAL checkpoint on start · pre-push hook: ruff + pyright + pytest (214 tests) · APScheduler nightly jobs: WHOOP/Hevy/DUPR sync + `compute_all_scores` (full self-learning pipeline)
 
 ---
 
@@ -966,48 +1006,49 @@ I spent more time on the UI than I probably should have. The whole thing uses OK
 ## Data Model
 
 <details>
-<summary>Schema — 24 tables, 4 views (27 migrations applied)</summary>
+<summary>Schema — 32 tables, 4 views (49 migrations applied)</summary>
 
 ```sql
 measurements        -- Apple Health time-series (metric, ts, value, unit, content_hash)
-                    -- captures dietary energy/protein/carbs/fat/fiber/water/sodium/caffeine + lean body mass
-workouts            -- WHOOP + Hevy sessions (strain, HR, kcal, kind)
-workout_sets        -- Strength sets (exercise, reps, weight_kg, rpe, is_warmup)
-sleep               -- Multi-source — sws_min, rem_min, light_min, awake_min, sleep_efficiency_pct,
-                    --   sleep_consistency_pct, disturbance_count, sleep_needed_min,
-                    --   respiratory_rate, sleep_cycle_count, in_bed_min, no_data_min,
-                    --   sleep_need_baseline_min, sleep_need_strain_min, sleep_need_nap_min, sleep_need_debt_min
+workouts            -- WHOOP + Hevy sessions (strain, HR, kcal, kind, percent_recorded)
+workout_sets        -- Strength sets (exercise, reps, weight_kg, rpe, is_warmup, exercise_template_id)
+sleep               -- Multi-source — sws_min, rem_min, efficiency_pct, disturbance_count,
+                    --   respiratory_rate, sleep_cycle_count, sleep_need_* attribution columns
 recovery            -- WHOOP (date, score, hrv, rhr, skin_temp, spo2_pct, user_calibrating)
-cardio_sessions     -- Manual + integrations (modality, duration, avg_hr, rpe, zones,
-                    --   zone_zero_min…zone_five_min, zone_distribution_json, percent_recorded,
-                    --   sport_id, sport_name, distance_meter)
-daily_cycle         -- WHOOP daily cycle (date, strain, kilojoule, avg_hr, max_hr, score_state)
-body_measurement    -- WHOOP body measurements (height_meter, weight_kg, max_heart_rate, synced_at)
-whoop_user_profile  -- WHOOP user profile (user_id, email, first_name, last_name, synced_at)
-working_weights     -- Current e1RM per exercise
-workout_plans       -- AI-generated plans (plan_json, date)
+cardio_sessions     -- Manual + integrations (modality, duration, avg_hr, zone_*_min, percent_recorded)
+daily_cycle         -- WHOOP daily cycle (strain, kilojoule, avg_hr, max_hr, score_state)
+body_measurement    -- WHOOP body measurements (height_meter, weight_kg, max_heart_rate)
+whoop_user_profile  -- WHOOP user profile
+working_weights     -- Current working weight per exercise
+workout_plans       -- AI-generated plans (plan_json, date, source)
 workout_retrospectives  -- Post-workout summaries (completion_pct, overload_flag, vault_insights)
-plan_adherence      -- Prescription vs execution
-daily_checkin       -- Morning survey
+plan_adherence      -- Prescription vs execution comparison
+daily_checkin       -- Morning survey (energy, stress, soreness, body_weight, protein_grams, …)
 medications         -- Active medications with audit trail
 conditions          -- Diagnoses
 labs                -- Lab results with reference ranges
-mesocycles          -- Active periodization block (started_on, planned_weeks, deload_trigger)
-muscle_volume_targets   -- MEV / MAV / MRV per muscle group, per mesocycle
-lab_questions       -- Pre-registered hypothesis catalogue (id, hypothesis, test_type, threshold, vault_ref,
-                    --   retired_at, queued_order — rotation system)
+mesocycles          -- Periodization blocks (started_on, planned_weeks, deload_trigger)
+muscle_volume_targets   -- MEV / MAV / MRV per muscle group; mesocycle_id='' global, UUID personal
+exercise_muscle_map     -- Exercise name → primary + secondary muscles (classifier + manual seed)
+hevy_exercise_templates -- Hevy exercise catalog cache (id, title, primary_muscle_group, category)
+exercise_weekly_e1rm    -- Per-exercise weekly best e1RM, work_sets, weekly_tonnage_kg, perf_score, trend
+personal_acwr_bands     -- Fitted ACWR gate thresholds from Rob's historical load distribution
+muscle_signal_cache     -- Materialized signal quality (scored_weeks, stability, confidence) per muscle
+muscle_prescription_log -- Weekly per-muscle prescription log for feedback-loop scoring
+lab_questions       -- Pre-registered hypothesis catalogue (retired_at, queued_order — rotation system)
 lab_findings        -- Per-run results (verdict, n, effect_size, p_value, evidence)
-dupr_snapshots      -- One DUPR doubles/singles rating snapshot per calendar day (synced from api.dupr.gg)
-dupr_matches        -- Full DUPR match history (match_id PK, game scores, partner/opponents, pre/post/delta rating)
-oauth_state         -- OAuth + credential sync state per source (last_sync_at, needs_reauth)
-schema_version      -- 27 migrations applied
+exercise_preferences    -- Per-exercise 'yes'/'no' training preferences
+dupr_snapshots      -- One DUPR rating snapshot per calendar day
+dupr_matches        -- Full DUPR match history (scores, partner/opponents, pre/post/delta)
+oauth_state         -- OAuth + credential sync state per source
+schema_version      -- 49 migrations applied
 ```
 
 ```sql
 v_hrv_baseline_28d      -- Rolling 28d HRV mean and SD (for σ-deviation)
-v_session_load          -- Per-day load from WHOOP strain + Hevy volume (filters percent_recorded ≥ 50%)
-v_daily_load            -- Composite load — true Gabbett ACWR denominator + Banister CTL/ATL input
-workout_sets_dedup      -- Deduped sets (handles Hevy sync collisions)
+v_session_load          -- Per-day WHOOP strain (filters percent_recorded ≥ 50%)
+v_daily_load            -- Composite load — uses workout_sets_dedup, not raw sets (dedup fix)
+workout_sets_dedup      -- Deduped sets — Hevy is source of truth when overlap with Fitbod
 ```
 
 </details>
