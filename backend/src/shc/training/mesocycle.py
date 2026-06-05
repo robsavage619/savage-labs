@@ -20,6 +20,8 @@ from datetime import date, timedelta
 
 import duckdb
 
+from shc.training.exercise_classifier import backfill_exercise_map
+
 log = logging.getLogger(__name__)
 
 
@@ -299,6 +301,7 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
 
     Writes results into exercise_weekly_e1rm (upsert).
     """
+    backfill_exercise_map(conn)
     backfill_weekly_e1rm(conn)
     this_week = _iso_week_start(date.today())
 
