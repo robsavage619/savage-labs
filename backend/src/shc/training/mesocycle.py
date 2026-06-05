@@ -487,16 +487,28 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     actuals = weekly_muscle_volume(conn, this_week)
     report = build_muscle_report(actuals, targets)
 
+    # Which muscles have personal landmark overrides (fitted to Rob's data)?
+    personal_muscles: set[str] = {
+        r[0]
+        for r in conn.execute(
+            "SELECT muscle_group FROM muscle_volume_targets WHERE mesocycle_id = ?",
+            [state.id],
+        ).fetchall()
+    }
+
     # Per-muscle volume table (anatomical; primary 1.0 + secondary 0.5 credit).
+    # Landmarks marked with * are fitted to Rob's own data; others are RP population defaults.
     vol_rows: list[str] = []
     for r in report:
         if r.mev is None:
             mav_str, landmarks = "—", "untargeted"
         else:
-            mav_str, landmarks = str(r.mav), f"{r.mev}/{r.mrv}"
+            fitted = "*" if r.muscle in personal_muscles else ""
+            mav_str = str(r.mav)
+            landmarks = f"{r.mev}/{r.mrv}{fitted}"
         vol_rows.append(
             f"| {r.muscle:<12} | {r.actual_sets:>6.1f} | {mav_str:>6} | "
-            f"{landmarks:>8} | {r.status} |"
+            f"{landmarks:>9} | {r.status} |"
         )
 
     # Per-exercise progression table (exercises trained in last 2 weeks)
@@ -529,15 +541,26 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         if state.is_deload_week
         else f"Week {state.week_number} of {state.planned_weeks} (accumulation)"
     )
+    # Self-learning summary line
+    n_personal = len(personal_muscles)
+    n_total = sum(1 for r in report if r.mev is not None)
+    try:
+        from shc.training.self_learning import read_acwr_bands
+        acwr_src = "personal (fitted)" if read_acwr_bands(conn) else "population defaults"
+    except Exception:
+        acwr_src = "unknown"
+
     lines = [
         "## MESOCYCLE POSITION",
         f"- Block status: {block_label}",
         f"- Block started: {state.started_on}",
         f"- Weeks remaining in accumulation: {state.weeks_remaining}",
+        f"- Self-learning: {n_personal}/{n_total} muscles have personal landmarks (*); "
+        f"ACWR gates from {acwr_src}",
         "",
-        "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 0.5)",
+        "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 0.5; * = fitted to Rob's data)",
         "| Muscle | Actual | MAV | MEV/MRV | Status |",
-        "|--------------|--------|--------|----------|--------|",
+        "|--------------|--------|--------|----------|---------|",
         *vol_rows,
         "",
     ]
