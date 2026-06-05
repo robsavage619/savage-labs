@@ -9,7 +9,8 @@ Public API:
     weekly_e1rm(conn, exercise, n)   → list[WeeklyE1RM]
     score_exercise(conn, exercise)   → ProgressionScore
     backfill_weekly_e1rm(conn)       → None  (upsert history into exercise_weekly_e1rm)
-    compute_all_scores(conn)         → None  (backfill + score this week)
+    backfill_perf_scores(conn)       → None  (score all unscored historical rows)
+    compute_all_scores(conn)         → None  (backfill + score all + fit this week)
     mesocycle_context_block(conn)    → str   (markdown injected into planner)
     advance_mesocycle(conn, trigger) → MesocycleState
 """
@@ -21,6 +22,7 @@ from datetime import date, timedelta
 import duckdb
 
 from shc.training.exercise_classifier import backfill_exercise_map
+from shc.training.self_learning import fit_all
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class WeeklyE1RM:
     work_sets: int
     perf_score: int | None
     trend: str | None
+    tonnage_kg: float | None = None
 
 
 @dataclass
@@ -165,19 +168,36 @@ def weekly_e1rm(
     conn: duckdb.DuckDBPyConnection,
     exercise: str,
     n_weeks: int = 8,
+    before: date | None = None,
 ) -> list[WeeklyE1RM]:
-    """Return the last n_weeks of stored e1RM data for an exercise, oldest first."""
-    rows = conn.execute(
-        """
-        SELECT week_start, e1rm_kg, work_sets, perf_score, trend
-        FROM exercise_weekly_e1rm
-        WHERE exercise = ?
-        ORDER BY week_start DESC
-        LIMIT ?
-        """,
-        [exercise, n_weeks],
-    ).fetchall()
-    return [WeeklyE1RM(r[0], r[1], r[2], r[3], r[4]) for r in reversed(rows)]
+    """Return the last n_weeks of stored e1RM data for an exercise, oldest first.
+
+    If ``before`` is given, only weeks strictly before that date are returned
+    (enables historical backfill scoring without today bleeding in).
+    """
+    if before is not None:
+        rows = conn.execute(
+            """
+            SELECT week_start, e1rm_kg, work_sets, perf_score, trend, weekly_tonnage_kg
+            FROM exercise_weekly_e1rm
+            WHERE exercise = ? AND week_start < ?
+            ORDER BY week_start DESC
+            LIMIT ?
+            """,
+            [exercise, before.isoformat(), n_weeks],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT week_start, e1rm_kg, work_sets, perf_score, trend, weekly_tonnage_kg
+            FROM exercise_weekly_e1rm
+            WHERE exercise = ?
+            ORDER BY week_start DESC
+            LIMIT ?
+            """,
+            [exercise, n_weeks],
+        ).fetchall()
+    return [WeeklyE1RM(r[0], r[1], r[2], r[3], r[4], r[5]) for r in reversed(rows)]
 
 
 # e1RM scoring is deliberately conservative: a hypertrophy controller must not
@@ -236,25 +256,41 @@ def _recommendation(score: int) -> str:
 def score_exercise(
     conn: duckdb.DuckDBPyConnection,
     exercise: str,
+    as_of: date | None = None,
 ) -> ProgressionScore | None:
     """Score an exercise from the TREND of its weekly e1RM over completed weeks.
 
     Uses the OLS slope across the last up to 6 COMPLETED weeks — the in-progress
     week is excluded, since a partial week understates the best set and would bias
-    the call by training-day timing. Returns None until ≥3 completed weeks exist:
-    with less, the trend is indistinguishable from noise and the controller should
-    hold and gather data rather than guess (panel review C1).
+    the call by training-day timing. Returns None until ≥3 completed weeks exist.
+
+    ``as_of`` defaults to today's ISO-week Monday; pass a historical Monday to
+    score as-of that point in time (used by backfill_perf_scores).
+
+    Blends a tonnage-progression component: if the e1RM trend is flat (score=3)
+    but weekly tonnage (weight×reps total) is rising ≥0.5%/week, upgrades to
+    score=4. This prevents a hypertrophy block where muscle is growing under
+    increasing volume from being misread as "stalled" (Phase 3 audit finding).
     """
-    this_week = _iso_week_start(date.today())
-    history = [h for h in weekly_e1rm(conn, exercise, n_weeks=8) if h.week_start < this_week]
+    this_week = as_of if as_of is not None else _iso_week_start(date.today())
+    history = weekly_e1rm(conn, exercise, n_weeks=8, before=this_week)
     if len(history) < 3:
         return None
 
     series = [h.e1rm_kg for h in history[-6:]]
     pct_per_week = _trend_pct_per_week(series)
     perf_score, trend = _score_from_trend(pct_per_week)
-    latest = history[-1]
 
+    # Tonnage blend: flat e1RM + rising volume-load = hypertrophy progress, not stall.
+    if perf_score == 3:
+        tonnage_series = [h.tonnage_kg for h in history[-6:] if h.tonnage_kg is not None]
+        if len(tonnage_series) >= 3:
+            tonnage_pct = _trend_pct_per_week(tonnage_series)
+            if tonnage_pct >= 0.5:
+                perf_score = 4
+                trend = "progressing"
+
+    latest = history[-1]
     return ProgressionScore(
         exercise=exercise,
         week_start=this_week,
@@ -268,6 +304,76 @@ def score_exercise(
     )
 
 
+def backfill_perf_scores(conn: duckdb.DuckDBPyConnection) -> None:
+    """Score every (exercise, week) row that has ≥3 prior completed weeks of e1RM.
+
+    Only fills NULL perf_score cells — does NOT overwrite already-computed scores.
+    Uses in-memory series per exercise (one DB read per exercise) so it's fast
+    even on first run with 143+ exercises × hundreds of weeks.
+    """
+    exercises = [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT exercise FROM (
+                SELECT exercise, COUNT(*) AS n
+                FROM exercise_weekly_e1rm
+                GROUP BY exercise
+                HAVING n >= 4
+            )
+            ORDER BY exercise
+            """
+        ).fetchall()
+    ]
+
+    updated = 0
+    for ex in exercises:
+        rows = conn.execute(
+            """
+            SELECT week_start, e1rm_kg, weekly_tonnage_kg, perf_score
+            FROM exercise_weekly_e1rm
+            WHERE exercise = ?
+            ORDER BY week_start
+            """,
+            [ex],
+        ).fetchall()
+
+        weeks = [r[0] for r in rows]
+        e1rms = [float(r[1]) for r in rows]
+        tonnages = [float(r[2]) if r[2] is not None else None for r in rows]
+        scored = [r[3] for r in rows]
+
+        for i in range(len(rows)):
+            if scored[i] is not None:
+                continue  # already scored — preserve
+
+            prior_e1rms = e1rms[max(0, i - 6) : i]
+            if len(prior_e1rms) < 3:
+                continue
+
+            pct = _trend_pct_per_week(prior_e1rms)
+            ps, trend = _score_from_trend(pct)
+
+            # Tonnage blend
+            if ps == 3:
+                prior_t = [t for t in tonnages[max(0, i - 6) : i] if t is not None]
+                if len(prior_t) >= 3 and _trend_pct_per_week(prior_t) >= 0.5:
+                    ps = 4
+                    trend = "progressing"
+
+            conn.execute(
+                """
+                UPDATE exercise_weekly_e1rm
+                SET perf_score = ?, trend = ?
+                WHERE exercise = ? AND week_start = ?
+                """,
+                [ps, trend, ex, weeks[i].isoformat()],
+            )
+            updated += 1
+
+    log.info("backfill_perf_scores: scored %d (exercise, week) rows", updated)
+
+
 def backfill_weekly_e1rm(conn: duckdb.DuckDBPyConnection) -> None:
     """Populate e1rm_kg + work_sets for every (exercise, ISO-week) from history.
 
@@ -278,19 +384,22 @@ def backfill_weekly_e1rm(conn: duckdb.DuckDBPyConnection) -> None:
     rows = conn.execute(
         f"""
         INSERT INTO exercise_weekly_e1rm
-            (exercise, week_start, e1rm_kg, work_sets, perf_score, trend, computed_at)
+            (exercise, week_start, e1rm_kg, work_sets, weekly_tonnage_kg,
+             perf_score, trend, computed_at)
         SELECT exercise,
                date_trunc('week', started_at)::DATE AS week_start,
                MAX({_CAPPED_E1RM})                  AS e1rm_kg,
                COUNT(*)                             AS work_sets,
+               SUM(weight_kg * reps)                AS weekly_tonnage_kg,
                NULL, NULL, now()
         FROM workout_sets_dedup
         WHERE weight_kg > 0 AND reps > 0
         GROUP BY exercise, date_trunc('week', started_at)::DATE
         ON CONFLICT (exercise, week_start) DO UPDATE SET
-            e1rm_kg    = excluded.e1rm_kg,
-            work_sets  = excluded.work_sets,
-            computed_at = now()
+            e1rm_kg          = excluded.e1rm_kg,
+            work_sets        = excluded.work_sets,
+            weekly_tonnage_kg = excluded.weekly_tonnage_kg,
+            computed_at      = now()
         """
     ).rowcount
     log.info("backfill_weekly_e1rm: upserted %d (exercise, week) rows", rows)
@@ -303,6 +412,7 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
     """
     backfill_exercise_map(conn)
     backfill_weekly_e1rm(conn)
+    backfill_perf_scores(conn)
     this_week = _iso_week_start(date.today())
 
     exercises = [
@@ -323,7 +433,7 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
         # weekly series the trend is built from accumulates one row per week.
         row = conn.execute(
             f"""
-            SELECT MAX({_CAPPED_E1RM}), COUNT(*)
+            SELECT MAX({_CAPPED_E1RM}), COUNT(*), SUM(weight_kg * reps)
             FROM workout_sets_dedup
             WHERE exercise = ?
               AND started_at::DATE >= ? AND started_at::DATE < ?
@@ -333,26 +443,30 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
         ).fetchone()
         if not row or not row[0]:
             continue
-        # Score comes from the trend over COMPLETED weeks (excludes this one);
-        # None until ≥3 weeks of history — store the e1RM with a null score.
         ps = score_exercise(conn, ex)
         perf_score = ps.perf_score if ps else None
         trend = ps.trend if ps else None
         conn.execute(
             """
             INSERT INTO exercise_weekly_e1rm
-                (exercise, week_start, e1rm_kg, work_sets, perf_score, trend, computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, now())
+                (exercise, week_start, e1rm_kg, work_sets, weekly_tonnage_kg,
+                 perf_score, trend, computed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, now())
             ON CONFLICT (exercise, week_start) DO UPDATE SET
-                e1rm_kg = excluded.e1rm_kg,
-                work_sets = excluded.work_sets,
-                perf_score = excluded.perf_score,
-                trend = excluded.trend,
-                computed_at = now()
+                e1rm_kg          = excluded.e1rm_kg,
+                work_sets        = excluded.work_sets,
+                weekly_tonnage_kg = excluded.weekly_tonnage_kg,
+                perf_score       = excluded.perf_score,
+                trend            = excluded.trend,
+                computed_at      = now()
             """,
-            [ex, this_week, row[0], row[1], perf_score, trend],
+            [ex, this_week, row[0], row[1], row[2], perf_score, trend],
         )
     log.info("compute_all_scores: updated %d exercises for week %s", len(exercises), this_week)
+
+    # Phase 3: fit personal landmarks + ACWR bands from the now-populated data.
+    state = active_mesocycle(conn)
+    fit_all(conn, state.id if state else "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

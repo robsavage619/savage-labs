@@ -943,9 +943,28 @@ def _gates(
     e1rm_regression_pct: float | None,
     deload_cooldown: bool = False,
     e1rm_lift: str | None = None,
+    conn=None,
 ) -> AutoRegGates:
     g = AutoRegGates()
     reasons: list[str] = []
+
+    # Load personal ACWR bands if available; fall back to population constants.
+    res_rest = RES_ACWR_REST
+    res_low = RES_ACWR_LOW
+    res_mod = RES_ACWR_MOD
+    cond_forbid_legs = COND_ACWR_FORBID_LEGS
+    if conn is not None:
+        try:
+            from shc.training.self_learning import read_acwr_bands
+            personal = read_acwr_bands(conn)
+            if personal:
+                res_rest = personal["RES_ACWR_REST"]
+                res_low = personal["RES_ACWR_LOW"]
+                res_mod = personal["RES_ACWR_MOD"]
+                cond_forbid_legs = personal["COND_ACWR_FORBID_LEGS"]
+        except Exception as exc:
+            import logging as _log
+            _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
 
     # Hard rest gates.
     if rec.hrv_sigma is not None and rec.hrv_sigma < -1.5:
@@ -1023,32 +1042,32 @@ def _gates(
     # rather than capping global intensity. This prevents a heavy pickleball
     # week from grounding under-stimulated upper-body lifting.
     res = load.resistance_acwr
-    if res is not None and res > RES_ACWR_REST:
+    if res is not None and res > res_rest:
         g.max_intensity = "rest"
         reasons.append(
-            f"Resistance ACWR {res} > {RES_ACWR_REST} — lifting fatigue spike, rest required"
+            f"Resistance ACWR {res} > {res_rest} — lifting fatigue spike, rest required"
         )
-    elif res is not None and res > RES_ACWR_LOW:
+    elif res is not None and res > res_low:
         if g.max_intensity in ("high", "moderate"):
             g.max_intensity = "low"
         reasons.append(
-            f"Resistance ACWR {res} > {RES_ACWR_LOW} — elevated lifting fatigue, cap LOW"
+            f"Resistance ACWR {res} > {res_low} — elevated lifting fatigue, cap LOW"
         )
-    elif res is not None and res > RES_ACWR_MOD:
+    elif res is not None and res > res_mod:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
         reasons.append(
-            f"Resistance ACWR {res} > {RES_ACWR_MOD} — accumulating fatigue, cap MODERATE"
+            f"Resistance ACWR {res} > {res_mod} — accumulating fatigue, cap MODERATE"
         )
 
     cond = load.conditioning_acwr
-    if cond is not None and cond > COND_ACWR_FORBID_LEGS:
+    if cond is not None and cond > cond_forbid_legs:
         # Court/cardio overload. Protect the lower body that absorbs court load;
         # leave upper-body lifting available.
         if "legs" not in g.forbid_muscle_groups:
             g.forbid_muscle_groups.append("legs")
         reasons.append(
-            f"Conditioning ACWR {cond} > {COND_ACWR_FORBID_LEGS} — court/cardio overload; hold "
+            f"Conditioning ACWR {cond} > {cond_forbid_legs} — court/cardio overload; hold "
             "pickleball + hard cardio, legs off today (upper-body lifting OK)"
         )
     elif cond is not None and cond > 1.3:
@@ -1408,7 +1427,7 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
     e1rm = _e1rm_regression(conn, today)
     e1rm_pct, e1rm_lift = e1rm if e1rm else (None, None)
     deload_cooldown = _deload_in_cooldown(conn, today)
-    gates = _gates(rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift)
+    gates = _gates(rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift, conn=conn)
     freshness = _freshness(conn, today, rec, sleep, load)
 
     body_comp = _body_composition(conn, today)
