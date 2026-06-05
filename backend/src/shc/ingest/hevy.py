@@ -52,7 +52,12 @@ async def _post(path: str, body: dict) -> dict:
             timeout=30.0,
         )
         if resp.status_code >= 400:
-            log.error("Hevy POST %s failed: %s — body sent: %s", path, resp.text[:500], json.dumps(body)[:1000])
+            log.error(
+                "Hevy POST %s failed: %s — body sent: %s",
+                path,
+                resp.text[:500],
+                json.dumps(body)[:1000],
+            )
             raise RuntimeError(f"Hevy {resp.status_code}: {resp.text[:300]}")
     return resp.json()
 
@@ -66,7 +71,12 @@ async def _put(path: str, body: dict) -> dict:
             timeout=30.0,
         )
         if resp.status_code >= 400:
-            log.error("Hevy PUT %s failed: %s — body sent: %s", path, resp.text[:500], json.dumps(body)[:1000])
+            log.error(
+                "Hevy PUT %s failed: %s — body sent: %s",
+                path,
+                resp.text[:500],
+                json.dumps(body)[:1000],
+            )
             raise RuntimeError(f"Hevy {resp.status_code}: {resp.text[:300]}")
     return resp.json()
 
@@ -168,22 +178,24 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
         for idx, s in enumerate(ex.get("sets", [])):
             set_hash = _content_hash("hevy", hevy_id, exercise_name, str(idx))
             set_id = f"hevy_set_{set_hash}"
-            set_rows.append({
-                "id": set_id,
-                "workout_id": workout_id,
-                "exercise": exercise_name,
-                "set_idx": s.get("index", idx),
-                "reps": s.get("reps"),
-                "weight_kg": s.get("weight_kg"),
-                "rpe": s.get("rpe"),
-                "duration_seconds": s.get("duration_seconds"),
-                "is_warmup": s.get("type") == "warmup",
-                "exercise_notes": exercise_notes,
-                "exercise_template_id": template_id,
-                "superset_id": superset_id,
-                "exercise_index": exercise_index,
-                "content_hash": set_hash,
-            })
+            set_rows.append(
+                {
+                    "id": set_id,
+                    "workout_id": workout_id,
+                    "exercise": exercise_name,
+                    "set_idx": s.get("index", idx),
+                    "reps": s.get("reps"),
+                    "weight_kg": s.get("weight_kg"),
+                    "rpe": s.get("rpe"),
+                    "duration_seconds": s.get("duration_seconds"),
+                    "is_warmup": s.get("type") == "warmup",
+                    "exercise_notes": exercise_notes,
+                    "exercise_template_id": template_id,
+                    "superset_id": superset_id,
+                    "exercise_index": exercise_index,
+                    "content_hash": set_hash,
+                }
+            )
     return workout_row, set_rows
 
 
@@ -222,6 +234,9 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
                  $duration_seconds, $is_warmup, $exercise_notes,
                  $exercise_template_id, $superset_id, $exercise_index, $content_hash)
             ON CONFLICT (id) DO UPDATE SET
+                reps                 = EXCLUDED.reps,
+                weight_kg            = EXCLUDED.weight_kg,
+                rpe                  = EXCLUDED.rpe,
                 exercise_notes       = EXCLUDED.exercise_notes,
                 exercise_template_id = EXCLUDED.exercise_template_id,
                 superset_id          = EXCLUDED.superset_id,
@@ -265,9 +280,7 @@ async def sync_workouts() -> dict[str, int]:
     # Load cursor
     read_conn = get_read_conn()
     try:
-        row = read_conn.execute(
-            "SELECT cursor FROM oauth_state WHERE source = 'hevy'"
-        ).fetchone()
+        row = read_conn.execute("SELECT cursor FROM oauth_state WHERE source = 'hevy'").fetchone()
     finally:
         read_conn.close()
 
@@ -392,9 +405,7 @@ async def push_routine(plan: dict) -> dict:
     # the date in the title marks which day it's for.
     read_conn = get_read_conn()
     try:
-        count = read_conn.execute(
-            "SELECT COUNT(*) FROM hevy_exercise_templates"
-        ).fetchone()[0]
+        count = read_conn.execute("SELECT COUNT(*) FROM hevy_exercise_templates").fetchone()[0]
         existing_routine = read_conn.execute(
             "SELECT routine_id FROM hevy_routines ORDER BY pushed_at DESC LIMIT 1"
         ).fetchone()
@@ -469,9 +480,7 @@ def _extract_routine_id(result) -> str:
     return "unknown"
 
 
-def _plan_to_hevy_exercises(
-    plan: dict, templates: list[tuple[str, str]]
-) -> list[dict]:
+def _plan_to_hevy_exercises(plan: dict, templates: list[tuple[str, str]]) -> list[dict]:
     """Convert SHC workout plan blocks → Hevy routine exercises list."""
     exercises = []
 
@@ -485,21 +494,23 @@ def _plan_to_hevy_exercises(
         n_sets = wu.get("sets", 1)
         reps = _parse_reps(wu.get("reps"))
         duration = wu.get("duration_sec")
-        exercises.append({
-            "exercise_template_id": template_id,
-            "superset_id": None,
-            "notes": wu.get("notes") or None,
-            "sets": [
-                {
-                    "type": "warmup",
-                    "weight_kg": None,
-                    "reps": reps,
-                    "duration_seconds": duration,
-                    "distance_meters": None,
-                }
-                for _ in range(n_sets)
-            ],
-        })
+        exercises.append(
+            {
+                "exercise_template_id": template_id,
+                "superset_id": None,
+                "notes": wu.get("notes") or None,
+                "sets": [
+                    {
+                        "type": "warmup",
+                        "weight_kg": None,
+                        "reps": reps,
+                        "duration_seconds": duration,
+                        "distance_meters": None,
+                    }
+                    for _ in range(n_sets)
+                ],
+            }
+        )
 
     # Main blocks
     for block in plan.get("blocks", []):
@@ -535,22 +546,24 @@ def _plan_to_hevy_exercises(
             combined_notes = " · ".join(note_parts) or None
 
             rest_secs = ex.get("rest_seconds")
-            exercises.append({
-                "exercise_template_id": template_id,
-                "superset_id": None,
-                "notes": combined_notes,
-                **({"rest_seconds": rest_secs} if rest_secs is not None else {}),
-                "sets": [
-                    {
-                        "type": "normal",
-                        "weight_kg": weight_kg,
-                        "reps": reps,
-                        "duration_seconds": duration,
-                        "distance_meters": None,
-                    }
-                    for _ in range(n_sets)
-                ],
-            })
+            exercises.append(
+                {
+                    "exercise_template_id": template_id,
+                    "superset_id": None,
+                    "notes": combined_notes,
+                    **({"rest_seconds": rest_secs} if rest_secs is not None else {}),
+                    "sets": [
+                        {
+                            "type": "normal",
+                            "weight_kg": weight_kg,
+                            "reps": reps,
+                            "duration_seconds": duration,
+                            "distance_meters": None,
+                        }
+                        for _ in range(n_sets)
+                    ],
+                }
+            )
 
     return exercises
 
