@@ -67,3 +67,39 @@ def test_lift_legs_more_recent_than_pickleball_wins(conn, seed, today: date) -> 
     seed.workout(ago(today, 1), "Goblet Squat", [(40, 10)])  # legs lift yesterday
     m = _training_load(conn, today)
     assert m.days_since_legs == 1
+
+
+def test_arm_acwr_resistance_and_conditioning_are_independent(
+    conn, seed, today: date
+) -> None:
+    """Resistance (Hevy tonnes, idx 3) and conditioning (WHOOP strain, idx 2) are
+    independent ACWR streams — a spike in one must not move the other."""
+    import uuid
+    from datetime import datetime
+
+    def _whoop(days_ago: int, strain: float) -> None:
+        wid = str(uuid.uuid4())
+        started = datetime.combine(ago(today, days_ago), datetime.min.time())
+        conn.execute(
+            "INSERT INTO workouts (id, source, started_at, kind, strain, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [wid, "whoop", started, "running", strain, wid],
+        )
+
+    # Chronic conditioning baseline: low strain 15 days ago.
+    _whoop(15, 8.0)
+    # Acute conditioning spike: high strain 3 days ago.
+    _whoop(3, 18.5)
+
+    # Hevy lifting only in the chronic window; no acute Hevy load.
+    seed.workout(ago(today, 15), "Bench Press (Barbell)", [(80, 10)] * 5)
+
+    m = _training_load(conn, today)
+
+    # Conditioning arm: recent 18.5 spike > chronic 8.0 baseline → ACWR > 1.
+    assert m.conditioning_acwr is not None
+    assert m.conditioning_acwr > 1.0, "conditioning spike should raise cond. ACWR"
+
+    # Resistance arm: acute is 0 (no Hevy this week), chronic has the old lift → ACWR < 1.
+    assert m.resistance_acwr is not None
+    assert m.resistance_acwr < 1.0, "resistance acute should be 0 with no recent lift"
