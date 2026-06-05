@@ -375,9 +375,26 @@ def _session_split(
     return [{"session": sess, "muscles": entries} for sess, entries in split_map.items() if entries]
 
 
-# Protein target: 1g per lb of bodyweight is the RP/sports-science standard for recomp.
-# Rob's bodyweight ≈ 239 lb → 239g. Stored in personal_context but approximated here.
-_PROTEIN_TARGET_G = 239
+def _protein_target_g(conn: duckdb.DuckDBPyConnection) -> int:
+    """Protein target in grams: 1g per lb of bodyweight (RP/sports-science standard).
+
+    Reads the most recent check-in weight rather than using a hardcoded snapshot.
+    Falls back to 239g (Rob's bodyweight at the time of the original estimate) when
+    no weight data is available.
+    """
+    row = conn.execute(
+        """
+        SELECT body_weight_kg
+        FROM daily_checkin
+        WHERE body_weight_kg IS NOT NULL
+        ORDER BY date DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row and row[0] is not None:
+        # 1g/lb: kg → lbs × 1g/lb
+        return int(round(float(row[0]) * 2.20462))
+    return 239  # fallback to bodyweight snapshot
 
 
 def _protein_gate(conn: duckdb.DuckDBPyConnection) -> dict:
@@ -397,11 +414,13 @@ def _protein_gate(conn: duckdb.DuckDBPyConnection) -> dict:
         """
     ).fetchall()
 
+    target_g = _protein_target_g(conn)
+
     if not rows:
         return {
             "adequate": None,
             "avg_7d": None,
-            "target": _PROTEIN_TARGET_G,
+            "target": target_g,
             "pct": None,
             "days_logged": 0,
             "note": "No protein data logged — start tracking daily protein in check-in",
@@ -409,20 +428,20 @@ def _protein_gate(conn: duckdb.DuckDBPyConnection) -> dict:
 
     values = [float(r[0]) for r in rows]
     avg = sum(values) / len(values)
-    pct = avg / _PROTEIN_TARGET_G
-    low_days = sum(1 for v in values if v < _PROTEIN_TARGET_G * 0.80)
+    pct = avg / target_g
+    low_days = sum(1 for v in values if v < target_g * 0.80)
     adequate = low_days < 4  # adequate if < 4 of last days were below 80% of target
 
     return {
         "adequate": adequate,
         "avg_7d": round(avg),
-        "target": _PROTEIN_TARGET_G,
+        "target": target_g,
         "pct": round(pct, 2),
         "days_logged": len(values),
         "note": (
             None
             if adequate
-            else f"Protein avg {round(avg)}g vs target {_PROTEIN_TARGET_G}g "
+            else f"Protein avg {round(avg)}g vs target {target_g}g "
             f"({low_days} of {len(values)} days below 80%) — "
             "hold volume increases until protein is consistent"
         ),

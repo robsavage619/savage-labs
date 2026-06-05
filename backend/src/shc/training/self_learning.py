@@ -232,10 +232,15 @@ def _historical_weekly_acwr(
 ) -> list[float]:
     """Compute uncoupled weekly ACWR ratios for ``column`` (hevy_tonnes | whoop_strain).
 
-    Mirrors the _arm_acwr formula used live in metrics.py:
-      acute  = mean(column) over [M, M+7)   = SUM/7
-      chronic = mean(column) over [M-28, M-7) = SUM/21
-      ratio  = acute / chronic  (only when chronic > 0)
+    Mirrors the _arm_acwr formula used live in metrics.py exactly:
+      acute   = mean(column) over [ws, ws+7)     = SUM/7
+      chronic = mean(column) over [ws-35, ws-7)  = SUM/28  ← 28-day window, not 21
+      ratio   = acute / chronic  (only when chronic > 0)
+
+    The chronic window was previously [ws-28, ws-7)/21 (21 days), but metrics.py
+    uses a 28-day chronic window. Mismatched windows meant personal ACWR bands
+    were fitted on different ratio distributions than the live gates apply — biasing
+    all personal thresholds downward (Bug 5).
     """
     rows = conn.execute(
         f"""
@@ -251,8 +256,8 @@ def _historical_weekly_acwr(
                AND d.date < w.ws + INTERVAL 7 DAYS) / 7.0  AS acute,
             (SELECT COALESCE(SUM(d.{column}), 0)
              FROM v_daily_load d
-             WHERE d.date >= w.ws - INTERVAL 28 DAYS
-               AND d.date < w.ws - INTERVAL 7 DAYS) / 21.0 AS chronic
+             WHERE d.date >= w.ws - INTERVAL 35 DAYS
+               AND d.date < w.ws - INTERVAL 7 DAYS) / 28.0 AS chronic
         FROM weeks w
         """
     ).fetchall()

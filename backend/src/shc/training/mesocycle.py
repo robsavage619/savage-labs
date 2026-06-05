@@ -125,8 +125,9 @@ def _build_state(
     notes: str | None,
 ) -> MesocycleState:
     today = date.today()
-    days_elapsed = (today - started_on).days
-    week_number = days_elapsed // 7 + 1
+    # Align to ISO-week Monday before counting elapsed weeks so a block started
+    # mid-week doesn't drift week_number by training-day timing (Bug 6).
+    week_number = (today - _iso_week_start(started_on)).days // 7 + 1
     weeks_remaining = max(0, planned_weeks - week_number + 1)
     # Deload is the week AFTER planned_weeks accumulation weeks
     is_deload_week = week_number > planned_weeks or status == "deloading"
@@ -274,7 +275,7 @@ def score_exercise(
 ) -> ProgressionScore | None:
     """Score an exercise from the TREND of its weekly e1RM over completed weeks.
 
-    Uses the OLS slope across the last up to 6 COMPLETED weeks — the in-progress
+    Uses the OLS slope across the last up to 12 COMPLETED weeks — the in-progress
     week is excluded, since a partial week understates the best set and would bias
     the call by training-day timing. Returns None until ≥3 completed weeks exist.
 
@@ -287,7 +288,7 @@ def score_exercise(
     increasing volume from being misread as "stalled" (Phase 3 audit finding).
     """
     this_week = as_of if as_of is not None else _iso_week_start(date.today())
-    # Fetch up to 14 weeks so the dynamic window can use 12 weeks for deep history.
+    # Fetch up to 14 weeks; thresholds below are calibrated to this cap.
     history = weekly_e1rm(conn, exercise, n_weeks=14, before=this_week)
     if len(history) < 3:
         return None
@@ -296,7 +297,7 @@ def score_exercise(
     # window produces too much noise for exercises progressing <0.5%/week.
     # Longer window reduces false "stalled" calls for experienced athletes.
     n = len(history)
-    window = 12 if n >= 24 else (9 if n >= 12 else 6)
+    window = 12 if n >= 12 else (9 if n >= 8 else 6)
     series = [h.e1rm_kg for h in history[-window:]]
     pct_per_week = _trend_pct_per_week(series)
     perf_score, trend = _score_from_trend(pct_per_week)

@@ -1060,7 +1060,16 @@ def _gates(
             f"Resistance ACWR {res} > {res_mod} — accumulating fatigue, cap MODERATE"
         )
 
-    cond = load.conditioning_acwr
+    # Bug 7: when WHOOP hasn't synced for >2 days, conditioning_acwr trends toward
+    # zero as the chronic window fills with zeros. Silently low ratio means
+    # leg/conditioning gates never fire — fail-open when data is stale.
+    # Treat WHOOP-derived conditioning as unavailable after 48h without a sync.
+    cond_raw = load.conditioning_acwr
+    whoop_stale = (
+        rec.score_date is not None
+        and (date.today() - date.fromisoformat(rec.score_date)).days > 2
+    )
+    cond = None if whoop_stale else cond_raw
     if cond is not None and cond > cond_forbid_legs:
         # Court/cardio overload. Protect the lower body that absorbs court load;
         # leave upper-body lifting available.
