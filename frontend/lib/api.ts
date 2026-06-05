@@ -1,4 +1,12 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+const SHC_KEY = process.env.NEXT_PUBLIC_SHC_KEY ?? "";
+
+// Returns headers including the admin key for mutating endpoints.
+function mutHeaders(extra?: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = { ...(extra ?? {}) };
+  if (SHC_KEY) h["X-SHC-Key"] = SHC_KEY;
+  return h;
+}
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
@@ -557,7 +565,7 @@ export const api = {
   workoutSubmit: async (plan: object) => {
     const r = await fetch(`${BASE}/api/workout/plan`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: mutHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ plan, source: "claude", push_to_hevy: false }),
     });
     if (!r.ok) {
@@ -567,7 +575,7 @@ export const api = {
     return r.json();
   },
   workoutDelete: async () => {
-    const r = await fetch(`${BASE}/api/workout/plan`, { method: "DELETE" });
+    const r = await fetch(`${BASE}/api/workout/plan`, { method: "DELETE", headers: mutHeaders() });
     if (!r.ok) throw new Error(`workoutDelete ${r.status}`);
     return r.json() as Promise<{ status: string; date: string }>;
   },
@@ -577,8 +585,8 @@ export const api = {
     get<{ prompt: string; date: string }>("/api/midday/context"),
   syncAll: async () => {
     const [whoop, hevy] = await Promise.allSettled([
-      fetch(`${BASE}/auth/whoop/sync`, { method: "POST" }).then((r) => r.json()),
-      fetch(`${BASE}/api/hevy/sync`, { method: "POST" }).then((r) => r.json()),
+      fetch(`${BASE}/auth/whoop/sync`, { method: "POST", headers: mutHeaders() }).then((r) => r.json()),
+      fetch(`${BASE}/api/hevy/sync`, { method: "POST", headers: mutHeaders() }).then((r) => r.json()),
     ]);
     return {
       whoop: whoop.status === "fulfilled" ? whoop.value : { error: String((whoop as PromiseRejectedResult).reason) },
@@ -588,7 +596,7 @@ export const api = {
   hevyPushRoutine: async (regen = false) => {
     const r = await fetch(
       `${BASE}/api/hevy/push-routine${regen ? "?regen=true" : ""}`,
-      { method: "POST" },
+      { method: "POST", headers: mutHeaders() },
     );
     if (!r.ok) throw new Error(`hevyPushRoutine ${r.status}`);
     return r.json() as Promise<{
@@ -615,7 +623,7 @@ export const api = {
   checkinSubmit: async (body: CheckinPayload) => {
     const r = await fetch(`${BASE}/api/checkin`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: mutHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (!r.ok) {
@@ -625,7 +633,7 @@ export const api = {
     return r.json() as Promise<{ status: string; date: string }>;
   },
   adherenceRecompute: async () => {
-    const r = await fetch(`${BASE}/api/training/adherence/recompute`, { method: "POST" });
+    const r = await fetch(`${BASE}/api/training/adherence/recompute`, { method: "POST", headers: mutHeaders() });
     if (!r.ok) throw new Error(`adherenceRecompute ${r.status}`);
     return r.json();
   },
@@ -640,14 +648,14 @@ export const api = {
   }) => {
     const r = await fetch(`${BASE}/api/cardio/log`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: mutHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error(`cardioLog ${r.status}`);
     return r.json() as Promise<{ status: string; id: string; date: string }>;
   },
   cardioDelete: async (id: string) => {
-    const r = await fetch(`${BASE}/api/cardio/log/${id}`, { method: "DELETE" });
+    const r = await fetch(`${BASE}/api/cardio/log/${id}`, { method: "DELETE", headers: mutHeaders() });
     if (!r.ok) throw new Error(`cardioDelete ${r.status}`);
     return r.json();
   },
@@ -737,7 +745,7 @@ export const api = {
       summary: string | null;
     }[]>("/api/lab/findings"),
   labRun: async () => {
-    const r = await fetch(`${BASE}/api/lab/run`, { method: "POST" });
+    const r = await fetch(`${BASE}/api/lab/run`, { method: "POST", headers: mutHeaders() });
     if (!r.ok) throw new Error(`labRun ${r.status}`);
     return r.json() as Promise<{ ran: number; verdicts: Record<string, string>; completed_at: string }>;
   },
@@ -949,6 +957,7 @@ export const api = {
     form.append("angle", angle);
     const r = await fetch(`${BASE}/api/progress-photos`, {
       method: "POST",
+      headers: mutHeaders(),
       body: form,
     });
     if (!r.ok) throw new Error(`progressPhotoUpload ${r.status}`);
