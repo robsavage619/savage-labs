@@ -9,17 +9,16 @@ function sessionDay(): number {
   return Math.max(1, Math.ceil((Date.now() - SESSION_EPOCH.getTime()) / 86_400_000));
 }
 
-function protocolLabel(score: number | null): string {
-  if (score == null) return "MONITORING";
-  if (score >= 67) return "PEAK OUTPUT";
-  if (score >= 34) return "ADAPTIVE LOAD";
-  return "RECOVERY";
+function tierLabel(tier: string | null | undefined, score: number | null): string {
+  if (tier === "green") return "RECOVERY OPTIMAL";
+  if (tier === "yellow") return "ADAPTIVE LOAD";
+  if (tier === "red") return "RECOVERY";
+  if (score != null) return score >= 67 ? "RECOVERY OPTIMAL" : score >= 34 ? "ADAPTIVE LOAD" : "RECOVERY";
+  return "MONITORING";
 }
 
 function Sep() {
-  return (
-    <span style={{ margin: "0 18px", color: "oklch(1 0 0 / 0.13)" }}>{"//"}</span>
-  );
+  return <span style={{ margin: "0 18px", color: "oklch(1 0 0 / 0.13)" }}>{"//"}</span>;
 }
 
 export function ProtocolStrip() {
@@ -30,6 +29,10 @@ export function ProtocolStrip() {
   });
 
   const score = data?.recovery?.score ?? null;
+  const tier = data?.readiness?.tier ?? null;
+  const acwr = data?.training_load?.acwr ?? null;
+  const hrv_sigma = data?.recovery?.hrv_sigma ?? null;
+  const push_pull = data?.training_load?.push_pull_ratio_28d ?? null;
 
   return (
     <div
@@ -58,13 +61,21 @@ export function ProtocolStrip() {
           whiteSpace: "nowrap",
         }}
       >
-        SUBJECT: ROB-01
+        {tierLabel(tier, score)}
         <Sep />
-        PROTOCOL: {protocolLabel(score)}
+        T:C RATIO {acwr != null ? acwr.toFixed(2) : "—"}
         <Sep />
-        SESSION DAY {sessionDay()}
+        HRV {hrv_sigma != null ? `${hrv_sigma >= 0 ? "+" : ""}${hrv_sigma.toFixed(1)}σ` : "—"}
+        {push_pull != null && (
+          <>
+            <Sep />
+            PUSH:PULL {push_pull.toFixed(1)}
+          </>
+        )}
         <Sep />
         <span style={{ color: "var(--positive)", opacity: 0.65 }}>DATA ACQ: LIVE</span>
+        <Sep />
+        DAY {sessionDay()}
       </span>
     </div>
   );

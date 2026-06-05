@@ -94,8 +94,8 @@ export function PillarTrainingLoad() {
   return (
     <div className="shc-card shc-enter p-5 flex flex-col">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>Training load · ACWR</Eyebrow>
-        <span className="text-[10.5px] text-[var(--text-dim)]">proxy · 7d ÷ 28d recovery</span>
+        <Eyebrow>Training load · recovery proxy</Eyebrow>
+        <span className="text-[10.5px] text-[var(--text-dim)]">7d ÷ 28d avg recovery</span>
       </div>
 
       <div className="mt-3 flex items-baseline gap-3">
@@ -146,12 +146,17 @@ export function PillarTrainingLoad() {
         </div>
       </div>
 
-      <p className="mt-3 text-[10.5px] text-[var(--text-dim)] leading-snug">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        ACWR (acute ÷ chronic load) 0.8–1.3 is the adaptation sweet spot.
-        &gt; 1.5 spikes injury risk; &lt; 0.8 means undertraining.
-        Today&apos;s call combines ACWR with HRV σ.
-      </p>
+      <details className="mt-3 group">
+        <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
+          <span className="group-open:hidden">▸ How to read this</span>
+          <span className="hidden group-open:inline">▾ How to read this</span>
+        </summary>
+        <p className="mt-1.5 text-[10.5px] text-[var(--text-dim)] leading-snug">
+          This ACWR uses recovery score as a proxy for load — not raw tonnage. 0.8–1.3 is the adaptation sweet spot.
+          &gt; 1.5 spikes injury risk; &lt; 0.8 means undertraining.
+          Today&apos;s call combines this proxy with HRV σ. The T:C ratio in the protocol strip uses actual training volume.
+        </p>
+      </details>
 
       <div className="mt-4 pt-4 grid grid-cols-3 gap-3 text-[11px] border-t border-[var(--hairline)]">
         <div className="border-l border-[var(--hairline)] pl-3">

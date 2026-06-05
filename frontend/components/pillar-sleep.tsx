@@ -260,11 +260,16 @@ export function PillarSleep() {
         )}
       </div>
 
-      <p className="mt-3 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Aim 7.5h+ with 15–20% deep and 20–25% REM. Consistency &lt; 1.0σ keeps the circadian
-        clock tight. Debt &gt; 5h hits HRV and recovery within 48h — pay it back.
-      </p>
+      <details className="mt-3 pt-3 border-t border-[var(--hairline)] group">
+        <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
+          <span className="group-open:hidden">▸ How to read this</span>
+          <span className="hidden group-open:inline">▾ How to read this</span>
+        </summary>
+        <p className="mt-1.5 text-[10.5px] text-[var(--text-dim)] leading-snug">
+          Aim 7.5h+ with 15–20% deep and 20–25% REM. Consistency &lt; 1.0σ keeps the circadian
+          clock tight. Debt &gt; 5h hits HRV and recovery within 48h — pay it back.
+        </p>
+      </details>
     </div>
   );
 }

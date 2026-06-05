@@ -130,7 +130,7 @@ function RPEBadge({ rpe }: { rpe: number }) {
 
 // ── Exercise block ───────────────────────────────────────────────────────────
 
-function ExerciseHistoryStamp({ name, prescribedLbs }: { name: string; prescribedLbs?: number }) {
+function ExerciseHistoryStamp({ name, prescribedLbs, modulated }: { name: string; prescribedLbs?: number; modulated?: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ["exercise-last", name],
     queryFn: () => api.trainingExerciseLast(name),
@@ -146,10 +146,11 @@ function ExerciseHistoryStamp({ name, prescribedLbs }: { name: string; prescribe
   const days = Math.floor((Date.now() - new Date(data.date! + "T00:00:00").getTime()) / 86_400_000);
   const ago = days === 0 ? "today" : days === 1 ? "yesterday" : days < 14 ? `${days}d ago` : days < 60 ? `${Math.round(days / 7)}w ago` : `${Math.round(days / 30)}mo ago`;
   const delta = prescribedLbs != null ? prescribedLbs - data.weight_lbs : null;
+  // On modulated-intensity days, a prescribed drop is intentional — use neutral not red.
   const deltaColor =
     delta == null ? "var(--text-faint)"
     : delta >= 5 ? "var(--positive)"
-    : delta <= -5 ? "var(--negative)"
+    : delta <= -5 ? (modulated ? "var(--neutral)" : "var(--negative)")
     : "var(--text-dim)";
   return (
     <div className="flex items-center gap-1.5 text-[10.5px] tabular-nums">
@@ -189,10 +190,12 @@ function ExerciseCard({
   ex,
   index,
   onPick,
+  modulated,
 }: {
   ex: WorkoutBlock["exercises"][number];
   index: number;
   onPick: (n: string) => void;
+  modulated?: boolean;
 }) {
   const isSuperset = (ex.notes ?? "").toLowerCase().includes("superset");
   return (
@@ -268,12 +271,12 @@ function ExerciseCard({
           </div>
 
           <div className="ml-7">
-            <ExerciseHistoryStamp name={ex.name} prescribedLbs={ex.weight_lbs} />
+            <ExerciseHistoryStamp name={ex.name} prescribedLbs={ex.weight_lbs} modulated={modulated} />
           </div>
 
           {ex.notes && !isSuperset && (
-            <p className="ml-7 mt-2 text-[11px] text-[var(--text-dim)] leading-snug">
-              <span className="text-[var(--text-faint)] uppercase tracking-wider text-[9.5px] mr-1.5">Cue</span>
+            <p className="ml-7 mt-2 text-[12px] text-[var(--text-muted)] leading-snug">
+              <span className="text-[var(--text-dim)] uppercase tracking-wider text-[9.5px] mr-1.5">Cue</span>
               {ex.notes}
             </p>
           )}
@@ -287,7 +290,7 @@ function ExerciseCard({
   );
 }
 
-function ExerciseBlock({ block, onPick }: { block: WorkoutBlock; onPick: (ex: string) => void }) {
+function ExerciseBlock({ block, onPick, modulated }: { block: WorkoutBlock; onPick: (ex: string) => void; modulated?: boolean }) {
   const accent = blockAccent(block.label);
   return (
     <section className="space-y-2.5">
@@ -302,7 +305,7 @@ function ExerciseBlock({ block, onPick }: { block: WorkoutBlock; onPick: (ex: st
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {(block.exercises ?? []).map((ex, i) => (
-          <ExerciseCard key={i} ex={ex} index={i} onPick={onPick} />
+          <ExerciseCard key={i} ex={ex} index={i} onPick={onPick} modulated={modulated} />
         ))}
       </div>
     </section>
@@ -558,7 +561,12 @@ export function NextWorkoutPane() {
           <ReadinessBanner plan={data} />
           <WarmupSection items={data.warmup ?? []} />
           {(data.blocks ?? []).map((block, i) => (
-            <ExerciseBlock key={i} block={block} onPick={setPicked} />
+            <ExerciseBlock
+              key={i}
+              block={block}
+              onPick={setPicked}
+              modulated={data.recommendation?.intensity === "low" || data.recommendation?.intensity === "rest"}
+            />
           ))}
           <CooldownRow text={data.cooldown ?? ""} />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

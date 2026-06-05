@@ -151,30 +151,24 @@ function GenerateButton({ onGenerated }: { onGenerated: () => void }) {
   };
 
   return (
-    <div className="flex flex-col items-center gap-3 py-4">
-      <div
-        className="w-12 h-12 rounded-full flex items-center justify-center text-xl opacity-30"
-        style={{ background: "oklch(1 0 0 / 0.04)", border: "1px solid var(--hairline)" }}
-      >
-        ◈
-      </div>
-      <p className="text-[12px] text-[var(--text-dim)] text-center leading-relaxed max-w-[240px]">
-        No midday plan yet. Generate one to make the most of your Nike lunch hour.
+    <div className="flex items-center justify-between gap-3 py-1">
+      <p className="text-[11.5px]" style={{ color: "var(--text-faint)" }}>
+        No plan yet for today.
       </p>
       <button
         onClick={handleClick}
-        className="px-4 py-2 rounded-[var(--r-sm)] text-[12px] font-medium"
+        className="px-3 py-1.5 rounded-lg text-[11.5px] font-medium shrink-0"
         style={{
           background: state === "copied" ? "var(--positive-soft)" : "oklch(1 0 0 / 0.06)",
           border: `1px solid ${state === "copied" ? "oklch(0.72 0.18 145 / 0.35)" : "var(--hairline)"}`,
-          color: state === "copied" ? "var(--positive)" : "var(--text-primary)",
+          color: state === "copied" ? "var(--positive)" : "var(--text-muted)",
         }}
       >
         {state === "copied"
-          ? "✓ Prompt copied — paste into Claude"
+          ? "✓ Copied"
           : state === "error"
-            ? "Failed — try again"
-            : "Generate Midday Plan"}
+            ? "Failed — retry"
+            : "Generate plan"}
       </button>
     </div>
   );

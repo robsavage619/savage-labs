@@ -134,47 +134,19 @@ export function WhoopVitals() {
           </div>
         </div>
 
-        {/* KPI strip — Recovery / Strain / Sleep / Z2 */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {/* KPI strip — Strain + Sleep only; Recovery + HRV Trend are in header HUD and Recovery pillar */}
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <p
               className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
               style={{ fontFamily: "var(--font-orbitron)" }}
             >
-              Recovery
+              Cardio strain · 7d avg
             </p>
             <div className="flex items-baseline gap-1">
               <span
                 className="text-[36px] leading-none font-light tabular-nums"
-                style={{
-                  fontFamily: "var(--font-orbitron)",
-                  color: tone(recovery),
-                  textShadow: `0 0 24px ${tone(recovery)}40`,
-                }}
-              >
-                {recovery != null ? Math.round(recovery) : "—"}
-              </span>
-              <span className="text-[11px] text-[var(--text-faint)]">/100</span>
-            </div>
-            <p className="text-[10px] text-[var(--text-faint)] mt-0.5 tabular-nums">
-              {hrv != null ? `${hrv.toFixed(0)}ms HRV · ${rhr ?? "—"}bpm RHR` : "no data today"}
-            </p>
-          </div>
-
-          <div>
-            <p
-              className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
-              style={{ fontFamily: "var(--font-orbitron)" }}
-            >
-              Strain · 7d
-            </p>
-            <div className="flex items-baseline gap-1">
-              <span
-                className="text-[36px] leading-none font-light tabular-nums"
-                style={{
-                  fontFamily: "var(--font-orbitron)",
-                  color: strainColor(cardioMin),
-                }}
+                style={{ fontFamily: "var(--font-orbitron)", color: strainColor(cardioMin) }}
               >
                 {cardioMin != null ? Math.round(cardioMin / 4) : "—"}
               </span>
@@ -215,44 +187,6 @@ export function WhoopVitals() {
               {deepPct != null
                 ? `deep ${(deepPct * 100).toFixed(0)}% · REM ${remMin ?? "—"}m`
                 : "no sleep data"}
-            </p>
-          </div>
-
-          <div>
-            <p
-              className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
-              style={{ fontFamily: "var(--font-orbitron)" }}
-            >
-              HRV trend
-            </p>
-            <div className="flex items-baseline gap-1">
-              <span
-                className="text-[36px] leading-none font-light tabular-nums"
-                style={{
-                  fontFamily: "var(--font-orbitron)",
-                  color:
-                    state?.recovery.hrv_sigma == null
-                      ? "var(--text-faint)"
-                      : state.recovery.hrv_sigma >= 0
-                        ? "var(--positive)"
-                        : state.recovery.hrv_sigma >= -1
-                          ? "var(--neutral)"
-                          : "var(--negative)",
-                }}
-              >
-                {state?.recovery.hrv_sigma != null
-                  ? `${state.recovery.hrv_sigma >= 0 ? "+" : ""}${state.recovery.hrv_sigma.toFixed(1)}`
-                  : "—"}
-              </span>
-              <span className="text-[11px] text-[var(--text-faint)]">σ</span>
-            </div>
-            <p className="text-[10px] text-[var(--text-faint)] mt-0.5 tabular-nums">
-              {state?.recovery.hrv_baseline_28d != null
-                ? `vs ${state.recovery.hrv_baseline_28d.toFixed(0)}ms baseline`
-                : "—"}
-              {state?.readiness.beta_blocker_adjusted && (
-                <span className="text-[var(--neutral)] ml-1">· β-adj</span>
-              )}
             </p>
           </div>
         </div>
@@ -355,11 +289,16 @@ export function WhoopVitals() {
           </div>
         )}
 
-        {/* Footer interpretation */}
-        <p className="mt-4 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[oklch(1_0_0/0.06)]">
-          <span className="text-[var(--text-muted)]">How to read this. </span>
-          Recovery 67+ green-lights intensity. Sleep efficiency &lt;75% or disturbances ≥12 caps intensity to MODERATE even when HRV looks good — quality matters as much as duration. HRV σ tracks autonomic balance; trend over absolute, especially on β-blocker days.
-        </p>
+        {/* Footer interpretation — collapsible */}
+        <details className="mt-4 pt-3 border-t border-[oklch(1_0_0/0.06)] group">
+          <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
+            <span className="group-open:hidden">▸ How to read this</span>
+            <span className="hidden group-open:inline">▾ How to read this</span>
+          </summary>
+          <p className="mt-2 text-[10.5px] text-[var(--text-dim)] leading-snug">
+            Recovery 67+ green-lights intensity. Sleep efficiency &lt;75% or disturbances ≥12 caps intensity to MODERATE even when HRV looks good — quality matters as much as duration. HRV σ tracks autonomic balance; trend over absolute, especially on β-blocker days.
+          </p>
+        </details>
       </div>
     </div>
   );

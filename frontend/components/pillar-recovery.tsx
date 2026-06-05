@@ -309,12 +309,17 @@ export function PillarRecovery() {
         </ul>
       </div>
 
-      <p className="mt-auto pt-4 text-[10.5px] text-[var(--text-dim)] leading-snug">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Recovery 67+ green-lights intensity, 34–66 favors moderate work, &lt;34 means rest. HRV σ shows
-        autonomic deviation from your 28-day baseline; β-blocker days blunt the signal so trust the
-        trend over a single day.
-      </p>
+      <details className="mt-auto pt-4 group">
+        <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
+          <span className="group-open:hidden">▸ How to read this</span>
+          <span className="hidden group-open:inline">▾ How to read this</span>
+        </summary>
+        <p className="mt-1.5 text-[10.5px] text-[var(--text-dim)] leading-snug">
+          Recovery 67+ green-lights intensity, 34–66 favors moderate work, &lt;34 means rest. HRV σ shows
+          autonomic deviation from your 28-day baseline; β-blocker days blunt the signal so trust the
+          trend over a single day.
+        </p>
+      </details>
     </div>
   );
 }

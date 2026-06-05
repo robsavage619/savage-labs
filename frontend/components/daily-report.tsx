@@ -95,6 +95,7 @@ export function DailyReport() {
   const { data: hrv = [] } = useQuery({ queryKey: ["hrv-trend"], queryFn: () => api.hrvTrend(28) });
   const { data: rec = [] } = useQuery({ queryKey: ["recovery-trend"], queryFn: () => api.recoveryTrend(14) });
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const copyPrompt = async () => {
     const { prompt } = await api.dailyReportPrompt();
@@ -178,79 +179,94 @@ export function DailyReport() {
                 tone={rhrDelta != null && rhrDelta <= 0 ? "positive" : "default"} />
               <Stat label="Recovery" value={rc?.score != null ? Math.round(rc.score) : "—"}
                 spark={<Spark data={rec as never} dataKey="score" color="var(--positive)" />} />
-              <Stat label="ACWR" value={acwr != null ? acwr.toFixed(2) : "—"}
+              <Stat label="T:C ratio" value={acwr != null ? acwr.toFixed(2) : "—"}
                 tone={acwr != null && acwr > 1.5 ? "negative" : "default"} />
             </div>
           </div>
         )}
 
-        {/* Sections */}
+        {/* Sections — collapsed by default, expand on demand */}
         {isLoading ? (
           <div className="space-y-3">
             {[1, 2, 3].map((i) => <div key={i} className="h-28 shc-skeleton rounded-xl" />)}
           </div>
         ) : r ? (
-          <div className="space-y-3">
-            {r.sections.map((s, i) => {
-              const accent = SECTION_ACCENTS[i % SECTION_ACCENTS.length];
-              return (
-                <div
-                  key={i}
-                  className="rounded-xl overflow-hidden"
-                  style={{
-                    border: "1px solid var(--hairline-strong)",
-                    background: "oklch(0.13 0.005 220 / 0.8)",
-                  }}
-                >
-                  {/* Gradient top accent line */}
-                  <div style={{ height: "1px", background: `linear-gradient(90deg, ${accent} 0%, ${accent} 30%, transparent 75%)` }} />
+          <>
+            {/* Expand/collapse toggle */}
+            <button
+              onClick={() => setExpanded((x) => !x)}
+              className="w-full no-tactile flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl transition-colors"
+              style={{
+                border: "1px solid var(--hairline-strong)",
+                background: expanded ? "oklch(0.14 0.01 220 / 0.6)" : "oklch(0.13 0.005 220 / 0.4)",
+                color: "var(--text-muted)",
+              }}
+            >
+              <span className="text-[11px] font-mono text-left leading-snug" style={{ color: "var(--text-dim)" }}>
+                <span className="mr-2" style={{ color: "var(--sl-accent)" }}>{expanded ? "▾" : "▸"}</span>
+                {r.sections.map((s) => s.title).join(" · ")}
+              </span>
+              <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--text-faint)" }}>
+                {expanded ? "collapse" : `${r.sections.length} sections`}
+              </span>
+            </button>
 
-                  <div className="p-4 space-y-3">
-                    <div className="flex items-baseline gap-3">
-                      <span
-                        className="text-[10px] font-mono tabular-nums shrink-0 leading-none"
-                        style={{ color: accent, opacity: 0.7 }}
-                      >
-                        {String(i + 1).padStart(2, "0")}
-                      </span>
-                      <h3 className="text-[13px] font-semibold tracking-tight" style={{ color: "var(--text-primary)" }}>
-                        {s.title}
-                      </h3>
+            {expanded && (
+              <div className="space-y-3">
+                {r.sections.map((s, i) => {
+                  const accent = SECTION_ACCENTS[i % SECTION_ACCENTS.length];
+                  return (
+                    <div
+                      key={i}
+                      className="rounded-xl overflow-hidden"
+                      style={{
+                        border: "1px solid var(--hairline-strong)",
+                        background: "oklch(0.13 0.005 220 / 0.8)",
+                      }}
+                    >
+                      <div style={{ height: "1px", background: `linear-gradient(90deg, ${accent} 0%, ${accent} 30%, transparent 75%)` }} />
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-baseline gap-3">
+                          <span className="text-[10px] font-mono tabular-nums shrink-0 leading-none" style={{ color: accent, opacity: 0.7 }}>
+                            {String(i + 1).padStart(2, "0")}
+                          </span>
+                          <h3 className="text-[13px] font-semibold tracking-tight" style={{ color: "var(--text-primary)" }}>
+                            {s.title}
+                          </h3>
+                        </div>
+                        <Markdown text={s.body_md} />
+                      </div>
                     </div>
-                    <Markdown text={s.body_md} />
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
 
-            {/* Vault sources */}
-            {r.sources && r.sources.length > 0 && (
-              <div className="pt-2 space-y-2">
-                <div className="flex items-center gap-2" style={{ color: "var(--text-faint)" }}>
-                  <div className="h-px flex-1" style={{ background: "var(--hairline)" }} />
-                  <span className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider">
-                    <ObsidianMark size={11} /> Vault research cited
-                  </span>
-                  <div className="h-px flex-1" style={{ background: "var(--hairline)" }} />
-                </div>
-                <div className="flex flex-wrap">
-                  {r.sources.map((s) => <ObsidianSourceTag key={s} source={s} />)}
-                </div>
+                {r.sources && r.sources.length > 0 && (
+                  <div className="pt-2 space-y-2">
+                    <div className="flex items-center gap-2" style={{ color: "var(--text-faint)" }}>
+                      <div className="h-px flex-1" style={{ background: "var(--hairline)" }} />
+                      <span className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider">
+                        <ObsidianMark size={11} /> Vault research cited
+                      </span>
+                      <div className="h-px flex-1" style={{ background: "var(--hairline)" }} />
+                    </div>
+                    <div className="flex flex-wrap">
+                      {r.sources.map((s) => <ObsidianSourceTag key={s} source={s} />)}
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-[10px] font-mono" style={{ color: "var(--text-faint)" }}>
+                  Generated {new Date(r.generated_at).toLocaleString()} · {r.model} · synced metrics + vault research
+                </p>
               </div>
             )}
-
-            <p className="text-[10px] font-mono" style={{ color: "var(--text-faint)" }}>
-              Generated {new Date(r.generated_at).toLocaleString()} · {r.model} · synced metrics + vault research
-            </p>
-          </div>
+          </>
         ) : (
           <div
             className="rounded-xl p-6 flex flex-col items-center gap-3 text-center"
             style={{ border: "1px dashed var(--hairline-strong)", background: "oklch(0.13 0 0 / 0.5)" }}
           >
-            <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>
-              No report yet.
-            </p>
+            <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>No report yet.</p>
             <p className="text-[12px] max-w-sm" style={{ color: "var(--text-faint)" }}>
               Click <strong style={{ color: "var(--sl-accent)" }}>Generate daily report</strong>, run the copied prompt in Claude Code — it syncs your data, builds the workout plan, and posts the full report here.
             </p>
