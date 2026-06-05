@@ -623,8 +623,54 @@ def record_prescription(conn: duckdb.DuckDBPyConnection, rx: object) -> None:
         )
 
 
+# ── Per-(muscle_category, action_type) outcome scoring window ─────────────────
+# Hypertrophy signal lag differs by muscle size and action (add vs cut).
+# Cut windows are longer because the supercompensation rebound (performance
+# temporarily improves post-cut) takes 1-3 weeks — scoring at 3w falsely
+# confirms cuts that should have been holds.
+# Sources: Schoenfeld 2019; Baz-Valle 2022 meta (N=2058 dose-response).
+
+_MUSCLE_SIZE_CATEGORY: dict[str, str] = {
+    "biceps": "small",
+    "triceps": "small",
+    "delts": "small",
+    "shoulders": "small",
+    "chest": "medium",
+    "back": "medium",
+    "lats": "medium",
+    "traps": "medium",
+    "quads": "large",
+    "hamstrings": "large",
+    "glutes": "large",
+    "legs": "large",
+    "calves": "small",
+    "core": "medium",
+    "abs": "medium",
+    "adductors": "medium",
+    "forearms": "small",
+}
+
+_FEEDBACK_LAG_WEEKS: dict[tuple[str, str], int] = {
+    ("small",  "add"):  3,
+    ("small",  "cut"):  4,
+    ("small",  "hold"): 3,
+    ("medium", "add"):  4,
+    ("medium", "cut"):  5,
+    ("medium", "hold"): 4,
+    ("large",  "add"):  5,
+    ("large",  "cut"):  6,
+    ("large",  "hold"): 4,
+}
+
+
+def _feedback_lag(muscle_group: str, action: str) -> int:
+    """Return the number of weeks to wait before scoring a prescription outcome."""
+    cat = _MUSCLE_SIZE_CATEGORY.get(muscle_group.lower(), "medium")
+    return _FEEDBACK_LAG_WEEKS.get((cat, action), 4)  # default medium/add if unknown
+
+
 def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
-    """Score logged prescriptions from 3 weeks ago against actual outcomes.
+    """Score logged prescriptions against actual outcomes using per-muscle lag windows.
 
     Correctness definition:
       add / hold (perf ≥ 3 at time) → correct if outcome_perf ≥ 3 (maintained)
@@ -634,23 +680,26 @@ def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
     Returns the number of prescriptions scored this call.
     """
     from datetime import date, timedelta
-    from shc.training.autoregulation import _muscle_performance
 
-    outcome_week_start = _iso_week_start_str(date.today()) - timedelta(weeks=3)
+    today_week = _iso_week_start_str(date.today())
 
+    # Pull unscored rows that might now be within a scoreable window.
+    # We check per-row whether enough lag has passed (lag depends on muscle + action).
     unscored = conn.execute(
         """
         SELECT week_start, muscle, action
         FROM muscle_prescription_log
         WHERE outcome_perf IS NULL
-          AND week_start <= ?
         ORDER BY week_start
         """,
-        [outcome_week_start.isoformat()],
     ).fetchall()
 
     scored = 0
     for pweek, muscle, action in unscored:
+        lag = _feedback_lag(muscle, action)
+        this_outcome_week = pweek + timedelta(weeks=lag)
+        if this_outcome_week > today_week:
+            continue  # not enough time has elapsed yet
         # Look up actual muscle perf for the outcome week.
         outcome_perf_row = conn.execute(
             """
@@ -663,8 +712,8 @@ def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
             """,
             [
                 muscle,
-                outcome_week_start.isoformat(),
-                (outcome_week_start + timedelta(days=7)).isoformat(),
+                this_outcome_week.isoformat(),
+                (this_outcome_week + timedelta(days=7)).isoformat(),
             ],
         ).fetchone()
 
@@ -685,7 +734,7 @@ def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
             SET outcome_perf = ?, outcome_week = ?, correct = ?, scored_at = now()
             WHERE week_start = ? AND muscle = ?
             """,
-            [outcome_perf, outcome_week_start.isoformat(), correct, pweek.isoformat(), muscle],
+            [outcome_perf, this_outcome_week.isoformat(), correct, pweek.isoformat(), muscle],
         )
         scored += 1
 

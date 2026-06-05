@@ -585,6 +585,42 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "- Cite vault notes by exact `filename.md`; every citation must be a real catalog note."
     )
 
+    # Schema stub — placed immediately before vault research so the binding
+    # contract sits within ~500 tokens of generation start (lost-in-the-middle
+    # mitigation). TypeScript interface is 40% more token-efficient than JSON Schema.
+    lines.append("""\
+\n## OUTPUT SCHEMA (validator enforces this — deviations will be rejected)
+```typescript
+interface Plan {
+  readiness_tier: "green" | "yellow" | "red";         // exact lowercase
+  readiness_summary: string;
+  recommendation: {
+    intensity: "high" | "moderate" | "low" | "rest";  // exact lowercase
+    focus: string;
+    rationale: string;
+    estimated_duration_min: number;
+    target_rpe: number;
+  };
+  warmup: Array<{ name: string; sets: number; reps: number | string }>;
+  blocks: Array<{
+    label: string;          // NOT "name" — key must be "label"
+    exercises: Array<{
+      name: string;
+      sets: number;
+      reps: number | string;
+      weight_lbs: number | null;
+      rpe_target: number;
+      rest_seconds: number; // REQUIRED on every exercise, no exceptions
+      notes: string;
+    }>;
+  }>;
+  cooldown: string;         // plain string, NOT array
+  clinical_notes: string[];
+  vault_insights: string[]; // cite real *.md filenames only
+}
+```
+""")
+
     vault = load_vault_research(state, extra_signals=extra, keyword_hints=hints)
     if vault:
         lines.append("\n" + vault)

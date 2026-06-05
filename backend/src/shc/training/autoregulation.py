@@ -27,6 +27,7 @@ program the chat assembles the actual session from.
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -172,12 +173,22 @@ def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str) -> int | N
     return round(weighted / total_w)
 
 
-def _conditioning_pressure(conn: duckdb.DuckDBPyConnection) -> float | None:
+def _conditioning_pressure(
+    conn: duckdb.DuckDBPyConnection,
+    use_rpe_only: bool = False,
+) -> float | None:
     """Conditioning ACWR — proxy for how much pickleball/cardio load is live.
 
     Read lazily from the daily state; None if unavailable. > 1.3 means the
     lower body is already absorbing meaningful court/cardio stimulus.
+
+    When ``use_rpe_only=True`` (propranolol day), returns None to bypass the
+    WHOOP-derived conditioning ACWR — HR is suppressed by the beta-blocker,
+    making strain systematically understate real load; RPE is the only unbiased
+    signal on dosed days.
     """
+    if use_rpe_only:
+        return None
     try:
         from shc.metrics import compute_daily_state
 
@@ -198,6 +209,7 @@ def _decide(
     conditioning_acwr: float | None,
     deload: bool = False,
     landmark_source: str = "population",
+    rpe_factor: float = 1.0,
 ) -> MusclePrescription:
     """Apply the RP set-progression tree + emphasis + interference for one muscle.
 
@@ -220,14 +232,15 @@ def _decide(
 
     if deload:
         cur0 = round(current)
-        target = max(0, min(mrv, max(mev, round(cur0 * 0.5))))
+        deload_floor = round(mev * 0.4)  # RP: deloads typically 30-50% of MEV
+        target = max(0, min(mrv, max(deload_floor, round(cur0 * 0.5))))
         return MusclePrescription(
             muscle=muscle,
             current_sets=round(current, 1),
             target_sets=target,
             delta=target - cur0,
             action="deload",
-            reason="deload week — volume ~halved toward MEV to shed accumulated fatigue",
+            reason="deload week — volume ~halved to clear accumulated fatigue",
             emphasis=emphasis,
             landmark_source=landmark_source,
         )
@@ -277,6 +290,11 @@ def _decide(
     else:
         desired = cur
         reason = "in range, no clear signal — hold and gather data"
+
+    # Apply RPE-drift damper before the asymmetric step clamp.
+    # rpe_factor ∈ [0.5, 1.0]: only dampens, never amplifies.
+    raw_delta = desired - cur
+    desired = cur + round(raw_delta * rpe_factor)
 
     # Clamp to MRV, then to the asymmetric weekly step, then derive the action.
     target = max(0, min(mrv, desired))
@@ -411,12 +429,40 @@ def _protein_gate(conn: duckdb.DuckDBPyConnection) -> dict:
     }
 
 
-def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
+def _rpe_drift_factor(
+    conn: duckdb.DuckDBPyConnection,
+    min_sessions: int = 5,
+    min_magnitude: float = 0.8,
+) -> float:
+    """Volume-delta multiplier in [0.5, 1.0] from 14-day signed RPE drift.
+
+    Returns 1.0 (no-op) when drift is absent, small, or there aren't enough
+    sessions to establish a directional trend. Only dampens — never amplifies
+    beyond 1.0 — so an athlete who is consistently working harder than target
+    (over-RPE) gets a conservative volume correction, not a volume boost.
+    """
+    from shc.ai.quality import rpe_drift_signed_mean
+
+    signed_mean = rpe_drift_signed_mean(conn)
+    if signed_mean is None or abs(signed_mean) < min_magnitude:
+        return 1.0
+    raw = 1.0 + math.copysign(min(abs(signed_mean) / 3.0, 0.5), signed_mean)
+    return max(0.5, min(1.0, raw))
+
+
+def weekly_prescription(
+    conn: duckdb.DuckDBPyConnection,
+    propranolol_day: bool = False,
+) -> Prescription:
     """Build this week's per-muscle volume prescription from Rob's logged data.
 
     The deterministic program: every targeted muscle gets a set target + action +
     reason; lagging lifts get a progression call; muscles needing volume get an
     exercise menu. The chat assembles the actual session from this.
+
+    ``propranolol_day`` bypasses WHOOP-derived conditioning ACWR (HR-suppressed,
+    unreliable on dosed days) and restores full RPE-drift authority to the
+    volume decision.
     """
     state = active_mesocycle(conn)
     meso_id = state.id if state else ""
@@ -426,14 +472,50 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
     actuals = weekly_muscle_volume(conn, this_week)
     report = build_muscle_report(actuals, targets)
     soreness = _recent_soreness(conn)
-    conditioning_acwr = _conditioning_pressure(conn)
+    conditioning_acwr = _conditioning_pressure(conn, use_rpe_only=propranolol_day)
 
     targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
     perfs = {r.muscle: _muscle_performance(conn, r.muscle) for r in targeted}
-    deload = deload_check(perfs, targeted)
+    signal_deload = deload_check(perfs, targeted)
+
+    # Unify signal-based and calendar-based deloads under a single OR gate.
+    # Either triggers a deload; the distinction is preserved in deload_reason
+    # so the planner can apply the correct volume reduction depth.
+    is_deload_week = state.is_deload_week if state else False
+    signal_based = signal_deload["recommended"]
+    is_deloading = is_deload_week or signal_based
+    if is_deloading:
+        if is_deload_week and signal_based:
+            deload_reason_str = "both"
+        elif is_deload_week:
+            deload_reason_str = "calendar"
+        else:
+            deload_reason_str = "signal"
+    else:
+        deload_reason_str = None
+
+    deload = {
+        **signal_deload,
+        "recommended": is_deloading,
+        "deload_reason": deload_reason_str,
+        "reason": (
+            signal_deload["reason"]
+            if signal_based
+            else (
+                f"calendar deload — week {state.week_number} exceeds planned {state.planned_weeks}"
+                if is_deload_week and state
+                else signal_deload["reason"]
+            )
+        ),
+    }
 
     # Protein gate: flag if recent intake is inadequate for hypertrophy.
     protein = _protein_gate(conn)
+
+    # RPE drift factor: dampen volume deltas when athlete is consistently
+    # working harder than target (persistent over-RPE). On propranolol days
+    # RPE is the only unbiased signal, so restore full authority (factor = 1.0).
+    rpe_factor = 1.0 if propranolol_day else _rpe_drift_factor(conn)
 
     # Signal quality from materialized cache (avoids per-request DB aggregation).
     from shc.training.self_learning import read_signal_quality_cache
@@ -455,6 +537,7 @@ def weekly_prescription(conn: duckdb.DuckDBPyConnection) -> Prescription:
             conditioning_acwr=conditioning_acwr,
             deload=deload["recommended"],
             landmark_source=vt.source if vt else "population",
+            rpe_factor=rpe_factor,
         )
         rx.confidence = float(sq.get("confidence", 0.0))
         rx.scored_weeks = int(sq.get("scored_weeks", 0))

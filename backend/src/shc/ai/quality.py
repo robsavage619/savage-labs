@@ -29,6 +29,37 @@ def _cutoff(days: int) -> str:
     return (date.today() - timedelta(days=days)).isoformat()
 
 
+def rpe_drift_signed_mean(conn: Any, days: int = 14) -> float | None:
+    """Signed 14-day rolling mean of (avg_rpe_actual − avg_rpe_target).
+
+    Positive → athlete works harder than prescribed (over-RPE).
+    Negative → athlete works lighter than prescribed (under-RPE).
+    Returns None when fewer than 5 sessions have both actual and target RPE.
+
+    Used as input to _rpe_drift_factor in autoregulation.py — persistent
+    directional drift (|mean| ≥ 0.8) modulates volume-delta scaling.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT avg_rpe_actual - avg_rpe_target AS diff
+            FROM plan_adherence
+            WHERE date >= $cutoff
+              AND avg_rpe_actual IS NOT NULL
+              AND avg_rpe_target IS NOT NULL
+            ORDER BY date
+            """,
+            {"cutoff": _cutoff(days)},
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — missing table/column → no metric
+        log.debug("rpe_drift_signed_mean skipped: %s", exc)
+        return None
+    if len(rows) < 5:
+        return None
+    diffs = [float(r[0]) for r in rows]
+    return round(sum(diffs) / len(diffs), 2)
+
+
 def rpe_calibration_error(conn: Any, days: int = 14) -> float | None:
     """Mean absolute (avg_rpe_actual − avg_rpe_target) over the window.
 
