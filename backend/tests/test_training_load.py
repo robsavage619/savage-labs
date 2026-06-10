@@ -54,19 +54,22 @@ def test_push_pull_ratio(conn, seed, today: date) -> None:
     assert m.push_pull_ratio_28d == 2.0
 
 
-def test_pickleball_counts_as_legs_stimulus(conn, seed, today: date) -> None:
-    """CLAUDE.md invariant: pickleball is a legs stimulus for rest tracking."""
+def test_pickleball_has_own_clock_not_legs(conn, seed, today: date) -> None:
+    """Pickleball is conditioning — it must NOT reset the legs lifting clock
+    (it used to, which rest-gated leg lifting for any weekend court player)."""
     seed.cardio(ago(today, 2), "pickleball", 90)
     m = _training_load(conn, today)
-    assert m.days_since_legs == 2
+    assert m.days_since_legs == 99  # no leg LIFT on record
+    assert m.days_since_pickleball == 2
     assert m.pickleball_min_28d == 90
 
 
-def test_lift_legs_more_recent_than_pickleball_wins(conn, seed, today: date) -> None:
+def test_legs_clock_tracks_lifts_only(conn, seed, today: date) -> None:
     seed.cardio(ago(today, 6), "pickleball", 90)
     seed.workout(ago(today, 1), "Goblet Squat", [(40, 10)])  # legs lift yesterday
     m = _training_load(conn, today)
     assert m.days_since_legs == 1
+    assert m.days_since_pickleball == 6
 
 
 def test_arm_acwr_resistance_and_conditioning_are_independent(

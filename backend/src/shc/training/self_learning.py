@@ -112,7 +112,10 @@ def fit_volume_landmarks(
         mrv = mev + _BIN_WIDTH
     mav = (mev + mrv) // 2
 
-    return {"mev": mev, "mav": mav, "mrv": mrv}
+    # vmax = highest weekly volume ever attempted (productive or not) — lets
+    # the caller distinguish "fitted low because he fails at higher volume"
+    # from "fitted low because higher volume was never tried".
+    return {"mev": mev, "mav": mav, "mrv": mrv, "vmax": round(max(volumes))}
 
 
 def persist_volume_landmarks(
@@ -148,21 +151,24 @@ def persist_volume_landmarks(
         floored = False
         if default:
             pop_mrv = default[2]
-            mrv_floor = round(pop_mrv * 0.5)
-            if mrv < mrv_floor:
-                # Personal MRV is below 50% of population MRV → this muscle is
-                # chronically undertrained, not physiologically limited. Floor the
-                # MRV so the engine can push toward the real productive zone.
+            if mrv < pop_mrv and result["vmax"] < pop_mrv:
+                # Fitted MRV is below population AND no week ever reached the
+                # population MRV: the fit reflects historical habit, not a
+                # recoverability ceiling — a percentile of volumes never tried
+                # can't measure a limit. Floor at population MRV so the engine
+                # can prescribe into the unexplored range. A genuine personal
+                # limit (high-volume weeks attempted and unproductive) keeps
+                # its fitted value because vmax >= pop_mrv in that case.
                 log.warning(
-                    "UNDERTRAINED %s: fitted MRV=%d is only %.0f%% of population MRV=%d "
-                    "— flooring to %d to allow exploration",
+                    "UNDERTRAINED %s: fitted MRV=%d (max week ever %d) below "
+                    "population MRV=%d with no evidence of failure at higher "
+                    "volume — flooring to population",
                     muscle,
                     mrv,
-                    mrv / pop_mrv * 100,
+                    result["vmax"],
                     pop_mrv,
-                    mrv_floor,
                 )
-                mrv = mrv_floor
+                mrv = pop_mrv
                 floored = True
 
         # Recompute MAV if MRV was floored.
@@ -241,12 +247,18 @@ def _historical_weekly_acwr(
     uses a 28-day chronic window. Mismatched windows meant personal ACWR bands
     were fitted on different ratio distributions than the live gates apply — biasing
     all personal thresholds downward (Bug 5).
+
+    Lookback is capped at 104 weeks (same horizon as the volume-landmark
+    fitter). Unbounded history pulled in ~7 years of pre-platform low-volume
+    eras (sample_weeks=373), whose near-zero ratios dragged every percentile
+    threshold down — the bands must describe the current training era.
     """
     rows = conn.execute(
         f"""
         WITH weeks AS (
             SELECT DISTINCT date_trunc('week', date)::DATE AS ws
             FROM v_daily_load
+            WHERE date >= (CURRENT_DATE - INTERVAL 728 DAYS)
             ORDER BY ws
         )
         SELECT

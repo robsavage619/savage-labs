@@ -152,6 +152,15 @@ class TrainingLoadMetrics:
     days_since_legs: int = 99
     days_since_push: int = 99
     days_since_pull: int = 99
+    # Pickleball gets its own rest clock — it is conditioning stimulus, not a
+    # leg-lift substitute, so it must not reset days_since_legs (which would
+    # permanently rest-gate leg lifting for a weekend court player).
+    days_since_pickleball: int = 99
+    # Avg RPE of each group's most recent session — scales the rest gate:
+    # a submaximal session needs less recovery than a near-failure one.
+    last_rpe_legs: float | None = None
+    last_rpe_push: float | None = None
+    last_rpe_pull: float | None = None
     push_pull_ratio_28d: float | None = None
     push_sets_28d: int = 0
     pull_sets_28d: int = 0
@@ -693,7 +702,7 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
     # Days since each muscle group (uses workout_sets — strength only).
     set_rows = conn.execute(
         """
-        SELECT day_d AS day, ws.exercise
+        SELECT day_d AS day, ws.exercise, ws.rpe
         FROM workout_sets_dedup ws
         WHERE ws.is_warmup = FALSE AND day_d >= $since
         """,
@@ -701,12 +710,16 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
     ).fetchall()
     last_by_group: dict[str, date] = {}
     bal: dict[str, int] = {"push": 0, "pull": 0, "legs": 0, "core": 0, "other": 0}
-    for day, exercise in set_rows:
+    for day, exercise, _rpe in set_rows:
         g = muscle_group(exercise or "")
         bal[g] = bal[g] + 1
         if g not in last_by_group or day > last_by_group[g]:
             last_by_group[g] = day
-    # Pickleball counts as a legs stimulus — heavy lateral lower-body demand.
+    # Pickleball is a lower-body stimulus but a CONDITIONING one — it gets its
+    # own clock (same-day legs gate in _gates) instead of resetting the 72h
+    # lifting clock. Resetting days_since_legs here meant a weekend court
+    # schedule permanently rest-gated leg lifting (23 leg sets vs 85 push in
+    # the 28d that motivated this change).
     pb_last_row = conn.execute(
         "SELECT MAX(date) FROM cardio_sessions WHERE modality = 'pickleball'"
     ).fetchone()
@@ -716,12 +729,22 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             if isinstance(pb_last_row[0], date)
             else date.fromisoformat(str(pb_last_row[0]))
         )
-        if "legs" not in last_by_group or pb_date > last_by_group["legs"]:
-            last_by_group["legs"] = pb_date
+        m.days_since_pickleball = (today - pb_date).days
 
     for g in ("push", "pull", "legs"):
         if g in last_by_group:
             setattr(m, f"days_since_{g}", (today - last_by_group[g]).days)
+            # Avg logged RPE of that group's most recent session — lets the
+            # rest gate distinguish a submaximal day from a near-failure one.
+            rpes = [
+                float(r[2])
+                for r in set_rows
+                if r[0] == last_by_group[g]
+                and r[2] is not None
+                and muscle_group(r[1] or "") == g
+            ]
+            if rpes:
+                setattr(m, f"last_rpe_{g}", round(sum(rpes) / len(rpes), 1))
     m.push_sets_28d = bal["push"]
     m.pull_sets_28d = bal["pull"]
     m.legs_sets_28d = bal["legs"]
@@ -958,10 +981,18 @@ def _gates(
             from shc.training.self_learning import read_acwr_bands
             personal = read_acwr_bands(conn)
             if personal:
-                res_rest = personal["RES_ACWR_REST"]
-                res_low = personal["RES_ACWR_LOW"]
-                res_mod = personal["RES_ACWR_MOD"]
-                cond_forbid_legs = personal["COND_ACWR_FORBID_LEGS"]
+                # Personal bands may LOOSEN the population defaults, never
+                # tighten them. The fitter's percentiles are dragged down by
+                # low-volume eras in the history, so an unfloored personal
+                # band gates ordinary accumulation weeks as "fatigue spikes"
+                # — which suppresses volume, lowers chronic load, and makes
+                # next week's ratio look even worse (the ACWR trap).
+                res_rest = max(personal["RES_ACWR_REST"], RES_ACWR_REST)
+                res_low = max(personal["RES_ACWR_LOW"], RES_ACWR_LOW)
+                res_mod = max(personal["RES_ACWR_MOD"], RES_ACWR_MOD)
+                cond_forbid_legs = max(
+                    personal["COND_ACWR_FORBID_LEGS"], COND_ACWR_FORBID_LEGS
+                )
         except Exception as exc:
             import logging as _log
             _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
@@ -1090,14 +1121,28 @@ def _gates(
         g.max_intensity = "low"
         reasons.append("Readiness red — cap intensity LOW")
 
-    # Muscle-group recovery.
+    # Muscle-group recovery. Base: compound legs ≥3d (72h); push/pull ≥2d (48h)
+    # — calibrated to a near-failure session. A submaximal session (avg RPE
+    # ≤ 6.5, i.e. 3+ RIR) recovers ~24h faster, and a flat calendar gate after
+    # easy sessions caps frequency below what the over-40 hypertrophy evidence
+    # prescribes (maintain or increase frequency, not reduce it).
     for grp in ("legs", "push", "pull"):
         rest = getattr(load, f"days_since_{grp}")
-        # Compound legs need ≥3d rest (72h); push/pull need ≥2d (48h).
         threshold = 3 if grp == "legs" else 2
+        last_rpe = getattr(load, f"last_rpe_{grp}")
+        if last_rpe is not None and last_rpe <= 6.5:
+            threshold -= 1
         if rest is not None and rest < threshold:
             g.forbid_muscle_groups.append(grp)
-            reasons.append(f"{grp.title()} {rest}d ago — needs ≥{threshold}d rest")
+            rpe_note = f" (last session avg RPE {last_rpe:.1f})" if last_rpe else ""
+            reasons.append(f"{grp.title()} {rest}d ago — needs ≥{threshold}d rest{rpe_note}")
+
+    # Same-day pickleball forbids leg lifting; from the next day on it does
+    # not — court time is conditioning stimulus, not heavy eccentric load, and
+    # the conditioning-ACWR gate above already protects against court overload.
+    if load.days_since_pickleball == 0 and "legs" not in g.forbid_muscle_groups:
+        g.forbid_muscle_groups.append("legs")
+        reasons.append("Pickleball today — legs off until tomorrow")
 
     # Per-muscle soreness from body-diagram check-in.
     # Severity 3 (acute) on any muscle in a group → forbid that group.

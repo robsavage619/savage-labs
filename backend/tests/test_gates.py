@@ -197,3 +197,72 @@ def test_recent_leg_training_forbids_legs() -> None:
     load.days_since_legs = 1  # < 2-day threshold for legs
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert "legs" in g.forbid_muscle_groups
+
+
+# ── RPE-scaled rest gates + pickleball clock + ACWR band floor ───────────────
+
+
+def test_easy_pull_session_needs_only_one_day() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.days_since_pull = 1
+    load.last_rpe_pull = 6.0  # submaximal — threshold drops 2d → 1d
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "pull" not in g.forbid_muscle_groups
+
+
+def test_hard_pull_session_keeps_48h_gate() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.days_since_pull = 1
+    load.last_rpe_pull = 8.5
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "pull" in g.forbid_muscle_groups
+
+
+def test_unknown_rpe_keeps_conservative_gate() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.days_since_pull = 1
+    load.last_rpe_pull = None
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "pull" in g.forbid_muscle_groups
+
+
+def test_easy_legs_session_needs_two_days() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.days_since_legs = 2
+    load.last_rpe_legs = 6.0  # 3d → 2d
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "legs" not in g.forbid_muscle_groups
+
+
+def test_same_day_pickleball_forbids_legs() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.days_since_pickleball = 0
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "legs" in g.forbid_muscle_groups
+
+
+def test_yesterday_pickleball_leaves_legs_open() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.days_since_pickleball = 1
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "legs" not in g.forbid_muscle_groups
+
+
+def test_personal_acwr_bands_floored_at_population(conn) -> None:
+    """A fitted band tighter than the population default must not tighten the
+    gate — personal bands may only loosen (the fitted percentiles are biased
+    low by low-volume history)."""
+    for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 50, now())",
+            [name, value],
+        )
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.88, 50, now())"
+    )
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.resistance_acwr = 1.44  # above the tight personal 1.2, below population 1.5
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "high"
