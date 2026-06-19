@@ -24,6 +24,7 @@ import { PatternsPane } from "@/components/patterns-pane";
 import { PerformanceCurvePane } from "@/components/performance-curve";
 import { PickleballPane } from "@/components/pickleball-panel";
 import { MuscleVolumePanel } from "@/components/muscle-volume-panel";
+import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { PrescriptionPanel } from "@/components/prescription-panel";
 
 const TABS = ["Recovery", "Body", "Patterns", "Insights", "Performance", "Sport", "Clinical"] as const;
@@ -489,6 +490,7 @@ function InsightsPane() {
       <VolumeLandmarks />
       <PrescriptionPanel />
       <MuscleVolumePanel />
+      <EngineStatusPanel />
       <SleepDoseResponse />
       <ACWRDeloadCard />
       <CorrelationCards />

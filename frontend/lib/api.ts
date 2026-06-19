@@ -874,6 +874,21 @@ export const api = {
       }[];
       exercise_menu: Record<string, string[]>;
     }>("/api/training/prescription"),
+  trainingSelfLearning: () =>
+    get<{
+      acwr_bands: { source: "personal" | "population"; sample_weeks: number | null };
+      volume_landmarks: { muscle: string; source: string }[];
+      prescription_accuracy: { overall: number | null; n_scored: number };
+      accuracy_history: { week_start: string; overall: number | null; n_scored: number }[];
+      deload_calibration: {
+        status: string;
+        threshold: number | null;
+        population_threshold: number;
+        n_events: number;
+        using_population_defaults: boolean;
+        message: string;
+      };
+    }>("/api/training/self-learning/status"),
   pickleballTrend: (days = 90) =>
     get<{
       as_of: string;
