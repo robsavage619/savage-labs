@@ -97,20 +97,24 @@ DELOAD_MUSCLE_THRESHOLD = 3
 def deload_check(
     perfs: dict[str, int | None],
     report: list[MuscleVolume],
+    threshold: int | None = None,
 ) -> dict:
     """Decide whether a fatigue-driven deload is warranted from real signals.
 
     A deload fires when training is broadly unproductive or maxed out, NOT on a
-    calendar (panel review M4): ≥``DELOAD_MUSCLE_THRESHOLD`` muscles regressing
-    (perf ≤ 2), or that many at/over MRV. Returns the recommendation + the
+    calendar (panel review M4): ≥``threshold`` muscles regressing (perf ≤ 2), or
+    that many at/over MRV. ``threshold`` defaults to the RP population value
+    (:data:`DELOAD_MUSCLE_THRESHOLD`); pass a personal value fitted by
+    ``calibrate_deload_trigger`` to override. Returns the recommendation + the
     specific triggers so the prescription can explain itself.
     """
+    thr = threshold if threshold is not None else DELOAD_MUSCLE_THRESHOLD
     regressing = sorted(m for m, p in perfs.items() if p is not None and p <= 2)
     at_mrv = sorted(r.muscle for r in report if r.mrv is not None and r.actual_sets >= r.mrv)
     triggers: list[str] = []
-    if len(regressing) >= DELOAD_MUSCLE_THRESHOLD:
+    if len(regressing) >= thr:
         triggers.append(f"{len(regressing)} muscles regressing ({', '.join(regressing[:5])})")
-    if len(at_mrv) >= DELOAD_MUSCLE_THRESHOLD:
+    if len(at_mrv) >= thr:
         triggers.append(f"{len(at_mrv)} muscles at/over MRV ({', '.join(at_mrv[:5])})")
     return {
         "recommended": bool(triggers),
@@ -495,7 +499,10 @@ def weekly_prescription(
 
     targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
     perfs = {r.muscle: _muscle_performance(conn, r.muscle) for r in targeted}
-    signal_deload = deload_check(perfs, targeted)
+    from shc.training.self_learning import read_deload_threshold
+
+    deload_threshold = read_deload_threshold(conn)
+    signal_deload = deload_check(perfs, targeted, threshold=deload_threshold)
 
     # Unify signal-based and calendar-based deloads under a single OR gate.
     # Either triggers a deload; the distinction is preserved in deload_reason

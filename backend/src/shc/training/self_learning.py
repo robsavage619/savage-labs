@@ -399,10 +399,12 @@ def fit_all(conn: duckdb.DuckDBPyConnection, meso_id: str) -> None:
     """Run both fitting pipelines and persist results.  Called from compute_all_scores."""
     landmarks_stored = persist_volume_landmarks(conn, meso_id)
     bands_stored = persist_acwr_bands(conn)
+    deload_cal = calibrate_deload_trigger(conn)
     log.info(
-        "fit_all: %d personal volume landmarks, ACWR bands %s",
+        "fit_all: %d personal volume landmarks, ACWR bands %s, deload threshold %s",
         landmarks_stored,
         "stored" if bands_stored else "skipped (insufficient data)",
+        deload_cal.get("status"),
     )
 
 
@@ -817,6 +819,53 @@ def prescription_accuracy(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
     return {"overall": overall, "n_scored": total_scored, "per_muscle": merged}
 
 
+def snapshot_accuracy(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
+    """Persist this ISO week's overall prescription accuracy for drift tracking.
+
+    Idempotent per week (upsert on week_start). Called from compute_all_scores so
+    the dashboard can chart whether the engine's calls are improving over time —
+    the only honest guard against a single-user fit silently degrading.
+    """
+    from datetime import date
+
+    acc = prescription_accuracy(conn)
+    week = _iso_week_start_str(date.today())
+    overall = acc["overall"]
+    n_scored = acc["n_scored"]
+    conn.execute(
+        """
+        INSERT INTO engine_accuracy_history (week_start, overall, n_scored, snapshot_at)
+        VALUES (?, ?, ?, now())
+        ON CONFLICT (week_start) DO UPDATE SET
+            overall     = excluded.overall,
+            n_scored    = excluded.n_scored,
+            snapshot_at = now()
+        """,
+        [week, overall, n_scored],
+    )
+    return {"week_start": str(week), "overall": overall, "n_scored": n_scored}
+
+
+def read_accuracy_history(
+    conn: duckdb.DuckDBPyConnection, weeks: int = 26
+) -> list[dict[str, object]]:
+    """Return the most recent ``weeks`` accuracy snapshots, oldest first."""
+    rows = conn.execute(
+        """
+        SELECT week_start, overall, n_scored
+        FROM engine_accuracy_history
+        ORDER BY week_start DESC
+        LIMIT ?
+        """,
+        [weeks],
+    ).fetchall()
+    return [
+        {"week_start": str(r[0]), "overall": float(r[1]) if r[1] is not None else None,
+         "n_scored": int(r[2])}
+        for r in reversed(rows)
+    ]
+
+
 def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict]:
     """Retroactive prescription accuracy from consecutive e1RM perf_score pairs.
 
@@ -875,44 +924,188 @@ def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict
 
 # ── Deload calibration ────────────────────────────────────────────────────────
 
+# Minimum signal-driven deload events needed before we trust a personal threshold.
+_DELOAD_MIN_EVENTS = 4
+# Clamp the fitted threshold to a sane range. Below 2, a single regressing muscle
+# would deload (too twitchy); above 4, fatigue is allowed to compound too far.
+_DELOAD_THRESHOLD_FLOOR = 2
+_DELOAD_THRESHOLD_CEIL = 4
+# Calendar/scheduled deloads carry no fatigue-threshold information — exclude them
+# so the fit reflects only deloads Rob took because his body signalled for one.
+_CALENDAR_DELOAD_TRIGGERS = ("scheduled",)
+
+
+def _regressing_precursor_count(conn: duckdb.DuckDBPyConnection, deload_start: object) -> int | None:
+    """Regressing-muscle count in the ISO week immediately before a deload.
+
+    Counts distinct primary muscles whose mean perf_score that week was ≤ 2 — the
+    same regression definition deload_check() uses live. Returns None when no
+    scored exercises exist in that week (the precursor is unobservable).
+    """
+    from datetime import timedelta
+
+    precursor_week = _iso_week_start_str(deload_start) - timedelta(days=7)  # type: ignore[operator]
+    row = conn.execute(
+        """
+        WITH muscle_perf AS (
+            SELECT m.primary_muscle AS muscle, AVG(e.perf_score) AS avg_perf
+            FROM exercise_weekly_e1rm e
+            JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
+            WHERE e.perf_score IS NOT NULL AND e.week_start = ?
+            GROUP BY m.primary_muscle
+        )
+        SELECT COUNT(*) FILTER (WHERE avg_perf <= 2), COUNT(*)
+        FROM muscle_perf
+        """,
+        [precursor_week],
+    ).fetchone()
+    if not row or not row[1]:  # no scored muscles that week — unobservable
+        return None
+    return int(row[0])
+
 
 def calibrate_deload_trigger(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
-    """Fit personal deload trigger thresholds from mesocycle history.
+    """Fit and persist a personal deload-trigger threshold from deload history.
 
-    Looks at the signals (ACWR, regressing muscles) in the week BEFORE each
-    recorded deload to learn Rob's personal deload precursors.
+    For each *signal-driven* deload (excludes scheduled/calendar deloads, which
+    carry no fatigue information), measures how many muscles were regressing in
+    the week before it fired. The personal threshold is the median of those
+    precursor counts, clamped to [2, 4]. Persisted to ``personal_deload_threshold``
+    and read live by ``deload_check`` via ``read_deload_threshold``.
 
-    Returns calibration result or a 'no_data' status when < 3 deload events exist.
+    Returns an honest status dict; keeps the population default (3) until enough
+    signal deloads exist to fit.
     """
+    from statistics import median
+
     deloads = conn.execute(
         """
-        SELECT id, started_on, deload_week, deload_trigger
+        SELECT started_on, deload_week, deload_trigger
         FROM mesocycles
         WHERE deload_week IS NOT NULL
         ORDER BY started_on
         """
     ).fetchall()
 
-    if len(deloads) < 3:
+    signal_deloads = [
+        d for d in deloads if (d[2] or "scheduled") not in _CALENDAR_DELOAD_TRIGGERS
+    ]
+
+    def _insufficient(n: int) -> dict[str, object]:
         return {
             "status": "insufficient_data",
-            "n_events": len(deloads),
+            "n_events": n,
+            "threshold": None,
+            "population_threshold": 3,
             "message": (
-                f"Only {len(deloads)} deload event(s) on record — need ≥3 to fit "
-                "personal thresholds. Using population defaults (DELOAD_MUSCLE_THRESHOLD=3)."
+                f"Only {n} signal-driven deload event(s) on record — need "
+                f"≥{_DELOAD_MIN_EVENTS} to fit a personal threshold. Using population "
+                "default (DELOAD_MUSCLE_THRESHOLD=3)."
             ),
             "using_population_defaults": True,
         }
 
-    # Stub: infrastructure is present, fitting logic is not yet implemented.
-    # Returns honest status so callers don't assume personal thresholds are active.
-    n_events = len(deloads)
+    if len(signal_deloads) < _DELOAD_MIN_EVENTS:
+        return _insufficient(len(signal_deloads))
+
+    from datetime import timedelta
+
+    counts: list[int] = []
+    for started_on, deload_week, _trigger in signal_deloads:
+        deload_start = started_on + timedelta(weeks=int(deload_week) - 1)
+        c = _regressing_precursor_count(conn, deload_start)
+        if c is not None:
+            counts.append(c)
+
+    if len(counts) < _DELOAD_MIN_EVENTS:
+        # Events exist but their precursor weeks have no scored history.
+        return _insufficient(len(counts))
+
+    precursor_median = float(median(counts))
+    threshold = max(
+        _DELOAD_THRESHOLD_FLOOR, min(_DELOAD_THRESHOLD_CEIL, round(precursor_median))
+    )
+
+    conn.execute(
+        """
+        INSERT INTO personal_deload_threshold (id, threshold, n_events, precursor_median, fitted_at)
+        VALUES (1, ?, ?, ?, now())
+        ON CONFLICT (id) DO UPDATE SET
+            threshold        = excluded.threshold,
+            n_events         = excluded.n_events,
+            precursor_median = excluded.precursor_median,
+            fitted_at        = now()
+        """,
+        [threshold, len(counts), precursor_median],
+    )
+    log.info(
+        "calibrate_deload_trigger: fitted threshold=%d from %d signal deloads "
+        "(precursor median=%.1f regressing muscles)",
+        threshold,
+        len(counts),
+        precursor_median,
+    )
     return {
-        "status": "stub",
-        "n_events": n_events,
+        "status": "fitted",
+        "n_events": len(counts),
+        "threshold": threshold,
+        "population_threshold": 3,
+        "precursor_median": round(precursor_median, 1),
         "message": (
-            f"{n_events} deload events on record — fitting not yet implemented. "
-            "Using population default (DELOAD_MUSCLE_THRESHOLD=3)."
+            f"Personal deload threshold = {threshold} muscle(s) regressing, fitted "
+            f"from {len(counts)} signal-driven deloads (median precursor "
+            f"{precursor_median:.1f}). Replaces population default of 3."
         ),
-        "using_population_defaults": True,
+        "using_population_defaults": False,
+    }
+
+
+def read_deload_threshold(conn: duckdb.DuckDBPyConnection) -> int | None:
+    """Read the fitted personal deload threshold, or None if never fitted."""
+    row = conn.execute(
+        "SELECT threshold FROM personal_deload_threshold WHERE id = 1"
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def read_deload_calibration(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
+    """Read-only deload calibration status for the status endpoint.
+
+    Reports the persisted personal threshold (fitted by ``calibrate_deload_trigger``
+    in the write pipeline) without re-fitting. Falls back to the population default
+    when no personal threshold has been stored yet.
+    """
+    row = conn.execute(
+        "SELECT threshold, n_events, precursor_median, fitted_at "
+        "FROM personal_deload_threshold WHERE id = 1"
+    ).fetchone()
+    if not row or row[0] is None:
+        n_signal = conn.execute(
+            "SELECT COUNT(*) FROM mesocycles "
+            "WHERE deload_week IS NOT NULL AND COALESCE(deload_trigger, 'scheduled') <> 'scheduled'"
+        ).fetchone()
+        n = int(n_signal[0]) if n_signal else 0
+        return {
+            "status": "insufficient_data",
+            "n_events": n,
+            "threshold": None,
+            "population_threshold": 3,
+            "using_population_defaults": True,
+            "message": (
+                f"{n} signal-driven deload(s) on record — need ≥{_DELOAD_MIN_EVENTS} "
+                "to fit. Using population default (DELOAD_MUSCLE_THRESHOLD=3)."
+            ),
+        }
+    return {
+        "status": "fitted",
+        "n_events": int(row[1]),
+        "threshold": int(row[0]),
+        "population_threshold": 3,
+        "precursor_median": round(float(row[2]), 1) if row[2] is not None else None,
+        "fitted_at": str(row[3]) if row[3] else None,
+        "using_population_defaults": False,
+        "message": (
+            f"Personal deload threshold = {int(row[0])} regressing muscle(s), fitted "
+            f"from {int(row[1])} signal deloads."
+        ),
     }
