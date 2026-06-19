@@ -498,12 +498,16 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
         materialize_signal_quality,
         record_prescription,
         score_prescription_outcomes,
+        snapshot_accuracy,
     )
 
     materialize_signal_quality(conn)
 
     # Score any logged prescriptions from 3 weeks ago.
     score_prescription_outcomes(conn)
+
+    # Snapshot this week's overall accuracy so engine drift is visible over time.
+    snapshot_accuracy(conn)
 
     # Log this week's prescription for future accuracy tracking.
     from shc.training.autoregulation import weekly_prescription

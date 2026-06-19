@@ -19,9 +19,10 @@ from pydantic import BaseModel
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
 from shc.training.self_learning import (
-    calibrate_deload_trigger,
     prescription_accuracy,
+    read_accuracy_history,
     read_acwr_bands,
+    read_deload_calibration,
     read_signal_quality_cache,
 )
 from shc.training.mesocycle import (
@@ -339,8 +340,8 @@ async def get_self_learning_status() -> dict[str, Any]:
         # Prescription accuracy (retroactive backtesting + logged outcomes).
         accuracy = prescription_accuracy(conn)
 
-        # Deload trigger calibration status.
-        deload_cal = calibrate_deload_trigger(conn)
+        # Deload trigger calibration status (read-only; fitting happens in the pipeline).
+        deload_cal = read_deload_calibration(conn)
 
         # RPE data coverage — explain why RPE-adjusted ACWR isn't active.
         rpe_row = conn.execute(
@@ -363,6 +364,7 @@ async def get_self_learning_status() -> dict[str, Any]:
             },
             "volume_landmarks": landmarks,
             "prescription_accuracy": accuracy,
+            "accuracy_history": read_accuracy_history(conn),
             "deload_calibration": deload_cal,
             "mesocycle_id": meso_id,
         }

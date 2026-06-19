@@ -18,9 +18,13 @@ from shc.training.self_learning import (
     persist_acwr_bands,
     persist_volume_landmarks,
     prescription_accuracy,
+    read_accuracy_history,
     read_acwr_bands,
+    read_deload_calibration,
+    read_deload_threshold,
     read_signal_quality_cache,
     regrade_stalled_with_tonnage_blend,
+    snapshot_accuracy,
 )
 
 
@@ -353,3 +357,101 @@ def test_deload_calibration_no_data_returns_insufficient(conn) -> None:
     assert result["status"] == "insufficient_data"
     assert result["n_events"] == 0
     assert result["using_population_defaults"] is True
+    assert read_deload_threshold(conn) is None
+
+
+def _seed_deload(conn, started_on: date, deload_week: int, trigger: str,
+                 regressing_muscles: int) -> None:
+    """Seed a deload event plus its precursor-week perf signals.
+
+    Creates ``regressing_muscles`` distinct muscles each with perf=1 (regressing)
+    and two productive muscles (perf=4) in the ISO week before the deload.
+    """
+    conn.execute(
+        "INSERT INTO mesocycles (started_on, planned_weeks, deload_week, deload_trigger)"
+        " VALUES (?, ?, ?, ?)",
+        [started_on.isoformat(), deload_week, deload_week, trigger],
+    )
+    deload_start = started_on + timedelta(weeks=deload_week - 1)
+    precursor = _monday(deload_start) - timedelta(weeks=1)
+    for i in range(regressing_muscles):
+        ex = f"reg_ex_{started_on.isoformat()}_{i}"
+        _seed_muscle_map(conn, ex, f"reg_muscle_{i}")
+        _seed_e1rm(conn, ex, precursor, 40.0, 8, perf=1)
+    for i in range(2):
+        ex = f"prod_ex_{started_on.isoformat()}_{i}"
+        _seed_muscle_map(conn, ex, f"prod_muscle_{i}")
+        _seed_e1rm(conn, ex, precursor, 50.0, 8, perf=4)
+
+
+def test_deload_calibration_fits_from_signal_deloads(conn) -> None:
+    # 4 signal-driven deloads, each preceded by 3 regressing muscles → threshold 3.
+    base = _monday(date.today()) - timedelta(weeks=60)
+    for i in range(4):
+        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
+                     trigger="hrv_drop", regressing_muscles=3)
+    result = calibrate_deload_trigger(conn)
+    assert result["status"] == "fitted"
+    assert result["n_events"] == 4
+    assert result["threshold"] == 3
+    assert result["using_population_defaults"] is False
+    assert read_deload_threshold(conn) == 3
+
+
+def test_deload_calibration_clamps_low_precursor_to_floor(conn) -> None:
+    # Deloads taken at just 1 regressing muscle should clamp up to the floor (2),
+    # not let a single regression deload the athlete.
+    base = _monday(date.today()) - timedelta(weeks=60)
+    for i in range(4):
+        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
+                     trigger="manual", regressing_muscles=1)
+    result = calibrate_deload_trigger(conn)
+    assert result["status"] == "fitted"
+    assert result["threshold"] == 2
+
+
+def test_deload_calibration_excludes_scheduled_deloads(conn) -> None:
+    # Calendar/scheduled deloads carry no fatigue info and must not count.
+    base = _monday(date.today()) - timedelta(weeks=60)
+    for i in range(5):
+        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
+                     trigger="scheduled", regressing_muscles=3)
+    result = calibrate_deload_trigger(conn)
+    assert result["status"] == "insufficient_data"
+    assert read_deload_threshold(conn) is None
+
+
+def test_read_deload_calibration_reports_fitted_without_writing(conn) -> None:
+    base = _monday(date.today()) - timedelta(weeks=60)
+    for i in range(4):
+        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
+                     trigger="hrv_drop", regressing_muscles=3)
+    calibrate_deload_trigger(conn)
+    status = read_deload_calibration(conn)
+    assert status["status"] == "fitted"
+    assert status["threshold"] == 3
+    assert status["using_population_defaults"] is False
+
+
+def test_read_deload_calibration_population_default_when_unfitted(conn) -> None:
+    status = read_deload_calibration(conn)
+    assert status["status"] == "insufficient_data"
+    assert status["threshold"] is None
+    assert status["using_population_defaults"] is True
+
+
+# ── accuracy history snapshot ──────────────────────────────────────────────────
+
+
+def test_snapshot_accuracy_persists_and_reads_back(conn) -> None:
+    snap = snapshot_accuracy(conn)
+    assert "overall" in snap and "n_scored" in snap
+    history = read_accuracy_history(conn)
+    assert len(history) == 1
+    assert history[0]["week_start"] == snap["week_start"]
+
+
+def test_snapshot_accuracy_is_idempotent_per_week(conn) -> None:
+    snapshot_accuracy(conn)
+    snapshot_accuracy(conn)  # same ISO week → upsert, not a second row
+    assert len(read_accuracy_history(conn)) == 1
