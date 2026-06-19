@@ -495,7 +495,8 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
     # gate, so callers require BASELINE_MIN_N valid nights (panel review M13).
     skin_baseline = conn.execute(
         "SELECT AVG(skin_temp), COUNT(skin_temp) FROM recovery WHERE skin_temp IS NOT NULL "
-        "AND date >= (current_date - INTERVAL '28 days')"
+        "AND date >= $since",
+        {"since": (today - timedelta(days=28)).isoformat()},
     ).fetchone()
 
     m = RecoveryMetrics()
@@ -754,8 +755,9 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
     cardio = conn.execute(
         """
         SELECT COALESCE(SUM(duration_min), 0) FROM cardio_sessions
-        WHERE date >= (current_date - INTERVAL '28 days')
-        """
+        WHERE date >= $since
+        """,
+        {"since": (today - timedelta(days=28)).isoformat()},
     ).fetchone()
     if cardio and cardio[0] is not None:
         m.cardio_min_28d = int(cardio[0])
@@ -797,8 +799,9 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             COALESCE(SUM(zone_four_min),  0) AS z4,
             COALESCE(SUM(zone_five_min),  0) AS z5
         FROM workouts
-        WHERE started_at >= (current_date - INTERVAL '7 days')
-        """
+        WHERE started_at >= $since
+        """,
+        {"since": (today - timedelta(days=7)).isoformat()},
     ).fetchone()
     zone_total = sum(zone_row) if zone_row else 0
     if zone_total > 0:
@@ -821,10 +824,11 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             f"""
             SELECT COALESCE(SUM(duration_min), 0)
             FROM cardio_sessions
-            WHERE date >= (current_date - INTERVAL '7 days')
+            WHERE date >= $since
               AND avg_hr IS NOT NULL
               AND avg_hr BETWEEN {z2_low} AND {z2_high}
-            """
+            """,
+            {"since": (today - timedelta(days=7)).isoformat()},
         ).fetchone()
         if z2 and z2[0] is not None:
             m.cardio_z2_min_7d = int(z2[0])
@@ -905,9 +909,10 @@ def _checkin(conn, today: date) -> CheckinMetrics:
         """
         SELECT value_num FROM measurements
         WHERE metric IN ('body_mass_kg', 'body_mass', 'weight') AND value_num IS NOT NULL
-          AND ts <= (current_date - INTERVAL '28 days')
+          AND ts <= $cutoff
         ORDER BY ts DESC LIMIT 1
-        """
+        """,
+        {"cutoff": (today - timedelta(days=28)).isoformat()},
     ).fetchone()
     past_kg = float(past[0]) if past and past[0] else None
     if today_kg and past_kg:

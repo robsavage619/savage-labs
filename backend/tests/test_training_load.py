@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from shc.metrics import _training_load
+from shc.metrics import _checkin, _recovery, _training_load
 
 
 def ago(today: date, n: int) -> date:
@@ -106,3 +106,58 @@ def test_arm_acwr_resistance_and_conditioning_are_independent(
     # Resistance arm: acute is 0 (no Hevy this week), chronic has the old lift → ACWR < 1.
     assert m.resistance_acwr is not None
     assert m.resistance_acwr < 1.0, "resistance acute should be 0 with no recent lift"
+
+
+# ── Windowed queries must anchor to `today`, not SQL current_date ─────────────
+# The `today` fixture (2026-05-20) is ~30 days before the real wall-clock date,
+# so data seeded relative to `today` falls outside any current_date-anchored
+# window. These lock in that backtests/recompute see the same numbers as live.
+
+
+def test_cardio_min_28d_anchors_to_today(conn, seed, today: date) -> None:
+    # 10 days before `today` → inside today's 28d window, but well before the
+    # real-date 28d window (~30 days later), where it would wrongly read 0.
+    seed.cardio(ago(today, 10), "running", 45)
+    m = _training_load(conn, today)
+    assert m.cardio_min_28d == 45
+
+
+def test_z2_7d_fallback_anchors_to_today(conn, seed, today: date) -> None:
+    # No WHOOP zone data → HR-range fallback. max_hr defaults to 180 → Z2 = 108–126.
+    # 3 days before `today` is inside today's 7d window, outside the real-date one.
+    seed.cardio(ago(today, 3), "running", 30, avg_hr=115)
+    m = _training_load(conn, today)
+    assert m.cardio_z2_min_7d == 30
+
+
+def test_skin_temp_baseline_anchors_to_today(conn, today: date) -> None:
+    import uuid
+
+    # 14 nights (>= BASELINE_MIN_N) ending the day before `today`, all inside
+    # today's 28d window but before the real-date window.
+    for n in range(1, 15):
+        rid = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO recovery (id, source, date, skin_temp, content_hash) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [rid, "whoop", ago(today, n), 33.0, rid],
+        )
+    m = _recovery(conn, today)
+    assert m.skin_temp_baseline_28d == 33.0  # None if window anchored to current_date
+
+
+def test_body_weight_trend_anchors_to_today(conn, today: date) -> None:
+    def _weight(days_ago: int, kg: float) -> None:
+        ts = datetime.combine(ago(today, days_ago), datetime.min.time())
+        conn.execute(
+            "INSERT INTO measurements "
+            "(source, metric, ts, value_num, external_id, content_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ["whoop", "body_mass_kg", ts, kg, f"w{days_ago}", f"w{days_ago}"],
+        )
+
+    _weight(1, 80.0)   # latest weight
+    _weight(40, 100.0)  # past anchor: only qualifies if cutoff = today - 28d
+    m = _checkin(conn, today)
+    # current_date cutoff (~today+30 − 28d) would pick the recent 80 → ~0%.
+    assert m.body_weight_trend_4wk == -20.0
