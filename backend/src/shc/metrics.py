@@ -767,18 +767,19 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         """
         SELECT modality, COALESCE(SUM(duration_min), 0) AS mins
         FROM cardio_sessions
-        WHERE date >= (current_date - INTERVAL '7 days')
-          AND modality NOT IN ('yoga', 'meditation', 'cross country skiing')
+        WHERE date >= $since AND modality NOT IN ('yoga', 'meditation', 'cross country skiing')
         GROUP BY modality
-        """
+        """,
+        {"since": (today - timedelta(days=7)).isoformat()},
     ).fetchall()
     m.cardio_modality_min_7d = {(r[0] or "unknown"): int(r[1] or 0) for r in modality_rows}
     m.pickleball_min_7d = m.cardio_modality_min_7d.get("pickleball", 0)
     pb28_row = conn.execute(
         """
         SELECT COALESCE(SUM(duration_min), 0) FROM cardio_sessions
-        WHERE date >= (current_date - INTERVAL '28 days') AND modality = 'pickleball'
-        """
+        WHERE date >= $since AND modality = 'pickleball'
+        """,
+        {"since": (today - timedelta(days=28)).isoformat()},
     ).fetchone()
     if pb28_row and pb28_row[0] is not None:
         m.pickleball_min_28d = int(pb28_row[0])
