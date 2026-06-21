@@ -577,142 +577,18 @@ The difference matters. Claude knows exercise science in aggregate from its trai
 
 ### What's In It
 
-**~416 notes across 11 domains** — all ingested from primary sources (textbooks, meta-analyses, RCTs), structured with YAML frontmatter tags, and condensed to actionable prescription sections.
+~416 notes across 8 domains, all ingested from primary sources (textbooks, meta-analyses, RCTs), structured with YAML frontmatter tags, and condensed to actionable prescription sections.
 
-<details>
-<summary><strong>Strength & Hypertrophy — 147 notes</strong></summary>
-
-The biggest chunk. Primarily Schoenfeld's *Science and Development of Muscle Hypertrophy* (2021), Israetel's *Scientific Principles of Hypertrophy Training* (2020), Helms' *Muscle & Strength Pyramid* (2018), and Bompa/Zatsiorsky on periodization.
-
-**What's encoded:**
-
-- **Volume threshold (Schoenfeld 2016 meta, 15 studies):** ≥10 working sets per muscle group per week to maximize hypertrophy. +0.37% per additional set across a 2–30 set range.
-- **Hypertrophy mechanisms (Schoenfeld 2010):** Mechanical tension is the primary driver. Metabolic stress and muscle damage are secondary. This hierarchy is encoded directly into exercise selection rules.
-- **Rest intervals:** 90–120s minimum between compound sets for hypertrophy; 180–300s for strength. Longer rest is actually superior (Schoenfeld 2016) — the "metabolic stress from short rest" hypothesis didn't hold up.
-- **Range of motion:** Full ROM beats partial. Lengthened-position loading (deficit RDLs, stretched-position flies) produces a greater stimulus per Pedrosa (2022) and Maeo (2021).
-- **DUP periodization:** Distinct rep ranges across sessions within the week (strength 3–5, hypertrophy 8–12, endurance 15–20) outperforms linear for trained athletes.
-- **SRA curves per muscle:** Stimulus-recovery-adaptation timelines per muscle group — quads 72h compound, biceps 48h, delts 36–48h — feed directly into the gate logic.
-- **Volume landmarks:** MEV → MAV → MRV per Israetel. Exceeding MRV triggers a deload.
-- **Cardio interference:** Low: cycling Z2 post-strength. High: running pre-strength, same-day HIIT.
-
-**Notes:** `exercise-selection-strength.md`, `exercise-selection-hypertrophy.md`, `exercise-order-strength.md`, `rest-interval-strength.md`, `rest-interval-hypertrophy.md`, `range-of-motion-hypertrophy.md`, `training-volume-hypertrophy.md`, `schoenfeld-2016-rt-volume-hypertrophy.md`, `schoenfeld-2021-science-development-muscle-hypertrophy.md` (9 chapters), `sra-training-frequency.md`, `supercompensation-theory.md`, `fitness-fatigue-theory.md`, `overreaching-detection.md`, `concurrent-training-interference.md`
-
-</details>
-
-<details>
-<summary><strong>Sleep Science — 76 notes</strong></summary>
-
-Walker's *Why We Sleep* (2017) and Winter's *The Sleep Solution* (2017), both chapter by chapter, plus primary research on HRV during sleep, OSA, and sleep × athletic performance.
-
-**What's encoded:**
-
-- **Sleep deprivation effects (Walker Ch1):** 6–7h demolishes immune function, doubles cancer risk relative to 8h, and raises ghrelin enough to drive ~300 kcal/day of extra intake. This is why the sleep debt accumulator in the dashboard exists — I want to see when I'm accumulating a deficit.
-- **Stage targets:** N3 (deep/slow-wave) drives physical recovery and GH release. REM drives motor learning and emotional regulation. Both tracked separately rather than collapsed into a single "sleep score."
-- **SpO2 threshold:** <95% average flags sleep-disordered breathing — it's weighted more heavily than duration in my composite score, for obvious reasons.
-- **Sleep state misperception:** Subjective quality often diverges from objective stage data. That's why I log both — WHOOP's objective staging and my own morning 1–10 rating.
-- **Circadian anchoring (Winter):** Consistent wake time matters more than consistent bed time.
-
-**Notes:** `walker-2017-why-we-sleep.md` (Ch1–16), `winter-2017-sleep-solution.md` (Ch1–16), `obstructive-sleep-apnea.md`, `sleep-spindles.md`, `sleep-learning-consolidation.md`, `napping-protocol.md`, `rem-dreaming-mechanisms.md`, `dolezal-2017-sleep-exercise-review.md`
-
-</details>
-
-<details>
-<summary><strong>Nutrition — 55 notes</strong></summary>
-
-Israetel's *Renaissance Diet 2.0* (2020) and Helms' *Muscle & Strength Pyramid: Nutrition* (2016), with Attia's *Outlive* (2023) for metabolic health context.
-
-**What's encoded:**
-
-- **Priority order (Israetel Ch1):** Adherence → calorie balance → macros → timing → food choice → supplements. This ordering determines what the AI advisor emphasizes when I ask nutrition questions.
-- **Recomposition conditions:** Possible if you're new to training, returning from a layoff, or enhanced. For a trained athlete in neither state, it requires deliberate calorie cycling — encoded as a constraint on what Claude will recommend.
-- **Protein floor:** 0.7g/lb minimum at any calorie level. 1.0–1.2g/lb in a surplus.
-- **Deficit rate:** 0.5–1.0% body weight per week to preserve lean mass. Faster → muscle loss risk.
-- **NEAT first:** Non-exercise activity thermogenesis is the biggest variable in TDEE. Increase output before cutting food.
-- **Supplement tier list:** Creatine and caffeine are Tier 1. Everything else is Tier 2 or lower. Encoded to gate what Claude recommends.
-
-**Notes:** `israetel-2020-renaissance-diet.md` (Ch1–17), `helms-2016-muscle-strength-pyramid-nutrition.md` (Ch1–7), `protein-target.md`, `calorie-deficit-fat-loss-rate.md`, `diet-break-refeed-protocol.md`, `diet-priority-pyramid.md`, `peri-workout-nutrition.md`, `supplements-tier-list.md`, `supplement-creatine.md`, `supplement-caffeine.md`
-
-</details>
-
-<details>
-<summary><strong>Longevity & Healthspan — 35 notes</strong></summary>
-
-Attia's *Outlive* (2023) cover to cover, framing everything through the four horsemen: cardiovascular disease, cancer, neurodegeneration, metabolic dysfunction.
-
-**What's encoded:**
-
-- **VO₂max as the most important fitness metric (Attia Ch11):** Bottom quartile → 4× all-cause mortality vs top. No upper limit to the benefit. I track Zone 2 and Zone 5 minutes specifically because of this.
-- **Centenarian Decathlon:** VO₂max, grip strength, leg press, single-leg balance, stair climb, carry, floor-rise, overhead press, gait speed. These are my long-term training targets, not aesthetics.
-- **Zone 2:** ~80% of aerobic volume at conversational pace. Mitochondrial density, fat oxidation, metabolic flexibility.
-- **ApoB > LDL-C:** ApoB is the causal cardiovascular risk marker. When I ask Claude about my lipid labs, it references ApoB first.
-- **Compression of morbidity:** The goal is function in the last decade, not just survival. Everything I track is downstream of this framing.
-
-**Notes:** `attia-2023-outlive.md` (Ch1–17), `four-horsemen-chronic-disease.md`, `centenarian-decathlon.md`, `vo2max-longevity.md`, `zone-2-training.md`, `compression-of-morbidity.md`, `grip-strength.md`, `apob.md`, `apoe.md`, `medicine-3-0.md`
-
-</details>
-
-<details>
-<summary><strong>HRV & Biometric Research — 15 notes</strong></summary>
-
-Primary papers on HRV monitoring, wearable validation, and HR modelling — the actual research behind the design decisions in this codebase.
-
-**Papers and what they drove:**
-
-- **Task Force (1996):** The foundational HRV standards paper. Established why RMSSD is the right metric for short-term vagal monitoring, not LF/HF.
-- **Kiviniemi et al. (2007):** HRV-guided training outperforms fixed-intensity programs. The direct basis for gating training intensity off σ-deviation rather than a fixed weekly schedule.
-- **Plews et al. (2013, 2014):** 7-day rolling average is superior to single readings for training decisions. Drove the 28-day baseline window design.
-- **Tanaka et al. (2001):** 220−age underestimates HRmax in trained adults. Tanaka (208 − 0.7 × age) is lower error. Encoded directly in the HR zone calculation.
-- **Dial et al. (2025):** WHOOP and Garmin validation study. Establishes the confidence interval for treating WHOOP readings as ground truth.
-
-**Notes:** `task-force-1996-hrv-standards.md`, `shaffer-2017-hrv-metrics-norms.md`, `kiviniemi-2007-hrv-guided-endurance-training.md`, `plews-2013-hrv-monitoring-compliance.md`, `tanaka-2001-hrmax-revisited.md`, `buchheit-2014-training-status-hr-monitoring.md`, `dial-2025-wearable-rhr-hrv-validation.md`
-
-</details>
-
-<details>
-<summary><strong>Concurrent Training & Sports Science — 11 notes</strong></summary>
-
-Added in response to pickleball becoming the primary sport goal. Covers interference effects, power development, and cardio zone methodology anchored to primary papers.
-
-**What's encoded:**
-
-- **Concurrent training interference (Wilson 2012):** The residual fatigue model. Lower-body explosive power is the first adaptation lost when aerobic volume is high — not upper-body strength. This asymmetry drives the planner's split: preserve compound pulling and pushing volume, drop lower-body to MEV when pickleball ≥ 150 min/7d.
-- **Molecular mechanisms (Coffey & Hawley 2017):** AMPK activated by aerobic work phosphorylates TSC2 → suppresses Rheb → inhibits mTORC1 → blunts hypertrophy signaling for ~6h. Practical application: Z2-only finishers when concurrent training load is high; ≥6h separation between sport and lifting reduces interference.
-- **Compatibility conditions (Schumann 2022):** Sport-specific movement patterns interfere less than generic running. Court-movement aerobic (pickleball) creates less lower-body interference than an equivalent HIIT session. Upper-body hypertrophy can remain at MAV even in high sport-volume weeks.
-- **Strength as the floor (Suchomel 2016):** Maximal strength is the foundation for all power expression in racquet sports. Never sacrifice compound primaries to make room for sport volume — reduce accessories, not the strength base.
-- **Polarized zone distribution (Seiler 2010, Stoggl & Sperlich 2014):** 80/20 rule — ~80% of aerobic volume at Z1/Z2 (conversational), ~20% at threshold or above. Validated across endurance sports. Applied to finisher selection: Z2-only finishers preserve this distribution when pickleball is already supplying the high-intensity stimulus.
-- **Respiratory rate monitoring (Nicolò 2020, Bourdillon 2018):** RR rises 3–4 days before subjective illness. Used to implement the +1 bpm sentinel gate.
-- **Athlete sleep (Vitale 2019):** Sleep extension to ≥8h improves reaction time and sprint speed. Platform now surfaces sleep cycle count, efficiency, and disturbances as first-class gate inputs.
-
-**Notes:** `wilson-2012-concurrent-training-interference.md`, `schumann-2022-concurrent-training-compatibility.md`, `coffey-2017-concurrent-training-molecular.md`, `suchomel-2016-strength-athletic-performance.md`, `seiler-2010-polarized-training.md`, `stoggl-2014-polarized-vs-pyramidal.md`, `nicolo-2020-respiratory-rate-monitoring.md`, `vitale-2019-athlete-sleep-hygiene.md`, `robergs-2002-hrmax-formula-critique.md`, `grosicki-2025-whoop-adherence-outcomes.md`, `whoop-2025-healthspan-whitepaper.md`
-
-</details>
-
-<details>
-<summary><strong>N-of-1 Methodology — 5 notes</strong></summary>
-
-The meta-framework that justifies treating my own data seriously — single-subject experimental design as rigorous science, not just self-tracking.
-
-- **Schork (2015, 2022):** Population RCTs tell you what works *on average*. N-of-1 trials tell you what works *for this person*. The philosophical backbone for why I treat my longitudinal data as an actual experiment.
-- **Daza (2018):** Counterfactual inference in single-subject designs. How to ask "did this protocol work?" without a control group — comparing windows of the same individual rather than against a population baseline.
-- **Piccininni et al. (2025):** Causal inference methods for N-of-1 designs. Grounds the correlation cards (sleep→recovery, HRV→readiness) in causal rather than purely associational framing.
-
-**Notes:** `schork-2015-personalized-medicine-one-person-trials.md`, `schork-2022-exploring-human-biology-nof1.md`, `daza-2018-counterfactual-nof1.md`, `piccininni-2025-causal-inference-nof1.md`, `konigorski-digital-nof1-experimental-physiology.md`
-
-</details>
-
-<details>
-<summary><strong>LLM Engineering & RAG — 67 notes</strong></summary>
-
-The domain that informs how the vault retrieval itself is built — I read this research while designing the system.
-
-- **Self-RAG (2023):** Adaptive retrieval where the model decides *when* to retrieve. Informs why I do signal-ranked retrieval rather than always dumping all notes into context.
-- **ReAct (Reasoning + Acting):** Chain-of-thought combined with tool use. The mental model for how the AI advisor uses live health data alongside vault research.
-- **Reflexion (Shinn et al., 2023):** Verbal RL via reflection. Why `validate_plan()` explains violations to Claude rather than just rejecting silently.
-- **Constitutional AI (Bai et al., 2022):** Anthropic's safety-through-self-critique framework. Context for how Claude's safety behaviors interact with clinical coaching instructions.
-
-**Notes:** `retrieval-augmented-generation.md`, `self-rag.md`, `react-synergizing-reasoning-and-acting.md`, `shinn-2023-reflexion-verbal-rl.md`, `hypothetical-document-embeddings.md`, `bai-2022-constitutional-ai.md`, `cognitive-architectures-for-language-agents.md`, `vector-embeddings.md`, `reranking.md`
-
-</details>
+| Domain | Notes | Primary sources |
+|---|---|---|
+| Strength & Hypertrophy | 147 | Schoenfeld, Israetel, Helms, Bompa/Zatsiorsky — volume landmarks, SRA curves, periodization, DUP |
+| Sleep Science | 76 | Walker, Winter — stage targets, SpO2 thresholds, circadian anchoring, sleep × athletic performance |
+| LLM Engineering & RAG | 67 | Self-RAG, ReAct, Reflexion, Constitutional AI — informs how the retrieval system is designed |
+| Nutrition | 55 | Israetel, Helms, Attia — priority hierarchy, protein targets, recomposition conditions, supplement tiers |
+| Longevity & Healthspan | 35 | Attia — VO₂max, centenarian decathlon, Zone 2, ApoB vs LDL-C, compression of morbidity |
+| HRV & Biometric Research | 15 | Task Force 1996, Kiviniemi, Plews, Tanaka, Dial — the papers behind every HRV and zone design decision |
+| Concurrent Training & Sports Science | 11 | Wilson, Coffey & Hawley, Schumann, Suchomel, Seiler — interference theory, AMPK/mTOR, sport compatibility |
+| N-of-1 Methodology | 5 | Schork, Daza, Piccininni — single-subject experimental design as rigorous science, not just self-tracking |
 
 ---
 
@@ -1005,53 +881,18 @@ I spent more time on the UI than I probably should have. The whole thing uses OK
 
 ## Data Model
 
-<details>
-<summary>Schema — 32 tables, 4 views (49 migrations applied)</summary>
+32 tables, 4 views, 49 migrations applied.
 
-```sql
-measurements        -- Apple Health time-series (metric, ts, value, unit, content_hash)
-workouts            -- WHOOP + Hevy sessions (strain, HR, kcal, kind, percent_recorded)
-workout_sets        -- Strength sets (exercise, reps, weight_kg, rpe, is_warmup, exercise_template_id)
-sleep               -- Multi-source — sws_min, rem_min, efficiency_pct, disturbance_count,
-                    --   respiratory_rate, sleep_cycle_count, sleep_need_* attribution columns
-recovery            -- WHOOP (date, score, hrv, rhr, skin_temp, spo2_pct, user_calibrating)
-cardio_sessions     -- Manual + integrations (modality, duration, avg_hr, zone_*_min, percent_recorded)
-daily_cycle         -- WHOOP daily cycle (strain, kilojoule, avg_hr, max_hr, score_state)
-body_measurement    -- WHOOP body measurements (height_meter, weight_kg, max_heart_rate)
-whoop_user_profile  -- WHOOP user profile
-working_weights     -- Current working weight per exercise
-workout_plans       -- AI-generated plans (plan_json, date, source)
-workout_retrospectives  -- Post-workout summaries (completion_pct, overload_flag, vault_insights)
-plan_adherence      -- Prescription vs execution comparison
-daily_checkin       -- Morning survey (energy, stress, soreness, body_weight, protein_grams, …)
-medications         -- Active medications with audit trail
-conditions          -- Diagnoses
-labs                -- Lab results with reference ranges
-mesocycles          -- Periodization blocks (started_on, planned_weeks, deload_trigger)
-muscle_volume_targets   -- MEV / MAV / MRV per muscle group; mesocycle_id='' global, UUID personal
-exercise_muscle_map     -- Exercise name → primary + secondary muscles (classifier + manual seed)
-hevy_exercise_templates -- Hevy exercise catalog cache (id, title, primary_muscle_group, category)
-exercise_weekly_e1rm    -- Per-exercise weekly best e1RM, work_sets, weekly_tonnage_kg, perf_score, trend
-personal_acwr_bands     -- Fitted ACWR gate thresholds from Rob's historical load distribution
-muscle_signal_cache     -- Materialized signal quality (scored_weeks, stability, confidence) per muscle
-muscle_prescription_log -- Weekly per-muscle prescription log for feedback-loop scoring
-lab_questions       -- Pre-registered hypothesis catalogue (retired_at, queued_order — rotation system)
-lab_findings        -- Per-run results (verdict, n, effect_size, p_value, evidence)
-exercise_preferences    -- Per-exercise 'yes'/'no' training preferences
-dupr_snapshots      -- One DUPR rating snapshot per calendar day
-dupr_matches        -- Full DUPR match history (scores, partner/opponents, pre/post/delta)
-oauth_state         -- OAuth + credential sync state per source
-schema_version      -- 49 migrations applied
-```
-
-```sql
-v_hrv_baseline_28d      -- Rolling 28d HRV mean and SD (for σ-deviation)
-v_session_load          -- Per-day WHOOP strain (filters percent_recorded ≥ 50%)
-v_daily_load            -- Composite load — uses workout_sets_dedup, not raw sets (dedup fix)
-workout_sets_dedup      -- Deduped sets — Hevy is source of truth when overlap with Fitbod
-```
-
-</details>
+| Group | What it stores |
+|---|---|
+| **Biometrics** | WHOOP recovery scores, HRV, RHR, skin temp, SpO2; sleep stage breakdown (SWS, REM, efficiency, disturbances, respiratory rate, cycles); Apple Health time-series; body measurements |
+| **Training** | Hevy sessions and sets (every lift back to 2015); cardio sessions with HR zone durations; AI-generated workout plans; post-workout retrospectives; prescription vs execution adherence |
+| **Self-learning engine** | Per-exercise weekly e1RM + tonnage + performance scores; fitted ACWR gate thresholds; materialized signal quality (scored weeks, stability, confidence per muscle); prescription feedback log |
+| **Periodization** | Active mesocycle (phase, planned weeks, deload trigger); per-muscle MEV/MAV/MRV targets (population defaults + personal fitted variants); exercise → muscle classification map |
+| **Clinical** | Active medications with audit trail; diagnoses; lab results with reference ranges; pre-registered N-of-1 hypothesis catalogue; per-run statistical findings (verdict, n, effect size, p-value) |
+| **Sport** | DUPR rating snapshots (daily); full match history with per-game scores, partners, opponents, pre/post/delta ratings |
+| **Daily input** | Morning check-in (energy, stress, soreness, body weight, protein, medication flags); exercise training preferences; OAuth + sync state per data source |
+| **Views** | Rolling 28d HRV baseline; per-day composite load (deduped); WHOOP session strain (quality-filtered) |
 
 ---
 
