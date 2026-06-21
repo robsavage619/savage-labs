@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20,25,30&height=220&section=header&text=SAVAGE+LABS&fontSize=72&fontColor=ffffff&animation=fadeIn&fontAlignY=40&desc=A+personal+health+OS+%E2%80%94+not+a+wellness+app&descAlignY=63&descSize=19" width="100%" />
+<img src="images/banner.png" width="100%" />
 
 <br />
 
@@ -919,8 +919,6 @@ The architecture section covers how it's built. The stack section covers what it
 ---
 
 <div align="center">
-
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20,25,30&height=120&section=footer" width="100%" />
 
 *Built by Rob Savage — because no existing tool understood my whole picture.*
 
