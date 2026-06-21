@@ -1063,30 +1063,17 @@ Everything runs on my MacBook. Nothing goes to a cloud. The database is encrypte
 
 ## Running It
 
-This is a personal tool built for my specific setup — WHOOP, Hevy, Apple Health export, macOS Keychain. It's not packaged for general use, but if you want to poke around:
+This is a personal tool built for a specific setup — it's not packaged for general use and there's no onboarding path for different hardware or environments.
 
-```bash
-git clone https://github.com/robsavage619/savage-labs
-cd savage-labs
+It assumes:
+- **WHOOP 4.0** for recovery, HRV, sleep staging, strain, and HR zones
+- **Hevy** for lift logging (with history back to 2015)
+- **HealthAutoExport** for Apple Health → CCDA XML sync
+- **macOS Keychain** for secrets (OAuth tokens, DB encryption key, Hevy API key)
+- **DUPR account** for pickleball rating history
+- **Obsidian vault** on disk for RAG (405 notes, personal to me)
 
-make install
-
-cp env.example .env
-# ANTHROPIC_API_KEY, WHOOP_CLIENT_ID, WHOOP_CLIENT_SECRET
-
-make seed    # seeds 90 days of synthetic data
-make dev     # API on :8000, frontend on :3000
-```
-
-| Command | Does |
-|---|---|
-| `make dev` | Start everything |
-| `make seed` | 90 days synthetic data |
-| `make doctor` | Check config, DB, AI spend |
-| `make reset` | Nuclear option (`CONFIRM=1`) |
-| `make lint` | ruff |
-| `make typecheck` | pyright |
-| `make test` | pytest |
+The architecture section covers how it's built. The stack section covers what it's built with. The most transferable design patterns — `DailyState` as a single computation contract, the deterministic gate engine layered under the LLM, signal-ranked vault retrieval — are all described in detail above and don't require this exact hardware setup to understand or adapt.
 
 ---
 
