@@ -24,12 +24,22 @@ async def _recompute_scores() -> None:
 
     The autoregulation controller's volume decisions read these scores, so they
     must be current before the next plan is generated.
+
+    After recompute, the nightly path mirrors the manual recompute (#7): if the
+    engine's prescription accuracy is degrading, re-fit the self-learning bands
+    and landmarks so the next plan is built on refreshed parameters. The API
+    endpoint covers manual recompute; this covers the unattended path.
     """
     from shc.db.schema import write_ctx
-    from shc.training.mesocycle import compute_all_scores
+    from shc.training.mesocycle import compute_all_scores, ensure_active_mesocycle
+    from shc.training.self_learning import detect_accuracy_degradation, fit_all
 
     async with write_ctx() as conn:
         compute_all_scores(conn)
+        deg = detect_accuracy_degradation(conn)
+        if deg.get("degrading"):
+            fit_all(conn, ensure_active_mesocycle(conn).id)
+            log.warning("engine accuracy degradation — re-fit triggered: %s", deg.get("message"))
 
 
 async def _recompute_adherence() -> None:

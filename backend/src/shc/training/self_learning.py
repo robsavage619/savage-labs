@@ -482,6 +482,12 @@ def regrade_stalled_with_tonnage_blend(conn: duckdb.DuckDBPyConnection) -> int:
 
 # ── Confidence + signal quality ───────────────────────────────────────────────
 
+# Coefficient of variation that maps to zero stability. perf scores live on a
+# 1–5 scale; a CV of 0.50 (e.g. mean 3, SD 1.5) means the muscle swings across
+# most of the scale week to week — no usable trend signal. CVs at/above this
+# floor stability to 0.0; everything below scales linearly toward 1.0.
+_SIGNAL_CV_REF = 0.50
+
 
 def compute_muscle_signal_quality(
     conn: duckdb.DuckDBPyConnection,
@@ -491,9 +497,16 @@ def compute_muscle_signal_quality(
 
     Returns:
         scored_weeks: int — total weeks with a perf_score for this muscle
-        signal_stability: float [0–1] — fraction of consecutive week-pairs where
-            the trend direction doesn't dramatically flip (|perf_W − perf_W+1| ≤ 1).
-            High stability → the trend model is a reliable predictor.
+        signal_stability: float [0–1] — calibrated inverse-dispersion of the
+            scored-week perf series. Computed from the coefficient of variation
+            (SD / mean) of the perf scores, mapped to [0,1] as
+            ``1 − min(1, CV / CV_REF)`` where CV_REF is the CV that maps to zero
+            stability. A flat series → 1.0; a wildly noisy one → ~0.0. This
+            replaces the old coarse "|Δperf| ≤ 1 step" pair-fraction rule, which
+            was insensitive to magnitude and not on a calibrated scale.
+        perf_cv: float — raw coefficient of variation of the perf series (0 = no
+            dispersion). Exposed so consumers can gate decisions on the underlying
+            measure rather than only the squashed stability score.
         confidence: float [0–1] — combined metric used to weight prescriptions.
             Derived from scored_weeks (sample size) × signal_stability (noise level).
     """
@@ -512,14 +525,21 @@ def compute_muscle_signal_quality(
 
     n = len(rows)
     if n == 0:
-        return {"scored_weeks": 0, "signal_stability": 0.0, "confidence": 0.0}
+        return {"scored_weeks": 0, "signal_stability": 0.0, "perf_cv": 0.0, "confidence": 0.0}
 
-    # Signal stability: consecutive pairs where perf doesn't swing > 1 point.
+    # Signal stability from dispersion of the scored-week perf series. We use the
+    # coefficient of variation (SD / mean) so the measure is scale-relative and
+    # comparable across muscles, then squash to a calibrated [0,1] stability.
+    from statistics import mean, pstdev
+
     perfs = [float(r[1]) for r in rows]
     if len(perfs) >= 2:
-        stable = sum(1 for a, b in zip(perfs[:-1], perfs[1:], strict=True) if abs(a - b) <= 1.0)
-        stability = stable / (len(perfs) - 1)
+        mu = mean(perfs)
+        sd = pstdev(perfs)  # population SD: we have the full observed series
+        cv = sd / mu if mu > 0 else _SIGNAL_CV_REF
+        stability = max(0.0, 1.0 - min(1.0, cv / _SIGNAL_CV_REF))
     else:
+        cv = 0.0
         stability = 0.5  # single week — no basis to judge
 
     # Confidence from sample size — asymptotic approach to 0.95.
@@ -543,6 +563,7 @@ def compute_muscle_signal_quality(
     return {
         "scored_weeks": n,
         "signal_stability": round(stability, 2),
+        "perf_cv": round(cv, 3),
         "confidence": confidence,
     }
 
@@ -670,15 +691,15 @@ _MUSCLE_SIZE_CATEGORY: dict[str, str] = {
 }
 
 _FEEDBACK_LAG_WEEKS: dict[tuple[str, str], int] = {
-    ("small",  "add"):  3,
-    ("small",  "cut"):  4,
-    ("small",  "hold"): 3,
-    ("medium", "add"):  4,
-    ("medium", "cut"):  5,
+    ("small", "add"): 3,
+    ("small", "cut"): 4,
+    ("small", "hold"): 3,
+    ("medium", "add"): 4,
+    ("medium", "cut"): 5,
     ("medium", "hold"): 4,
-    ("large",  "add"):  5,
-    ("large",  "cut"):  6,
-    ("large",  "hold"): 4,
+    ("large", "add"): 5,
+    ("large", "cut"): 6,
+    ("large", "hold"): 4,
 }
 
 
@@ -691,10 +712,15 @@ def _feedback_lag(muscle_group: str, action: str) -> int:
 def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
     """Score logged prescriptions against actual outcomes using per-muscle lag windows.
 
-    Correctness definition:
-      add / hold (perf ≥ 3 at time) → correct if outcome_perf ≥ 3 (maintained)
-      cut       (perf ≤ 2 at time)  → correct if outcome_perf ≥ 3 (recovered)
-      deload                         → always treated as correct (safety call)
+    Correctness definition (directional-outcome semantics — a prescription is
+    "correct" only when it produced the change it was prescribed to produce):
+      add  (push volume on a progressing muscle) → correct if outcome_perf ≥ 4
+            (progression sustained; a slide to a stall means the add was wrong)
+      hold (maintain)                            → correct if outcome_perf ≥ 3
+            (maintained; a slide to regression is a missed call, not a hit)
+      cut  (back off a regressing muscle)        → correct if outcome_perf ≥ 3
+            (recovered out of the regression band)
+      deload                                      → always correct (safety call)
 
     Returns the number of prescriptions scored this call.
     """
@@ -742,9 +768,11 @@ def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
         outcome_perf = round(float(outcome_perf_row[0]))
         if action == "deload":
             correct = True
-        elif action in ("add", "hold"):
-            correct = outcome_perf >= 3
-        else:  # cut
+        elif action == "add":
+            correct = outcome_perf >= 4  # progression must be sustained, not just stalled
+        elif action == "hold":
+            correct = outcome_perf >= 3  # maintained, not slid into regression
+        else:  # cut — must clear the regression band
             correct = outcome_perf >= 3
 
         conn.execute(
@@ -860,8 +888,11 @@ def read_accuracy_history(
         [weeks],
     ).fetchall()
     return [
-        {"week_start": str(r[0]), "overall": float(r[1]) if r[1] is not None else None,
-         "n_scored": int(r[2])}
+        {
+            "week_start": str(r[0]),
+            "overall": float(r[1]) if r[1] is not None else None,
+            "n_scored": int(r[2]),
+        }
         for r in reversed(rows)
     ]
 
@@ -870,10 +901,25 @@ def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict
     """Retroactive prescription accuracy from consecutive e1RM perf_score pairs.
 
     For each (muscle, week_W) → (week_W+1) consecutive pair where both weeks
-    have a perf_score, evaluate whether the model's implied prediction held:
-      perf_W ≥ 4 ("add load") → predict perf_W+1 ≥ 3  (maintained progress)
-      perf_W == 3 ("hold")    → predict perf_W+1 ≥ 2  (stall is stable ±1)
-      perf_W ≤ 2 ("cut")     → predict perf_W+1 ≥ 2 OR trending up
+    have a perf_score, evaluate whether the model's implied prescription produced
+    its *intended directional outcome*. The old predicates rewarded a non-event
+    (a regressing muscle that stayed regressing still scored "correct"), which
+    inflated the headline accuracy. The tightened logic:
+
+      perf_W ≥ 4 ("add load") — the muscle was progressing and we pushed volume.
+        Correct only if it kept progressing: perf_W+1 ≥ 4. Dropping to a stall
+        (3) or regression (≤2) means the added load was the wrong call.
+
+      perf_W == 3 ("hold") — maintenance prescription. Correct only if it *stayed*
+        maintained or broke upward: perf_W+1 ≥ 3. A slide to ≤2 (the old
+        predicate's "nxt ≥ 2") is a missed regression, not a hit.
+
+      perf_W ≤ 2 ("cut" / back-off) — the muscle was regressing and we backed off
+        to let it recover. Correct only if it actually recovered or at minimum
+        stopped getting worse: perf_W+1 > cur (strict improvement) OR
+        perf_W+1 ≥ 3 (cleared the regression band). Staying at the same
+        regressing level (nxt == cur ≤ 2) is *not* the intended outcome and now
+        scores incorrect — that is the inflation this fix removes.
     """
     muscles = [
         r[0]
@@ -896,8 +942,6 @@ def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict
         if len(rows) < 4:
             continue
 
-        from datetime import timedelta
-
         weeks = [r[0] for r in rows]
         perfs = [float(r[1]) for r in rows]
 
@@ -909,12 +953,12 @@ def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict
                 continue
             cur, nxt = perfs[i], perfs[i + 1]
             total += 1
-            if cur >= 4:  # "add load" prediction
+            if cur >= 4:  # "add load" — must keep progressing
+                correct += int(nxt >= 4)
+            elif cur == 3:  # "hold" — must stay maintained, not slide
                 correct += int(nxt >= 3)
-            elif cur == 3:  # "hold" prediction
-                correct += int(nxt >= 2)
-            else:  # cur <= 2 "cut" prediction
-                correct += int(nxt >= 2 or nxt > cur)
+            else:  # cur <= 2 "cut" — must recover or at least improve
+                correct += int(nxt >= 3 or nxt > cur)
 
         if total >= 4:
             results[muscle] = {"n": total, "accuracy": round(correct / total, 2)}
@@ -935,7 +979,9 @@ _DELOAD_THRESHOLD_CEIL = 4
 _CALENDAR_DELOAD_TRIGGERS = ("scheduled",)
 
 
-def _regressing_precursor_count(conn: duckdb.DuckDBPyConnection, deload_start: object) -> int | None:
+def _regressing_precursor_count(
+    conn: duckdb.DuckDBPyConnection, deload_start: object
+) -> int | None:
     """Regressing-muscle count in the ISO week immediately before a deload.
 
     Counts distinct primary muscles whose mean perf_score that week was ≤ 2 — the
@@ -987,9 +1033,7 @@ def calibrate_deload_trigger(conn: duckdb.DuckDBPyConnection) -> dict[str, objec
         """
     ).fetchall()
 
-    signal_deloads = [
-        d for d in deloads if (d[2] or "scheduled") not in _CALENDAR_DELOAD_TRIGGERS
-    ]
+    signal_deloads = [d for d in deloads if (d[2] or "scheduled") not in _CALENDAR_DELOAD_TRIGGERS]
 
     def _insufficient(n: int) -> dict[str, object]:
         return {
@@ -1008,23 +1052,73 @@ def calibrate_deload_trigger(conn: duckdb.DuckDBPyConnection) -> dict[str, objec
     if len(signal_deloads) < _DELOAD_MIN_EVENTS:
         return _insufficient(len(signal_deloads))
 
-    from datetime import timedelta
+    from datetime import date, timedelta
+
+    # A deload_week of 1..N indexes which week of the mesocycle the deload landed
+    # on; the precursor (last hard week) is started_on + (deload_week - 1) weeks.
+    # Guard the calendar math: a missing/out-of-range deload_week or an implausible
+    # derived date (before the mesocycle start, or in the future) means the row is
+    # mis-recorded — skip it and warn rather than silently locating a wrong week.
+    _MAX_MESO_WEEKS = 24  # generous upper bound on a single mesocycle length
 
     counts: list[int] = []
+    skipped = 0
     for started_on, deload_week, _trigger in signal_deloads:
-        deload_start = started_on + timedelta(weeks=int(deload_week) - 1)
+        if deload_week is None:
+            skipped += 1
+            log.warning(
+                "calibrate_deload_trigger: deload (started_on=%s) has no deload_week — skipping",
+                started_on,
+            )
+            continue
+        try:
+            dw = int(deload_week)
+        except (TypeError, ValueError):
+            skipped += 1
+            log.warning(
+                "calibrate_deload_trigger: non-numeric deload_week=%r (started_on=%s) — skipping",
+                deload_week,
+                started_on,
+            )
+            continue
+        if dw < 1 or dw > _MAX_MESO_WEEKS:
+            skipped += 1
+            log.warning(
+                "calibrate_deload_trigger: deload_week=%d out of range [1,%d] "
+                "(started_on=%s) — skipping",
+                dw,
+                _MAX_MESO_WEEKS,
+                started_on,
+            )
+            continue
+        deload_start = started_on + timedelta(weeks=dw - 1)
+        if deload_start < started_on or deload_start > date.today():
+            skipped += 1
+            log.warning(
+                "calibrate_deload_trigger: derived deload_start=%s implausible "
+                "(started_on=%s, deload_week=%d) — skipping",
+                deload_start,
+                started_on,
+                dw,
+            )
+            continue
         c = _regressing_precursor_count(conn, deload_start)
         if c is not None:
             counts.append(c)
+
+    if skipped:
+        log.warning(
+            "calibrate_deload_trigger: skipped %d/%d signal deloads with bad deload_week semantics",
+            skipped,
+            len(signal_deloads),
+        )
 
     if len(counts) < _DELOAD_MIN_EVENTS:
         # Events exist but their precursor weeks have no scored history.
         return _insufficient(len(counts))
 
     precursor_median = float(median(counts))
-    threshold = max(
-        _DELOAD_THRESHOLD_FLOOR, min(_DELOAD_THRESHOLD_CEIL, round(precursor_median))
-    )
+    threshold = max(_DELOAD_THRESHOLD_FLOOR, min(_DELOAD_THRESHOLD_CEIL, round(precursor_median)))
 
     conn.execute(
         """
@@ -1062,9 +1156,7 @@ def calibrate_deload_trigger(conn: duckdb.DuckDBPyConnection) -> dict[str, objec
 
 def read_deload_threshold(conn: duckdb.DuckDBPyConnection) -> int | None:
     """Read the fitted personal deload threshold, or None if never fitted."""
-    row = conn.execute(
-        "SELECT threshold FROM personal_deload_threshold WHERE id = 1"
-    ).fetchone()
+    row = conn.execute("SELECT threshold FROM personal_deload_threshold WHERE id = 1").fetchone()
     return int(row[0]) if row and row[0] is not None else None
 
 
@@ -1108,4 +1200,123 @@ def read_deload_calibration(conn: duckdb.DuckDBPyConnection) -> dict[str, object
             f"Personal deload threshold = {int(row[0])} regressing muscle(s), fitted "
             f"from {int(row[1])} signal deloads."
         ),
+    }
+
+
+# ── Read paths for autoregulation + training router ───────────────────────────
+
+
+def read_muscle_prescription_accuracy(
+    conn: duckdb.DuckDBPyConnection,
+) -> dict[str, dict[str, object]]:
+    """Per-muscle historical prescription hit-rate, for weighting next prescriptions.
+
+    Clean read path over the logged/retroactive accuracy already computed by
+    ``prescription_accuracy``. Autoregulation can consult a muscle's historical
+    accuracy to decide how much to trust the engine's next call for that muscle:
+    a muscle the engine has consistently called correctly can take a more
+    aggressive prescription; a muscle with a poor hit-rate should be hedged.
+
+    Returns a mapping ``muscle -> {accuracy, n, source}`` where:
+        accuracy: float [0–1] | None — None when there is no scoreable history.
+        n: int — number of scored (muscle, week) prescription outcomes behind it.
+        source: "logged" | "retroactive" | "insufficient" — provenance of the
+            estimate so the consumer can down-weight retroactive figures if wanted.
+
+    This is a pure read; it never re-scores. Callers should treat ``accuracy is
+    None`` or ``source == "insufficient"`` as "no prior — use the unweighted
+    prescription".
+    """
+    acc = prescription_accuracy(conn)
+    per_muscle = acc.get("per_muscle", {})
+    out: dict[str, dict[str, object]] = {}
+    for muscle, v in per_muscle.items():  # type: ignore[union-attr]
+        out[muscle] = {
+            "accuracy": v.get("accuracy"),
+            "n": int(v.get("n", 0)),
+            "source": v.get("source", "insufficient"),
+        }
+    return out
+
+
+# Minimum snapshots required before a degradation verdict is meaningful.
+_DEGRADATION_MIN_SNAPSHOTS = 6
+# Accuracy drop (absolute, on the [0,1] scale) between the older and recent
+# halves of the window that counts as a real degradation rather than noise.
+_DEGRADATION_DROP_THRESHOLD = 0.08
+
+
+def detect_accuracy_degradation(
+    conn: duckdb.DuckDBPyConnection, weeks: int = 12
+) -> dict[str, object]:
+    """Detect whether engine prescription accuracy is declining over recent weeks.
+
+    Reads the snapshot history (``read_accuracy_history``) and compares the mean
+    accuracy of the older half of the window against the recent half. A material
+    drop is surfaced as a structured degradation signal with a suggested
+    remediation, so the training-router agent can act (widen the feedback-lag
+    windows, flag personal landmarks for a re-fit) without re-deriving the trend.
+
+    The cron wiring lives elsewhere — this function only computes and returns the
+    signal; it has no side effects.
+
+    Returns:
+        degrading: bool — True when a material, sustained accuracy drop is seen.
+        recent_mean / older_mean: float | None — mean accuracy of each half.
+        delta: float | None — recent_mean − older_mean (negative = worse).
+        n_snapshots: int — snapshots considered.
+        suggested_action: str | None — remediation hint when degrading, e.g.
+            "widen_feedback_lag" or "refit_landmarks"; None otherwise.
+        message: str — human-readable summary (honest about insufficient data).
+    """
+    history = read_accuracy_history(conn, weeks=weeks)
+    scored = [h for h in history if h.get("overall") is not None]
+    n = len(scored)
+    if n < _DEGRADATION_MIN_SNAPSHOTS:
+        return {
+            "degrading": False,
+            "recent_mean": None,
+            "older_mean": None,
+            "delta": None,
+            "n_snapshots": n,
+            "suggested_action": None,
+            "message": (
+                f"Only {n} accuracy snapshot(s) — need ≥{_DEGRADATION_MIN_SNAPSHOTS} "
+                "to judge a trend. No degradation verdict."
+            ),
+        }
+
+    mid = n // 2
+    older = [float(h["overall"]) for h in scored[:mid]]  # type: ignore[arg-type]
+    recent = [float(h["overall"]) for h in scored[mid:]]  # type: ignore[arg-type]
+    older_mean = sum(older) / len(older)
+    recent_mean = sum(recent) / len(recent)
+    delta = recent_mean - older_mean
+    degrading = delta <= -_DEGRADATION_DROP_THRESHOLD
+
+    if degrading:
+        # A deeper drop suggests the landmarks themselves drifted; a shallower one
+        # is more consistent with a feedback-lag that's scoring outcomes too early.
+        suggested_action = (
+            "refit_landmarks" if delta <= -2 * _DEGRADATION_DROP_THRESHOLD else "widen_feedback_lag"
+        )
+        message = (
+            f"Accuracy degrading: {older_mean:.2f} → {recent_mean:.2f} "
+            f"(Δ {delta:+.2f}) over {n} snapshots. Suggested action: {suggested_action}."
+        )
+    else:
+        suggested_action = None
+        message = (
+            f"Accuracy stable: {older_mean:.2f} → {recent_mean:.2f} "
+            f"(Δ {delta:+.2f}) over {n} snapshots."
+        )
+
+    return {
+        "degrading": degrading,
+        "recent_mean": round(recent_mean, 2),
+        "older_mean": round(older_mean, 2),
+        "delta": round(delta, 2),
+        "n_snapshots": n,
+        "suggested_action": suggested_action,
+        "message": message,
     }

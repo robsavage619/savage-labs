@@ -18,13 +18,6 @@ from pydantic import BaseModel
 
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
-from shc.training.self_learning import (
-    prescription_accuracy,
-    read_accuracy_history,
-    read_acwr_bands,
-    read_deload_calibration,
-    read_signal_quality_cache,
-)
 from shc.training.mesocycle import (
     advance_mesocycle,
     compute_all_scores,
@@ -33,6 +26,15 @@ from shc.training.mesocycle import (
     score_exercise,
     volume_targets,
     weekly_e1rm,
+)
+from shc.training.self_learning import (
+    detect_accuracy_degradation,
+    fit_all,
+    prescription_accuracy,
+    read_accuracy_history,
+    read_acwr_bands,
+    read_deload_calibration,
+    read_signal_quality_cache,
 )
 
 router = APIRouter(tags=["training"])
@@ -256,9 +258,33 @@ async def post_advance(req: AdvanceRequest) -> dict[str, Any]:
 
 @router.post("/training/scores/recompute", dependencies=[Depends(require_admin_key)])
 async def post_recompute() -> dict[str, Any]:
+    """Recompute scores, then act on any engine accuracy degradation.
+
+    After the nightly score recompute, check whether prescription accuracy is
+    trending down. If it is, take a real remediation: force an immediate re-fit
+    of the personal landmarks / ACWR bands (``fit_all``) so the engine
+    self-corrects rather than continuing to prescribe off stale parameters. The
+    same check + action is mirrored in the scheduler's nightly job (handoff to
+    ``scheduler/jobs.py:_recompute_scores``).
+    """
     async with write_ctx() as conn:
         compute_all_scores(conn)
-    return {"ok": True, "message": "Scores recomputed for current week"}
+        degradation = detect_accuracy_degradation(conn)
+        refit_triggered = False
+        if degradation.get("degrading"):
+            meso = ensure_active_mesocycle(conn)
+            fit_all(conn, meso.id)
+            refit_triggered = True
+            log.warning(
+                "engine accuracy degradation detected (%s) — re-fit triggered",
+                degradation.get("message"),
+            )
+    return {
+        "ok": True,
+        "message": "Scores recomputed for current week",
+        "accuracy_degradation": degradation,
+        "refit_triggered": refit_triggered,
+    }
 
 
 @router.get("/training/self-learning/status")
@@ -340,6 +366,12 @@ async def get_self_learning_status() -> dict[str, Any]:
         # Prescription accuracy (retroactive backtesting + logged outcomes).
         accuracy = prescription_accuracy(conn)
 
+        # Accuracy-degradation trigger: surface whether the engine's accuracy is
+        # trending down so a decline is visible here, not just inferable from the
+        # raw history. The remediation (re-fit/down-weight) is actuated on the
+        # nightly recompute path (see post_recompute / _recompute_scores).
+        degradation = detect_accuracy_degradation(conn)
+
         # Deload trigger calibration status (read-only; fitting happens in the pipeline).
         deload_cal = read_deload_calibration(conn)
 
@@ -364,6 +396,7 @@ async def get_self_learning_status() -> dict[str, Any]:
             },
             "volume_landmarks": landmarks,
             "prescription_accuracy": accuracy,
+            "accuracy_degradation": degradation,
             "accuracy_history": read_accuracy_history(conn),
             "deload_calibration": deload_cal,
             "mesocycle_id": meso_id,
@@ -391,8 +424,12 @@ async def get_muscle_volume() -> dict[str, Any]:
     each secondary 0.5) by :func:`shc.training.volume.weekly_muscle_volume` —
     the corrected single source of truth (see migration 0040).
     """
+    from dataclasses import asdict
+
     from shc.training.volume import (
         build_muscle_report,
+        rpe_coverage,
+        unmapped_exercise_sets,
         unmapped_exercises,
         weekly_muscle_volume,
     )
@@ -424,6 +461,14 @@ async def get_muscle_volume() -> dict[str, Any]:
             "mesocycle_id": state.id,
             "muscles": muscles,
             "unmapped_exercises": unmapped_exercises(conn, week_start),
+            # Richer unmapped view (#25): which lifts credit zero volume + their
+            # dropped set counts, so the UI can show what's contributing nothing.
+            "unmapped_exercise_sets": [
+                {"exercise": ex, "sets": n} for ex, n in unmapped_exercise_sets(conn, week_start)
+            ],
+            # RPE coverage (#23): how much of the volume rests on the NULL-RPE
+            # assumption (assumed_pct) — surfaces whether the RIR gate is inert.
+            "rpe_coverage": asdict(rpe_coverage(conn, week_start)),
         }
     finally:
         conn.close()
@@ -569,8 +614,25 @@ async def get_pickleball_trend(days: int = 90) -> dict[str, Any]:
         conn.close()
 
 
-# DUPR doubles rating goal — Rob's 2026 target (4.5 → 5.0).
-DUPR_TARGET_DOUBLES = 5.0
+# DUPR doubles improvement goal. The *target* is anchored to the live synced
+# rating + this increment rather than a hardcoded absolute — a fixed 5.0 was
+# divorced from reality (live rating ~3.2), so narratives claimed a goal Rob is
+# nowhere near. Override DUPR_GOAL_INCREMENT to chase a more/less aggressive gain.
+DUPR_GOAL_INCREMENT = 0.5
+# Floor target used only when no synced rating exists yet (cold start).
+DUPR_TARGET_FALLBACK = 4.0
+
+
+def _dupr_target_doubles(current_doubles: float | None) -> float:
+    """Anchor the doubles target to the live rating plus a realistic increment.
+
+    Returns ``current + DUPR_GOAL_INCREMENT`` (rounded to 0.25, DUPR's step) when
+    a synced rating exists, else a cold-start fallback. This keeps the goal a
+    real, reachable step ahead of where Rob actually is instead of a static memo.
+    """
+    if current_doubles is None:
+        return DUPR_TARGET_FALLBACK
+    return round((current_doubles + DUPR_GOAL_INCREMENT) * 4) / 4
 
 
 @router.get("/pickleball/dupr")
@@ -604,12 +666,13 @@ def dupr_rating() -> dict[str, Any]:
 
     current = snapshots[-1] if snapshots else None
     first_doubles = next((s["doubles"] for s in snapshots if s["doubles"] is not None), None)
+    current_doubles = current["doubles"] if current else None
     return {
         "as_of": date.today().isoformat(),
         "snapshots": snapshots,
         "current": current,
         "baseline_doubles": first_doubles,
-        "target_doubles": DUPR_TARGET_DOUBLES,
+        "target_doubles": _dupr_target_doubles(current_doubles),
         "last_sync_at": state[0] if state else None,
         "needs_reauth": bool(state[1]) if state else False,
     }
