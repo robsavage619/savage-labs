@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import duckdb
 import pytest
 
-from shc.ai.workout_planner import GateViolation, validate_plan
-
+from shc.ai.workout_planner import (
+    _RELATIVE_CLINICAL_CAP,
+    GateViolation,
+    _clinical_volume_cap,
+    validate_plan,
+)
 
 _UNSET = object()
 
@@ -42,6 +47,7 @@ def _ex(name, weight_lbs, reps, **kw):
 
 # ── schema validation ────────────────────────────────────────────────────────
 
+
 def test_rejects_bad_readiness_tier() -> None:
     p = _plan(exercises=[_ex("Face Pull", 50, "8")])
     p["readiness_tier"] = "purple"
@@ -68,12 +74,30 @@ def test_rejects_missing_rest_seconds() -> None:
 
 # Face Pull e1RM ~48 kg (~105 lb). low-day cap 78% → ceiling ~82 lb e1RM.
 CEIL = {"Face Pull": 48.0, "Bench Press (Barbell)": 49.0}
-LOW_STATE = {"gates": {"max_intensity": "low", "deload_required": False,
-                       "forbid_muscle_groups": [], "reasons": []}}
-HIGH_STATE = {"gates": {"max_intensity": "high", "deload_required": False,
-                        "forbid_muscle_groups": [], "reasons": []}}
-DELOAD_STATE = {"gates": {"max_intensity": "low", "deload_required": True,
-                          "forbid_muscle_groups": [], "reasons": []}}
+LOW_STATE = {
+    "gates": {
+        "max_intensity": "low",
+        "deload_required": False,
+        "forbid_muscle_groups": [],
+        "reasons": [],
+    }
+}
+HIGH_STATE = {
+    "gates": {
+        "max_intensity": "high",
+        "deload_required": False,
+        "forbid_muscle_groups": [],
+        "reasons": [],
+    }
+}
+DELOAD_STATE = {
+    "gates": {
+        "max_intensity": "low",
+        "deload_required": True,
+        "forbid_muscle_groups": [],
+        "reasons": [],
+    }
+}
 
 
 def test_rejects_supramaximal_pseudo_deload() -> None:
@@ -91,8 +115,11 @@ def test_accepts_load_under_ceiling() -> None:
 
 def test_high_day_allows_progressive_overload() -> None:
     """A new-peak attempt on a high day must pass (cap > 100%)."""
-    p = _plan(intensity="high", target_rpe=9,
-              exercises=[_ex("Bench Press (Barbell)", 95, "6", rpe_target=9, rest_seconds=240)])
+    p = _plan(
+        intensity="high",
+        target_rpe=9,
+        exercises=[_ex("Bench Press (Barbell)", 95, "6", rpe_target=9, rest_seconds=240)],
+    )
     assert validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL) is True
 
 
@@ -115,6 +142,7 @@ def test_parses_reps_from_each_side_string() -> None:
 
 # ── existing gate enforcement still holds ────────────────────────────────────
 
+
 def test_intensity_exceeding_gate_rejected() -> None:
     p = _plan(intensity="high", target_rpe=9, exercises=[_ex("Face Pull", 50, "8")])
     with pytest.raises(GateViolation):
@@ -129,6 +157,7 @@ def test_deload_requires_low_rpe() -> None:
 
 # ── target_rpe absent from recommendation (bug: defaulted to 10, tripped deload gate) ──
 
+
 def test_deload_passes_when_target_rpe_absent_and_exercise_rpEs_low() -> None:
     """Recommendation omits target_rpe; gate must derive from exercise rpe_targets (≤7)."""
     p = _plan(intensity="low", exercises=[_ex("Face Pull", 30, "12", rpe_target=2)])
@@ -140,3 +169,51 @@ def test_deload_rejects_when_target_rpe_absent_and_exercise_rpes_high() -> None:
     p = _plan(intensity="low", exercises=[_ex("Face Pull", 30, "12", rpe_target=9)])
     with pytest.raises(GateViolation, match="RPE"):
         validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)
+
+
+# --- #21 deterministic clinical contraindication cap -------------------------
+
+
+def _clinical_conn(conditions=(), labs=()):
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE conditions (name VARCHAR, status VARCHAR, valid_to DATE)")
+    conn.execute(
+        "CREATE TABLE labs (name VARCHAR, value DOUBLE, ref_high DOUBLE, collected_at DATE)"
+    )
+    for name, status in conditions:
+        conn.execute("INSERT INTO conditions VALUES (?, ?, NULL)", [name, status])
+    for name, value, ref_high in labs:
+        conn.execute("INSERT INTO labs VALUES (?, ?, ?, current_date)", [name, value, ref_high])
+    return conn
+
+
+def test_clinical_cap_absolute_cardiac_forbids_all() -> None:
+    cap, reason = _clinical_volume_cap(
+        _clinical_conn(conditions=[("Acute coronary syndrome", None)])
+    )
+    assert cap == 0
+    assert reason is not None
+
+
+def test_clinical_cap_absolute_critical_potassium() -> None:
+    cap, reason = _clinical_volume_cap(_clinical_conn(labs=[("Potassium", 6.4, 5.2)]))
+    assert cap == 0
+    assert reason is not None
+
+
+def test_clinical_cap_relative_acute_illness() -> None:
+    cap, reason = _clinical_volume_cap(_clinical_conn(conditions=[("Influenza A", None)]))
+    assert cap == _RELATIVE_CLINICAL_CAP
+    assert reason is not None
+
+
+def test_clinical_cap_relative_anemia() -> None:
+    cap, reason = _clinical_volume_cap(_clinical_conn(labs=[("Hemoglobin", 9.1, 17.5)]))
+    assert cap == _RELATIVE_CLINICAL_CAP
+    assert reason is not None
+
+
+def test_clinical_cap_clear_when_healthy() -> None:
+    cap, reason = _clinical_volume_cap(_clinical_conn(labs=[("Hemoglobin", 14.2, 17.5)]))
+    assert cap is None
+    assert reason is None

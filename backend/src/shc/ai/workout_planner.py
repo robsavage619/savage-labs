@@ -808,6 +808,10 @@ class GateViolation(ValueError):
 MAX_WORKING_SETS = 22
 MAX_SESSION_MIN = 75
 
+# Working-set ceiling for a relative clinical contraindication (#21): acute
+# illness / significant anemia warrant a reduced session, not a hard stop.
+_RELATIVE_CLINICAL_CAP = 12
+
 # Hip-hinge patterns (#19): blocked when the pull gate is active. The metrics
 # agent reconciled hinge → 'pull', but a forbidden *group* check alone can't
 # express "the pull gate forbids hinge specifically"; pattern-level matching
@@ -939,10 +943,15 @@ def _clinical_volume_cap(conn: Any) -> tuple[int | None, str | None]:
     unambiguous cases cap volume, everything else returns ``(None, None)`` and
     leaves prescription to the rest of the pipeline.
 
-    Hard cases handled:
+    Absolute cases (cap = 0, rest only):
       * an active acute cardiac / chest-pain / DVT / rhabdomyolysis condition →
         training is contraindicated; cap to a recovery-only set count.
       * a critically out-of-range potassium or troponin lab → same.
+
+    Relative cases (cap = ``_RELATIVE_CLINICAL_CAP`` sets, no high intensity):
+      * an active acute febrile / viral illness (myocarditis risk) → reduced
+        session rather than a hard stop.
+      * significant anemia (hemoglobin < 10 g/dL) → reduced volume.
 
     FAILS VISIBLY upstream: when no ``conn`` is supplied to ``validate_plan`` the
     caller skips this guard entirely and a handoff records that the router must
@@ -1014,6 +1023,35 @@ def _clinical_volume_cap(conn: Any) -> tuple[int | None, str | None]:
             return 0, (
                 f"troponin {value:g} above reference {ref_high:g} — cardiac flag, "
                 "no loaded training until cleared"
+            )
+
+    # Relative contraindications: reduce volume rather than forbid. Training hard
+    # through an acute febrile/viral illness carries a real myocarditis risk
+    # (return-to-play guidance), and significant anemia blunts O2 delivery — both
+    # warrant a low-volume, no-high-intensity session, not a hard stop.
+    relative_illness = (
+        "influenza",
+        "covid",
+        "fever",
+        "pneumonia",
+        "mononucleosis",
+        "bronchitis",
+    )
+    for (name,) in cond_rows:
+        low = (name or "").lower()
+        for flag in relative_illness:
+            if flag in low:
+                return _RELATIVE_CLINICAL_CAP, (
+                    f"active acute illness on record ({name}) — reduced volume, no "
+                    "high-intensity work until recovered"
+                )
+    for name, value, _ref_high in lab_rows:
+        if value is None:
+            continue
+        low_name = (name or "").lower()
+        if ("hemoglobin" in low_name or "haemoglobin" in low_name) and value < 10.0:
+            return _RELATIVE_CLINICAL_CAP, (
+                f"low hemoglobin {value:g} g/dL — reduced volume until corrected"
             )
     return None, None
 
@@ -1244,16 +1282,25 @@ def validate_plan(
             # caps volume/intensity; a plan exceeding the cap is rejected.
             cap_sets, cap_reason = _clinical_volume_cap(conn)
             if cap_reason is not None:
-                if rec.get("intensity") != "rest":
-                    raise GateViolation(
-                        f"Clinical contraindication: {cap_reason}. Plan intensity "
-                        f"{rec.get('intensity')!r} is not permitted — prescribe rest/recovery only."
-                    )
-                if cap_sets is not None and _count_working_sets(plan) > cap_sets:
-                    raise GateViolation(
-                        f"Clinical contraindication: {cap_reason}. Plan has "
-                        f"{_count_working_sets(plan)} working sets, over the cap of {cap_sets}."
-                    )
+                if cap_sets == 0:
+                    # Absolute contraindication: no loaded training at all.
+                    if rec.get("intensity") != "rest":
+                        raise GateViolation(
+                            f"Clinical contraindication: {cap_reason}. Plan intensity "
+                            f"{rec.get('intensity')!r} is not permitted — prescribe rest/recovery only."
+                        )
+                else:
+                    # Relative contraindication: reduced volume, no high intensity.
+                    if rec.get("intensity") == "high":
+                        raise GateViolation(
+                            f"Clinical relative contraindication: {cap_reason}. "
+                            "High-intensity work is not permitted today."
+                        )
+                    if cap_sets is not None and _count_working_sets(plan) > cap_sets:
+                        raise GateViolation(
+                            f"Clinical relative contraindication: {cap_reason}. Plan has "
+                            f"{_count_working_sets(plan)} working sets, over the cap of {cap_sets}."
+                        )
 
             # #18 + #22 reuse the weekly engine prescription.
             rx = prescription
