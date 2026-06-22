@@ -249,20 +249,46 @@ def test_yesterday_pickleball_leaves_legs_open() -> None:
 
 
 def test_personal_acwr_bands_floored_at_population(conn) -> None:
-    """A fitted band tighter than the population default must not tighten the
-    gate — personal bands may only loosen (the fitted percentiles are biased
-    low by low-volume history)."""
+    """A THIN-sample fitted band tighter than the population default must not
+    tighten the gate — below _ACWR_TIGHTEN_MIN_WEEKS personal bands may only
+    loosen (the fitted percentiles are biased low by low-volume history).
+
+    Note: the sample count here is intentionally below the tighten bar. A
+    well-sampled band IS allowed to tighten — see
+    test_personal_acwr_bands_tighten_when_well_sampled."""
+    for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 12, now())",
+            [name, value],
+        )
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.88, 12, now())"
+    )
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.resistance_acwr = 1.44  # above the tight personal 1.2, below population 1.5
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "high"
+
+
+def test_personal_acwr_bands_tighten_when_well_sampled(conn) -> None:
+    """Once a personal band rests on enough weeks (≥ _ACWR_TIGHTEN_MIN_WEEKS) it
+    is trusted as-is and MAY tighten below the population default — the floor is
+    a thin-sample guard, not a permanent one."""
     for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
         conn.execute(
             "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
             "VALUES ('resistance', ?, ?, 50, now())",
             [name, value],
         )
+    # read_acwr_bands() only activates personal bands when all four thresholds
+    # (incl. the conditioning arm) are present.
     conn.execute(
         "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
         "VALUES ('conditioning', 'forbid_legs', 1.88, 50, now())"
     )
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.resistance_acwr = 1.44  # above the tight personal 1.2, below population 1.5
+    load.resistance_acwr = 1.44  # above the trusted personal mod band (1.2)
     g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
-    assert g.max_intensity == "high"
+    assert g.max_intensity == "moderate"

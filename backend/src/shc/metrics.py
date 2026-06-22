@@ -69,6 +69,13 @@ BASELINE_MIN_N = 14
 RES_ACWR_REST, RES_ACWR_LOW, RES_ACWR_MOD = 2.0, 1.8, 1.5
 COND_ACWR_FORBID_LEGS = 1.8
 
+# Minimum fitted weeks before a personal ACWR band is allowed to TIGHTEN below
+# the population floor. The fitter itself accepts a band at 12 weeks
+# (self_learning._ACWR_MIN_WEEKS); tightening is the riskier direction, so the
+# bar is set strictly higher — a thin fit may loosen but not gate accumulation
+# weeks as spikes until the sample describes a stable era.
+_ACWR_TIGHTEN_MIN_WEEKS = 24
+
 Tier = Literal["green", "yellow", "red"]
 Intensity = Literal["high", "moderate", "low", "rest"]
 
@@ -170,11 +177,27 @@ class TrainingLoadMetrics:
     cardio_zone_min_7d: dict[str, float] = field(
         default_factory=dict
     )  # {z0:.., z1:.., ..., z5:..} from WHOOP
+    # High-intensity (Z3-Z5) conditioning minutes in the last 7d. The full zone
+    # breakdown is computed but only Z2 was consumed downstream; the planner
+    # needs the high-intensity pole to shape POLARIZED conditioning (most volume
+    # easy Z2, a small dose hard Z4/Z5, little in the Z3 "grey zone").
+    cardio_high_intensity_min_7d: int = 0  # Z3+Z4+Z5
+    cardio_zone3_min_7d: float = 0.0
+    cardio_zone4_min_7d: float = 0.0
+    cardio_zone5_min_7d: float = 0.0
     max_hr_measured: int | None = None  # WHOOP-measured max HR (preferred over Tanaka formula)
     max_hr_tanaka: int | None = None  # 208 - 0.7 × age (population formula, fallback)
     pickleball_min_7d: int = 0  # logged conditioning load only (not a programmed goal)
     pickleball_min_28d: int = 0
     cardio_modality_min_7d: dict[str, int] = field(default_factory=dict)  # per-sport minutes
+    # WHOOP day_strain (0-21 logarithmic) surfaced into DailyState so the planner
+    # can gate today's session on whole-day cardiovascular load, not just the
+    # 7/28d ACWR. yesterday = the most recent completed cycle (drives "ease off
+    # today" after a hard day); today = the in-progress cycle if WHOOP has a
+    # partial reading.
+    day_strain_yesterday: float | None = None
+    day_strain_today: float | None = None
+    day_strain_7d_avg: float | None = None
 
 
 @dataclass
@@ -264,9 +287,27 @@ class DailyState:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-# Order matters — check LEGS and CORE before PUSH/PULL so "leg press" → legs, not push,
-# and "leg curl" → legs, not pull. Compound terms (e.g. "calf raise") must also resolve
-# to legs before the generic "raise" hits push.
+# Hip-hinge patterns classify as PULL, checked BEFORE _LEGS so a hinge never
+# leaks into legs. WHY: the auto-reg gate forbids whole push/pull/legs groups via
+# muscle_group(), and the shipped+documented convention is that a "pull" gate
+# also bars posterior-chain hinges (RDL, SL-RDL, deadlift, good morning) — they
+# load the same hip-hinge/erector pattern as heavy rows/deadlifts, not the
+# quad/knee-extension pattern of a squat. Previously "deadlift" → pull but "rdl"
+# → legs (and "sumo deadlift"/"stiff leg deadlift" → legs via _LEGS), so the
+# gate let an RDL through on a pull-rested day. Reconciled: every hinge → pull.
+# Hip thrust is deliberately EXCLUDED — it's a glute-bridge (hip extension under
+# a fixed back), not a standing hinge, so it stays a legs/glute movement.
+_HINGE = (
+    "rdl",
+    "romanian deadlift",
+    "deadlift",
+    "good morning",
+)
+
+# Order matters — check HINGE first (→ pull), then LEGS and CORE before PUSH/PULL
+# so "leg press" → legs, not push, and "leg curl" → legs, not pull. Compound
+# terms (e.g. "calf raise") must also resolve to legs before the generic "raise"
+# hits push.
 _LEGS = (
     "squat",
     " leg ",
@@ -279,7 +320,6 @@ _LEGS = (
     "hamstring",
     "quad",
     "calf",
-    "rdl",
     "step-up",
     "adduct",
     "abduct",
@@ -361,10 +401,13 @@ def muscle_group(exercise: str) -> str:
     """Classify an exercise into push/pull/legs/core/other.
 
     Single source of truth — previously duplicated in workout_planner and
-    dashboard. Legs/core checked FIRST so "leg press" → legs (not push) and
-    "leg curl" → legs (not pull).
+    dashboard. Hinge checked FIRST so all hip-hinge patterns (deadlift, RDL,
+    good morning) → pull consistently; then legs/core before push/pull so
+    "leg press" → legs (not push) and "leg curl" → legs (not pull).
     """
     e = exercise.lower()
+    if any(k in e for k in _HINGE):
+        return "pull"
     if any(k in e for k in _LEGS):
         return "legs"
     if any(k in e for k in _CORE):
@@ -374,6 +417,156 @@ def muscle_group(exercise: str) -> str:
     if any(k in e for k in _PULL):
         return "pull"
     return "other"
+
+
+def pickleball_match_load(conn, lookback_days: int = 28) -> dict[str, Any] | None:
+    """Differentiate competitive-match pickleball from casual court load.
+
+    Pickleball reaches the load/ACWR model as undifferentiated cardio (WHOOP
+    strain on a ``pickleball`` cardio_session). But a logged DUPR *match* — a
+    rated, competitive game with win/loss and scores — carries higher
+    neuromuscular and psychological load per minute than casual rallying. This
+    reads ``dupr_matches`` (migration 0027) for the window and returns a load
+    multiplier the conditioning arm can apply to competitive days, plus the raw
+    match facts.
+
+    FAILS VISIBLY: if ``dupr_matches`` isn't queryable here, returns None so the
+    caller falls back to undifferentiated load rather than silently assuming
+    "all casual". The actual blend into ``v_daily_load`` lives in the load-view
+    layer — see the handoff — this helper is the readable hook it consumes.
+
+    Args:
+        conn: DuckDB connection.
+        lookback_days: Window for counting competitive matches.
+
+    Returns:
+        ``{match_days, total_matches, wins, losses, competitive_load_mult,
+        last_match_date}`` or None.
+    """
+    try:
+        table_exists = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'dupr_matches'"
+        ).fetchone()[0]
+    except Exception as exc:
+        log.warning("dupr_matches existence check failed: %s", exc)
+        return None
+    if not table_exists:
+        return None
+    since = (date.today() - timedelta(days=lookback_days)).isoformat()
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(DISTINCT event_date)              AS match_days,
+            COUNT(*)                                AS total_matches,
+            COALESCE(SUM(CASE WHEN won THEN 1 ELSE 0 END), 0)        AS wins,
+            COALESCE(SUM(CASE WHEN won = FALSE THEN 1 ELSE 0 END), 0) AS losses,
+            MAX(event_date)                         AS last_match
+        FROM dupr_matches
+        WHERE event_date >= $s
+        """,
+        {"s": since},
+    ).fetchone()
+    if not row or not row[1]:
+        return None
+    match_days, total, wins, losses, last_match = row
+    # Conservative, bounded uplift: a competitive-match day carries ~25% more
+    # conditioning load per minute than casual play (rated games are played at
+    # higher intensity with full effort on every point). Capped — this is a
+    # heuristic prior for an N=1 athlete, not a validated coefficient.
+    competitive_load_mult = 1.25
+    return {
+        "match_days": int(match_days or 0),
+        "total_matches": int(total or 0),
+        "wins": int(wins or 0),
+        "losses": int(losses or 0),
+        "competitive_load_mult": competitive_load_mult,
+        "last_match_date": str(last_match) if last_match else None,
+    }
+
+
+def vo2max_series(conn, lookback_days: int = 90) -> dict[str, Any] | None:
+    """Latest VO2max and a short trend for the cardio-prescription path.
+
+    VO2max is ingested into ``measurements`` (metric ``vo2_max``, Apple Watch
+    HKQuantityTypeIdentifierVO2Max) but no training reader existed — the cardio
+    planner had no aerobic-fitness anchor. Reads the daily-averaged series over
+    ``lookback_days`` and returns the latest value plus the signed change vs the
+    earliest reading in the window. Filters obviously bad values (≤20 mL/kg/min)
+    the same way the dashboard endpoint does.
+
+    Args:
+        conn: DuckDB connection.
+        lookback_days: Trend window length.
+
+    Returns:
+        ``{latest, latest_date, trend_pct, change_abs, n}`` or None when there's
+        no usable VO2max data.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT ts::DATE AS day, AVG(value_num) AS vo2max
+            FROM measurements
+            WHERE metric = 'vo2_max' AND value_num IS NOT NULL AND value_num > 20
+              AND ts >= $s
+            GROUP BY day
+            ORDER BY day
+            """,
+            {"s": (date.today() - timedelta(days=lookback_days)).isoformat()},
+        ).fetchall()
+    except Exception as exc:
+        log.warning("vo2_max series unavailable: %s", exc)
+        return None
+    series = [(r[0], float(r[1])) for r in rows if r[1] is not None]
+    if not series:
+        return None
+    latest_date, latest = series[-1]
+    first = series[0][1]
+    change_abs = round(latest - first, 1)
+    trend_pct = round((latest - first) / first * 100.0, 2) if first else None
+    return {
+        "latest": round(latest, 1),
+        "latest_date": str(latest_date),
+        "trend_pct": trend_pct,
+        "change_abs": change_abs,
+        "n": len(series),
+    }
+
+
+def polarized_zone_distribution(load: TrainingLoadMetrics) -> dict[str, float] | None:
+    """Easy / grey / hard split of the last 7d of HR-zone conditioning minutes.
+
+    For the polarized-conditioning planner path: returns total minutes plus the
+    fraction in each pole — ``easy`` (Z0-Z2), ``grey`` (Z3, the threshold zone a
+    polarized model deliberately minimizes), and ``hard`` (Z4-Z5). Returns None
+    when there's no WHOOP zone data for the window (the fallback Z2-only path
+    can't populate the full breakdown).
+
+    Args:
+        load: The training-load metrics carrying ``cardio_zone_min_7d``.
+
+    Returns:
+        ``{total_min, easy_min, grey_min, hard_min, easy_pct, grey_pct,
+        hard_pct}`` or None.
+    """
+    z = load.cardio_zone_min_7d
+    if not z:
+        return None
+    easy = z.get("z0", 0.0) + z.get("z1", 0.0) + z.get("z2", 0.0)
+    grey = z.get("z3", 0.0)
+    hard = z.get("z4", 0.0) + z.get("z5", 0.0)
+    total = easy + grey + hard
+    if total <= 0:
+        return None
+    return {
+        "total_min": round(total, 1),
+        "easy_min": round(easy, 1),
+        "grey_min": round(grey, 1),
+        "hard_min": round(hard, 1),
+        "easy_pct": round(easy / total, 3),
+        "grey_pct": round(grey / total, 3),
+        "hard_pct": round(hard / total, 3),
+    }
 
 
 def _hrv_subscore(sigma: float | None) -> float | None:
@@ -740,9 +933,7 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             rpes = [
                 float(r[2])
                 for r in set_rows
-                if r[0] == last_by_group[g]
-                and r[2] is not None
-                and muscle_group(r[1] or "") == g
+                if r[0] == last_by_group[g] and r[2] is not None and muscle_group(r[1] or "") == g
             ]
             if rpes:
                 setattr(m, f"last_rpe_{g}", round(sum(rpes) / len(rpes), 1))
@@ -814,6 +1005,12 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             "z5": round(float(zone_row[5]), 1),
         }
         m.cardio_z2_min_7d = int(round(float(zone_row[2])))
+        m.cardio_zone3_min_7d = m.cardio_zone_min_7d["z3"]
+        m.cardio_zone4_min_7d = m.cardio_zone_min_7d["z4"]
+        m.cardio_zone5_min_7d = m.cardio_zone_min_7d["z5"]
+        m.cardio_high_intensity_min_7d = int(
+            round(float(zone_row[3]) + float(zone_row[4]) + float(zone_row[5]))
+        )
     else:
         # Fallback: HR-range inference using whichever max HR we have.
         # 60–70% of max = Z2 (Seiler / polarized model).
@@ -838,7 +1035,49 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
     age_today = _age_today(conn)
     if age_today is not None:
         m.max_hr_tanaka = int(round(208 - 0.7 * age_today))
+
+    _apply_day_strain(conn, today, m)
     return m
+
+
+def _apply_day_strain(conn, today: date, m: TrainingLoadMetrics) -> None:
+    """Surface WHOOP `daily_cycle.strain` into the training-load metrics.
+
+    WHOOP day-strain (0-21, logarithmic) is the whole-day cardiovascular load —
+    distinct from the 7/28d ACWR arms — and previously only reached lab.py. The
+    planner uses ``day_strain_yesterday`` to ease today's session after a hard
+    day. Fails VISIBLY: if `daily_cycle` (or its `strain` column) isn't present,
+    the fields stay None and a warning is logged rather than silently zeroed.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT date, MAX(strain) AS strain
+            FROM daily_cycle
+            WHERE date >= $s AND strain IS NOT NULL
+            GROUP BY date
+            ORDER BY date
+            """,
+            {"s": (today - timedelta(days=7)).isoformat()},
+        ).fetchall()
+    except Exception as exc:
+        log.warning("daily_cycle.strain unavailable — day_strain not surfaced: %s", exc)
+        return
+    if not rows:
+        return
+    by_date = {
+        (r[0] if isinstance(r[0], date) else date.fromisoformat(str(r[0]))): float(r[1])
+        for r in rows
+        if r[1] is not None
+    }
+    if today in by_date:
+        m.day_strain_today = round(by_date[today], 1)
+    prior = sorted(d for d in by_date if d < today)
+    if prior:
+        m.day_strain_yesterday = round(by_date[prior[-1]], 1)
+    vals = list(by_date.values())
+    if vals:
+        m.day_strain_7d_avg = round(sum(vals) / len(vals), 1)
 
 
 def _latest_max_hr(conn) -> int | None:
@@ -963,6 +1202,34 @@ def _readiness_snapshot(
 DELOAD_COOLDOWN_DAYS = 9
 
 
+def _acwr_band_sample_weeks(conn) -> tuple[int, int]:
+    """Fitted sample-week count for the (resistance, conditioning) ACWR arms.
+
+    Reads ``personal_acwr_bands.sample_weeks`` directly so the gate can decide
+    whether a personal band rests on enough history to tighten the population
+    floor. Returns ``(0, 0)`` when the table is absent or empty.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT arm, MAX(sample_weeks) FROM personal_acwr_bands GROUP BY arm"
+        ).fetchall()
+    except Exception:
+        return 0, 0
+    by_arm = {str(arm): int(n) for arm, n in rows if n is not None}
+    return by_arm.get("resistance", 0), by_arm.get("conditioning", 0)
+
+
+def _apply_band(personal: float, population: float, floor_only: bool) -> float:
+    """Reconcile a personal ACWR threshold against its population default.
+
+    When ``floor_only`` (thin sample), the personal band may only LOOSEN —
+    ``max`` keeps the conservative population floor. Once the sample is thick
+    enough to trust, the personal band is used as-is and may tighten below the
+    floor.
+    """
+    return max(personal, population) if floor_only else personal
+
+
 def _gates(
     rec: RecoveryMetrics,
     sleep: SleepMetrics,
@@ -985,22 +1252,31 @@ def _gates(
     if conn is not None:
         try:
             from shc.training.self_learning import read_acwr_bands
+
             personal = read_acwr_bands(conn)
             if personal:
-                # Personal bands may LOOSEN the population defaults, never
-                # tighten them. The fitter's percentiles are dragged down by
-                # low-volume eras in the history, so an unfloored personal
-                # band gates ordinary accumulation weeks as "fatigue spikes"
-                # — which suppresses volume, lowers chronic load, and makes
-                # next week's ratio look even worse (the ACWR trap).
-                res_rest = max(personal["RES_ACWR_REST"], RES_ACWR_REST)
-                res_low = max(personal["RES_ACWR_LOW"], RES_ACWR_LOW)
-                res_mod = max(personal["RES_ACWR_MOD"], RES_ACWR_MOD)
-                cond_forbid_legs = max(
-                    personal["COND_ACWR_FORBID_LEGS"], COND_ACWR_FORBID_LEGS
+                # Personal bands LOOSEN the population defaults freely, but may
+                # only TIGHTEN below them once the fit rests on enough weeks to
+                # describe Rob's current training era rather than the low-volume
+                # history that drags percentiles down (the ACWR trap: an
+                # unfloored thin-sample band gates ordinary accumulation as a
+                # "fatigue spike", suppressing volume → lowering chronic load →
+                # worsening next week's ratio). _ACWR_TIGHTEN_MIN_WEEKS is set
+                # above the fitter's own minimum so the bar to tighten is
+                # strictly stricter than the bar to merely fit. Gating is
+                # per-arm on each arm's own sample_weeks.
+                res_n, cond_n = _acwr_band_sample_weeks(conn)
+                res_floor = res_n < _ACWR_TIGHTEN_MIN_WEEKS
+                cond_floor = cond_n < _ACWR_TIGHTEN_MIN_WEEKS
+                res_rest = _apply_band(personal["RES_ACWR_REST"], RES_ACWR_REST, res_floor)
+                res_low = _apply_band(personal["RES_ACWR_LOW"], RES_ACWR_LOW, res_floor)
+                res_mod = _apply_band(personal["RES_ACWR_MOD"], RES_ACWR_MOD, res_floor)
+                cond_forbid_legs = _apply_band(
+                    personal["COND_ACWR_FORBID_LEGS"], COND_ACWR_FORBID_LEGS, cond_floor
                 )
         except Exception as exc:
             import logging as _log
+
             _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
 
     # Hard rest gates.
@@ -1081,21 +1357,15 @@ def _gates(
     res = load.resistance_acwr
     if res is not None and res > res_rest:
         g.max_intensity = "rest"
-        reasons.append(
-            f"Resistance ACWR {res} > {res_rest} — lifting fatigue spike, rest required"
-        )
+        reasons.append(f"Resistance ACWR {res} > {res_rest} — lifting fatigue spike, rest required")
     elif res is not None and res > res_low:
         if g.max_intensity in ("high", "moderate"):
             g.max_intensity = "low"
-        reasons.append(
-            f"Resistance ACWR {res} > {res_low} — elevated lifting fatigue, cap LOW"
-        )
+        reasons.append(f"Resistance ACWR {res} > {res_low} — elevated lifting fatigue, cap LOW")
     elif res is not None and res > res_mod:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
-        reasons.append(
-            f"Resistance ACWR {res} > {res_mod} — accumulating fatigue, cap MODERATE"
-        )
+        reasons.append(f"Resistance ACWR {res} > {res_mod} — accumulating fatigue, cap MODERATE")
 
     # Bug 7: when WHOOP hasn't synced for >2 days, conditioning_acwr trends toward
     # zero as the chronic window fills with zeros. Silently low ratio means
@@ -1103,8 +1373,7 @@ def _gates(
     # Treat WHOOP-derived conditioning as unavailable after 48h without a sync.
     cond_raw = load.conditioning_acwr
     whoop_stale = (
-        rec.score_date is not None
-        and (date.today() - date.fromisoformat(rec.score_date)).days > 2
+        rec.score_date is not None and (date.today() - date.fromisoformat(rec.score_date)).days > 2
     )
     cond = None if whoop_stale else cond_raw
     if cond is not None and cond > cond_forbid_legs:
@@ -1461,6 +1730,88 @@ def _body_comp_note(bc: BodyComposition, weight_trend_4wk: float | None) -> str 
     return f"waist {bc.trend_direction}, weight trend {wt:+.1f}%"
 
 
+_PHYSIQUE_BIAS_MAX = 0.15  # bounded ±15% emphasis nudge — physique is slow-moving
+
+
+def physique_volume_bias(conn, lookback_days: int = 120) -> dict[str, float] | None:
+    """Per-muscle volume-emphasis nudges from physique geometry + critique trend.
+
+    Produces a conservative, bounded ``{muscle: factor}`` map (factor in
+    [1-_PHYSIQUE_BIAS_MAX, 1+_PHYSIQUE_BIAS_MAX], 1.0 = no change) for the
+    autoregulation emphasis path. Two trended (NOT latest-only) signals combine:
+
+    * **Waist:shoulder trend** (BodyComposition): a *softening* taper (waist
+      rising relative to shoulders) nudges UP the muscles that drive the
+      V-taper — side_delts, lats, glutes — and the trunk (abs). A *leaning*
+      taper relaxes those nudges toward neutral.
+    * **Physique-critique verdict trend**: the *majority* verdict across recent
+      ``physique_critiques`` rows (leaner / stable / softer). Only the
+      structured ``verdict`` column is used — the free-text bodies are NOT
+      parsed, because reliable per-muscle extraction from prose would need an
+      LLM and the backend never calls one (faking it is worse than skipping).
+
+    Returns None when neither signal is available. Muscles absent from the map
+    are implicitly 1.0.
+
+    Args:
+        conn: DuckDB connection.
+        lookback_days: Window for the critique-verdict trend.
+
+    Returns:
+        ``{muscle: factor}`` or None.
+    """
+    today = date.today()
+    bc = _body_composition(conn, today)
+
+    # Critique verdict trend — majority over the window (trended, not latest).
+    verdict_trend: str | None = None
+    try:
+        vrows = conn.execute(
+            """
+            SELECT verdict FROM physique_critiques
+            WHERE created_at >= $s AND verdict IS NOT NULL
+            ORDER BY created_at
+            """,
+            {"s": (today - timedelta(days=lookback_days)).isoformat()},
+        ).fetchall()
+        verdicts = [str(v[0]) for v in vrows if v[0]]
+        if verdicts:
+            counts: dict[str, int] = {}
+            for v in verdicts:
+                counts[v] = counts.get(v, 0) + 1
+            verdict_trend = max(counts, key=lambda k: counts[k])
+    except Exception as exc:
+        log.warning("physique_critiques trend unavailable: %s", exc)
+
+    if bc.trend_direction is None and verdict_trend is None:
+        return None
+
+    # Combine the two directional signals into a single softening "pressure" in
+    # [-1, 1]: +1 = clearly softening (bias toward taper muscles), -1 = leaning.
+    pressure = 0.0
+    n = 0
+    if bc.trend_direction is not None:
+        pressure += {"softer": 1.0, "leaner": -1.0}.get(bc.trend_direction, 0.0)
+        n += 1
+    if verdict_trend is not None:
+        pressure += {"softer": 1.0, "leaner": -1.0}.get(verdict_trend, 0.0)
+        n += 1
+    if n:
+        pressure /= n
+    if pressure <= 0:
+        # Leaning or stable → no positive emphasis nudge; keep it neutral.
+        return None
+
+    nudge = round(1.0 + _PHYSIQUE_BIAS_MAX * pressure, 3)
+    # Taper-driving muscles get the emphasis when the silhouette is softening.
+    return {
+        "side_delts": nudge,
+        "lats": nudge,
+        "glutes": nudge,
+        "abs": nudge,
+    }
+
+
 def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, Any]:
     """Return the canonical `DailyState` for today as a JSON-serializable dict.
 
@@ -1487,7 +1838,9 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
     e1rm = _e1rm_regression(conn, today)
     e1rm_pct, e1rm_lift = e1rm if e1rm else (None, None)
     deload_cooldown = _deload_in_cooldown(conn, today)
-    gates = _gates(rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift, conn=conn)
+    gates = _gates(
+        rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift, conn=conn
+    )
     freshness = _freshness(conn, today, rec, sleep, load)
 
     body_comp = _body_composition(conn, today)
