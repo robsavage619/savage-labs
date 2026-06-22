@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,10 +20,10 @@ _key_header = APIKeyHeader(name="X-SHC-Key", auto_error=False)
 
 
 _SHORTCUTS_DATE_FMTS = [
-    "%B %d, %Y at %I:%M %p",   # May 10, 2026 at 9:17 PM
-    "%B %d, %Y at %I:%M:%S %p",# May 10, 2026 at 9:17:00 PM
-    "%Y-%m-%dT%H:%M:%S%z",     # ISO 8601 with tz
-    "%Y-%m-%dT%H:%M:%S",       # ISO 8601 no tz
+    "%B %d, %Y at %I:%M %p",  # May 10, 2026 at 9:17 PM
+    "%B %d, %Y at %I:%M:%S %p",  # May 10, 2026 at 9:17:00 PM
+    "%Y-%m-%dT%H:%M:%S%z",  # ISO 8601 with tz
+    "%Y-%m-%dT%H:%M:%S",  # ISO 8601 no tz
     "%Y-%m-%d %H:%M:%S%z",
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%d",
@@ -37,12 +36,12 @@ def _parse_ts(raw: str) -> str:
         try:
             dt = datetime.strptime(raw.strip(), fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
             return dt.isoformat()
         except ValueError:
             continue
     log.warning("unparseable date %r — using now()", raw)
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _require_key(key: Annotated[str | None, Depends(_key_header)]) -> None:
@@ -92,52 +91,52 @@ async def apple_hae_webhook(request: Request) -> dict[str, Any]:
 # Unit-neutral metrics (bpm, %, kcal, count, min) are the same regardless of locale.
 _SHORTCUT_UNITS: dict[str, tuple[str, str]] = {
     # Core vitals
-    "hrv_sdnn":              ("hrv_sdnn",              "ms"),
-    "resting_heart_rate":    ("resting_heart_rate",    "bpm"),
-    "heart_rate":            ("heart_rate",            "bpm"),
-    "spo2_pct":              ("spo2_pct",              "%"),
-    "respiratory_rate":      ("respiratory_rate",      "bpm"),
-    "bp_systolic":           ("bp_systolic",           "mmHg"),
-    "bp_diastolic":          ("bp_diastolic",          "mmHg"),
+    "hrv_sdnn": ("hrv_sdnn", "ms"),
+    "resting_heart_rate": ("resting_heart_rate", "bpm"),
+    "heart_rate": ("heart_rate", "bpm"),
+    "spo2_pct": ("spo2_pct", "%"),
+    "respiratory_rate": ("respiratory_rate", "bpm"),
+    "bp_systolic": ("bp_systolic", "mmHg"),
+    "bp_diastolic": ("bp_diastolic", "mmHg"),
     # Cardio / recovery
-    "walking_heart_rate_avg":("walking_heart_rate_avg","bpm"),
+    "walking_heart_rate_avg": ("walking_heart_rate_avg", "bpm"),
     # Activity (unit-neutral)
-    "step_count":            ("step_count",            "count"),
-    "flights_climbed":       ("flights_climbed",       "count"),
-    "active_energy_kcal":    ("active_energy_kcal",    "kcal"),
-    "exercise_time_min":     ("exercise_time_min",     "min"),
-    "stand_time_min":        ("stand_time_min",        "min"),
+    "step_count": ("step_count", "count"),
+    "flights_climbed": ("flights_climbed", "count"),
+    "active_energy_kcal": ("active_energy_kcal", "kcal"),
+    "exercise_time_min": ("exercise_time_min", "min"),
+    "stand_time_min": ("stand_time_min", "min"),
     # Gait — unit-neutral percentages
-    "walking_asymmetry_pct":     ("walking_asymmetry_pct",     "%"),
-    "walking_double_support_pct":("walking_double_support_pct","%"),
+    "walking_asymmetry_pct": ("walking_asymmetry_pct", "%"),
+    "walking_double_support_pct": ("walking_double_support_pct", "%"),
     # Body composition — unit-neutral
-    "body_mass_index":       ("body_mass_index",       "kg/m²"),
-    "body_fat_pct":          ("body_fat_pct",          "%"),
+    "body_mass_index": ("body_mass_index", "kg/m²"),
+    "body_fat_pct": ("body_fat_pct", "%"),
     # Environment / mindfulness — unit-neutral
-    "env_audio_dbspl":       ("env_audio_dbspl",       "dBASPL"),
+    "env_audio_dbspl": ("env_audio_dbspl", "dBASPL"),
     "headphone_audio_dbspl": ("headphone_audio_dbspl", "dBASPL"),
-    "mindful_min":           ("mindful_min",           "min"),
+    "mindful_min": ("mindful_min", "min"),
     # Diet
-    "dietary_energy_kcal":   ("dietary_energy_kcal",   "kcal"),
-    "dietary_protein_g":     ("dietary_protein_g",     "g"),
-    "dietary_carbs_g":       ("dietary_carbs_g",       "g"),
-    "dietary_fat_g":         ("dietary_fat_g",         "g"),
-    "dietary_fiber_g":       ("dietary_fiber_g",       "g"),
-    "dietary_water_ml":      ("dietary_water_ml",      "mL"),
+    "dietary_energy_kcal": ("dietary_energy_kcal", "kcal"),
+    "dietary_protein_g": ("dietary_protein_g", "g"),
+    "dietary_carbs_g": ("dietary_carbs_g", "g"),
+    "dietary_fat_g": ("dietary_fat_g", "g"),
+    "dietary_fiber_g": ("dietary_fiber_g", "g"),
+    "dietary_water_ml": ("dietary_water_ml", "mL"),
 }
 
 # Imperial keys Shortcuts sends on a US-locale iPhone → convert to SI for DB consistency
 # DB always stores SI (matches XML importer). Display layer converts back to imperial.
 _IMPERIAL_TO_SI: dict[str, tuple[str, str, float]] = {
     # shortcut key → (db metric, db unit, multiplier)
-    "lean_body_mass_lb":     ("lean_body_mass_kg",     "kg",    0.453592),
-    "distance_walking_mi":   ("distance_walking_km",   "km",    1.60934),
-    "walking_speed_mph":     ("walking_speed_m_s",     "m/s",   0.44704),
-    "walking_step_length_in":("walking_step_length_m", "m",     0.0254),
-    "stair_ascent_speed_fps":("stair_ascent_speed_m_s","m/s",   0.3048),
-    "stair_descent_speed_fps":("stair_descent_speed_m_s","m/s", 0.3048),
+    "lean_body_mass_lb": ("lean_body_mass_kg", "kg", 0.453592),
+    "distance_walking_mi": ("distance_walking_km", "km", 1.60934),
+    "walking_speed_mph": ("walking_speed_m_s", "m/s", 0.44704),
+    "walking_step_length_in": ("walking_step_length_m", "m", 0.0254),
+    "stair_ascent_speed_fps": ("stair_ascent_speed_m_s", "m/s", 0.3048),
+    "stair_descent_speed_fps": ("stair_descent_speed_m_s", "m/s", 0.3048),
     # Wrist temp: Shortcuts sends delta °F → store as delta °C (delta, so just multiply)
-    "wrist_temp_delta_f":    ("wrist_temp_delta_c",    "°C",    0.5556),
+    "wrist_temp_delta_f": ("wrist_temp_delta_c", "°C", 0.5556),
 }
 
 
@@ -168,7 +167,7 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
     # Shape A (ideal):  {"date": "...", "metrics": {hrv_sdnn: 45, ...}}
     # Shape B (nested): {"metrics": {"date": "...", "metrics": {hrv_sdnn: 45, ...}}}
     # Shape C (flat):   {hrv_sdnn: 45, "date": "...", ...}
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     inner = data.get("metrics", data)
     if isinstance(inner, dict) and "metrics" in inner:
         # Shape B — one extra nesting level
@@ -217,8 +216,14 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
                 VALUES ('apple_health', $metric, $ts, $value, $unit, $ext_id, $hash)
                 ON CONFLICT (source, metric, ts, external_id) DO NOTHING
                 """,
-                {"metric": db_metric, "ts": ts_raw, "value": val, "unit": db_unit,
-                 "ext_id": ext_id, "hash": row_hash},
+                {
+                    "metric": db_metric,
+                    "ts": ts_raw,
+                    "value": val,
+                    "unit": db_unit,
+                    "ext_id": ext_id,
+                    "hash": row_hash,
+                },
             )
             inserted += 1
 

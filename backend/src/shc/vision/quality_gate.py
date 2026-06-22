@@ -85,6 +85,4 @@ def evaluate_quality(
     if brightness_asymmetry > MAX_BRIGHTNESS_ASYMMETRY:
         advisories.append("uneven_lighting")
 
-    return QualityResult(
-        passed=not flags, flags=flags, advisories=advisories, pose_conf=pose_conf
-    )
+    return QualityResult(passed=not flags, flags=flags, advisories=advisories, pose_conf=pose_conf)

@@ -148,10 +148,7 @@ def _parse_match_hit(hit: dict, user_id: int) -> dict[str, Any] | None:
         (
             t
             for t in teams
-            if any(
-                (p or {}).get("id") == user_id
-                for p in [t.get("player1"), t.get("player2")]
-            )
+            if any((p or {}).get("id") == user_id for p in [t.get("player1"), t.get("player2")])
         ),
         None,
     )
@@ -276,14 +273,24 @@ async def sync_matches() -> dict[str, Any]:
                     synced_at = EXCLUDED.synced_at
                 """,
                 {
-                    "mid": r["match_id"], "ed": r["event_date"], "en": r["event_name"],
-                    "v": r["venue"], "fmt": r["format"],
-                    "pn": r["partner_name"], "o1": r["opponent1_name"], "o2": r["opponent2_name"],
+                    "mid": r["match_id"],
+                    "ed": r["event_date"],
+                    "en": r["event_name"],
+                    "v": r["venue"],
+                    "fmt": r["format"],
+                    "pn": r["partner_name"],
+                    "o1": r["opponent1_name"],
+                    "o2": r["opponent2_name"],
                     "won": r["won"],
-                    "g1u": r["game1_us"], "g1t": r["game1_them"],
-                    "g2u": r["game2_us"], "g2t": r["game2_them"],
-                    "g3u": r["game3_us"], "g3t": r["game3_them"],
-                    "dpre": r["dupr_pre"], "dpost": r["dupr_post"], "ddelta": r["dupr_delta"],
+                    "g1u": r["game1_us"],
+                    "g1t": r["game1_them"],
+                    "g2u": r["game2_us"],
+                    "g2t": r["game2_them"],
+                    "g3u": r["game3_us"],
+                    "g3t": r["game3_them"],
+                    "dpre": r["dupr_pre"],
+                    "dpost": r["dupr_post"],
+                    "ddelta": r["dupr_delta"],
                     "raw": r["raw"],
                 },
             )

@@ -30,6 +30,7 @@ def _client_id() -> str:
 def _client_secret() -> str:
     return load_token("whoop", "client_secret") or settings.whoop_client_secret or ""
 
+
 log = logging.getLogger(__name__)
 _refresh_lock = asyncio.Lock()
 
@@ -37,8 +38,7 @@ WHOOP_BASE = "https://api.prod.whoop.com/developer"
 AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth"
 TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token"  # noqa: S105
 SCOPES = (
-    "offline read:recovery read:sleep read:workout read:cycles "
-    "read:body_measurement read:profile"
+    "offline read:recovery read:sleep read:workout read:cycles read:body_measurement read:profile"
 )
 
 _oauth_state: dict[str, str] = {}
@@ -95,7 +95,9 @@ async def _refresh() -> str:
                 },
             )
         if resp.status_code in (400, 401):
-            raise WHOOPAuthError(f"WHOOP refresh rejected ({resp.status_code}) — re-authorization required")
+            raise WHOOPAuthError(
+                f"WHOOP refresh rejected ({resp.status_code}) — re-authorization required"
+            )
         resp.raise_for_status()
         tokens = resp.json()
         store_token("whoop", "access_token", tokens["access_token"])
@@ -125,7 +127,9 @@ async def _get(path: str, params: dict | None = None) -> dict:
             continue
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("retry-after", delay))
-            log.warning("WHOOP 429 on %s — backing off %.1fs (attempt %d/4)", path, retry_after, attempt + 1)
+            log.warning(
+                "WHOOP 429 on %s — backing off %.1fs (attempt %d/4)", path, retry_after, attempt + 1
+            )
             await asyncio.sleep(retry_after)
             delay *= 2
             continue
@@ -176,6 +180,7 @@ async def _paginate(path: str) -> list[dict]:
 
 
 # ── Recovery ─────────────────────────────────────────────────────────────────
+
 
 async def sync_recovery() -> int:
     """Fetch recent recovery records and upsert into DuckDB."""
@@ -228,6 +233,7 @@ async def sync_recovery() -> int:
 
 
 # ── Sleep ────────────────────────────────────────────────────────────────────
+
 
 async def sync_sleep() -> int:
     records = await _paginate("/v2/activity/sleep")
@@ -414,6 +420,7 @@ def _duration_min(start: str | None, end: str | None) -> int | None:
 
 # ── Workouts ─────────────────────────────────────────────────────────────────
 
+
 async def sync_workout() -> int:
     """Fetch WHOOP workout activities and upsert into the workouts and cardio_sessions tables."""
     records = await _paginate("/v2/activity/workout")
@@ -539,6 +546,7 @@ async def sync_workout() -> int:
 
 # ── Cycle ────────────────────────────────────────────────────────────────────
 
+
 async def sync_cycle() -> int:
     """Fetch daily cycle records (strain, kcal, avg/max HR) and upsert into daily_cycle."""
     records = await _paginate("/v2/cycle")
@@ -595,6 +603,7 @@ async def sync_cycle() -> int:
 
 # ── Body Measurement ─────────────────────────────────────────────────────────
 
+
 async def sync_body_measurement() -> int:
     """Fetch height/weight/max-HR. Single row endpoint — no pagination."""
     data = await _get("/v2/user/measurement/body")
@@ -626,12 +635,15 @@ async def sync_body_measurement() -> int:
         )
     log.info(
         "synced WHOOP body measurement: max_hr=%s height=%sm weight=%skg",
-        data.get("max_heart_rate"), data.get("height_meter"), data.get("weight_kilogram"),
+        data.get("max_heart_rate"),
+        data.get("height_meter"),
+        data.get("weight_kilogram"),
     )
     return 1
 
 
 # ── User Profile ─────────────────────────────────────────────────────────────
+
 
 async def sync_user_profile() -> int:
     """Fetch the WHOOP user profile (identity audit trail)."""
@@ -662,6 +674,7 @@ async def sync_user_profile() -> int:
 
 
 # ── Orchestration ────────────────────────────────────────────────────────────
+
 
 async def sync_all() -> dict[str, int]:
     """Full sync — called by APScheduler 2x/day.

@@ -103,8 +103,9 @@ async def upload_photo(
         )
         conn.execute(
             "INSERT INTO progress_photos "
-            "(id, photo_date, angle, file_path, quality_pass, quality_flags, pose_conf, scale_px) "
-            "VALUES ($id, $d, $a, $f, $qp, $qf, $pc, $sp)",
+            "(id, photo_date, angle, file_path, quality_pass, quality_flags, pose_conf, "
+            "scale_px, brightness_asymmetry) "
+            "VALUES ($id, $d, $a, $f, $qp, $qf, $pc, $sp, $ba)",
             {
                 "id": photo_id,
                 "d": pdate,
@@ -114,6 +115,7 @@ async def upload_photo(
                 "qf": json.dumps(analysis.quality.flags),
                 "pc": analysis.pose_conf,
                 "sp": analysis.scale_px,
+                "ba": analysis.brightness_asymmetry,
             },
         )
         for metric, (value_px, value_norm) in analysis.measurements.items():
@@ -292,10 +294,14 @@ def _latest_body_comp() -> dict:
 
 
 def _photo_path(angle: str, d: date) -> str | None:
-    row = get_read_conn().execute(
-        "SELECT file_path FROM progress_photos WHERE photo_date = $d AND angle = $a AND quality_pass",
-        {"d": d, "a": angle},
-    ).fetchone()
+    row = (
+        get_read_conn()
+        .execute(
+            "SELECT file_path FROM progress_photos WHERE photo_date = $d AND angle = $a AND quality_pass",
+            {"d": d, "a": angle},
+        )
+        .fetchone()
+    )
     return str(settings.uploads_dir / row[0]) if row else None
 
 
@@ -303,7 +309,9 @@ def _build_critique_prompt(bc: dict) -> str:
     w2s, w2h = bc.get("waist_to_shoulder"), bc.get("waist_to_hip")
     verdict = bc.get("trend_direction") or "baseline"
     trend = (
-        f"{bc['trend_28d_pct']:+.1f}% over ~28d" if bc.get("trend_28d_pct") is not None else "no trend yet (single session)"
+        f"{bc['trend_28d_pct']:+.1f}% over ~28d"
+        if bc.get("trend_28d_pct") is not None
+        else "no trend yet (single session)"
     )
     return (
         "You are giving Rob a physique critique from his progress photos. Follow these "
@@ -379,10 +387,14 @@ async def submit_critique(body: CritiqueSubmission):
 @router.get("/progress-photos/critique")
 async def latest_critique():
     """Return the latest critique and whether measurements have moved past noise."""
-    row = get_read_conn().execute(
-        "SELECT created_at, verdict, shape_change_md, visible_detail_md, basis_w2s, basis_w2h "
-        "FROM physique_critiques ORDER BY created_at DESC LIMIT 1"
-    ).fetchone()
+    row = (
+        get_read_conn()
+        .execute(
+            "SELECT created_at, verdict, shape_change_md, visible_detail_md, basis_w2s, basis_w2h "
+            "FROM physique_critiques ORDER BY created_at DESC LIMIT 1"
+        )
+        .fetchone()
+    )
     if not row:
         return {"critique": None, "stale": True, "reason": "no critique yet"}
 
