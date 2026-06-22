@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 
 # ── System prompts ────────────────────────────────────────────────────────────
 
+
 def _build_health_system() -> str:
     personal = load_personal_context()
     personal_block = f"\n{personal}\n" if personal else ""
@@ -67,7 +68,9 @@ coaching principles that are stable over time.
 
 HEALTH_SYSTEM = _build_health_system()
 
-CHAT_SYSTEM = HEALTH_SYSTEM + """
+CHAT_SYSTEM = (
+    HEALTH_SYSTEM
+    + """
 ## Chat mode
 Answer direct questions. Be concise and cite actual numbers. Never hedge
 excessively — give a clear recommendation. Return plain prose (not JSON).
@@ -76,6 +79,7 @@ excessively — give a clear recommendation. Return plain prose (not JSON).
 The current training context is injected at the end of the system prompt on every
 request — you always have today's metrics, recent sessions, and working weights.
 """
+)
 
 
 # ── Clinical context (live from DB) ──────────────────────────────────────────
@@ -184,7 +188,188 @@ def build_clinical_context(conn) -> str:
     return "\n".join(lines)
 
 
+# ── Clinical question derivation (for vault grounding) ────────────────────────
+
+
+def _clinical_findings(conn, state: dict) -> list[str]:
+    """Collect today's notable clinical findings as short natural-language phrases.
+
+    Sources, in priority order:
+      • out-of-range labs (HIGH / LOW vs reference range, last 12 months)
+      • active conditions on record
+      • flagged daily-state physiology (illness, resp-rate sentinel, skin-temp
+        elevation, low overnight SpO₂)
+
+    These phrases seed the clinical-domain vault query so the health narrative
+    is grounded in evidence relevant to *today's* findings rather than a static
+    pinned set. Returns an empty list only when nothing is notable.
+    """
+    findings: list[str] = []
+
+    flagged_labs = conn.execute(
+        """
+        SELECT name, value, ref_low, ref_high
+        FROM (
+            SELECT name, value, ref_low, ref_high,
+                   ROW_NUMBER() OVER (PARTITION BY name ORDER BY collected_at DESC) AS rn
+            FROM labs
+            WHERE collected_at IS NOT NULL
+              AND collected_at >= (current_date - INTERVAL '365 days')
+        )
+        WHERE rn = 1
+          AND value IS NOT NULL
+          AND (
+              (ref_low IS NOT NULL AND value < ref_low)
+              OR (ref_high IS NOT NULL AND value > ref_high)
+          )
+        ORDER BY name
+        LIMIT 8
+        """
+    ).fetchall()
+    for name, value, ref_low, ref_high in flagged_labs:
+        if ref_high is not None and value > ref_high:
+            findings.append(f"elevated {name}")
+        elif ref_low is not None and value < ref_low:
+            findings.append(f"low {name}")
+
+    conditions = conn.execute(
+        """
+        SELECT name
+        FROM conditions
+        WHERE valid_to IS NULL
+          AND (status IS NULL OR LOWER(status) NOT IN ('resolved', 'inactive', 'remission'))
+        ORDER BY onset DESC NULLS LAST
+        LIMIT 6
+        """
+    ).fetchall()
+    findings.extend(name for (name,) in conditions if name)
+
+    rec = state.get("recovery") or {}
+    chk = state.get("checkin") or {}
+    if chk.get("illness_flag"):
+        findings.append("illness flag raised")
+    if (rec.get("respiratory_rate_delta") or 0) >= 1.0:
+        findings.append("elevated respiratory rate (illness sentinel)")
+    if (rec.get("skin_temp_delta") or 0) >= 0.5:
+        findings.append("elevated skin temperature")
+    if rec.get("spo2_pct") is not None and rec["spo2_pct"] < 95:
+        findings.append("low overnight blood oxygen")
+
+    return findings
+
+
+def _clinical_question(conn, state: dict) -> str:
+    """Build a natural-language clinical question to scope vault retrieval.
+
+    Phrases today's notable findings into a question so question-scoped vault
+    retrieval pulls clinical evidence matched to the actual state of the day.
+    Falls back to a general cardiometabolic-health question when nothing is
+    flagged, so scoring is never dead.
+    """
+    findings = _clinical_findings(conn, state)
+    if findings:
+        return (
+            "How should these clinical findings shape today's health and training "
+            f"guidance: {', '.join(findings)}?"
+        )
+    return (
+        "What do this person's medications, conditions, and recent labs imply for "
+        "cardiometabolic health, recovery, and training today?"
+    )
+
+
+def _state_driven_hints(state: dict) -> list[str]:
+    """Derive retrieval hints from flagged metrics in the day's state.
+
+    Ensures the training-vault query has at least one live, state-specific term
+    even when the push/pull ratio is balanced and nothing is sore — otherwise
+    the hint set is a constant and hint-based scoring is dead. Each branch maps a
+    flagged signal to vocabulary that note bodies actually use.
+    """
+    hints: list[str] = []
+    rec = state.get("recovery") or {}
+    sleep = state.get("sleep") or {}
+    load = state.get("training_load") or {}
+    gates = state.get("gates") or {}
+    chk = state.get("checkin") or {}
+
+    if (rec.get("hrv_sigma") or 0) < -1.0:
+        hints += ["hrv", "recovery", "fatigue", "autoregulation"]
+    if (load.get("acwr") or 0) > 1.3:
+        hints += ["acwr", "training load", "overreaching"]
+    if (sleep.get("last_hours") or 8) < 6:
+        hints += ["sleep", "sleep deprivation", "recovery"]
+    if gates.get("deload_required"):
+        hints += ["deload", "fatigue management", "supercompensation"]
+    if chk.get("illness_flag") or (rec.get("respiratory_rate_delta") or 0) >= 1.0:
+        hints += ["illness", "respiratory rate", "monitoring"]
+
+    # Always non-empty: if nothing flagged, anchor to the readiness tier so the
+    # query still varies with the day's overall state.
+    if not hints:
+        tier = (state.get("readiness") or {}).get("tier")
+        if tier == "green":
+            hints += ["progressive overload", "intensity"]
+        elif tier in {"yellow", "red"}:
+            hints += ["fatigue", "recovery", "autoregulation"]
+        else:
+            hints += ["periodization"]
+    return hints
+
+
+# ── Clinical vault grounding ──────────────────────────────────────────────────
+
+# Domains the vault index classifies clinical/health evidence into. The health
+# narrative draws on Attia-style cardiometabolic notes (`health`), HRV/recovery
+# physiology (`hrv`), and sleep — not the training-programming corpus.
+_CLINICAL_DOMAINS = {"health", "hrv", "sleep"}
+
+
+def _clinical_vault_research(conn, state: dict) -> str:
+    """Retrieve clinical/health-domain vault evidence scoped to today's findings.
+
+    Grounds the health narrative in clinical evidence relevant to *today* by
+    deriving a question from the day's flagged labs/conditions/physiology and
+    restricting retrieval to the clinical domains — instead of reusing the
+    static training pin set.
+
+    Retrieval is now question-scoped: the derived clinical question is forwarded
+    to ``vault_context(question=...)`` so notes rank by relevance to *that*
+    question rather than lexical hints alone. The finding phrases plus stable
+    cardiometabolic anchors are still passed as keyword hints so scoring has
+    lexical anchors even on a clean day.
+    """
+    findings = _clinical_findings(conn, state)
+    question = _clinical_question(conn, state)
+    log.debug("clinical vault question: %s", question)
+
+    # Lexical hints: the finding phrases plus stable cardiometabolic anchors so
+    # the query is never empty even on a clean day.
+    hints = list(findings) + ["cardiometabolic", "apob", "longevity", "recovery"]
+
+    # Imported lazily: vault_context is the only entry point exposing `domains`/
+    # `question`; if the running vault build predates either param, degrade
+    # visibly to the unscoped query rather than crashing the briefing.
+    from shc.ai.vault import vault_context
+
+    try:
+        return vault_context(
+            state=state,
+            keyword_hints=hints,
+            limit=6,
+            domains=_CLINICAL_DOMAINS,
+            question=question,
+        )
+    except TypeError:
+        log.warning(
+            "clinical vault grounding: vault_context missing `domains`/`question` "
+            "param — falling back to unscoped retrieval (see handoff)"
+        )
+        return vault_context(state=state, keyword_hints=hints, limit=6)
+
+
 # ── Context builder ───────────────────────────────────────────────────────────
+
 
 def build_daily_context(conn) -> str:
     """Build a dynamic daily health + training snapshot from the live DB.
@@ -210,15 +395,16 @@ def build_daily_context(conn) -> str:
     clinical = build_clinical_context(conn)
     if clinical:
         lines.append("\n" + clinical)
+        clinical_vault = _clinical_vault_research(conn, state)
+        if clinical_vault:
+            lines.append("\n" + clinical_vault)
 
     # Readiness composite — single canonical number.
     if readiness["score"] is not None:
         tier = readiness["tier"]
         emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(tier, "")
         adj = " (β-blocker reweighted)" if readiness["beta_blocker_adjusted"] else ""
-        lines.append(
-            f"Readiness: {readiness['score']:.0f}/100 {emoji} {tier}{adj}"
-        )
+        lines.append(f"Readiness: {readiness['score']:.0f}/100 {emoji} {tier}{adj}")
 
     # Recovery vitals.
     if rec["score"] is not None:
@@ -236,7 +422,10 @@ def build_daily_context(conn) -> str:
         lines.append(f"Skin temp: {temp_f:.1f}°F (Δ {delta_f:+.1f}°F vs 28d)")
     if rec.get("spo2_pct") is not None:
         lines.append(f"Overnight SpO₂ (recovery): {rec['spo2_pct']:.1f}%")
-    if rec.get("respiratory_rate_delta") is not None and rec.get("respiratory_rate_baseline_28d") is not None:
+    if (
+        rec.get("respiratory_rate_delta") is not None
+        and rec.get("respiratory_rate_baseline_28d") is not None
+    ):
         delta = rec["respiratory_rate_delta"]
         flag = " ⚠ illness sentinel" if delta >= 1.0 else ""
         lines.append(
@@ -250,7 +439,7 @@ def build_daily_context(conn) -> str:
     if sleep["last_hours"] is not None:
         parts = [f"{sleep['last_hours']:.1f}h asleep"]
         if sleep.get("in_bed_min_last"):
-            parts.append(f"{sleep['in_bed_min_last']/60:.1f}h in bed")
+            parts.append(f"{sleep['in_bed_min_last'] / 60:.1f}h in bed")
         if sleep.get("efficiency_pct_last") is not None:
             parts.append(f"efficiency {sleep['efficiency_pct_last']:.0f}%")
         if sleep.get("performance_pct_last") is not None:
@@ -262,9 +451,13 @@ def build_daily_context(conn) -> str:
         # Stage architecture (deep / REM / light / awake) in minutes + pct.
         stage_parts: list[str] = []
         if sleep.get("deep_min_last") and sleep.get("deep_pct_last") is not None:
-            stage_parts.append(f"deep {sleep['deep_min_last']:.0f}m ({sleep['deep_pct_last']*100:.0f}%)")
+            stage_parts.append(
+                f"deep {sleep['deep_min_last']:.0f}m ({sleep['deep_pct_last'] * 100:.0f}%)"
+            )
         if sleep.get("rem_min_last") and sleep.get("rem_pct_last") is not None:
-            stage_parts.append(f"REM {sleep['rem_min_last']:.0f}m ({sleep['rem_pct_last']*100:.0f}%)")
+            stage_parts.append(
+                f"REM {sleep['rem_min_last']:.0f}m ({sleep['rem_pct_last'] * 100:.0f}%)"
+            )
         if sleep.get("light_min_last"):
             stage_parts.append(f"light {sleep['light_min_last']:.0f}m")
         if sleep.get("awake_min_last"):
@@ -287,17 +480,16 @@ def build_daily_context(conn) -> str:
         # Sleep need attribution (baseline + debt + strain - nap_credit).
         need_parts: list[str] = []
         if sleep.get("sleep_need_baseline_min_last"):
-            need_parts.append(f"baseline {sleep['sleep_need_baseline_min_last']/60:.1f}h")
+            need_parts.append(f"baseline {sleep['sleep_need_baseline_min_last'] / 60:.1f}h")
         if sleep.get("sleep_need_debt_min_last"):
-            need_parts.append(f"+debt {sleep['sleep_need_debt_min_last']/60:.1f}h")
+            need_parts.append(f"+debt {sleep['sleep_need_debt_min_last'] / 60:.1f}h")
         if sleep.get("sleep_need_strain_min_last"):
-            need_parts.append(f"+strain {sleep['sleep_need_strain_min_last']/60:.1f}h")
+            need_parts.append(f"+strain {sleep['sleep_need_strain_min_last'] / 60:.1f}h")
         if sleep.get("sleep_need_nap_min_last"):
-            need_parts.append(f"−nap {sleep['sleep_need_nap_min_last']/60:.1f}h")
+            need_parts.append(f"−nap {sleep['sleep_need_nap_min_last'] / 60:.1f}h")
         if need_parts and sleep.get("sleep_needed_min_last"):
             lines.append(
-                f"  Sleep need: {sleep['sleep_needed_min_last']/60:.1f}h "
-                f"= {' '.join(need_parts)}"
+                f"  Sleep need: {sleep['sleep_needed_min_last'] / 60:.1f}h = {' '.join(need_parts)}"
             )
 
         if sleep.get("avg_7d"):
@@ -317,9 +509,7 @@ def build_daily_context(conn) -> str:
         )
     # Max HR — surface measured value so the LLM uses correct zones.
     if load.get("max_hr_measured"):
-        formula = (
-            f" (vs Tanaka {load['max_hr_tanaka']})" if load.get("max_hr_tanaka") else ""
-        )
+        formula = f" (vs Tanaka {load['max_hr_tanaka']})" if load.get("max_hr_tanaka") else ""
         lines.append(f"Max HR (WHOOP-measured): {load['max_hr_measured']} bpm{formula}")
     # Pickleball volume — primary sport for the 4.5→5.0 climb. Surfaced so
     # the planner frames lifting as court-power transfer when sport vol is high.
@@ -337,7 +527,7 @@ def build_daily_context(conn) -> str:
         z_total = sum(zones.values())
         if z_total > 0:
             parts = [
-                f"{k.upper()} {int(v)}m ({v/z_total*100:.0f}%)"
+                f"{k.upper()} {int(v)}m ({v / z_total * 100:.0f}%)"
                 for k, v in sorted(zones.items())
                 if v > 0
             ]
@@ -401,13 +591,13 @@ def build_daily_context(conn) -> str:
         lines.append("\n## AUTO-REG GATES (must respect)")
         lines.append(f"Max intensity allowed: {gates['max_intensity'].upper()}")
         if gates["forbid_muscle_groups"]:
-            lines.append(f"Forbidden muscle groups today: {', '.join(gates['forbid_muscle_groups'])}")
+            lines.append(
+                f"Forbidden muscle groups today: {', '.join(gates['forbid_muscle_groups'])}"
+            )
         if gates["deload_required"]:
             lines.append(f"DELOAD WEEK REQUIRED: {gates['deload_reason']}")
         if gates["hr_zone_shift_bpm"]:
-            lines.append(
-                f"HR zones: shift −{gates['hr_zone_shift_bpm']} bpm (propranolol day)"
-            )
+            lines.append(f"HR zones: shift −{gates['hr_zone_shift_bpm']} bpm (propranolol day)")
         for r in gates["reasons"]:
             lines.append(f"- {r}")
 
@@ -449,6 +639,14 @@ def build_daily_context(conn) -> str:
         hints += ["push", "chest", "press", "anterior"]
     hints.extend(m for m, sev in (chk.get("muscle_soreness") or {}).items() if (sev or 0) >= 2)
 
+    # No-hint degradation guard: when the ratio is balanced and nothing is sore,
+    # the hint set above is the constant baseline and scoring is effectively
+    # dead. Derive at least one state-driven hint from a flagged metric so the
+    # retrieval reflects today rather than collapsing to the pinned set.
+    state_driven = _state_driven_hints(state)
+    if state_driven:
+        hints.extend(h for h in state_driven if h not in hints)
+
     vault = load_vault_research(state, extra_signals=extra, keyword_hints=hints)
     if vault:
         lines.append("\n" + vault)
@@ -457,6 +655,7 @@ def build_daily_context(conn) -> str:
 
 
 # ── Persistence ────────────────────────────────────────────────────────────────
+
 
 async def store_briefing(briefing: dict) -> None:
     """Persist a briefing dict generated by Claude in chat."""
