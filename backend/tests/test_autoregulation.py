@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from shc.training.autoregulation import (
+    EMPHASIS_MUSCLES,
     _decide,
     _protein_gate,
     _session_split,
@@ -17,7 +18,30 @@ from shc.training.volume import MuscleVolume
 
 
 def _d(muscle, current, perf, soreness=0.0, cond=None, mev=10, mav=16, mrv=22):
-    return _decide(muscle, current, mev, mav, mrv, perf, soreness, cond)
+    # These cases exercise the RP set-progression tree in isolation. The #1/#10
+    # confidence/accuracy gate is a separate layer that shrinks adds toward zero
+    # when there is no signal (confidence=0, scored_weeks=0 → factor 0.0); pass a
+    # clearing confidence so the tree's add/cut/hold decision is what's asserted,
+    # not the suppression layer (which has its own coverage below).
+    #
+    # Emphasis is now resolved by the CALLER (#3/#26 — dynamic, via
+    # _resolve_emphasis) rather than inside _decide. With no physique signal the
+    # caller's emphasis set is just the biceps/glutes prior, so mirror that here
+    # to keep the emphasis cases (biceps/glutes) genuinely exercising the
+    # emphasis branch instead of silently falling through to the default.
+    return _decide(
+        muscle,
+        current,
+        mev,
+        mav,
+        mrv,
+        perf,
+        soreness,
+        cond,
+        emphasis=muscle in EMPHASIS_MUSCLES,
+        confidence=0.6,
+        scored_weeks=4,
+    )
 
 
 def test_progressing_recovered_adds():
@@ -175,8 +199,10 @@ def _make_rx(muscle: str, target: int, action: str = "add") -> MusclePrescriptio
 def test_session_split_upper_muscles_on_upper_days() -> None:
     rx = [_make_rx("biceps", 12), _make_rx("chest", 10)]
     split = _session_split(rx)
-    all_sessions = {s["session"] for s in split}
-    assert "Upper-A (Tue)" in all_sessions or "Upper-B (Thu)" in all_sessions
+    # #18 contract: label and weekday are SEPARATE keys (session="Upper-A",
+    # weekday="Tue"), not a combined "Upper-A (Tue)" string.
+    upper = [(s["session"], s["weekday"]) for s in split if s["region"] == "upper"]
+    assert ("Upper-A", "Tue") in upper or ("Upper-B", "Thu") in upper
     # No biceps or chest on lower days
     for sess in split:
         if "Lower" in sess["session"]:

@@ -10,7 +10,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from shc.api.deps import require_admin_key
 from shc.ai.briefing import build_daily_context, store_briefing
 from shc.ai.workout_planner import (
     GateViolation,
@@ -21,10 +20,11 @@ from shc.ai.workout_planner import (
     save_plan,
     validate_plan,
 )
-from shc.config import settings
+from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, get_write_conn, write_ctx
 from shc.lab import _welch_t as _lab_welch
-from shc.metrics import compute_daily_state, muscle_group as _mg
+from shc.metrics import compute_daily_state
+from shc.metrics import muscle_group as _mg
 
 router = APIRouter(tags=["dashboard"])
 log = logging.getLogger(__name__)
@@ -1224,7 +1224,6 @@ class CardioLog(BaseModel):
 async def cardio_log(body: CardioLog) -> dict:
     """Log a cardio session (pickleball, walking, biking, etc.)."""
     import hashlib
-    import uuid
 
     d = body.date or date.today().isoformat()
     cid = str(uuid.uuid4())
@@ -1466,7 +1465,6 @@ class MedicationIn(BaseModel):
 async def add_medication(body: MedicationIn) -> dict:
     """Add an active medication. Used to bootstrap the medications table so
     the dashboard's beta-blocker awareness works."""
-    import uuid
 
     async with write_ctx() as conn:
         conn.execute(
@@ -2751,21 +2749,25 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
         from shc.ai.workout_planner import e1rm_by_exercise
 
         e1rm_ceilings = e1rm_by_exercise(conn, plan_date)
-    finally:
-        conn.close()
-    from shc.ai.vault import valid_citation_filenames
 
-    try:
+        from shc.ai.vault import valid_citation_filenames
+
+        # Validate with the connection still open so the conn-gated checks
+        # (engine-split adherence, clinical contraindication cap, dampened-volume
+        # re-check) actually run — they self-skip when conn is None.
         validate_plan(
             body.plan,
             state=state,
             e1rm_ceilings=e1rm_ceilings,
             allowed_citations=valid_citation_filenames(),
+            conn=conn,
         )
     except GateViolation as exc:
         raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        conn.close()
 
     plan_date_iso = plan_date.isoformat()
     # Persist whether a deload genuinely fired today (gate, not narrative text).
@@ -2924,6 +2926,28 @@ def _select_exercises_for_focus(focus_group: str, n: int) -> list[tuple[str, flo
     return picked
 
 
+def _walking_asymmetry_28d() -> float | None:
+    """Return the 28-day mean walking asymmetry (%) from Apple Health, or None.
+
+    Backs the conditioning block's high-impact avoidance with a real gait signal
+    rather than a hardcoded assumption. Returns None when no asymmetry has been
+    ingested, so callers degrade to a neutral rationale instead of inventing data.
+    """
+    conn = get_read_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT AVG(value_num)
+            FROM measurements
+            WHERE metric = 'walking_asymmetry_pct'
+              AND ts >= (current_date - INTERVAL '28 days')
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    return round(float(row[0]), 1) if row and row[0] is not None else None
+
+
 def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -> dict:
     tier = "green"
     if rec_score is not None:
@@ -3018,11 +3042,21 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         ]
 
     # ── Conditioning / metabolic finisher (fat-loss layer) ──
-    # Avoids high-impact options because of forefoot overload + gait asymmetry.
+    # Low-impact bias when the measured gait asymmetry is elevated (Apple Health
+    # walking_asymmetry_pct, 28d mean). Falls back to low-impact by default when
+    # no asymmetry signal is ingested — we never assert forefoot overload we
+    # can't see in the data.
+    asymmetry_pct = _walking_asymmetry_28d()
+    asymmetry_note = (
+        f"Low-impact bias — 28d walking asymmetry {asymmetry_pct}%."
+        if asymmetry_pct is not None
+        else "Low-impact bias (no gait-asymmetry signal on file)."
+    )
     if tier == "green":
         blocks.append(
             {
                 "label": "Metabolic Finisher",
+                "rationale": asymmetry_note,
                 "exercises": [
                     {
                         "name": "Kettlebell Swing",
@@ -3046,6 +3080,7 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         blocks.append(
             {
                 "label": "Conditioning · Z2/Z3",
+                "rationale": asymmetry_note,
                 "exercises": [
                     {
                         "name": "Bike (upright or recumbent)",
@@ -3061,6 +3096,7 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         blocks.append(
             {
                 "label": "Active Recovery · Zone 2",
+                "rationale": asymmetry_note,
                 "exercises": [
                     {
                         "name": "Walk or easy bike",
@@ -3162,7 +3198,9 @@ async def daily_brief_slim() -> dict:
         state_d = compute_daily_state(conn)  # already a dict
         signals = state_signals(state_d)
         index = _get_index()
-        notes = index.query(signals=signals, limit=5) if index else []
+        # limit > pinned count so state-ranked notes survive the central
+        # _PINNED_SHARE cap (vault issue #13) instead of returning all-pinned.
+        notes = index.query(signals=signals, limit=8) if index else []
         vault_payload = [
             {
                 "filename": n.filename,
@@ -3771,7 +3809,11 @@ async def training_after_action() -> dict:
 
     signals = state_signals(state_d) | extra_signals
     idx = _get_index()
-    notes = idx.query(signals, keyword_hints=hints, limit=8) if idx else []
+    # Rank by the execution question this retrospective raises (verdict reasons),
+    # not the static pinned set — and limit > pinned count so signal notes
+    # survive the central _PINNED_SHARE cap (vault issues #12, #13).
+    question = reasons.strip() or None
+    notes = idx.query(signals, keyword_hints=hints, limit=10, question=question) if idx else []
     vault_research = (
         "## VAULT RESEARCH (ground every adjustment in these)\n\n"
         + "\n\n---\n\n".join(

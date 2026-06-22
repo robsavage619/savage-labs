@@ -12,7 +12,6 @@ None if the name cannot be classified confidently.
 """
 
 import logging
-from collections.abc import Sequence
 
 import duckdb
 
@@ -121,7 +120,7 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
     if (
         "tricep" in n
         or "pushdown" in n
-        or "dip" in n   # bench dip, machine dip, ring dip, etc.
+        or "dip" in n  # bench dip, machine dip, ring dip, etc.
         or ("overhead" in n and "extension" in n)
         or "skull" in n
     ):
@@ -153,7 +152,7 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         or "iron cross" in n
         or "band pullapart" in n
         or "clamshell" in n
-        or "scapular" in n      # scapular retraction, scapular squeeze
+        or "scapular" in n  # scapular retraction, scapular squeeze
         or "shoulder squeeze" in n
     ):
         return "rear_delts", ["traps"]
@@ -263,10 +262,14 @@ def backfill_exercise_map(conn: duckdb.DuckDBPyConnection) -> None:
         inserted += 1
 
     if skipped:
+        # Name every unclassifiable exercise (#25): a truncated list hides the
+        # exact lifts that will silently contribute zero volume, so the full set
+        # is logged rather than skipped[:20].
         log.warning(
-            "backfill_exercise_map: %d exercises could not be classified: %s",
+            "backfill_exercise_map: %d exercises could not be classified and will"
+            " contribute ZERO volume until mapped: %s",
             len(skipped),
-            skipped[:20],
+            ", ".join(skipped),
         )
     log.info(
         "backfill_exercise_map: inserted %d, skipped %d (total unmapped input: %d)",

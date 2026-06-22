@@ -35,10 +35,23 @@ _ARM_MUSCLES = ("biceps", "triceps", "forearms")
 
 # Hypertrophy stimulating-rep window. Sets outside 5–30 reps don't count toward
 # the MEV/MAV/MRV landmarks, which are calibrated to this range (panel review M1).
-# (No RIR gate: Hevy floors its RPE picker at 6 — i.e. RIR ≤ 4 — so every logged
-# Hevy set is already inside the stimulating range by construction.)
 _REP_MIN, _REP_MAX = 5, 30
 _STIMULATING = f"ws.reps BETWEEN {_REP_MIN} AND {_REP_MAX}"
+
+# Per-set RIR/RPE gate (#23). A set only drives hypertrophy when taken close
+# enough to failure; the MEV/MAV/MRV landmarks assume working sets at roughly
+# RIR ≤ 4 (RPE ≥ 6). Hevy ingests a per-set ``rpe`` value, so when it's present
+# we USE it instead of assuming every loaded set is stimulating:
+#   * RPE ≥ _STIMULATING_RPE → full credit.
+#   * RPE <  _STIMULATING_RPE → not stimulating, contributes 0 (a back-off /
+#     feeder single Rob explicitly graded easy shouldn't count toward MRV).
+# When ``rpe`` is NULL we fall back to the prior assumption (count it) rather than
+# silently zeroing the set — Rob logs RPE on <2% of Hevy sets and never on the
+# Fitbod history, so a hard NULL-excludes gate would erase ~99% of real volume.
+# The size of that assumption is surfaced by :func:`rpe_coverage` so it can't
+# hide. Threshold matches Hevy's RPE picker floor of 6 (RIR ≈ 4).
+_STIMULATING_RPE = 6.0
+_RPE_GATE = f"(ws.rpe IS NULL OR ws.rpe >= {_STIMULATING_RPE})"
 
 
 @dataclass
@@ -61,9 +74,13 @@ def weekly_muscle_volume(
     """Credited working sets per muscle for the [week_start, week_end) window.
 
     Primary muscle gets 1.0 per set; each secondary gets ``ARM_SECONDARY_CREDIT``
-    for elbow flexors/extensors else ``SECONDARY_CREDIT``. Only warmup-free,
-    loaded sets inside the 5–30 rep stimulating window count. Exercises absent
-    from ``exercise_muscle_map`` contribute nothing (see :func:`unmapped_exercises`).
+    for elbow flexors/extensors else ``SECONDARY_CREDIT``. A set counts only when
+    it is warmup-free, loaded, inside the 5–30 rep stimulating window, and passes
+    the per-set RIR gate (#23): a logged ``rpe`` below ``_STIMULATING_RPE`` is
+    excluded as non-stimulating, while a NULL ``rpe`` is assumed stimulating (see
+    :func:`rpe_coverage` for how large that assumption currently is). Exercises
+    absent from ``exercise_muscle_map`` contribute nothing (see
+    :func:`unmapped_exercises`).
 
     Args:
         conn: Open DuckDB connection.
@@ -83,6 +100,7 @@ def weekly_muscle_volume(
         JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
         WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
           AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
+          AND {_RPE_GATE}
         GROUP BY m.primary_muscle
         """,
         params,
@@ -98,6 +116,7 @@ def weekly_muscle_volume(
         CROSS JOIN UNNEST(m.secondary_muscles) AS u(sec)
         WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
           AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
+          AND {_RPE_GATE}
         GROUP BY u.sec
         """,
         params,
@@ -111,26 +130,122 @@ def weekly_muscle_volume(
     return dict(totals)
 
 
+@dataclass
+class RpeCoverage:
+    """How much of the window's volume rests on the NULL-RPE assumption (#23).
+
+    ``assumed_sets`` are loaded, in-window sets counted *without* a logged RPE
+    (treated as stimulating by assumption). ``graded_stimulating`` and
+    ``graded_excluded`` are sets that carried a real RPE at/above and below the
+    stimulating threshold respectively; the latter are the only sets the gate
+    actually drops. A high ``assumed_pct`` means the RIR gate is mostly inert
+    because Rob isn't logging RPE — surface it, don't hide it.
+    """
+
+    counted_sets: int
+    assumed_sets: int
+    graded_stimulating: int
+    graded_excluded: int
+    assumed_pct: float
+
+
+def rpe_coverage(
+    conn: duckdb.DuckDBPyConnection,
+    week_start: date,
+    week_end: date | None = None,
+) -> RpeCoverage:
+    """Per-set RPE logging coverage over the mapped, in-window working sets.
+
+    Makes the NULL-RPE assumption baked into :func:`weekly_muscle_volume` visible
+    so a viewer can tell whether the RIR gate is doing real work or just passing
+    everything through.
+
+    Args:
+        conn: Open DuckDB connection.
+        week_start: Inclusive start of the window.
+        week_end: Exclusive end; defaults to ``week_start + 7 days``.
+
+    Returns:
+        An :class:`RpeCoverage` summarising counted vs assumed vs graded sets.
+    """
+    end = week_end or week_start + timedelta(days=7)
+    row = conn.execute(
+        f"""
+        SELECT
+            COUNT(*) FILTER (WHERE ws.rpe IS NULL)                       AS assumed,
+            COUNT(*) FILTER (WHERE ws.rpe >= {_STIMULATING_RPE})         AS graded_ok,
+            COUNT(*) FILTER (WHERE ws.rpe < {_STIMULATING_RPE})          AS graded_out
+        FROM workout_sets_dedup ws
+        JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
+        WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
+          AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
+        """,
+        [week_start.isoformat(), end.isoformat()],
+    ).fetchone()
+    assumed = int(row[0]) if row else 0
+    graded_ok = int(row[1]) if row else 0
+    graded_out = int(row[2]) if row else 0
+    counted = assumed + graded_ok
+    denom = counted or 1
+    return RpeCoverage(
+        counted_sets=counted,
+        assumed_sets=assumed,
+        graded_stimulating=graded_ok,
+        graded_excluded=graded_out,
+        assumed_pct=round(assumed / denom, 3),
+    )
+
+
 def unmapped_exercises(
     conn: duckdb.DuckDBPyConnection,
     week_start: date,
     week_end: date | None = None,
 ) -> list[str]:
-    """Exercises trained in the window with no ``exercise_muscle_map`` entry."""
+    """Exercises trained in the window with no ``exercise_muscle_map`` entry.
+
+    Each such exercise silently contributes zero credited volume, so a
+    miscategorised or freshly-renamed lift can quietly starve a muscle (#25). The
+    specific names — with their dropped working-set counts — are logged at WARNING
+    so the gap is visible; :func:`unmapped_exercise_sets` returns the same data
+    structured for callers that want to surface it in a report.
+    """
+    detail = unmapped_exercise_sets(conn, week_start, week_end)
+    if detail:
+        named = ", ".join(f"{name} ({sets} sets)" for name, sets in detail)
+        log.warning(
+            "UNMAPPED EXERCISES (%d) contributing zero volume this window: %s",
+            len(detail),
+            named,
+        )
+    return [name for name, _ in detail]
+
+
+def unmapped_exercise_sets(
+    conn: duckdb.DuckDBPyConnection,
+    week_start: date,
+    week_end: date | None = None,
+) -> list[tuple[str, int]]:
+    """Unmapped in-window exercises with their dropped working-set counts.
+
+    Returns ``(exercise_name, set_count)`` pairs, busiest first, for every
+    loaded, non-warmup exercise in ``[week_start, week_end)`` that has no
+    ``exercise_muscle_map`` row and therefore credits zero volume (#25).
+    """
     end = week_end or week_start + timedelta(days=7)
     rows = conn.execute(
         """
-        SELECT DISTINCT ws.exercise
+        SELECT ws.exercise, COUNT(*)::INTEGER AS sets
         FROM workout_sets_dedup ws
         LEFT JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
         WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
           AND NOT ws.is_warmup AND ws.weight_kg > 0 AND ws.reps > 0
           AND m.exercise_name IS NULL
-        ORDER BY ws.exercise
+        GROUP BY ws.exercise
+        ORDER BY sets DESC, ws.exercise
         """,
         [week_start.isoformat(), end.isoformat()],
     ).fetchall()
-    return [r[0] for r in rows]
+    return [(r[0], int(r[1])) for r in rows]
 
 
 def _status(actual: float, mev: int | None, mav: int | None, mrv: int | None) -> str:

@@ -46,9 +46,37 @@ log = logging.getLogger(__name__)
 # Lagging muscles Rob wants prioritized — they RAMP FASTER (+2/wk) and floor at
 # the MEV–MAV midpoint, not at MEV. They do NOT start at MAV: MAV is the maximum
 # adaptive volume, not a baseline, and starting there removes the low-fatigue
-# accumulation runway (panel review M3). Static for v1; Phase 3 will derive
-# emphasis from a measured per-muscle development index.
+# accumulation runway (panel review M3).
+#
+# This frozenset is the DEFAULT/PRIOR only. The live emphasis set is derived at
+# prescription time by :func:`_resolve_emphasis`, which folds in the metrics
+# engine's physique_volume_bias() so emphasis shifts as muscles catch up — a
+# muscle the silhouette/critique trend no longer flags drops out; a softening
+# taper muscle (e.g. side_delts, lats) is promoted. Biceps/glutes remain the
+# prior when the physique signal is absent.
 EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes"})
+
+# A physique-bias factor at/above this promotes a muscle into the emphasis set
+# even if it isn't in the biceps/glutes prior. The factor is in
+# [1-_PHYSIQUE_BIAS_MAX, 1+_PHYSIQUE_BIAS_MAX] (metrics.py); >1 means the trended
+# silhouette/critique signal wants more volume there.
+EMPHASIS_PROMOTE_FACTOR = 1.05
+
+# Confidence floor below which an ADD is shrunk toward zero (panel review M1 →
+# actuating the noise floor). Below this the engine has too little / too noisy a
+# per-muscle signal to justify a full add; the delta is scaled by
+# confidence/_CONFIDENCE_FULL so a 0.25-confidence muscle gets ~⅓ of the add.
+_CONFIDENCE_FULL = 0.5
+
+# A large ADD (more than one set) requires at least this confidence — a +2
+# emphasis ramp on a muscle the engine barely understands is exactly the
+# overreach the noise floor exists to prevent.
+_LARGE_ADD_CONFIDENCE_BAR = 0.45
+
+# Per-muscle historical hit-rate at/below which the engine is hedged: a muscle
+# the engine has prescribed poorly gets its ADD damped further (#10). Above this
+# accuracy the prescription is trusted unweighted. None accuracy → no hedge.
+_ACCURACY_HEDGE_BELOW = 0.55
 
 # Lower-body muscles whose recovery competes with pickleball/cardio conditioning.
 LOWER_BODY: frozenset[str] = frozenset({"quads", "hamstrings", "glutes", "calves", "adductors"})
@@ -202,6 +230,68 @@ def _conditioning_pressure(
         return None
 
 
+def _confidence_add_factor(
+    confidence: float,
+    scored_weeks: int,
+    accuracy: float | None,
+) -> float:
+    """Multiplier in [0, 1] applied to a positive (ADD) volume delta.
+
+    Converts the per-muscle noise floor from display-only to actuating (#1) and
+    folds in historical prescription hit-rate (#10). Three conservative,
+    multiplicative shrinks — never amplifies above 1.0:
+
+    * **Confidence shrink**: below :data:`_CONFIDENCE_FULL` the add is scaled by
+      ``confidence / _CONFIDENCE_FULL`` so a low-confidence muscle adds a
+      fraction of a set, not a full one. With no signal at all (confidence 0,
+      scored_weeks 0) the factor collapses to 0 and the add is suppressed.
+    * **Accuracy hedge**: a muscle whose historical hit-rate is at/below
+      :data:`_ACCURACY_HEDGE_BELOW` is damped proportionally to how poor it is,
+      so the engine is more conservative where it has been wrong before. None
+      accuracy (no scoreable history) applies no hedge — innocent until proven.
+
+    Cuts are never passed here: backing off fatigue is a safety response and
+    must stay at full authority (asymmetric clamp, panel review M10).
+    """
+    if scored_weeks <= 0 and confidence <= 0.0:
+        return 0.0
+    factor = 1.0
+    if confidence < _CONFIDENCE_FULL:
+        factor *= max(0.0, confidence / _CONFIDENCE_FULL)
+    if accuracy is not None and accuracy <= _ACCURACY_HEDGE_BELOW:
+        # Linear hedge: accuracy 0 → 0.5×, at the threshold → 1.0×.
+        factor *= 0.5 + 0.5 * (accuracy / _ACCURACY_HEDGE_BELOW)
+    return max(0.0, min(1.0, factor))
+
+
+def _resolve_emphasis(
+    physique_bias: dict[str, float] | None,
+) -> tuple[set[str], dict[str, float]]:
+    """Resolve the live emphasis set + per-muscle factor (#26/#3).
+
+    Starts from the biceps/glutes prior (:data:`EMPHASIS_MUSCLES`) and folds in
+    the metrics engine's ``physique_volume_bias()`` so emphasis tracks measured
+    development instead of a static frozenset:
+
+    * Any muscle the physique signal nudges at/above
+      :data:`EMPHASIS_PROMOTE_FACTOR` joins the emphasis set (a softening taper
+      promotes side_delts/lats, say).
+    * The prior muscles stay in the set regardless, but their ramp/floor can be
+      relaxed if the physique signal no longer flags them (factor toward 1.0).
+
+    Returns ``(emphasis_muscles, factor_by_muscle)``. The factor defaults to 1.0
+    for muscles the physique signal does not mention.
+    """
+    emphasis = set(EMPHASIS_MUSCLES)
+    factors: dict[str, float] = {}
+    if physique_bias:
+        for muscle, factor in physique_bias.items():
+            factors[muscle] = factor
+            if factor >= EMPHASIS_PROMOTE_FACTOR:
+                emphasis.add(muscle)
+    return emphasis, factors
+
+
 def _decide(
     muscle: str,
     current: float,
@@ -214,6 +304,11 @@ def _decide(
     deload: bool = False,
     landmark_source: str = "population",
     rpe_factor: float = 1.0,
+    emphasis: bool = False,
+    emphasis_factor: float = 1.0,
+    confidence: float = 0.0,
+    scored_weeks: int = 0,
+    accuracy: float | None = None,
 ) -> MusclePrescription:
     """Apply the RP set-progression tree + emphasis + interference for one muscle.
 
@@ -222,8 +317,14 @@ def _decide(
     ``MAX_WEEKLY_CUT`` down) so volume ramps gradually but can back off faster.
     When ``deload`` is set, the normal tree is bypassed: volume is halved toward
     MEV in a single deliberate drop (the step clamp does not apply to a deload).
+
+    ``emphasis`` is now resolved dynamically by the caller (biceps/glutes prior
+    modulated by physique_volume_bias) rather than read from a static frozenset.
+    ``confidence``/``scored_weeks``/``accuracy`` gate the ADD: a low-confidence or
+    historically-mis-prescribed muscle has its add shrunk toward zero, and a
+    large (>1 set) add is suppressed unless confidence clears
+    :data:`_LARGE_ADD_CONFIDENCE_BAR`. Cuts are never shrunk (safety asymmetry).
     """
-    emphasis = muscle in EMPHASIS_MUSCLES
 
     # Append landmark source to reason for auditing — tells the planner (and Rob)
     # whether the MEV/MRV boundaries come from personal data or RP population norms.
@@ -281,8 +382,13 @@ def _decide(
         desired = cur
         reason = f"court/cardio load high (cond. ACWR {conditioning_acwr:.2f}) → hold leg volume"
     elif perf is not None and perf >= 4:
-        desired = cur + (2 if emphasis else 1)
-        reason = f"progressing (perf {perf}/5){' + emphasis' if emphasis else ''} → add toward MRV"
+        # Emphasis muscles ramp +2; a strong physique nudge (emphasis_factor well
+        # above 1) can lift a non-emphasis progressing muscle to +2 too, so the
+        # ramp tracks the live development signal rather than a static membership.
+        ramp = 2 if (emphasis or emphasis_factor >= EMPHASIS_PROMOTE_FACTOR) else 1
+        desired = cur + ramp
+        tag = " + emphasis" if emphasis else (" + physique nudge" if ramp == 2 else "")
+        reason = f"progressing (perf {perf}/5){tag} → add toward MRV"
     elif perf == 3:
         desired = cur + 1
         reason = "stalled e1RM → +1 set to break the stall"
@@ -300,6 +406,28 @@ def _decide(
     raw_delta = desired - cur
     desired = cur + round(raw_delta * rpe_factor)
 
+    # Confidence/accuracy gate on ADDs only (#1, #10). An add the engine is not
+    # confident about — or has historically gotten wrong — is shrunk toward zero;
+    # a cut keeps full authority. Done before the step clamp so the floor caps an
+    # already-confidence-scaled add, never the other way round.
+    hedge_note = ""
+    if desired > cur:
+        add_delta = desired - cur
+        conf_factor = _confidence_add_factor(confidence, scored_weeks, accuracy)
+        # A large add (>1 set) needs to clear a higher confidence bar; below it,
+        # cap the add at a single set regardless of the tree's appetite.
+        if add_delta > 1 and confidence < _LARGE_ADD_CONFIDENCE_BAR:
+            add_delta = 1
+            hedge_note = f" [add capped: confidence {confidence:.0%} below bar for a large add]"
+        scaled = round(add_delta * conf_factor)
+        if scaled < add_delta and not hedge_note:
+            hedge_note = (
+                f" [add shrunk {add_delta}→{scaled}: low confidence {confidence:.0%}"
+                + (f"/accuracy {accuracy:.0%}" if accuracy is not None else "")
+                + "]"
+            )
+        desired = cur + scaled
+
     # Clamp to MRV, then to the asymmetric weekly step, then derive the action.
     target = max(0, min(mrv, desired))
     target = max(cur - MAX_WEEKLY_CUT, min(cur + MAX_WEEKLY_ADD, target))
@@ -312,9 +440,11 @@ def _decide(
         target_sets=target,
         delta=delta,
         action=action,
-        reason=reason + _src_tag(),
+        reason=reason + _src_tag() + hedge_note,
         emphasis=emphasis,
         landmark_source=landmark_source,
+        confidence=round(confidence, 2),
+        scored_weeks=scored_weeks,
     )
 
 
@@ -348,35 +478,96 @@ def _exercise_menu(
     return menu
 
 
+# Per-session hypertrophy set cap (RP guideline: ≤10 working sets per muscle per
+# session before junk-volume / per-session fatigue dominates).
+PER_SESSION_SET_CAP = 10
+
+# The training-week split is the structured source of truth for #18 — it replaces
+# the inline hardcoded "Upper-A (Tue)" strings. Each session declares its weekday
+# and which body region it trains; the allocator derives labels and validates
+# muscle→session assignment from this rather than a constant string buried in the
+# function body. Matches Rob's logged schedule (lifts Tue–Fri). The planner /
+# validator agent enforces the resulting per-session allocation + set cap.
+WEEKLY_SPLIT: tuple[dict[str, str], ...] = (
+    {"label": "Upper-A", "weekday": "Tue", "region": "upper"},
+    {"label": "Lower-A", "weekday": "Wed", "region": "lower"},
+    {"label": "Upper-B", "weekday": "Thu", "region": "upper"},
+    {"label": "Lower-B", "weekday": "Fri", "region": "lower"},
+)
+
+
 def _session_split(
     muscle_rx: list[MusclePrescription],
+    split: tuple[dict[str, str], ...] = WEEKLY_SPLIT,
 ) -> list[dict]:
-    """Recommend how to split the weekly set prescription across training sessions.
+    """Allocate the weekly set prescription across the real training-day split.
 
-    RP guideline: ≤10 sets per muscle per session for hypertrophy.  Rob trains
-    4 days (Tue–Fri); session labels are Upper-A/Lower-A/Upper-B/Lower-B.
-    Lower-body muscles are split across the two lower days, upper-body across
-    the two upper days.  Arm muscles get 3 mini-sessions if target > 10 sets.
+    Derives session labels and the muscle→session mapping from :data:`WEEKLY_SPLIT`
+    (the structured schedule) instead of hardcoded strings (#18), so the split is
+    validated against the actual training-day context and can be swapped without
+    editing this function body. Lower-body muscles fan out across the lower days,
+    everything else across the upper days; sets are distributed as evenly as the
+    integer target allows.
+
+    Each returned session is the structured allocation the validator/planner agent
+    enforces::
+
+        {
+            "session": "Upper-A",          # label
+            "weekday": "Tue",              # real training day
+            "region": "upper" | "lower",
+            "cap": PER_SESSION_SET_CAP,    # per-muscle ceiling to enforce
+            "total_sets": int,             # sum across muscles this session
+            "muscles": [{"muscle": str, "sets": int, "over_cap": bool}, ...],
+        }
+
+    ``over_cap`` flags any per-muscle allocation that breaches the cap so the
+    validator can demand a re-split (it never silently truncates here — failing
+    visibly beats degrading the prescription).
     """
-    LOWER = frozenset({"quads", "hamstrings", "glutes", "calves", "adductors"})
-    UPPER_SESSIONS = ["Upper-A (Tue)", "Upper-B (Thu)"]
-    LOWER_SESSIONS = ["Lower-A (Wed)", "Lower-B (Fri)"]
+    upper_labels = [s["label"] for s in split if s["region"] != "lower"]
+    lower_labels = [s["label"] for s in split if s["region"] == "lower"]
+    meta = {s["label"]: s for s in split}
 
-    split_map: dict[str, list[dict]] = {s: [] for s in UPPER_SESSIONS + LOWER_SESSIONS}
+    split_map: dict[str, list[dict]] = {s["label"]: [] for s in split}
 
     for rx in muscle_rx:
         if rx.target_sets <= 0:
             continue
-        sessions = LOWER_SESSIONS if rx.muscle in LOWER else UPPER_SESSIONS
+        labels = lower_labels if rx.muscle in LOWER_BODY else upper_labels
+        if not labels:  # schedule has no day for this region — surface, don't drop
+            log.warning("no %s session in split for %s", rx.muscle, rx.muscle)
+            continue
 
-        n = len(sessions)
+        n = len(labels)
         base, extra = divmod(rx.target_sets, n)
-        for i, sess in enumerate(sessions):
+        for i, label in enumerate(labels):
             sets_this = base + (1 if i < extra else 0)
             if sets_this > 0:
-                split_map[sess].append({"muscle": rx.muscle, "sets": sets_this})
+                split_map[label].append(
+                    {
+                        "muscle": rx.muscle,
+                        "sets": sets_this,
+                        "over_cap": sets_this > PER_SESSION_SET_CAP,
+                    }
+                )
 
-    return [{"session": sess, "muscles": entries} for sess, entries in split_map.items() if entries]
+    out: list[dict] = []
+    for label, entries in split_map.items():
+        if not entries:
+            continue
+        m = meta[label]
+        out.append(
+            {
+                "session": label,
+                "weekday": m["weekday"],
+                "region": m["region"],
+                "cap": PER_SESSION_SET_CAP,
+                "total_sets": sum(e["sets"] for e in entries),
+                "muscles": entries,
+            }
+        )
+    return out
 
 
 def _protein_target_g(conn: duckdb.DuckDBPyConnection) -> int:
@@ -548,10 +739,34 @@ def weekly_prescription(
 
     signal_quality = read_signal_quality_cache(conn)
 
+    # Dynamic emphasis (#26/#3): biceps/glutes prior modulated by the metrics
+    # engine's physique signal. Degrade gracefully if the helper is unavailable.
+    physique_bias: dict[str, float] | None = None
+    try:
+        from shc.metrics import physique_volume_bias
+
+        physique_bias = physique_volume_bias(conn)
+    except Exception as exc:  # noqa: BLE001 — physique signal optional → prior only
+        log.debug("physique_volume_bias unavailable, using emphasis prior: %s", exc)
+    emphasis_muscles, emphasis_factors = _resolve_emphasis(physique_bias)
+
+    # Per-muscle historical prescription accuracy (#10): hedge muscles the engine
+    # has called poorly. Helper is the self_learning read path; absent → no hedge.
+    accuracy_by_muscle: dict[str, dict[str, object]] = {}
+    try:
+        from shc.training.self_learning import read_muscle_prescription_accuracy
+
+        accuracy_by_muscle = read_muscle_prescription_accuracy(conn)
+    except Exception as exc:  # noqa: BLE001 — accuracy optional → unweighted
+        log.debug("read_muscle_prescription_accuracy unavailable: %s", exc)
+
     muscle_rx: list[MusclePrescription] = []
     for r in targeted:
         vt = targets.get(r.muscle)
         sq = signal_quality.get(r.muscle, {})
+        acc_row = accuracy_by_muscle.get(r.muscle, {})
+        acc_val = acc_row.get("accuracy")
+        accuracy = float(acc_val) if isinstance(acc_val, (int, float)) else None
         rx = _decide(
             muscle=r.muscle,
             current=r.actual_sets,
@@ -564,9 +779,12 @@ def weekly_prescription(
             deload=deload["recommended"],
             landmark_source=vt.source if vt else "population",
             rpe_factor=rpe_factor,
+            emphasis=r.muscle in emphasis_muscles,
+            emphasis_factor=emphasis_factors.get(r.muscle, 1.0),
+            confidence=float(sq.get("confidence", 0.0)),
+            scored_weeks=int(sq.get("scored_weeks", 0)),
+            accuracy=accuracy,
         )
-        rx.confidence = float(sq.get("confidence", 0.0))
-        rx.scored_weeks = int(sq.get("scored_weeks", 0))
         # If protein is inadequate, cap "add" actions at "hold" for non-emphasis muscles.
         if rx.action == "add" and not rx.emphasis and protein.get("adequate") is False:
             rx.action = "hold"
@@ -647,12 +865,17 @@ def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         for muscle, exs in rx.exercise_menu.items():
             lines.append(f"- {muscle}: {', '.join(exs)}")
 
-    # Session split.
+    # Session split (advisory — the validator agent enforces cap + allocation).
     if rx.session_split:
-        lines.append("\n## RECOMMENDED SESSION SPLIT (≤10 sets/muscle/session)")
+        lines.append(f"\n## RECOMMENDED SESSION SPLIT (≤{PER_SESSION_SET_CAP} sets/muscle/session)")
         for sess in rx.session_split:
-            entries = ", ".join(f"{e['muscle']} ×{e['sets']}" for e in sess["muscles"])
-            lines.append(f"- **{sess['session']}**: {entries}")
+            entries = ", ".join(
+                f"{e['muscle']} ×{e['sets']}" + ("⚠" if e.get("over_cap") else "")
+                for e in sess["muscles"]
+            )
+            day = sess.get("weekday", "")
+            total = sess.get("total_sets", "")
+            lines.append(f"- **{sess['session']} ({day})** [{total} sets]: {entries}")
 
     # Protein gate.
     pg = rx.protein_gate
