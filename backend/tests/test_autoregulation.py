@@ -95,11 +95,21 @@ def test_emphasis_does_not_start_at_mav():
     assert rx.target_sets == 11
 
 
-def test_add_step_capped_at_two():
-    # M10: even a big desired jump (below-floor ramp) adds at most MAX_WEEKLY_ADD.
+def test_below_mev_seeds_to_mev_in_one_step():
+    # Block init / post-deload: a muscle well below MEV is re-seeded straight to
+    # its minimum effective volume, not crawled +2/wk (which left a fresh athlete
+    # with a 1-set-per-muscle session). The climb TO MEV is exempt from the step.
     rx = _d("chest", current=2, perf=None, mev=10, mav=16, mrv=22)
     assert rx.action == "add"
-    assert rx.delta == 2  # 2 → 4, not 2 → 10
+    assert rx.target_sets == 10  # 2 → MEV(10) in one step
+
+
+def test_above_mev_ramp_still_capped_at_two():
+    # Once AT/above MEV, the weekly add stays rate-limited to MAX_WEEKLY_ADD even
+    # for an emphasis muscle — only the climb up to MEV is exempt.
+    rx = _d("glutes", current=10, perf=5, mev=6, mav=14, mrv=20)
+    assert rx.action == "add"
+    assert rx.delta == 2  # emphasis ramp +2, not a jump to MAV
 
 
 def test_action_never_contradicts_delta():

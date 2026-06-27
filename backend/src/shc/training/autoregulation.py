@@ -452,9 +452,15 @@ def _decide(
     mev_floor = min(tree_target, mev) if hold_below_mev else mev
     desired = max(desired, mev_floor)
 
-    # Clamp to MRV, then to the asymmetric weekly step.
+    # Clamp to MRV, then to the asymmetric weekly step. The climb UP TO MEV is
+    # exempt from the +per-week ceiling: at block start / after a deload a muscle
+    # is re-seeded to its minimum effective volume in one step (RP block
+    # initialization), not crawled there at +2/wk — that crawl was leaving a
+    # fresh, recovered athlete with a 1-set-per-muscle session. Only the ramp
+    # ABOVE MEV is rate-limited to +MAX_WEEKLY_ADD/wk.
     target = max(0, min(mrv, desired))
-    target = max(cur - MAX_WEEKLY_CUT, min(cur + MAX_WEEKLY_ADD, target))
+    add_ceiling = max(cur + MAX_WEEKLY_ADD, mev_floor)
+    target = max(cur - MAX_WEEKLY_CUT, min(add_ceiling, target))
     delta = target - cur
     action = "add" if delta > 0 else "cut" if delta < 0 else "hold"
 
