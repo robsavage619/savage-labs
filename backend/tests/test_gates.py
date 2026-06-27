@@ -272,23 +272,42 @@ def test_personal_acwr_bands_floored_at_population(conn) -> None:
     assert g.max_intensity == "high"
 
 
-def test_personal_acwr_bands_tighten_when_well_sampled(conn) -> None:
-    """Once a personal band rests on enough weeks (≥ _ACWR_TIGHTEN_MIN_WEEKS) it
-    is trusted as-is and MAY tighten below the population default — the floor is
-    a thin-sample guard, not a permanent one."""
+def test_personal_acwr_caps_never_tighten_below_population(conn) -> None:
+    """The MODERATE/LOW intensity caps are absolute safety ceilings, not
+    homeostats. Even when well-sampled (≥ _ACWR_TIGHTEN_MIN_WEEKS), a personal
+    cap fitted below population (mod 1.2 < 1.5) must NOT tighten the gate — it
+    may only ever loosen above population. Otherwise the percentile-of-self fit
+    gates ordinary progressive overload as a fatigue spike."""
     for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
         conn.execute(
             "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
             "VALUES ('resistance', ?, ?, 50, now())",
             [name, value],
         )
-    # read_acwr_bands() only activates personal bands when all four thresholds
-    # (incl. the conditioning arm) are present.
     conn.execute(
         "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
         "VALUES ('conditioning', 'forbid_legs', 1.88, 50, now())"
     )
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.resistance_acwr = 1.44  # above the trusted personal mod band (1.2)
+    load.resistance_acwr = 1.44  # above the tight personal mod (1.2), below population (1.5)
     g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
-    assert g.max_intensity == "moderate"
+    assert g.max_intensity == "high"  # cap floored at population — not tightened
+
+
+def test_personal_acwr_rest_gate_still_personalizes(conn) -> None:
+    """REST is the true danger gate, not a progression cap, so a well-sampled
+    personal REST band MAY still tighten below the population default (2.0)."""
+    for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 50, now())",
+            [name, value],
+        )
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.88, 50, now())"
+    )
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.resistance_acwr = 1.97  # above personal rest (1.96), below population rest (2.0)
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "rest"
