@@ -1268,9 +1268,19 @@ def _gates(
                 res_n, cond_n = _acwr_band_sample_weeks(conn)
                 res_floor = res_n < _ACWR_TIGHTEN_MIN_WEEKS
                 cond_floor = cond_n < _ACWR_TIGHTEN_MIN_WEEKS
+                # The MODERATE and LOW intensity caps are absolute injury-spike
+                # ceilings (Gabbett), not homeostats. Fitted as percentiles of
+                # Rob's own load (mod = 65th pct), they sit BELOW the population
+                # thresholds and gate ordinary progressive overload as if it were
+                # a fatigue spike — the ACWR-as-anti-progression trap, which is
+                # actively hostile to a hypertrophy goal. They may only ever
+                # LOOSEN above population (earn more rope), never tighten below
+                # it: floor_only is forced True regardless of sample depth. REST
+                # (the true danger gate) and conditioning keep sample-gated
+                # personalization and may still tighten once well-fit.
                 res_rest = _apply_band(personal["RES_ACWR_REST"], RES_ACWR_REST, res_floor)
-                res_low = _apply_band(personal["RES_ACWR_LOW"], RES_ACWR_LOW, res_floor)
-                res_mod = _apply_band(personal["RES_ACWR_MOD"], RES_ACWR_MOD, res_floor)
+                res_low = _apply_band(personal["RES_ACWR_LOW"], RES_ACWR_LOW, floor_only=True)
+                res_mod = _apply_band(personal["RES_ACWR_MOD"], RES_ACWR_MOD, floor_only=True)
                 cond_forbid_legs = _apply_band(
                     personal["COND_ACWR_FORBID_LEGS"], COND_ACWR_FORBID_LEGS, cond_floor
                 )

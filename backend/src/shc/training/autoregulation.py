@@ -52,9 +52,9 @@ log = logging.getLogger(__name__)
 # prescription time by :func:`_resolve_emphasis`, which folds in the metrics
 # engine's physique_volume_bias() so emphasis shifts as muscles catch up — a
 # muscle the silhouette/critique trend no longer flags drops out; a softening
-# taper muscle (e.g. side_delts, lats) is promoted. Biceps/glutes remain the
-# prior when the physique signal is absent.
-EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes"})
+# taper muscle (e.g. side_delts, lats) is promoted. This prior is Rob's stated
+# focus set (biceps/glutes/traps) and applies when the physique signal is absent.
+EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes", "traps"})
 
 # A physique-bias factor at/above this promotes a muscle into the emphasis set
 # even if it isn't in the biceps/glutes prior. The factor is in
@@ -420,6 +420,15 @@ def _decide(
             add_delta = 1
             hedge_note = f" [add capped: confidence {confidence:.0%} below bar for a large add]"
         scaled = round(add_delta * conf_factor)
+        # The confidence shrink governs how fast a muscle RAMPS, not whether it
+        # is trained at all. Left unfloored, a sub-floor muscle under ~0.25
+        # confidence rounds to a 0-set add → dropped from the plan → never
+        # trained → never accumulates the data that would raise its confidence:
+        # a self-locking lockout (abs, glutes, hamstrings all sat here). A muscle
+        # below its productive floor (MEV, or the emphasis floor) is guaranteed
+        # ≥1 set so it can gather signal; the shrink still caps the ramp above it.
+        if cur < grow_floor:
+            scaled = max(1, scaled)
         if scaled < add_delta and not hedge_note:
             hedge_note = (
                 f" [add shrunk {add_delta}→{scaled}: low confidence {confidence:.0%}"

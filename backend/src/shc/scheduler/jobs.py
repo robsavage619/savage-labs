@@ -113,6 +113,42 @@ async def _recompute_adherence() -> None:
     log.info("plan adherence recomputed for %s (sets %s/%s)", yesterday, sets_done, prescribed_sets)
 
 
+async def _auto_advance_mesocycle() -> None:
+    """Roll a finished block forward so it can't latch in permanent calendar deload.
+
+    A block's deload flag is pure calendar math (``week_number > planned_weeks``);
+    nothing previously advanced the block, so once it passed its planned weeks it
+    flagged deload indefinitely and every prescription thereafter halved volume.
+    This drives the two-phase state machine on a calendar dwell:
+
+      * accumulation done (week_number > planned_weeks) → enter the deload week
+      * deload week elapsed (week_number > planned_weeks + 1) → start a fresh block
+
+    week_number counts from the original ``started_on`` and is unaffected by the
+    active→deloading transition, so it is a stable dwell gate for both steps.
+    """
+    from shc.db.schema import write_ctx
+    from shc.training.mesocycle import advance_mesocycle, ensure_active_mesocycle
+
+    async with write_ctx() as conn:
+        state = ensure_active_mesocycle(conn)
+        if state.status == "active" and state.week_number > state.planned_weeks:
+            advance_mesocycle(conn, trigger="auto-calendar")
+            log.warning(
+                "mesocycle %s past planned %dwk (week %d) — entering deload",
+                state.id,
+                state.planned_weeks,
+                state.week_number,
+            )
+        elif state.status == "deloading" and state.week_number > state.planned_weeks + 1:
+            new = advance_mesocycle(conn, trigger="auto-calendar")
+            log.warning(
+                "mesocycle %s deload week elapsed — starting fresh accumulation block %s",
+                state.id,
+                new.id,
+            )
+
+
 _scheduler: AsyncIOScheduler | None = None
 
 
@@ -159,6 +195,18 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         hour=4,
         minute=0,
         id="scores_recompute",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    # Roll the mesocycle forward when a block is past its planned weeks, so it
+    # can't latch in permanent calendar deload. Runs after scores/adherence and
+    # before the morning plan is generated.
+    scheduler.add_job(
+        _auto_advance_mesocycle,
+        "cron",
+        hour=4,
+        minute=30,
+        id="mesocycle_auto_advance",
         replace_existing=True,
         misfire_grace_time=3600,
     )
