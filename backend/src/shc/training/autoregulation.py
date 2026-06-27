@@ -62,16 +62,20 @@ EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes", "traps"})
 # silhouette/critique signal wants more volume there.
 EMPHASIS_PROMOTE_FACTOR = 1.05
 
-# Confidence floor below which an ADD is shrunk toward zero (panel review M1 →
-# actuating the noise floor). Below this the engine has too little / too noisy a
-# per-muscle signal to justify a full add; the delta is scaled by
-# confidence/_CONFIDENCE_FULL so a 0.25-confidence muscle gets ~⅓ of the add.
-_CONFIDENCE_FULL = 0.5
+# Confidence floor at/above which an ADD gets full authority; below it the add is
+# scaled by confidence/_CONFIDENCE_FULL. CALIBRATION (fixed 2026-06-27): confidence
+# is size_factor × signal_stability, and perf-score noise caps stability ~0.4, so
+# even a muscle with 300+ scored weeks tops out near 0.34 — it can NEVER reach the
+# old 0.5. Set on that real achievable range so a well-tracked muscle earns full
+# add authority instead of being permanently throttled (the cause of every plan
+# collapsing to 1 set/muscle). MEV is separately floored below so this only governs
+# the ramp ABOVE minimum effective volume.
+_CONFIDENCE_FULL = 0.30
 
-# A large ADD (more than one set) requires at least this confidence — a +2
-# emphasis ramp on a muscle the engine barely understands is exactly the
-# overreach the noise floor exists to prevent.
-_LARGE_ADD_CONFIDENCE_BAR = 0.45
+# A large ADD (more than one set) requires at least this confidence. Set below the
+# best-tracked muscles' ~0.34 ceiling (was 0.45 — unreachable, so it always fired
+# and capped every muscle to +1/wk forever) so a well-sampled muscle can ramp +2.
+_LARGE_ADD_CONFIDENCE_BAR = 0.22
 
 # Per-muscle historical hit-rate at/below which the engine is hedged: a muscle
 # the engine has prescribed poorly gets its ADD damped further (#10). Above this
@@ -406,6 +410,12 @@ def _decide(
     raw_delta = desired - cur
     desired = cur + round(raw_delta * rpe_factor)
 
+    # The tree's `desired` is the volume this muscle SHOULD train at; below the
+    # productive floor it was set to that floor. Confidence may throttle the
+    # speculative ramp ABOVE minimum effective volume, but must never pull a
+    # trainable muscle BELOW MEV — its minimum effective volume is non-negotiable.
+    tree_target = desired
+
     # Confidence/accuracy gate on ADDs only (#1, #10). An add the engine is not
     # confident about — or has historically gotten wrong — is shrunk toward zero;
     # a cut keeps full authority. Done before the step clamp so the floor caps an
@@ -420,15 +430,6 @@ def _decide(
             add_delta = 1
             hedge_note = f" [add capped: confidence {confidence:.0%} below bar for a large add]"
         scaled = round(add_delta * conf_factor)
-        # The confidence shrink governs how fast a muscle RAMPS, not whether it
-        # is trained at all. Left unfloored, a sub-floor muscle under ~0.25
-        # confidence rounds to a 0-set add → dropped from the plan → never
-        # trained → never accumulates the data that would raise its confidence:
-        # a self-locking lockout (abs, glutes, hamstrings all sat here). A muscle
-        # below its productive floor (MEV, or the emphasis floor) is guaranteed
-        # ≥1 set so it can gather signal; the shrink still caps the ramp above it.
-        if cur < grow_floor:
-            scaled = max(1, scaled)
         if scaled < add_delta and not hedge_note:
             hedge_note = (
                 f" [add shrunk {add_delta}→{scaled}: low confidence {confidence:.0%}"
@@ -437,7 +438,21 @@ def _decide(
             )
         desired = cur + scaled
 
-    # Clamp to MRV, then to the asymmetric weekly step, then derive the action.
+    # MEV floor: a trainable muscle must climb toward its minimum effective
+    # volume regardless of confidence or which branch set `desired`. The perf
+    # branches above ramp only +1/+2 from `cur`, so a muscle the deload spiral
+    # left at 0 sets — but that still carries a stale "progressing" perf score —
+    # would crawl up one set at a time instead of heading to MEV (the lockout
+    # that collapsed every plan to ~1 set per muscle). Confidence governs the
+    # ramp ABOVE MEV, never the climb to it. Only genuine recovery holds
+    # (under-recovered, court/cardio leg interference) are allowed below MEV; the
+    # climb is still rate-limited to +MAX_WEEKLY_ADD/wk by the clamp below, so a
+    # starved muscle reaches MEV over a couple of weeks, not in a single jump.
+    hold_below_mev = under_recovered or leg_interference
+    mev_floor = min(tree_target, mev) if hold_below_mev else mev
+    desired = max(desired, mev_floor)
+
+    # Clamp to MRV, then to the asymmetric weekly step.
     target = max(0, min(mrv, desired))
     target = max(cur - MAX_WEEKLY_CUT, min(cur + MAX_WEEKLY_ADD, target))
     delta = target - cur
