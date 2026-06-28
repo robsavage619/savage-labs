@@ -20,22 +20,41 @@ def test_empty_defaults(conn, today: date) -> None:
 
 def test_acwr_high_when_recent_load_spikes(conn, seed, today: date) -> None:
     # composite_load = hevy_volume_kg / 5000 (no WHOOP strain seeded).
-    seed.workout(ago(today, 25), "Bench Press (Barbell)", [(50, 10)])     # vol 500
-    seed.workout(ago(today, 2), "Bench Press (Barbell)", [(200, 50)])     # vol 10000
+    seed.workout(ago(today, 25), "Bench Press (Barbell)", [(50, 10)])  # vol 500
+    seed.workout(ago(today, 2), "Bench Press (Barbell)", [(200, 50)])  # vol 10000
     m = _training_load(conn, today)
     assert m.acwr is not None
     assert m.acwr > 1.5  # acute window carries the spike
 
 
 def test_acwr_low_when_no_recent_load(conn, seed, today: date) -> None:
-    seed.workout(ago(today, 25), "Bench Press (Barbell)", [(200, 50)])    # only old
+    seed.workout(ago(today, 25), "Bench Press (Barbell)", [(200, 50)])  # only old
     m = _training_load(conn, today)
     assert m.acwr is not None
     assert m.acwr < 0.8
 
 
+def test_acwr_equals_one_under_constant_load(conn, seed, today: date) -> None:
+    # Window-exactness guard: equal load every day for 28 days means the 7-day
+    # acute mean equals the 21-day chronic mean, so ACWR must be EXACTLY 1.0. The
+    # prior off-by-one (acute >= today-7 → 8 day-slots / 7) made this read ~1.14.
+    for n in range(28):
+        seed.workout(ago(today, n), "Bench Press (Barbell)", [(100, 10)])
+    m = _training_load(conn, today)
+    assert m.acwr == 1.0
+
+
+def test_acwr_excludes_day_seven_from_acute(conn, seed, today: date) -> None:
+    # A single bout exactly 7 days ago belongs to the CHRONIC window now, not the
+    # acute one. With acute load = 0 the ratio is 0 (or near-0), never elevated.
+    seed.workout(ago(today, 7), "Bench Press (Barbell)", [(200, 50)])
+    m = _training_load(conn, today)
+    assert m.acwr is not None
+    assert m.acwr < 0.2  # day-7 load is chronic; acute window is empty
+
+
 def test_days_since_muscle_groups(conn, seed, today: date) -> None:
-    seed.workout(ago(today, 1), "Bench Press (Barbell)", [(80, 8)])   # push
+    seed.workout(ago(today, 1), "Bench Press (Barbell)", [(80, 8)])  # push
     seed.workout(ago(today, 5), "Bent Over Row (Barbell)", [(80, 8)])  # pull
     m = _training_load(conn, today)
     assert m.days_since_push == 1
@@ -44,10 +63,10 @@ def test_days_since_muscle_groups(conn, seed, today: date) -> None:
 
 
 def test_push_pull_ratio(conn, seed, today: date) -> None:
-    seed.workout(ago(today, 3), "Bench Press (Barbell)",
-                 [(80, 8), (80, 8), (80, 8), (80, 8)])  # 4 push sets
-    seed.workout(ago(today, 4), "Bent Over Row (Barbell)",
-                 [(80, 8), (80, 8)])                     # 2 pull sets
+    seed.workout(
+        ago(today, 3), "Bench Press (Barbell)", [(80, 8), (80, 8), (80, 8), (80, 8)]
+    )  # 4 push sets
+    seed.workout(ago(today, 4), "Bent Over Row (Barbell)", [(80, 8), (80, 8)])  # 2 pull sets
     m = _training_load(conn, today)
     assert m.push_sets_28d == 4
     assert m.pull_sets_28d == 2
@@ -72,9 +91,7 @@ def test_legs_clock_tracks_lifts_only(conn, seed, today: date) -> None:
     assert m.days_since_pickleball == 6
 
 
-def test_arm_acwr_resistance_and_conditioning_are_independent(
-    conn, seed, today: date
-) -> None:
+def test_arm_acwr_resistance_and_conditioning_are_independent(conn, seed, today: date) -> None:
     """Resistance (Hevy tonnes, idx 3) and conditioning (WHOOP strain, idx 2) are
     independent ACWR streams — a spike in one must not move the other."""
     import uuid
@@ -156,7 +173,7 @@ def test_body_weight_trend_anchors_to_today(conn, today: date) -> None:
             ["whoop", "body_mass_kg", ts, kg, f"w{days_ago}", f"w{days_ago}"],
         )
 
-    _weight(1, 80.0)   # latest weight
+    _weight(1, 80.0)  # latest weight
     _weight(40, 100.0)  # past anchor: only qualifies if cutoff = today - 28d
     m = _checkin(conn, today)
     # current_date cutoff (~today+30 − 28d) would pick the recent 80 → ~0%.

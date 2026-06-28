@@ -953,10 +953,12 @@ def _clinical_volume_cap(conn: Any) -> tuple[int | None, str | None]:
         session rather than a hard stop.
       * significant anemia (hemoglobin < 10 g/dL) → reduced volume.
 
-    FAILS VISIBLY upstream: when no ``conn`` is supplied to ``validate_plan`` the
-    caller skips this guard entirely and a handoff records that the router must
-    pass ``conn`` for the guard to run. Returns ``(None, None)`` on any DB error
-    rather than silently capping (a false cap would block legitimate training).
+    FAILS VISIBLY: when no ``conn`` is supplied to ``validate_plan`` the caller
+    skips this guard entirely and a handoff records that the router must pass
+    ``conn``. ``(None, None)`` means "checked, nothing found". A DB ERROR instead
+    returns ``(None, <reason>)`` which logs a WARNING and degrades conservatively
+    (blocks high intensity, surfaces the reason) — a failed safety check must
+    never be indistinguishable from an all-clear.
     """
     contraindicated = (
         "acute coronary",
@@ -979,8 +981,17 @@ def _clinical_volume_cap(conn: Any) -> tuple[int | None, str | None]:
             """
         ).fetchall()
     except Exception as exc:
-        log.debug("clinical guard: conditions query failed: %s", exc)
-        return None, None
+        # Fail VISIBLY: a crashed contraindication query must NOT look like "all
+        # clear". Warn loudly and degrade conservatively — cap_sets=None blocks
+        # high intensity (relative-cap branch) and surfaces this reason, instead
+        # of silently returning (None, None) = no contraindication found.
+        log.warning(
+            "clinical guard: conditions query FAILED — degrading to no-high-intensity: %s", exc
+        )
+        return (
+            None,
+            "clinical contraindication check failed (conditions query error) — could not verify safety",
+        )
     for (name,) in cond_rows:
         low = (name or "").lower()
         for flag in contraindicated:
@@ -1008,8 +1019,11 @@ def _clinical_volume_cap(conn: Any) -> tuple[int | None, str | None]:
             """
         ).fetchall()
     except Exception as exc:
-        log.debug("clinical guard: labs query failed: %s", exc)
-        return None, None
+        log.warning("clinical guard: labs query FAILED — degrading to no-high-intensity: %s", exc)
+        return (
+            None,
+            "clinical contraindication check failed (labs query error) — could not verify safety",
+        )
     for name, value, ref_high in lab_rows:
         if value is None:
             continue

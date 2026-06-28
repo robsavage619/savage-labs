@@ -873,11 +873,19 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         # Mean over the window length (not just non-zero days) so ACWR drops on
         # rest weeks. Per arm: composite (pooled, display), conditioning (WHOOP
         # strain), resistance (Hevy tonnes); scale-invariant within an arm.
-        acute_cut = today - timedelta(days=7)
+        #
+        # The acute window is the 7 days ENDING today — [today-6, today] — and the
+        # chronic window is the 21 days immediately before it — [today-27, today-7].
+        # Both edges are bounded explicitly so the arms stay exactly 7 and 21 days:
+        # an earlier `>= today-7` gave the acute arm an 8th day-slot (today-7) while
+        # still dividing by 7, inflating every ratio ~14% and making the Gabbett
+        # thresholds (1.5/1.8/2.0 — defined on a true 7:21 ratio) fire too eagerly.
+        acute_start = today - timedelta(days=6)
+        chronic_start = today - timedelta(days=27)
 
         def _arm_acwr(idx: int) -> tuple[float, float, float | None]:
-            recent = [float(r[idx] or 0) for r in load_rows if r[0] >= acute_cut]
-            prior = [float(r[idx] or 0) for r in load_rows if r[0] < acute_cut]
+            recent = [float(r[idx] or 0) for r in load_rows if r[0] >= acute_start]
+            prior = [float(r[idx] or 0) for r in load_rows if chronic_start <= r[0] < acute_start]
             acute = sum(recent) / 7.0
             chronic = sum(prior) / 21.0
             # Ratio from RAW means — rounding chronic first can zero a small arm.
@@ -1386,6 +1394,14 @@ def _gates(
         rec.score_date is not None and (date.today() - date.fromisoformat(rec.score_date)).days > 2
     )
     cond = None if whoop_stale else cond_raw
+    if whoop_stale:
+        # Fail VISIBLY: the conditioning/leg-protection gate runs on WHOOP strain.
+        # When that data is stale we can't see court/cardio load, so the gate is
+        # blind — say so rather than silently letting a leg day through.
+        reasons.append(
+            "WHOOP not synced >48h — conditioning ACWR unavailable; leg/court-load "
+            "protection gate is BLIND today (verify pickleball/cardio load manually)"
+        )
     if cond is not None and cond > cond_forbid_legs:
         # Court/cardio overload. Protect the lower body that absorbs court load;
         # leave upper-body lifting available.

@@ -170,8 +170,15 @@ def _recent_soreness(conn: duckdb.DuckDBPyConnection, days: int = 7) -> dict[str
         try:
             data = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
+            # Fail VISIBLY: a corrupt check-in silently dropped here means a sore
+            # muscle reads as 0 soreness and gets ramped instead of held. Warn so
+            # the bad row surfaces rather than quietly degrading the gate.
+            log.warning(
+                "soreness check-in row is not valid JSON — skipping (soreness signal degraded)"
+            )
             continue
         if not isinstance(data, dict):
+            log.warning("soreness check-in payload is not an object — skipping: %r", data)
             continue
         for muscle, sev in data.items():
             if sev is not None:

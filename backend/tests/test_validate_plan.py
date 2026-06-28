@@ -217,3 +217,15 @@ def test_clinical_cap_clear_when_healthy() -> None:
     cap, reason = _clinical_volume_cap(_clinical_conn(labs=[("Hemoglobin", 14.2, 17.5)]))
     assert cap is None
     assert reason is None
+
+
+def test_clinical_cap_db_error_fails_visible_not_silent() -> None:
+    # Fail-visible hardening: a crashed contraindication query must NOT look like
+    # "all clear" (cap=None, reason=None). It returns a reason so the caller
+    # degrades conservatively and Rob sees why, instead of getting full intensity.
+    conn = _clinical_conn()
+    conn.execute("DROP TABLE conditions")  # force the conditions query to error
+    cap, reason = _clinical_volume_cap(conn)
+    assert cap is None
+    assert reason is not None
+    assert "failed" in reason.lower()
