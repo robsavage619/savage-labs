@@ -118,6 +118,11 @@ class Prescription:
     muscles: list[MusclePrescription] = field(default_factory=list)
     lift_progressions: list[dict] = field(default_factory=list)
     exercise_menu: dict[str, list[str]] = field(default_factory=dict)
+    # Sports-science-grounded picks per muscle (lengthened-position + head
+    # coverage + rep target + citation). Curated muscles only; the rest stay in
+    # exercise_menu (recency). See :func:`evidence_menu`.
+    exercise_science: dict[str, list[dict]] = field(default_factory=dict)
+    development: dict[str, dict] = field(default_factory=dict)  # per-muscle dev brief
     session_split: list[dict] = field(default_factory=list)  # [{session, muscles, sets}]
     protein_gate: dict = field(default_factory=dict)  # {adequate, avg_7d, target, pct}
 
@@ -554,6 +559,144 @@ def _exercise_menu(
     return menu
 
 
+_LENGTH_RANK = {"lengthened": 0, "mid": 1, "shortened": 2}
+_SFR_RANK = {"high": 0, "moderate": 1, "low": 2}
+
+
+def load_muscle_development(conn: duckdb.DuckDBPyConnection) -> dict[str, dict]:
+    """Per-muscle programming evidence (regions to cover, dose, freq, citation).
+
+    Reads the curated ``muscle_development`` table. Empty dict if the table is
+    absent (migration not yet run) so callers degrade to the legacy menu.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT muscle, regions, length_priority, weekly_sets_low, "
+            "weekly_sets_high, freq_per_week, rep_scheme, rationale, citation, "
+            "citation_url FROM muscle_development"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — evidence layer optional → legacy menu
+        log.debug("muscle_development unavailable: %s", exc)
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows:
+        try:
+            regions = json.loads(r[1]) if r[1] else []
+        except (json.JSONDecodeError, TypeError):
+            regions = []
+        out[r[0]] = {
+            "regions": regions,
+            "length_priority": r[2],
+            "weekly_sets_low": r[3],
+            "weekly_sets_high": r[4],
+            "freq_per_week": r[5],
+            "rep_scheme": r[6],
+            "rationale": r[7],
+            "citation": r[8],
+            "citation_url": r[9],
+        }
+    return out
+
+
+def _select_grounded(cands: list[tuple], per_muscle: int) -> list[tuple]:
+    """Pick exercises by evidence, not recency.
+
+    Ranking floats lengthened-position movements and high stimulus-to-fatigue
+    options to the top; Rob's recency breaks ties so it stays personal. Then a
+    coverage pass takes one movement per distinct head/region (long/short/
+    brachialis) in that ranked order, so the week trains every head, before
+    filling any remaining slots with the next-best movements.
+    """
+
+    def _recency(c) -> float:
+        last = c[9]
+        try:
+            return -last.timestamp()
+        except (AttributeError, TypeError, ValueError, OSError):
+            return 0.0
+
+    ordered = sorted(
+        cands,
+        key=lambda c: (_LENGTH_RANK.get(c[3], 1), _SFR_RANK.get(c[6], 1), _recency(c)),
+    )
+    picks: list[tuple] = []
+    seen_regions: set[str] = set()
+    for c in ordered:  # coverage pass: one per head, lengthened-first
+        if len(picks) >= per_muscle:
+            break
+        region = c[2] or c[1]
+        if region not in seen_regions:
+            picks.append(c)
+            seen_regions.add(region)
+    for c in ordered:  # fill remaining slots with next-best
+        if len(picks) >= per_muscle:
+            break
+        if c not in picks:
+            picks.append(c)
+    return picks[:per_muscle]
+
+
+def evidence_menu(
+    conn: duckdb.DuckDBPyConnection, muscles: list[str], per_muscle: int = 4
+) -> dict[str, list[dict]]:
+    """Sports-science-grounded exercise picks per muscle (the guiding light).
+
+    For a muscle with curated ``exercise_science`` rows, selects movements to
+    lead with a lengthened-position option and cover every head/region the
+    evidence says to train (see :func:`_select_grounded`), each carrying its rep
+    target, rationale, and citation. A muscle with no curated rows is omitted
+    here and falls back to the legacy recency menu (:func:`_exercise_menu`).
+    """
+    try:
+        avoid = {
+            r[0]
+            for r in conn.execute(
+                "SELECT exercise FROM exercise_preferences WHERE status = 'no'"
+            ).fetchall()
+        }
+    except Exception:  # noqa: BLE001
+        avoid = set()
+    out: dict[str, list[dict]] = {}
+    for muscle in muscles:
+        try:
+            rows = conn.execute(
+                """
+                SELECT s.exercise_name, s.muscle, s.region, s.length_bias,
+                       s.rep_low, s.rep_high, s.sfr_tier, s.rationale, s.citation,
+                       s.citation_url,
+                       COALESCE(MAX(ws.started_at), '1900-01-01'::TIMESTAMP) AS last_done
+                FROM exercise_science s
+                LEFT JOIN workout_sets_dedup ws ON ws.exercise = s.exercise_name
+                WHERE s.muscle = ?
+                GROUP BY s.exercise_name, s.muscle, s.region, s.length_bias,
+                         s.rep_low, s.rep_high, s.sfr_tier, s.rationale, s.citation,
+                         s.citation_url
+                """,
+                [muscle],
+            ).fetchall()
+        except Exception as exc:  # noqa: BLE001 — evidence layer optional
+            log.debug("exercise_science unavailable for %s: %s", muscle, exc)
+            continue
+        cands = [r for r in rows if r[0] not in avoid]
+        if not cands:
+            continue
+        out[muscle] = [
+            {
+                "exercise": c[0],
+                "region": c[2],
+                "length_bias": c[3],
+                "rep_low": c[4],
+                "rep_high": c[5],
+                "sfr_tier": c[6],
+                "rationale": c[7],
+                "citation": c[8],
+                "citation_url": c[9],
+            }
+            for c in _select_grounded(cands, per_muscle)
+        ]
+    return out
+
+
 # Per-session hypertrophy set cap (RP guideline: ≤10 working sets per muscle per
 # session before junk-volume / per-session fatigue dominates).
 PER_SESSION_SET_CAP = 10
@@ -897,8 +1040,12 @@ def weekly_prescription(
         )
 
     # Exercise menu for muscles that need volume (adding, or below MAV).
+    # Sports-science-grounded selection (evidence_menu) leads; the legacy recency
+    # menu fills any muscle not yet curated in the exercise-science layer.
     need_volume = [m.muscle for m in muscle_rx if m.action == "add" or m.emphasis]
     menu = _exercise_menu(conn, need_volume)
+    science = evidence_menu(conn, need_volume)
+    development = {m: d for m, d in load_muscle_development(conn).items() if m in need_volume}
 
     return Prescription(
         week_start=this_week,
@@ -907,6 +1054,8 @@ def weekly_prescription(
         muscles=muscle_rx,
         lift_progressions=lift_progressions,
         exercise_menu=menu,
+        exercise_science=science,
+        development=development,
         session_split=_session_split(muscle_rx),
         protein_gate=protein,
     )
@@ -937,10 +1086,32 @@ def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
             f"| {m.muscle}{star} | {m.current_sets:g} | {m.target_sets} "
             f"({m.delta:+d}) | {m.action.upper()} | {m.reason} |"
         )
-    if rx.exercise_menu:
-        lines.append("\n**Exercise menu for muscles needing volume** (your history first):")
+    if rx.exercise_menu or rx.exercise_science:
+        lines.append(
+            "\n**Exercise menu for muscles needing volume** — sports-science-grounded "
+            "where curated (lengthened-position + head coverage); recency otherwise:"
+        )
         for muscle, exs in rx.exercise_menu.items():
-            lines.append(f"- {muscle}: {', '.join(exs)}")
+            picks = rx.exercise_science.get(muscle)
+            if picks:
+                dev = rx.development.get(muscle)
+                if dev:
+                    lines.append(
+                        f"- **{muscle}** — target {dev['weekly_sets_low']}–{dev['weekly_sets_high']} "
+                        f"sets/wk over {dev['freq_per_week']}×; {dev['rep_scheme']} "
+                        f"[{dev['citation']}]"
+                    )
+                else:
+                    lines.append(f"- **{muscle}** (evidence-based selection):")
+                for p in picks:
+                    head = f"{p['region']}, " if p.get("region") else ""
+                    lines.append(
+                        f"    - {p['exercise']} — {head}{p['length_bias']}-biased, "
+                        f"{p['rep_low']}–{p['rep_high']} reps · {p['rationale']} "
+                        f"[{p['citation']}]"
+                    )
+            else:
+                lines.append(f"- {muscle}: {', '.join(exs)}")
 
     # Session split (advisory — the validator agent enforces cap + allocation).
     if rx.session_split:

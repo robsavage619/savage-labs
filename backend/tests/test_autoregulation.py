@@ -11,7 +11,9 @@ from shc.training.autoregulation import (
     _resolve_emphasis,
     _session_split,
     deload_check,
+    evidence_menu,
     load_emphasis,
+    load_muscle_development,
     weekly_prescription,
 )
 from shc.training.mesocycle import _iso_week_start
@@ -251,6 +253,41 @@ def test_confidence_factor_accuracy_hedge():
     # Accuracy 0 halves the add; at the hedge threshold the hedge is a no-op.
     assert _confidence_add_factor(0.30, 8, 0.0) == 0.5
     assert _confidence_add_factor(0.30, 8, 0.55) == 1.0
+
+
+# --- Sports-science exercise selection (the guiding light) --------------------
+
+
+def test_biceps_menu_is_evidence_grounded(conn):
+    # Selection must be driven by the science, not recency: lead with a
+    # lengthened-position movement and cover every head across the picks.
+    menu = evidence_menu(conn, ["biceps"])
+    assert "biceps" in menu
+    picks = menu["biceps"]
+    assert picks[0]["length_bias"] == "lengthened"  # lengthened leads
+    regions = {p["region"] for p in picks}
+    assert {"long_head", "short_head", "brachialis"} <= regions  # all heads covered
+
+
+def test_biceps_picks_carry_citation_and_rep_target(conn):
+    # Every prescribed movement must be defensible: a citation + a rep range.
+    for p in evidence_menu(conn, ["biceps"])["biceps"]:
+        assert p["citation"]
+        assert p["citation_url"]
+        assert 1 <= p["rep_low"] < p["rep_high"] <= 40
+
+
+def test_uncurated_muscle_falls_back(conn):
+    # A muscle with no exercise_science rows is omitted (caller uses recency menu).
+    assert "chest" not in evidence_menu(conn, ["chest"])
+
+
+def test_muscle_development_brief_loaded(conn):
+    dev = load_muscle_development(conn)
+    assert "biceps" in dev
+    assert dev["biceps"]["length_priority"] == "lengthened"
+    assert set(dev["biceps"]["regions"]) == {"long_head", "short_head", "brachialis"}
+    assert dev["biceps"]["freq_per_week"] == 2
 
 
 def test_stall_breaks_with_one_set():
