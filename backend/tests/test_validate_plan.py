@@ -219,6 +219,21 @@ def test_clinical_cap_clear_when_healthy() -> None:
     assert reason is None
 
 
+def test_rep_range_enforced_rejects_out_of_band(conn) -> None:
+    # Binding the sports-science layer: Incline Curl is curated for 10–20 reps;
+    # a 3-rep grinder defeats the lengthened-isolation stimulus → rejected.
+    state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
+    plan = _plan(intensity="moderate", exercises=[_ex("Incline Curl (Dumbbell)", 30, "3")])
+    with pytest.raises(GateViolation, match="evidence-based"):
+        validate_plan(plan, state=state, conn=conn)
+
+
+def test_rep_range_allows_in_band(conn) -> None:
+    state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
+    plan = _plan(intensity="moderate", exercises=[_ex("Incline Curl (Dumbbell)", 30, "12")])
+    validate_plan(plan, state=state, conn=conn)  # in-band → no rep violation
+
+
 def test_clinical_cap_db_error_fails_visible_not_silent() -> None:
     # Fail-visible hardening: a crashed contraindication query must NOT look like
     # "all clear" (cap=None, reason=None). It returns a reason so the caller

@@ -290,6 +290,26 @@ def test_muscle_development_brief_loaded(conn):
     assert dev["biceps"]["freq_per_week"] == 2
 
 
+def test_glutes_menu_is_evidence_grounded(conn):
+    # Pass-2 muscle: lengthened lead, both regions covered, every pick cited.
+    picks = evidence_menu(conn, ["glutes"])["glutes"]
+    assert picks[0]["length_bias"] == "lengthened"
+    assert {"gluteus_maximus", "gluteus_medius"} <= {p["region"] for p in picks}
+    for p in picks:
+        assert p["citation"] and p["citation_url"]
+
+
+def test_glutes_selection_reaches_across_primary_mapping(conn):
+    # The science layer must be able to prescribe squat/BSS/RDL for glutes even
+    # though those are quad/hamstring-PRIMARY in exercise_muscle_map.
+    names = {p["exercise"] for p in evidence_menu(conn, ["glutes"])["glutes"]}
+    assert names & {
+        "Bulgarian Split Squat (Dumbbell)",
+        "Romanian Deadlift (Barbell)",
+        "Squat (Barbell)",
+    }
+
+
 def test_stall_breaks_with_one_set():
     rx = _d("chest", current=14, perf=3)
     assert rx.action == "add"

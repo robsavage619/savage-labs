@@ -1316,6 +1316,37 @@ def validate_plan(
                             f"{_count_working_sets(plan)} working sets, over the cap of {cap_sets}."
                         )
 
+            # Sports-science rep-range adherence: for a curated exercise, the
+            # planned reps must fall within its evidence-based window (with a
+            # small tolerance). Stops a lengthened isolation being run as a heavy
+            # triple, or a loadable compound as a 25-rep burnout — each exercise
+            # is selected FOR a rep range, and that range is part of the evidence.
+            try:
+                _sci_reps = {
+                    r[0]: (r[1], r[2])
+                    for r in conn.execute(
+                        "SELECT exercise_name, rep_low, rep_high FROM exercise_science"
+                    ).fetchall()
+                }
+            except Exception:  # noqa: BLE001 — evidence layer optional
+                _sci_reps = {}
+            if _sci_reps:
+                for block in blocks:
+                    for ex in block.get("exercises", []):
+                        band = _sci_reps.get(ex.get("name", ""))
+                        reps = _first_int(ex.get("reps"))
+                        if not band or not reps:
+                            continue
+                        lo, hi = band
+                        # ±2 low / +3 high tolerance for set-to-set and rounding.
+                        if reps < lo - 2 or reps > hi + 3:
+                            direction = "too heavy/low" if reps < lo else "too light/high"
+                            raise GateViolation(
+                                f"{ex.get('name')!r} prescribed {reps} reps, outside its "
+                                f"evidence-based {lo}–{hi} window ({direction}). Match the rep "
+                                "range the exercise is selected for, or pick a better-fit movement."
+                            )
+
             # #18 + #22 reuse the weekly engine prescription.
             rx = prescription
             if rx is None:
