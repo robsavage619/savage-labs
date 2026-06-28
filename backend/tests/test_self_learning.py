@@ -22,8 +22,10 @@ from shc.training.self_learning import (
     read_acwr_bands,
     read_deload_calibration,
     read_deload_threshold,
+    read_muscle_prescription_accuracy,
     read_signal_quality_cache,
     regrade_stalled_with_tonnage_blend,
+    score_prescription_outcomes,
     snapshot_accuracy,
 )
 
@@ -35,8 +37,15 @@ def _monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def _seed_e1rm(conn, exercise: str, week: date, e1rm: float, sets: int,
-               perf: int | None = None, tonnage: float | None = None) -> None:
+def _seed_e1rm(
+    conn,
+    exercise: str,
+    week: date,
+    e1rm: float,
+    sets: int,
+    perf: int | None = None,
+    tonnage: float | None = None,
+) -> None:
     conn.execute(
         """
         INSERT INTO exercise_weekly_e1rm
@@ -103,8 +112,19 @@ def test_fit_volume_landmarks_returns_mev_le_mav_le_mrv(conn) -> None:
     base = _monday(date.today()) - timedelta(weeks=20)
     # Weeks at volume 2 (regressing), 4–12 (progressing), 14 (regressing again).
     data = (
-        [(2, 2), (2, 2), (2, 2), (2, 2)]      # low volume, regress → perf 2
-        + [(6, 6), (8, 8), (8, 8), (8, 8), (10, 10), (10, 10), (12, 12), (12, 12), (12, 12), (14, 14)]  # productive
+        [(2, 2), (2, 2), (2, 2), (2, 2)]  # low volume, regress → perf 2
+        + [
+            (6, 6),
+            (8, 8),
+            (8, 8),
+            (8, 8),
+            (10, 10),
+            (10, 10),
+            (12, 12),
+            (12, 12),
+            (12, 12),
+            (14, 14),
+        ]  # productive
         + [(18, 18), (18, 18), (18, 18), (18, 18)]  # over MRV, regress
     )
     for i, (sets, _) in enumerate(data):
@@ -137,10 +157,10 @@ def test_read_acwr_bands_empty_table_returns_none(conn) -> None:
 def test_persist_and_read_acwr_bands_roundtrip(conn) -> None:
     """Manually insert bands and verify read_acwr_bands returns the correct mapping."""
     rows = [
-        ("resistance",   "rest",         2.10, 50),
-        ("resistance",   "low",          1.75, 50),
-        ("resistance",   "mod",          1.45, 50),
-        ("conditioning", "forbid_legs",  1.95, 30),
+        ("resistance", "rest", 2.10, 50),
+        ("resistance", "low", 1.75, 50),
+        ("resistance", "mod", 1.45, 50),
+        ("conditioning", "forbid_legs", 1.95, 30),
     ]
     for arm, name, val, n in rows:
         conn.execute(
@@ -151,9 +171,9 @@ def test_persist_and_read_acwr_bands_roundtrip(conn) -> None:
 
     bands = read_acwr_bands(conn)
     assert bands is not None
-    assert bands["RES_ACWR_REST"]       == pytest.approx(2.10)
-    assert bands["RES_ACWR_LOW"]        == pytest.approx(1.75)
-    assert bands["RES_ACWR_MOD"]        == pytest.approx(1.45)
+    assert bands["RES_ACWR_REST"] == pytest.approx(2.10)
+    assert bands["RES_ACWR_LOW"] == pytest.approx(1.75)
+    assert bands["RES_ACWR_MOD"] == pytest.approx(1.45)
     assert bands["COND_ACWR_FORBID_LEGS"] == pytest.approx(1.95)
 
 
@@ -191,9 +211,9 @@ def test_regrade_upgrades_stalled_row_with_rising_tonnage(conn) -> None:
     ).fetchall()
     scores = [r[1] for r in rows]
     assert 4 in scores, "at least one row should be upgraded to perf=4"
-    assert 3 not in scores or all(
-        s != 3 for s in scores[3:]
-    ), "later rows with rising tonnage should be upgraded"
+    assert 3 not in scores or all(s != 3 for s in scores[3:]), (
+        "later rows with rising tonnage should be upgraded"
+    )
 
 
 def test_regrade_does_not_touch_flat_tonnage(conn) -> None:
@@ -212,8 +232,15 @@ def test_regrade_does_not_touch_non_stalled_rows(conn) -> None:
     base = _monday(date.today()) - timedelta(weeks=8)
     # Already progressing (perf=4) with rising tonnage — must not be touched.
     for i in range(7):
-        _seed_e1rm(conn, "Row", base + timedelta(weeks=i), 100.0, 5, perf=4,
-                   tonnage=2000.0 * (1 + i * 0.03))
+        _seed_e1rm(
+            conn,
+            "Row",
+            base + timedelta(weeks=i),
+            100.0,
+            5,
+            perf=4,
+            tonnage=2000.0 * (1 + i * 0.03),
+        )
 
     upgraded = regrade_stalled_with_tonnage_blend(conn)
     assert upgraded == 0, "progressing rows must not be re-graded"
@@ -246,8 +273,7 @@ def test_signal_quality_noisy_signal_gives_low_stability(conn) -> None:
     base = _monday(date.today()) - timedelta(weeks=40)
     # Alternating 1/5 — maximally noisy.
     for i in range(35):
-        _seed_e1rm(conn, "Squat", base + timedelta(weeks=i), 100.0, 5,
-                   perf=5 if i % 2 == 0 else 1)
+        _seed_e1rm(conn, "Squat", base + timedelta(weeks=i), 100.0, 5, perf=5 if i % 2 == 0 else 1)
 
     result = compute_muscle_signal_quality(conn, "quads")
     assert result["signal_stability"] < 0.2, "alternating signal should score very low"
@@ -360,8 +386,9 @@ def test_deload_calibration_no_data_returns_insufficient(conn) -> None:
     assert read_deload_threshold(conn) is None
 
 
-def _seed_deload(conn, started_on: date, deload_week: int, trigger: str,
-                 regressing_muscles: int) -> None:
+def _seed_deload(
+    conn, started_on: date, deload_week: int, trigger: str, regressing_muscles: int
+) -> None:
     """Seed a deload event plus its precursor-week perf signals.
 
     Creates ``regressing_muscles`` distinct muscles each with perf=1 (regressing)
@@ -388,8 +415,13 @@ def test_deload_calibration_fits_from_signal_deloads(conn) -> None:
     # 4 signal-driven deloads, each preceded by 3 regressing muscles → threshold 3.
     base = _monday(date.today()) - timedelta(weeks=60)
     for i in range(4):
-        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
-                     trigger="hrv_drop", regressing_muscles=3)
+        _seed_deload(
+            conn,
+            base + timedelta(weeks=i * 8),
+            deload_week=5,
+            trigger="hrv_drop",
+            regressing_muscles=3,
+        )
     result = calibrate_deload_trigger(conn)
     assert result["status"] == "fitted"
     assert result["n_events"] == 4
@@ -403,8 +435,13 @@ def test_deload_calibration_clamps_low_precursor_to_floor(conn) -> None:
     # not let a single regression deload the athlete.
     base = _monday(date.today()) - timedelta(weeks=60)
     for i in range(4):
-        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
-                     trigger="manual", regressing_muscles=1)
+        _seed_deload(
+            conn,
+            base + timedelta(weeks=i * 8),
+            deload_week=5,
+            trigger="manual",
+            regressing_muscles=1,
+        )
     result = calibrate_deload_trigger(conn)
     assert result["status"] == "fitted"
     assert result["threshold"] == 2
@@ -414,8 +451,13 @@ def test_deload_calibration_excludes_scheduled_deloads(conn) -> None:
     # Calendar/scheduled deloads carry no fatigue info and must not count.
     base = _monday(date.today()) - timedelta(weeks=60)
     for i in range(5):
-        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
-                     trigger="scheduled", regressing_muscles=3)
+        _seed_deload(
+            conn,
+            base + timedelta(weeks=i * 8),
+            deload_week=5,
+            trigger="scheduled",
+            regressing_muscles=3,
+        )
     result = calibrate_deload_trigger(conn)
     assert result["status"] == "insufficient_data"
     assert read_deload_threshold(conn) is None
@@ -424,8 +466,13 @@ def test_deload_calibration_excludes_scheduled_deloads(conn) -> None:
 def test_read_deload_calibration_reports_fitted_without_writing(conn) -> None:
     base = _monday(date.today()) - timedelta(weeks=60)
     for i in range(4):
-        _seed_deload(conn, base + timedelta(weeks=i * 8), deload_week=5,
-                     trigger="hrv_drop", regressing_muscles=3)
+        _seed_deload(
+            conn,
+            base + timedelta(weeks=i * 8),
+            deload_week=5,
+            trigger="hrv_drop",
+            regressing_muscles=3,
+        )
     calibrate_deload_trigger(conn)
     status = read_deload_calibration(conn)
     assert status["status"] == "fitted"
@@ -441,6 +488,80 @@ def test_read_deload_calibration_population_default_when_unfitted(conn) -> None:
 
 
 # ── accuracy history snapshot ──────────────────────────────────────────────────
+
+
+def _log_rx(conn, week: date, muscle: str, action: str, target: int = 10) -> None:
+    conn.execute(
+        "INSERT INTO muscle_prescription_log "
+        "(week_start, muscle, action, target_sets, landmark_source, confidence) "
+        "VALUES (?, ?, ?, ?, 'population', 0.5) "
+        "ON CONFLICT (week_start, muscle) DO UPDATE SET action = excluded.action",
+        [week.isoformat(), muscle, action, target],
+    )
+
+
+def test_score_skips_add_against_deload_outcome_week(conn) -> None:
+    # Deload-confound guard: an ADD whose outcome week the muscle was DELOADED in
+    # must NOT be scored — the volume cut, not a training failure, drops perf.
+    _seed_muscle_map(conn, "Curl", "biceps")
+    tw = _monday(date.today())
+    pweek = tw - timedelta(weeks=4)  # biceps/add lag = 3 → outcome = tw-1wk (elapsed)
+    outcome = pweek + timedelta(weeks=3)
+    _log_rx(conn, pweek, "biceps", "add")
+    _log_rx(conn, outcome, "biceps", "deload")  # the muscle was deloaded that week
+    _seed_e1rm(conn, "Curl", outcome, 40.0, 5, perf=2)  # low perf would mark add wrong
+    score_prescription_outcomes(conn)
+    row = conn.execute(
+        "SELECT outcome_perf, correct FROM muscle_prescription_log "
+        "WHERE week_start = ? AND muscle = 'biceps' AND action = 'add'",
+        [pweek.isoformat()],
+    ).fetchone()
+    assert row == (None, None)  # skipped, not a false miss
+
+
+def test_score_marks_add_wrong_without_deload(conn) -> None:
+    # Control: with no deload confound, a low outcome perf correctly marks the ADD
+    # wrong — the guard does not over-skip legitimate scoring.
+    _seed_muscle_map(conn, "Curl", "biceps")
+    tw = _monday(date.today())
+    pweek = tw - timedelta(weeks=4)
+    outcome = pweek + timedelta(weeks=3)
+    _log_rx(conn, pweek, "biceps", "add")
+    _seed_e1rm(conn, "Curl", outcome, 40.0, 5, perf=2)
+    score_prescription_outcomes(conn)
+    row = conn.execute(
+        "SELECT correct FROM muscle_prescription_log WHERE week_start = ? AND muscle = 'biceps'",
+        [pweek.isoformat()],
+    ).fetchone()
+    assert row[0] is False
+
+
+def test_accuracy_source_logged_with_enough_outcomes(conn) -> None:
+    # >=5 logged scored outcomes → source 'logged' (the only source the
+    # autoregulation hedge is allowed to actuate on).
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=30)
+    for i in range(6):
+        wk = base + timedelta(weeks=i)
+        conn.execute(
+            "INSERT INTO muscle_prescription_log "
+            "(week_start, muscle, action, target_sets, landmark_source, confidence, "
+            " outcome_perf, correct, scored_at) "
+            "VALUES (?, 'biceps', 'add', 10, 'population', 0.5, 4, TRUE, now())",
+            [wk.isoformat()],
+        )
+    assert read_muscle_prescription_accuracy(conn)["biceps"]["source"] == "logged"
+
+
+def test_retroactive_only_muscle_labeled_retroactive(conn) -> None:
+    # A muscle with no logged prescriptions but perf history is labelled
+    # 'retroactive' — autoregulation ignores this source, so an inferred proxy
+    # never damps a real prescription.
+    _seed_muscle_map(conn, "Pushdown", "triceps")
+    base = _monday(date.today()) - timedelta(weeks=20)
+    for i, p in enumerate([4, 3, 4, 3, 4, 3]):
+        _seed_e1rm(conn, "Pushdown", base + timedelta(weeks=i), 40.0, 6, perf=p)
+    assert read_muscle_prescription_accuracy(conn).get("triceps", {}).get("source") == "retroactive"
 
 
 def test_snapshot_accuracy_persists_and_reads_back(conn) -> None:

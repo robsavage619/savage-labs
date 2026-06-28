@@ -745,6 +745,22 @@ def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
         this_outcome_week = pweek + timedelta(weeks=lag)
         if this_outcome_week > today_week:
             continue  # not enough time has elapsed yet
+
+        # Deload-confound guard: an ADD/HOLD scored against an outcome week the
+        # muscle was DELOADED in is unfair — volume was deliberately halved, so
+        # perf naturally dips and the call looks "wrong" when it was not a
+        # training failure. Skip (leave unscored) rather than record a false
+        # miss. A CUT is still fair to score: a cut and a deload both reduce
+        # load, and recovery remains the expected outcome either way.
+        if action in ("add", "hold"):
+            deloaded = conn.execute(
+                "SELECT 1 FROM muscle_prescription_log "
+                "WHERE week_start = ? AND muscle = ? AND action = 'deload'",
+                [this_outcome_week.isoformat(), muscle],
+            ).fetchone()
+            if deloaded:
+                continue
+
         # Look up actual muscle perf for the outcome week.
         outcome_perf_row = conn.execute(
             """

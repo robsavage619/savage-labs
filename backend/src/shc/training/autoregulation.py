@@ -1051,7 +1051,12 @@ def weekly_prescription(
         vt = targets.get(r.muscle)
         sq = signal_quality.get(r.muscle, {})
         acc_row = accuracy_by_muscle.get(r.muscle, {})
-        acc_val = acc_row.get("accuracy")
+        # Only a LOGGED prescription-outcome hit-rate may actuate the ADD hedge.
+        # Retroactive accuracy is an inferred proxy (it reads the prescription
+        # back OUT of perf momentum), so it measures noise persistence, not call
+        # quality — trusting it would damp a muscle for being noisy. Shown for
+        # transparency, never trusted to throttle ("innocent until proven").
+        acc_val = acc_row.get("accuracy") if acc_row.get("source") == "logged" else None
         accuracy = float(acc_val) if isinstance(acc_val, (int, float)) else None
         rx = _decide(
             muscle=r.muscle,
