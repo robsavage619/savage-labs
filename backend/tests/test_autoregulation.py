@@ -4,12 +4,15 @@ from datetime import date
 
 from shc.training.autoregulation import (
     EMPHASIS_MUSCLES,
+    MusclePrescription,
+    _confidence_add_factor,
     _decide,
     _protein_gate,
+    _resolve_emphasis,
     _session_split,
     deload_check,
+    load_emphasis,
     weekly_prescription,
-    MusclePrescription,
 )
 from shc.training.mesocycle import _iso_week_start
 from shc.training.volume import MuscleVolume
@@ -119,6 +122,137 @@ def test_action_never_contradicts_delta():
     assert rx.delta == 0
 
 
+# --- Emphasis persistence (DB lever) ------------------------------------------
+
+
+def test_load_emphasis_reads_seeded_prior(conn):
+    # Migration 0056 seeds the biceps/glutes/traps prior; load_emphasis surfaces it.
+    em = load_emphasis(conn)
+    assert {"biceps", "glutes", "traps"} <= set(em)
+
+
+def test_resolve_emphasis_honors_db_over_prior(conn):
+    # Persisting a new muscle (side_delts) must put it in the live emphasis set —
+    # this is the path that lets what Rob sets actually reach the prescription,
+    # instead of being a hardcoded frozenset he can't change.
+    conn.execute("INSERT INTO muscle_emphasis (muscle) VALUES ('side_delts')")
+    emphasis, _ = _resolve_emphasis(physique_bias=None, db_emphasis=load_emphasis(conn))
+    assert "side_delts" in emphasis
+
+
+def test_resolve_emphasis_falls_back_to_prior_when_empty():
+    # No DB rows → fall back to the frozenset prior so the engine stays robust
+    # whether or not the migration has run.
+    emphasis, _ = _resolve_emphasis(physique_bias=None, db_emphasis={})
+    assert emphasis == set(EMPHASIS_MUSCLES)
+
+
+# --- Lagging-emphasis actuation (regression test for Rob's complaint) ---------
+
+
+def test_lagging_emphasis_climbs_despite_low_confidence():
+    # The core bug: a LAGGING priority muscle (no perf≥4 signal, thin direct
+    # history → low confidence) sat at MEV and got locked there, because the
+    # confidence throttle shrank its add to zero. Emphasis must still climb it
+    # toward the productive floor. Without the fix this returned delta 0 (hold).
+    rx = _decide(
+        "biceps",
+        current=8,
+        mev=8,
+        mav=14,
+        mrv=20,
+        perf=None,
+        soreness=0.0,
+        conditioning_acwr=None,
+        emphasis=True,
+        confidence=0.1,  # below _LARGE_ADD_CONFIDENCE_BAR
+        scored_weeks=2,
+    )
+    assert rx.action == "add"
+    assert rx.delta >= 2
+
+
+def test_emphasis_outpaces_non_emphasis_when_both_lagging():
+    # Same starting point and (low) confidence; only emphasis differs. The
+    # emphasized muscle must advance; the non-emphasis one holds at MEV.
+    common = dict(
+        current=8,
+        mev=8,
+        mav=14,
+        mrv=20,
+        perf=None,
+        soreness=0.0,
+        conditioning_acwr=None,
+        confidence=0.1,
+        scored_weeks=2,
+    )
+    emph = _decide("biceps", emphasis=True, **common)
+    plain = _decide("chest", emphasis=False, **common)
+    assert emph.delta > plain.delta
+    assert plain.delta == 0  # at MEV, no signal → hold
+
+
+def test_emphasis_does_not_override_safety_cut():
+    # Emphasis accelerates growth; it must NOT blunt a safety response. A
+    # regressing emphasis muscle still cuts toward MEV.
+    rx = _decide(
+        "biceps",
+        current=18,
+        mev=8,
+        mav=14,
+        mrv=20,
+        perf=2,  # regressing
+        soreness=0.0,
+        conditioning_acwr=None,
+        emphasis=True,
+        confidence=0.6,
+        scored_weeks=4,
+    )
+    assert rx.action == "cut"
+    assert rx.target_sets < 18
+
+
+def test_emphasis_under_recovered_still_backs_off():
+    # An acutely sore emphasis muscle backs off regardless of priority.
+    rx = _decide(
+        "glutes",
+        current=12,
+        mev=8,
+        mav=14,
+        mrv=20,
+        perf=4,
+        soreness=2.5,  # under-recovered
+        conditioning_acwr=None,
+        emphasis=True,
+        confidence=0.6,
+        scored_weeks=4,
+    )
+    assert rx.action == "cut"
+
+
+# --- Confidence/accuracy ADD factor (previously untested) ---------------------
+
+
+def test_confidence_factor_suppresses_with_no_signal():
+    assert _confidence_add_factor(0.0, 0, None) == 0.0
+
+
+def test_confidence_factor_scales_below_full():
+    # Below _CONFIDENCE_FULL (0.30) the add is scaled by confidence/0.30.
+    assert _confidence_add_factor(0.15, 4, None) == 0.5
+
+
+def test_confidence_factor_full_at_and_above_ceiling():
+    assert _confidence_add_factor(0.30, 8, None) == 1.0
+    assert _confidence_add_factor(0.45, 8, None) == 1.0
+
+
+def test_confidence_factor_accuracy_hedge():
+    # Accuracy 0 halves the add; at the hedge threshold the hedge is a no-op.
+    assert _confidence_add_factor(0.30, 8, 0.0) == 0.5
+    assert _confidence_add_factor(0.30, 8, 0.55) == 1.0
+
+
 def test_stall_breaks_with_one_set():
     rx = _d("chest", current=14, perf=3)
     assert rx.action == "add"
@@ -198,8 +332,12 @@ def test_weekly_prescription_smoke(conn, seed):
 
 def _make_rx(muscle: str, target: int, action: str = "add") -> MusclePrescription:
     return MusclePrescription(
-        muscle=muscle, current_sets=float(target - 1), target_sets=target,
-        delta=1, action=action, reason="test",
+        muscle=muscle,
+        current_sets=float(target - 1),
+        target_sets=target,
+        delta=1,
+        action=action,
+        reason="test",
     )
 
 
@@ -255,6 +393,7 @@ def test_protein_gate_no_data_returns_none_adequate(conn) -> None:
 
 def test_protein_gate_adequate_when_above_target(conn) -> None:
     from datetime import timedelta
+
     today = date.today()
     for i in range(5):
         conn.execute(
@@ -268,6 +407,7 @@ def test_protein_gate_adequate_when_above_target(conn) -> None:
 
 def test_protein_gate_inadequate_when_below_target(conn) -> None:
     from datetime import timedelta
+
     today = date.today()
     for i in range(6):
         conn.execute(

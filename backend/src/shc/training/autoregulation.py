@@ -268,25 +268,45 @@ def _confidence_add_factor(
     return max(0.0, min(1.0, factor))
 
 
+def load_emphasis(conn: duckdb.DuckDBPyConnection) -> dict[str, float]:
+    """Load Rob's persisted muscle-emphasis priorities from the DB.
+
+    Returns ``{muscle: weight}``. An empty dict when the ``muscle_emphasis`` table
+    is missing or empty, so the caller falls back to the :data:`EMPHASIS_MUSCLES`
+    prior — the engine stays robust whether or not the migration has run. This is
+    the path that lets what Rob sets (via ``POST /training/emphasis``) actually
+    reach the prescription, instead of living only in chat memory.
+    """
+    try:
+        rows = conn.execute("SELECT muscle, weight FROM muscle_emphasis").fetchall()
+    except Exception as exc:  # noqa: BLE001 — table optional → prior fallback
+        log.debug("muscle_emphasis unavailable, using prior: %s", exc)
+        return {}
+    return {str(m): float(w) for m, w in rows}
+
+
 def _resolve_emphasis(
     physique_bias: dict[str, float] | None,
+    db_emphasis: dict[str, float] | None = None,
 ) -> tuple[set[str], dict[str, float]]:
     """Resolve the live emphasis set + per-muscle factor (#26/#3).
 
-    Starts from the biceps/glutes prior (:data:`EMPHASIS_MUSCLES`) and folds in
-    the metrics engine's ``physique_volume_bias()`` so emphasis tracks measured
-    development instead of a static frozenset:
+    Starts from Rob's persisted priorities (``db_emphasis``, from
+    :func:`load_emphasis`) — falling back to the biceps/glutes prior
+    (:data:`EMPHASIS_MUSCLES`) when none are stored — and folds in the metrics
+    engine's ``physique_volume_bias()`` so emphasis tracks both stated intent and
+    measured development instead of a static frozenset:
 
     * Any muscle the physique signal nudges at/above
       :data:`EMPHASIS_PROMOTE_FACTOR` joins the emphasis set (a softening taper
       promotes side_delts/lats, say).
-    * The prior muscles stay in the set regardless, but their ramp/floor can be
-      relaxed if the physique signal no longer flags them (factor toward 1.0).
+    * The stored/prior muscles stay in the set regardless, but their ramp/floor
+      can be relaxed if the physique signal no longer flags them (factor → 1.0).
 
     Returns ``(emphasis_muscles, factor_by_muscle)``. The factor defaults to 1.0
     for muscles the physique signal does not mention.
     """
-    emphasis = set(EMPHASIS_MUSCLES)
+    emphasis = set(db_emphasis) if db_emphasis else set(EMPHASIS_MUSCLES)
     factors: dict[str, float] = {}
     if physique_bias:
         for muscle, factor in physique_bias.items():
@@ -357,6 +377,12 @@ def _decide(
     # Emphasis muscles floor at the MEV–MAV midpoint (keeps an accumulation
     # runway), not at MAV; everything else floors at MEV (panel review M3).
     grow_floor = (mev + (mav - mev) // 2) if emphasis else mev
+    # A muscle is "emphasized" if it's in the set or carries a strong physique
+    # nudge; emphasized muscles ramp at +2 (not just on the progressing branch)
+    # so a LAGGING priority muscle — which rarely shows perf≥4 and has thin,
+    # low-confidence direct history — actually climbs instead of crawling +1.
+    emphasized = emphasis or emphasis_factor >= EMPHASIS_PROMOTE_FACTOR
+    ramp_step = 2 if emphasized else 1
     cur = round(current)
     under_recovered = soreness >= SORENESS_BLOCK
     # Uncoupled conditioning ACWR runs higher than the old coupled scale (M2);
@@ -389,13 +415,15 @@ def _decide(
         # Emphasis muscles ramp +2; a strong physique nudge (emphasis_factor well
         # above 1) can lift a non-emphasis progressing muscle to +2 too, so the
         # ramp tracks the live development signal rather than a static membership.
-        ramp = 2 if (emphasis or emphasis_factor >= EMPHASIS_PROMOTE_FACTOR) else 1
-        desired = cur + ramp
-        tag = " + emphasis" if emphasis else (" + physique nudge" if ramp == 2 else "")
+        desired = cur + ramp_step
+        tag = " + emphasis" if emphasized else ""
         reason = f"progressing (perf {perf}/5){tag} → add toward MRV"
     elif perf == 3:
-        desired = cur + 1
-        reason = "stalled e1RM → +1 set to break the stall"
+        # Stalled: emphasized muscles break the stall at +2 (the whole point of
+        # flagging a bring-up is to push it harder than a maintenance muscle).
+        desired = cur + ramp_step
+        tag = " (emphasis)" if emphasized else ""
+        reason = f"stalled e1RM{tag} → +{ramp_step} set to break the stall"
     elif cur < grow_floor:
         # No performance signal yet, but below the floor it should be training at.
         desired = grow_floor
@@ -450,7 +478,18 @@ def _decide(
     # starved muscle reaches MEV over a couple of weeks, not in a single jump.
     hold_below_mev = under_recovered or leg_interference
     mev_floor = min(tree_target, mev) if hold_below_mev else mev
-    desired = max(desired, mev_floor)
+    # An emphasized muscle's productive floor (grow_floor = MEV–MAV midpoint) is
+    # non-speculative the same way MEV is: bringing a lagging priority muscle up
+    # to a productive baseline is the whole reason emphasis exists, so the
+    # confidence shrink — which governs only the speculative ramp ABOVE the floor
+    # — must not pull it back down. Applies only when the tree wants to grow/hold
+    # (tree_target >= cur) and the muscle isn't held below MEV for recovery; a
+    # safety cut (regressing) is never floored above its decision. The climb to
+    # this floor is still rate-limited above MEV by the step clamp below.
+    if emphasized and not hold_below_mev and tree_target >= cur:
+        desired = max(desired, min(grow_floor, mrv))
+    else:
+        desired = max(desired, mev_floor)
 
     # Clamp to MRV, then to the asymmetric weekly step. The climb UP TO MEV is
     # exempt from the +per-week ceiling: at block start / after a deload a muscle
@@ -778,7 +817,8 @@ def weekly_prescription(
         physique_bias = physique_volume_bias(conn)
     except Exception as exc:  # noqa: BLE001 — physique signal optional → prior only
         log.debug("physique_volume_bias unavailable, using emphasis prior: %s", exc)
-    emphasis_muscles, emphasis_factors = _resolve_emphasis(physique_bias)
+    db_emphasis = load_emphasis(conn)
+    emphasis_muscles, emphasis_factors = _resolve_emphasis(physique_bias, db_emphasis)
 
     # Per-muscle historical prescription accuracy (#10): hedge muscles the engine
     # has called poorly. Helper is the self_learning read path; absent → no hedge.

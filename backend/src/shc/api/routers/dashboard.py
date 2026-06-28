@@ -37,6 +37,12 @@ class WorkoutPlanSubmission(BaseModel):
     plan_date: str | None = None  # ISO date override; auto-detected from workout history if omitted
 
 
+class EmphasisSubmission(BaseModel):
+    muscle: str
+    weight: float = 1.0
+    note: str | None = None
+
+
 class BriefingSubmission(BaseModel):
     training_call: str  # Push | Train | Maintain | Easy | Rest
     training_rationale: str
@@ -2791,6 +2797,70 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
         hevy_result = await push_routine(plan_with_meta)
 
     return {"status": "ok", "date": plan_date_iso, "hevy": hevy_result}
+
+
+@router.get("/training/emphasis")
+async def get_emphasis() -> dict:
+    """Return Rob's persisted muscle-emphasis priorities (the engine's live lever)."""
+    conn = get_read_conn()
+    try:
+        rows = conn.execute(
+            "SELECT muscle, weight, note, updated_at FROM muscle_emphasis ORDER BY muscle"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "emphasis": [
+            {"muscle": m, "weight": w, "note": n, "updated_at": str(ts)} for m, w, n, ts in rows
+        ]
+    }
+
+
+@router.post("/training/emphasis", dependencies=[Depends(require_admin_key)])
+async def set_emphasis(body: EmphasisSubmission) -> dict:
+    """Set (upsert) a muscle's training emphasis — the lever that lets what Rob
+    asks for actually reach the autoregulation engine.
+
+    The muscle must exist in the trained taxonomy (`exercise_muscle_map`); an
+    unknown name is rejected rather than silently stored as a dead row, so a typo
+    surfaces instead of quietly no-op'ing the priority Rob set.
+    """
+    muscle = body.muscle.strip().lower()
+    if not muscle:
+        raise HTTPException(status_code=422, detail="muscle is required")
+    async with write_ctx() as conn:
+        known = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT primary_muscle FROM exercise_muscle_map"
+            ).fetchall()
+        }
+        if muscle not in known:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown muscle {muscle!r}; not in the trained taxonomy",
+            )
+        conn.execute(
+            """
+            INSERT INTO muscle_emphasis (muscle, weight, note, updated_at)
+            VALUES (?, ?, ?, now())
+            ON CONFLICT (muscle) DO UPDATE
+                SET weight = EXCLUDED.weight,
+                    note = EXCLUDED.note,
+                    updated_at = now()
+            """,
+            [muscle, body.weight, body.note],
+        )
+    return {"status": "ok", "muscle": muscle, "weight": body.weight}
+
+
+@router.delete("/training/emphasis/{muscle}", dependencies=[Depends(require_admin_key)])
+async def delete_emphasis(muscle: str) -> dict:
+    """Remove a muscle from the emphasis set (stop prioritizing it)."""
+    m = muscle.strip().lower()
+    async with write_ctx() as conn:
+        conn.execute("DELETE FROM muscle_emphasis WHERE muscle = ?", [m])
+    return {"status": "ok", "muscle": m}
 
 
 @router.delete("/workout/plan", dependencies=[Depends(require_admin_key)])
