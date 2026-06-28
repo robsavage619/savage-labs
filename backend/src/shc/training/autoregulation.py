@@ -697,6 +697,72 @@ def evidence_menu(
     return out
 
 
+# Weeks of scored history at/above which a muscle's targets are treated as
+# personalized rather than population defaults (matches the landmark-fit floor).
+_PERSONALIZE_MIN_WEEKS = 10
+
+
+def muscle_science_report(conn: duckdb.DuckDBPyConnection, muscle: str | None = None) -> list[dict]:
+    """The build-a-muscle surface: cited brief + grounded exercises + data honesty.
+
+    For each curated muscle (or just ``muscle`` if given) assemble: the
+    ``muscle_development`` brief, the sports-science-grounded exercise selection
+    (:func:`evidence_menu`), the active MEV/MAV/MRV landmarks, and an HONEST
+    data-coverage read — whether those targets are personalized to Rob's logged
+    history or still population defaults, and how many more weeks of data would
+    personalize them. This is what lets the engine explain how to build any body
+    part AND be transparent about how personal that advice currently is.
+    """
+    dev = load_muscle_development(conn)
+    muscles = [muscle] if muscle else sorted(dev)
+    from shc.training.self_learning import read_signal_quality_cache
+
+    try:
+        sq = read_signal_quality_cache(conn)
+    except Exception as exc:  # noqa: BLE001 — signal cache optional
+        log.debug("signal cache unavailable for science report: %s", exc)
+        sq = {}
+    state = active_mesocycle(conn)
+    targets = volume_targets(conn, state.id if state else "")
+    menus = evidence_menu(conn, muscles)
+
+    out: list[dict] = []
+    for m in muscles:
+        brief = dev.get(m)
+        q = sq.get(m, {})
+        scored = int(q.get("scored_weeks", 0))
+        conf = float(q.get("confidence", 0.0))
+        vt = targets.get(m)
+        source = vt.source if vt else "population"
+        personalized = source != "population" or scored >= _PERSONALIZE_MIN_WEEKS
+        if personalized:
+            note = f"personalized from {scored} scored week(s) of your data"
+        else:
+            need = max(1, _PERSONALIZE_MIN_WEEKS - scored)
+            note = (
+                f"population default — log ~{need} more week(s) training this muscle "
+                "to personalize the targets"
+            )
+        out.append(
+            {
+                "muscle": m,
+                "grounded": brief is not None,
+                "brief": brief,
+                "exercises": menus.get(m, []),
+                "targets": (
+                    {"mev": vt.mev, "mav": vt.mav, "mrv": vt.mrv, "source": source} if vt else None
+                ),
+                "data_coverage": {
+                    "scored_weeks": scored,
+                    "confidence": round(conf, 2),
+                    "personalized": personalized,
+                    "note": note,
+                },
+            }
+        )
+    return out
+
+
 # Per-session hypertrophy set cap (RP guideline: ≤10 working sets per muscle per
 # session before junk-volume / per-session fatigue dominates).
 PER_SESSION_SET_CAP = 10

@@ -2799,6 +2799,26 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     return {"status": "ok", "date": plan_date_iso, "hevy": hevy_result}
 
 
+@router.get("/training/science")
+async def get_training_science(muscle: str | None = Query(default=None)) -> dict:
+    """Evidence-grounded build-up guidance for a muscle (or all curated muscles).
+
+    Returns, per muscle: the cited development brief, the sports-science-grounded
+    exercise selection (lengthened-position + head coverage, each with rep target
+    and citation), the active MEV/MAV/MRV landmarks, and an honest data-coverage
+    read (personalized to Rob's history vs population default). This is the
+    queryable surface behind "how do I build up X".
+    """
+    conn = get_read_conn()
+    try:
+        from shc.training.autoregulation import muscle_science_report
+
+        report = muscle_science_report(conn, muscle.strip().lower() if muscle else None)
+    finally:
+        conn.close()
+    return {"science": report}
+
+
 @router.get("/training/emphasis")
 async def get_emphasis() -> dict:
     """Return Rob's persisted muscle-emphasis priorities (the engine's live lever)."""

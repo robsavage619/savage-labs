@@ -14,6 +14,7 @@ from shc.training.autoregulation import (
     evidence_menu,
     load_emphasis,
     load_muscle_development,
+    muscle_science_report,
     weekly_prescription,
 )
 from shc.training.mesocycle import _iso_week_start
@@ -282,14 +283,39 @@ def test_uncurated_muscle_falls_back(conn):
     assert "totally_made_up_muscle" not in evidence_menu(conn, ["totally_made_up_muscle"])
 
 
+def test_muscle_science_report_assembles_and_is_honest(conn):
+    # The build-up surface: cited brief + grounded exercises + targets, plus an
+    # HONEST data-coverage read (no logged history → population default, not faked
+    # as personalized).
+    rep = muscle_science_report(conn, "biceps")
+    assert len(rep) == 1
+    r = rep[0]
+    assert r["grounded"] and r["brief"] and r["exercises"]
+    assert r["targets"]["mev"] and r["targets"]["source"] == "population"
+    assert r["data_coverage"]["personalized"] is False
+    assert "population default" in r["data_coverage"]["note"]
+    assert all(e["citation"] for e in r["exercises"])
+
+
+def test_muscle_science_report_covers_all_muscles(conn):
+    rep = muscle_science_report(conn)
+    assert {r["muscle"] for r in rep} >= {
+        "biceps",
+        "glutes",
+        "quads",
+        "chest",
+        "triceps",
+        "forearms",
+        "adductors",
+    }
+
+
 def test_all_targeted_muscles_are_grounded(conn):
     # Standing guard: every muscle the engine targets must be curated + cited,
     # every prescribed exercise must exist in the catalog, every row cited.
     targeted = [
         r[0]
-        for r in conn.execute(
-            "SELECT DISTINCT muscle_group FROM muscle_volume_targets"
-        ).fetchall()
+        for r in conn.execute("SELECT DISTINCT muscle_group FROM muscle_volume_targets").fetchall()
     ]
     dev = load_muscle_development(conn)
     catalog = {
