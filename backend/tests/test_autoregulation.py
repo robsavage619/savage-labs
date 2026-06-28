@@ -279,7 +279,31 @@ def test_biceps_picks_carry_citation_and_rep_target(conn):
 
 def test_uncurated_muscle_falls_back(conn):
     # A muscle with no exercise_science rows is omitted (caller uses recency menu).
-    assert "chest" not in evidence_menu(conn, ["chest"])
+    assert "totally_made_up_muscle" not in evidence_menu(conn, ["totally_made_up_muscle"])
+
+
+def test_all_targeted_muscles_are_grounded(conn):
+    # Standing guard: every muscle the engine targets must be curated + cited,
+    # every prescribed exercise must exist in the catalog, every row cited.
+    targeted = [
+        r[0]
+        for r in conn.execute(
+            "SELECT DISTINCT muscle_group FROM muscle_volume_targets"
+        ).fetchall()
+    ]
+    dev = load_muscle_development(conn)
+    catalog = {
+        r[0] for r in conn.execute("SELECT exercise_name FROM exercise_muscle_map").fetchall()
+    }
+    menu = evidence_menu(conn, targeted)
+    for m in targeted:
+        assert m in dev, f"{m} has no muscle_development brief"
+        picks = menu.get(m, [])
+        assert picks, f"{m} returns no grounded exercises"
+        for p in picks:
+            assert p["exercise"] in catalog, f"{m}: {p['exercise']} not in catalog"
+            assert p["citation"] and p["citation_url"], f"{m}: {p['exercise']} uncited"
+            assert 1 <= p["rep_low"] < p["rep_high"] <= 40
 
 
 def test_muscle_development_brief_loaded(conn):
