@@ -35,6 +35,9 @@ class WorkoutPlanSubmission(BaseModel):
     source: str = "claude"
     push_to_hevy: bool = False
     plan_date: str | None = None  # ISO date override; auto-detected from workout history if omitted
+    override_reason: str | None = (
+        None  # non-empty → train through max_intensity by one tier, logged
+    )
 
 
 class EmphasisSubmission(BaseModel):
@@ -2737,6 +2740,12 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     This endpoint is the write-path used by the Claude chat interface.
     Auto-regulation gates from today's `DailyState` are enforced — plans
     that violate them are rejected with HTTP 409.
+
+    Pass `override_reason` to deliberately train through the max_intensity
+    gate by one tier (see `validate_plan`'s docstring for what it does and
+    does not loosen). Every override that's actually exercised — i.e. the
+    plan genuinely exceeded the true gate, not just carried an unused reason
+    string — is logged to `gate_overrides` for audit.
     """
     conn = get_read_conn()
     try:
@@ -2752,7 +2761,7 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
         state = compute_daily_state(
             conn, planning_date=plan_date if plan_date != date.today() else None
         )
-        from shc.ai.workout_planner import e1rm_by_exercise
+        from shc.ai.workout_planner import INTENSITY_ORDER, e1rm_by_exercise
 
         e1rm_ceilings = e1rm_by_exercise(conn, plan_date)
 
@@ -2767,6 +2776,19 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
             e1rm_ceilings=e1rm_ceilings,
             allowed_citations=valid_citation_filenames(),
             conn=conn,
+            override_reason=body.override_reason,
+        )
+
+        # Audit only a GENUINE override — a reason was supplied AND the plan
+        # actually needed it (exceeded the true, un-loosened gate). A reason
+        # carried on a plan that was already within the gate logs nothing.
+        gates = state.get("gates", {})
+        true_max = gates.get("max_intensity", "high")
+        req_intensity = body.plan.get("recommendation", {}).get("intensity")
+        override_used = bool(
+            body.override_reason
+            and req_intensity in INTENSITY_ORDER
+            and INTENSITY_ORDER.index(req_intensity) > INTENSITY_ORDER.index(true_max)
         )
     except GateViolation as exc:
         raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
@@ -2774,6 +2796,31 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         conn.close()
+
+    if override_used:
+        import json
+        import uuid
+
+        async with write_ctx() as wconn:
+            wconn.execute(
+                "INSERT INTO gate_overrides (id, plan_date, requested_intensity, "
+                "gate_max_intensity, reason, gates_bypassed_json) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    str(uuid.uuid4()),
+                    plan_date,
+                    req_intensity,
+                    true_max,
+                    body.override_reason,
+                    json.dumps(gates.get("reasons", [])),
+                ],
+            )
+        log.warning(
+            "gate override exercised: %s requested (gate=%s) on %s — %s",
+            req_intensity,
+            true_max,
+            plan_date.isoformat(),
+            body.override_reason,
+        )
 
     plan_date_iso = plan_date.isoformat()
     # Persist whether a deload genuinely fired today (gate, not narrative text).

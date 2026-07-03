@@ -98,6 +98,14 @@ DELOAD_STATE = {
         "reasons": [],
     }
 }
+REST_STATE = {
+    "gates": {
+        "max_intensity": "rest",
+        "deload_required": False,
+        "forbid_muscle_groups": ["legs"],
+        "reasons": ["Resistance ACWR 2.04 > 1.87 — lifting fatigue spike, rest required"],
+    }
+}
 
 
 def test_rejects_supramaximal_pseudo_deload() -> None:
@@ -147,6 +155,54 @@ def test_intensity_exceeding_gate_rejected() -> None:
     p = _plan(intensity="high", target_rpe=9, exercises=[_ex("Face Pull", 50, "8")])
     with pytest.raises(GateViolation):
         validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL)
+
+
+# ── override_reason (gate-override feature) ─────────────────────────────────
+
+
+def test_rest_gate_rejects_low_intensity_without_override() -> None:
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 40, "8")])
+    with pytest.raises(GateViolation, match="rest"):
+        validate_plan(p, state=REST_STATE, e1rm_ceilings=CEIL)
+
+
+def test_override_reason_loosens_rest_gate_by_one_tier() -> None:
+    """override_reason lets a "low" plan clear a "rest" gate — exactly one tier."""
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 40, "8")])
+    assert (
+        validate_plan(
+            p, state=REST_STATE, e1rm_ceilings=CEIL, override_reason="feel good, want to lift"
+        )
+        is True
+    )
+
+
+def test_override_reason_does_not_jump_two_tiers() -> None:
+    """A "rest" gate loosens to "low" at most — "moderate" still rejected even
+    with a reason. The override is a bounded concession, not a blank check."""
+    p = _plan(intensity="moderate", target_rpe=7, exercises=[_ex("Face Pull", 40, "8")])
+    with pytest.raises(GateViolation):
+        validate_plan(
+            p, state=REST_STATE, e1rm_ceilings=CEIL, override_reason="feel good, want to lift"
+        )
+
+
+def test_override_reason_does_not_bypass_forbidden_muscle_groups() -> None:
+    """override_reason loosens the fatigue-model intensity cap only — it must
+    NOT let a forbidden muscle group (here: legs, forbidden independent of
+    today's sleep/ACWR signals) train through."""
+    p = _plan(intensity="low", exercises=[_ex("Goblet Squat", 60, "8")])
+    with pytest.raises(GateViolation, match="forbidden"):
+        validate_plan(
+            p, state=REST_STATE, e1rm_ceilings=CEIL, override_reason="feel good, want to lift"
+        )
+
+
+def test_override_reason_unused_when_plan_already_within_gate() -> None:
+    """A reason present on a plan that's already within the true gate changes
+    nothing — validate_plan just passes, same as with no reason at all."""
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 50, "8")])
+    assert validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL, override_reason="unused") is True
 
 
 def test_deload_requires_low_rpe() -> None:

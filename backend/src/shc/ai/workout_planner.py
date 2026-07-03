@@ -808,6 +808,10 @@ class GateViolation(ValueError):
 MAX_WORKING_SETS = 22
 MAX_SESSION_MIN = 75
 
+# Shared with dashboard.py's override-audit check — the ordering the intensity
+# gate reasons about, from most to least restrictive.
+INTENSITY_ORDER = ("rest", "low", "moderate", "high")
+
 # Working-set ceiling for a relative clinical contraindication (#21): acute
 # illness / significant anemia warrant a reduced session, not a hard stop.
 _RELATIVE_CLINICAL_CAP = 12
@@ -857,10 +861,19 @@ def load_cap_pct(gates: dict[str, Any]) -> int:
     is exactly how progressive overload registers a new peak. Capping high days
     at <100% would freeze the strength ceiling and create a different "stuck"
     loop. The 3% tolerance in the validator stacks on top of these.
+
+    "rest" is mapped explicitly (60%, below deload's 70%) rather than falling
+    through to the 103% default: that fallback is only correct when
+    max_intensity is genuinely unset. Once ``validate_plan``'s override path
+    lets a "low"-intensity plan clear a "rest" gate, gates.max_intensity is
+    still "rest" here (the override loosens the intensity check, not the
+    underlying gate state) — without an explicit rest entry, an overridden
+    rest day would silently get the *least* restrictive load cap instead of
+    the most.
     """
     if gates.get("deload_required"):
         return 70
-    return {"low": 78, "moderate": 90}.get(gates.get("max_intensity", "high"), 103)
+    return {"rest": 60, "low": 78, "moderate": 90}.get(gates.get("max_intensity", "high"), 103)
 
 
 def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
@@ -1119,6 +1132,7 @@ def validate_plan(
     allowed_citations: set[str] | None = None,
     conn: Any | None = None,
     prescription: Any | None = None,
+    override_reason: str | None = None,
 ) -> bool:
     """Validate a plan dict against the schema AND the deterministic gates.
 
@@ -1145,6 +1159,16 @@ def validate_plan(
     Pass `prescription` (a ``Prescription`` from ``weekly_prescription``) to reuse
     an already-computed engine prescription for #18/#22; when omitted but `conn`
     is supplied it is computed on demand.
+
+    Pass `override_reason` (a non-empty explanation) to deliberately train
+    through the max_intensity gate — the fatigue-model cap loosens by exactly
+    ONE tier (rest→low, low→moderate, moderate→high), never more, and never
+    silently: the caller is expected to log the override for audit (see
+    dashboard.py's `/workout/plan`). This does NOT touch forbid_muscle_groups,
+    deload_required, or the clinical contraindication guard (#21) — those are
+    tissue-recovery-timing and medical constraints, not the discretionary
+    fatigue signal max_intensity represents, and overriding them isn't a
+    training-preference decision.
 
     The session-budget cap (#17 — working-set count + estimated duration) and the
     pull-gate hinge block (#19) run from `state` alone and need no `conn`.
@@ -1207,14 +1231,24 @@ def validate_plan(
     # Auto-regulation gate enforcement.
     if state is not None:
         gates = state.get("gates", {})
-        order = ("rest", "low", "moderate", "high")
+        order = INTENSITY_ORDER
         max_allowed = gates.get("max_intensity", "high")
         if rec["intensity"] not in order:
             raise ValueError(f"Invalid intensity: {rec['intensity']!r}")
-        if order.index(rec["intensity"]) > order.index(max_allowed):
+        effective_max = max_allowed
+        if override_reason and order.index(max_allowed) < len(order) - 1:
+            # Loosen by exactly one tier — a deliberate, logged choice to train
+            # through the fatigue/sleep-architecture signal, not a blank check.
+            # gates itself is left unmodified: load_cap_pct and the e1RM ceiling
+            # check below still read the TRUE max_intensity, so an overridden
+            # rest day still gets rest-day load caps even though the session
+            # itself is now permitted to happen.
+            effective_max = order[order.index(max_allowed) + 1]
+        if order.index(rec["intensity"]) > order.index(effective_max):
             raise GateViolation(
-                f"Plan intensity {rec['intensity']!r} exceeds gate {max_allowed!r}. "
-                f"Reasons: {'; '.join(gates.get('reasons', [])) or 'see DailyState.gates'}"
+                f"Plan intensity {rec['intensity']!r} exceeds gate {max_allowed!r}"
+                + (f" (override to {effective_max!r} insufficient)" if override_reason else "")
+                + f". Reasons: {'; '.join(gates.get('reasons', [])) or 'see DailyState.gates'}"
             )
         forbid = set(gates.get("forbid_muscle_groups", []))
         if forbid:

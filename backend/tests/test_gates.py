@@ -60,6 +60,15 @@ def test_load_cap_by_intensity() -> None:
     assert load_cap_pct({"max_intensity": "high"}) == 103
 
 
+def test_load_cap_rest_is_most_conservative() -> None:
+    """A "rest"-gated day trained via an override must NOT fall through to the
+    103% high-day default — it needs its own, more conservative cap (below
+    deload's 70%), since the underlying gate state is still "rest" even when
+    the override lets a "low" plan clear the intensity check."""
+    assert load_cap_pct({"max_intensity": "rest"}) == 60
+    assert load_cap_pct({"max_intensity": "rest"}) < load_cap_pct({"deload_required": True})
+
+
 def test_high_day_cap_allows_progressive_overload() -> None:
     """A high day must sit above 100% so a new e1RM peak isn't rejected."""
     assert load_cap_pct({"max_intensity": "high"}) > 100
