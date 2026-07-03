@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Tests for Phase 3 self-learning: volume landmark fitting and ACWR band fitting."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -13,9 +13,11 @@ from shc.training.self_learning import (
     compute_all_muscle_signal_quality,
     compute_muscle_signal_quality,
     fit_acwr_bands,
+    fit_sleep_bands,
     fit_volume_landmarks,
     materialize_signal_quality,
     persist_acwr_bands,
+    persist_sleep_bands,
     persist_volume_landmarks,
     prescription_accuracy,
     read_accuracy_history,
@@ -24,6 +26,7 @@ from shc.training.self_learning import (
     read_deload_threshold,
     read_muscle_prescription_accuracy,
     read_signal_quality_cache,
+    read_sleep_bands,
     regrade_stalled_with_tonnage_blend,
     score_prescription_outcomes,
     snapshot_accuracy,
@@ -184,6 +187,91 @@ def test_read_acwr_bands_partial_returns_none(conn) -> None:
         " VALUES ('resistance', 'rest', 2.0, 10)"
     )
     assert read_acwr_bands(conn) is None
+
+
+# ── fit_sleep_bands ───────────────────────────────────────────────────────────
+
+
+def test_fit_sleep_bands_insufficient_data_returns_none(conn) -> None:
+    # Empty sleep table → no nightly history → returns None.
+    result = fit_sleep_bands(conn, min_nights=30)
+    assert result is None
+
+
+def _insert_night(conn, night_date: date, disturbance_count: int, sleep_cycle_count: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO sleep (id, source, night_date, ts_in, ts_out,
+                            disturbance_count, sleep_cycle_count, content_hash)
+        VALUES (?, 'whoop', ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            f"night-{night_date.isoformat()}",
+            night_date,
+            datetime.combine(night_date, datetime.min.time()),
+            datetime.combine(night_date, datetime.min.time()) + timedelta(hours=8),
+            disturbance_count,
+            sleep_cycle_count,
+            f"hash-{night_date.isoformat()}",
+        ],
+    )
+
+
+def test_fit_sleep_bands_returns_none_below_min_nights(conn) -> None:
+    today = date(2026, 6, 1)
+    for i in range(20):  # below the 30-night minimum
+        _insert_night(conn, today - timedelta(days=i), disturbance_count=14, sleep_cycle_count=2)
+    assert fit_sleep_bands(conn, min_nights=30) is None
+
+
+def test_fit_sleep_bands_reflects_chronic_osa_baseline(conn) -> None:
+    """A consistently high-disturbance/low-cycle history (simulated untreated
+    OSA) should fit a personal band well above/below the population default,
+    not just reproduce it."""
+    today = date(2026, 6, 1)
+    for i in range(40):
+        _insert_night(conn, today - timedelta(days=i), disturbance_count=14, sleep_cycle_count=2)
+    result = fit_sleep_bands(conn, min_nights=30)
+    assert result is not None
+    assert result["disturbance_p80"] == pytest.approx(14.0)
+    assert result["cycle_p20"] == pytest.approx(2.0)
+    assert result["disturbance_n"] == 40
+    assert result["cycle_n"] == 40
+
+
+# ── persist + read_sleep_bands ────────────────────────────────────────────────
+
+
+def test_read_sleep_bands_empty_table_returns_none(conn) -> None:
+    assert read_sleep_bands(conn) is None
+
+
+def test_persist_and_read_sleep_bands_roundtrip(conn) -> None:
+    today = date(2026, 6, 1)
+    for i in range(40):
+        _insert_night(conn, today - timedelta(days=i), disturbance_count=14, sleep_cycle_count=2)
+
+    stored = persist_sleep_bands(conn, min_nights=30)
+    assert stored is True
+
+    bands = read_sleep_bands(conn)
+    assert bands is not None
+    assert bands["DISTURBANCE_P80"] == pytest.approx(14.0)
+    assert bands["CYCLE_P20"] == pytest.approx(2.0)
+
+
+def test_persist_sleep_bands_insufficient_data_returns_false(conn) -> None:
+    assert persist_sleep_bands(conn, min_nights=30) is False
+    assert read_sleep_bands(conn) is None
+
+
+def test_read_sleep_bands_partial_returns_none(conn) -> None:
+    """If only one metric is stored (e.g. partial migration), return None."""
+    conn.execute(
+        "INSERT INTO personal_sleep_bands (metric, threshold_name, value, sample_nights)"
+        " VALUES ('disturbance_count', 'p80', 14.0, 40)"
+    )
+    assert read_sleep_bands(conn) is None
 
 
 # ── persist_volume_landmarks ─────────────────────────────────────────────────

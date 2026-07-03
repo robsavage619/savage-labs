@@ -392,6 +392,157 @@ def read_acwr_bands(conn: duckdb.DuckDBPyConnection) -> dict[str, float] | None:
     return result if len(result) == 4 else None
 
 
+# ── Sleep-architecture band fitting ───────────────────────────────────────────
+#
+# disturbance_count and sleep_cycle_count gates in metrics.py used fixed
+# population thresholds with no personal baseline, unlike every other
+# autonomic gate. Rob has diagnosed, off-CPAP obstructive sleep apnea, which
+# structurally elevates disturbance counts and fragments cycle counts most
+# nights regardless of whether a given night is unusually bad for him. This
+# fits personal percentiles so the gate reacts to deviation from his own
+# baseline instead of a population norm his condition guarantees he'll clear.
+
+# Minimum nights with non-null values before fitting (otherwise the
+# distribution is too noisy to trust). Nightly data accrues far faster than
+# the weekly ACWR series, so 30 nights (~1 month) is enough to describe a
+# stable baseline without waiting a full quarter.
+_SLEEP_MIN_NIGHTS = 30
+
+# Lookback window for the historical query. Capped (unlike an unbounded scan)
+# so a stale early-WHOOP or pre-diagnosis era doesn't bias the percentile —
+# same rationale as the ACWR fitter's 728-day cap, just tighter since sleep
+# architecture is a more stable trait than training load.
+_SLEEP_LOOKBACK_DAYS = 180
+
+# disturbance_count: gate fires ABOVE the threshold, so "high but normal for
+# Rob" sits in the upper tail — 80th percentile of his own nights.
+# sleep_cycle_count: gate fires BELOW the threshold, so "low but normal for
+# Rob" sits in the lower tail — 20th percentile of his own nights.
+_SLEEP_PERCENTILES = {"disturbance_count": 0.80, "sleep_cycle_count": 0.20}
+
+
+def _historical_sleep_metric(conn: duckdb.DuckDBPyConnection, column: str) -> list[float]:
+    """Per-night history of ``column`` (disturbance_count | sleep_cycle_count).
+
+    Collapses multi-segment nights to the longest session and excludes naps —
+    mirrors the dedup in metrics.py's ``_sleep()`` so the fitted distribution
+    matches what the live gate actually sees.
+    """
+    rows = conn.execute(
+        f"""
+        SELECT night_date, epoch(ts_out - ts_in) AS dur, {column}
+        FROM sleep
+        WHERE night_date >= (CURRENT_DATE - INTERVAL '{_SLEEP_LOOKBACK_DAYS} DAYS')
+          AND ts_in IS NOT NULL AND ts_out IS NOT NULL
+          AND COALESCE(is_nap, FALSE) = FALSE
+          AND {column} IS NOT NULL
+        ORDER BY night_date, ts_in
+        """
+    ).fetchall()
+    by_night: dict[str, tuple[float, float]] = {}
+    for night_date, dur, val in rows:
+        key = str(night_date)
+        prev = by_night.get(key)
+        if prev is None or (dur or 0) > prev[0]:
+            by_night[key] = (dur or 0, val)
+    return [float(v) for _, v in by_night.values()]
+
+
+def fit_sleep_bands(
+    conn: duckdb.DuckDBPyConnection,
+    min_nights: int = _SLEEP_MIN_NIGHTS,
+) -> dict[str, float] | None:
+    """Fit personal sleep-architecture gate thresholds from nightly history.
+
+    Returns ``{"disturbance_p80", "cycle_p20", "disturbance_n", "cycle_n"}``
+    or None if either metric has insufficient history.
+    """
+    disturbance_vals = _historical_sleep_metric(conn, "disturbance_count")
+    cycle_vals = _historical_sleep_metric(conn, "sleep_cycle_count")
+
+    if len(disturbance_vals) < min_nights or len(cycle_vals) < min_nights:
+        log.warning(
+            "fit_sleep_bands: only %d/%d nights of disturbance/cycle history (need %d) — skip",
+            len(disturbance_vals),
+            len(cycle_vals),
+            min_nights,
+        )
+        return None
+
+    disturbance_p80 = round(
+        _percentile(disturbance_vals, _SLEEP_PERCENTILES["disturbance_count"]), 1
+    )
+    cycle_p20 = round(_percentile(cycle_vals, _SLEEP_PERCENTILES["sleep_cycle_count"]), 1)
+
+    log.info(
+        "fit_sleep_bands: disturbance p80=%.1f (n=%d), cycle p20=%.1f (n=%d)",
+        disturbance_p80,
+        len(disturbance_vals),
+        cycle_p20,
+        len(cycle_vals),
+    )
+    return {
+        "disturbance_p80": disturbance_p80,
+        "cycle_p20": cycle_p20,
+        "disturbance_n": len(disturbance_vals),
+        "cycle_n": len(cycle_vals),
+    }
+
+
+def persist_sleep_bands(
+    conn: duckdb.DuckDBPyConnection,
+    min_nights: int = _SLEEP_MIN_NIGHTS,
+) -> bool:
+    """Fit and persist personal sleep bands to the personal_sleep_bands table.
+
+    Returns True if bands were stored, False if insufficient data.
+    """
+    bands = fit_sleep_bands(conn, min_nights=min_nights)
+    if bands is None:
+        return False
+
+    rows = [
+        ("disturbance_count", "p80", bands["disturbance_p80"], bands["disturbance_n"]),
+        ("sleep_cycle_count", "p20", bands["cycle_p20"], bands["cycle_n"]),
+    ]
+    for metric, name, value, n in rows:
+        conn.execute(
+            """
+            INSERT INTO personal_sleep_bands (metric, threshold_name, value, sample_nights, fitted_at)
+            VALUES (?, ?, ?, ?, now())
+            ON CONFLICT (metric, threshold_name) DO UPDATE SET
+                value         = excluded.value,
+                sample_nights = excluded.sample_nights,
+                fitted_at     = now()
+            """,
+            [metric, name, value, n],
+        )
+    return True
+
+
+def read_sleep_bands(conn: duckdb.DuckDBPyConnection) -> dict[str, float] | None:
+    """Read fitted sleep bands from the DB.
+
+    Returns a flat dict with keys matching the metrics.py constant names
+    (DISTURBANCE_P80, CYCLE_P20) or None if the table is empty (caller uses
+    population defaults).
+    """
+    rows = conn.execute("SELECT metric, threshold_name, value FROM personal_sleep_bands").fetchall()
+    if not rows:
+        return None
+
+    mapping = {
+        ("disturbance_count", "p80"): "DISTURBANCE_P80",
+        ("sleep_cycle_count", "p20"): "CYCLE_P20",
+    }
+    result = {}
+    for metric, name, value in rows:
+        key = mapping.get((metric, name))
+        if key:
+            result[key] = float(value)
+    return result if len(result) == 2 else None
+
+
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
 
@@ -399,11 +550,13 @@ def fit_all(conn: duckdb.DuckDBPyConnection, meso_id: str) -> None:
     """Run both fitting pipelines and persist results.  Called from compute_all_scores."""
     landmarks_stored = persist_volume_landmarks(conn, meso_id)
     bands_stored = persist_acwr_bands(conn)
+    sleep_bands_stored = persist_sleep_bands(conn)
     deload_cal = calibrate_deload_trigger(conn)
     log.info(
-        "fit_all: %d personal volume landmarks, ACWR bands %s, deload threshold %s",
+        "fit_all: %d personal volume landmarks, ACWR bands %s, sleep bands %s, deload threshold %s",
         landmarks_stored,
         "stored" if bands_stored else "skipped (insufficient data)",
+        "stored" if sleep_bands_stored else "skipped (insufficient data)",
         deload_cal.get("status"),
     )
 

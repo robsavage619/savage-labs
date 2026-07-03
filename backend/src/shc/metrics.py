@@ -76,6 +76,13 @@ COND_ACWR_FORBID_LEGS = 1.8
 # weeks as spikes until the sample describes a stable era.
 _ACWR_TIGHTEN_MIN_WEEKS = 24
 
+# Sleep-architecture gate population defaults (protective ceilings, not
+# homeostats — Rob has diagnosed, off-CPAP sleep apnea, so these fire almost
+# every night on the population default alone; a personal fit may only LOOSEN
+# them, same treatment as the ACWR LOW/MOD bands, never tighten below).
+_SLEEP_DISTURBANCE_POPULATION = 12.0
+_SLEEP_CYCLE_POPULATION = 4.0
+
 Tier = Literal["green", "yellow", "red"]
 Intensity = Literal["high", "moderate", "low", "rest"]
 
@@ -1238,6 +1245,15 @@ def _apply_band(personal: float, population: float, floor_only: bool) -> float:
     return max(personal, population) if floor_only else personal
 
 
+def _apply_band_loosen_down(personal: float, population: float) -> float:
+    """Like ``_apply_band(floor_only=True)`` but for gates where LOOSENING
+    means LOWERING the trigger threshold — e.g. sleep-cycle count, where the
+    population default is a protective ceiling a chronic condition may
+    legitimately clear most nights without the night being unusually bad.
+    """
+    return min(personal, population)
+
+
 def _gates(
     rec: RecoveryMetrics,
     sleep: SleepMetrics,
@@ -1297,6 +1313,31 @@ def _gates(
 
             _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
 
+    # Load personal sleep-architecture bands if available; fall back to
+    # population constants. Loosen-only (see _apply_band_loosen_down): a thin
+    # or absent fit keeps the protective population default, never gets
+    # stricter than it.
+    disturbance_threshold = _SLEEP_DISTURBANCE_POPULATION
+    cycle_threshold = _SLEEP_CYCLE_POPULATION
+    if conn is not None:
+        try:
+            from shc.training.self_learning import read_sleep_bands
+
+            personal_sleep = read_sleep_bands(conn)
+            if personal_sleep:
+                disturbance_threshold = _apply_band(
+                    personal_sleep["DISTURBANCE_P80"],
+                    _SLEEP_DISTURBANCE_POPULATION,
+                    floor_only=True,
+                )
+                cycle_threshold = _apply_band_loosen_down(
+                    personal_sleep["CYCLE_P20"], _SLEEP_CYCLE_POPULATION
+                )
+        except Exception as exc:
+            import logging as _log
+
+            _log.getLogger(__name__).debug("personal sleep bands unavailable: %s", exc)
+
     # Hard rest gates.
     if rec.hrv_sigma is not None and rec.hrv_sigma < -1.5:
         g.max_intensity = "low"
@@ -1337,11 +1378,12 @@ def _gates(
     # Sleep architecture: <4 sleep cycles is structurally inadequate even when
     # total hours look fine (Vitale 2019; one full cycle = ~90 min, 4 cycles is
     # the minimum for full REM/SWS recovery).
-    if sleep.sleep_cycle_count_last is not None and sleep.sleep_cycle_count_last < 4:
+    if sleep.sleep_cycle_count_last is not None and sleep.sleep_cycle_count_last < cycle_threshold:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
         reasons.append(
-            f"Only {sleep.sleep_cycle_count_last} sleep cycles — fragmented architecture, cap MODERATE"
+            f"Only {sleep.sleep_cycle_count_last} sleep cycles (personal floor "
+            f"{cycle_threshold:.1f}) — fragmented architecture, cap MODERATE"
         )
 
     # Sleep-quality gates (WHOOP sleep score breakdown).
@@ -1349,12 +1391,16 @@ def _gates(
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
         reasons.append(f"Sleep efficiency {sleep.efficiency_pct_last:.0f}% < 75% — cap MODERATE")
-    if sleep.disturbance_count_last is not None and sleep.disturbance_count_last >= 12:
+    if (
+        sleep.disturbance_count_last is not None
+        and sleep.disturbance_count_last >= disturbance_threshold
+    ):
         # Highly fragmented night → poor restoration even with adequate hours.
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
         reasons.append(
-            f"Sleep disturbances {sleep.disturbance_count_last} ≥ 12 — fragmented night, cap MODERATE"
+            f"Sleep disturbances {sleep.disturbance_count_last} ≥ {disturbance_threshold:.1f} "
+            "(personal baseline) — fragmented night, cap MODERATE"
         )
     if sleep.performance_pct_last is not None and sleep.performance_pct_last < 60:
         # Sleep need badly missed — recovery debt large enough to matter.

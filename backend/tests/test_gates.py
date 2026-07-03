@@ -311,3 +311,82 @@ def test_personal_acwr_rest_gate_still_personalizes(conn) -> None:
     load.resistance_acwr = 1.97  # above personal rest (1.96), below population rest (2.0)
     g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
     assert g.max_intensity == "rest"
+
+
+# ── Personal sleep-architecture bands (OSA baseline, not an acute flag) ──────
+
+
+def test_population_disturbance_threshold_fires_without_personal_band() -> None:
+    """Sanity check the population default (>=12) is what fires with no conn/history."""
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    sleep.disturbance_count_last = 14
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "moderate"
+    assert any("fragmented night" in r for r in g.reasons)
+
+
+def test_population_cycle_threshold_fires_without_personal_band() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    sleep.sleep_cycle_count_last = 2
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "moderate"
+    assert any("fragmented architecture" in r for r in g.reasons)
+
+
+def _insert_sleep_bands(conn, disturbance_p80: float, cycle_p20: float) -> None:
+    """read_sleep_bands requires BOTH metrics present (mirrors read_acwr_bands'
+    all-4-or-none contract) — always insert both rows even when a test only
+    exercises one of the two gates."""
+    conn.execute(
+        "INSERT INTO personal_sleep_bands (metric, threshold_name, value, sample_nights, fitted_at)"
+        " VALUES ('disturbance_count', 'p80', ?, 40, now())",
+        [disturbance_p80],
+    )
+    conn.execute(
+        "INSERT INTO personal_sleep_bands (metric, threshold_name, value, sample_nights, fitted_at)"
+        " VALUES ('sleep_cycle_count', 'p20', ?, 40, now())",
+        [cycle_p20],
+    )
+
+
+def test_personal_disturbance_band_loosens_for_chronic_osa_baseline(conn) -> None:
+    """A personal p80 fitted well above the population default (e.g. Rob's
+    OSA-driven nightly norm of ~14) should stop 14 disturbances from firing —
+    it's normal for him, not a fragmented-night flag."""
+    _insert_sleep_bands(conn, disturbance_p80=18.0, cycle_p20=2.0)
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    sleep.disturbance_count_last = 14
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "high"
+
+
+def test_personal_disturbance_band_never_tightens_below_population(conn) -> None:
+    """Even if a personal fit comes in BELOW the population default (unusual,
+    thin/atypical sample), the gate must not get stricter than 12 — loosen-only,
+    same treatment as the ACWR LOW/MOD caps."""
+    _insert_sleep_bands(conn, disturbance_p80=8.0, cycle_p20=2.0)
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    sleep.disturbance_count_last = 10  # above personal 8, below population 12
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "high"
+
+
+def test_personal_cycle_band_loosens_for_chronic_osa_baseline(conn) -> None:
+    """A personal p20 fitted well below the population default (e.g. Rob's
+    OSA-driven nightly norm of ~2 cycles) should stop 2 cycles from firing —
+    it's normal for him, not a fragmented-architecture flag."""
+    _insert_sleep_bands(conn, disturbance_p80=18.0, cycle_p20=2.0)
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    sleep.sleep_cycle_count_last = 2
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "high"
+
+
+def test_personal_cycle_band_never_tightens_above_population(conn) -> None:
+    """Even if a personal fit comes in ABOVE the population default (unusual,
+    thin/atypical sample), the gate must not get stricter than <4 — loosen-only."""
+    _insert_sleep_bands(conn, disturbance_p80=18.0, cycle_p20=5.0)
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    sleep.sleep_cycle_count_last = 4  # below personal 5, at population floor 4 (not < 4)
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "high"
