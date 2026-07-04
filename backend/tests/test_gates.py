@@ -164,12 +164,16 @@ def test_clean_inputs_leave_high() -> None:
     assert g.deload_required is False
 
 
-def test_acwr_rest_threshold_uncoupled_scale() -> None:
-    # Bands recalibrated to the uncoupled ACWR scale (M2): rest above 2.0.
+def test_acwr_spike_caps_low_never_rest() -> None:
+    # A resistance-ACWR spike is an overreaching signal, not an injury-validated
+    # stop-gate: it caps LOAD (LOW), it does not forbid training. A full rest day
+    # would drop chronic load and worsen the next day's ratio (anti-progression
+    # trap). Only an objective recovery gate (illness/HRV/SpO₂) may push to rest.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.resistance_acwr = 2.1  # resistance arm gates intensity (pooled is display-only)
+    load.resistance_acwr = 2.1  # above population rest band (2.0)
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert g.max_intensity == "rest"
+    assert g.max_intensity == "low"
+    assert any("cap LOW" in r for r in g.reasons)
 
 
 def test_acwr_low_threshold_uncoupled_scale() -> None:
@@ -303,9 +307,11 @@ def test_personal_acwr_caps_never_tighten_below_population(conn) -> None:
     assert g.max_intensity == "high"  # cap floored at population — not tightened
 
 
-def test_personal_acwr_rest_gate_still_personalizes(conn) -> None:
-    """REST is the true danger gate, not a progression cap, so a well-sampled
-    personal REST band MAY still tighten below the population default (2.0)."""
+def test_personal_acwr_rest_band_floored_at_population(conn) -> None:
+    """The REST band is floor_only like LOW/MOD: a personal fit may LOOSEN it
+    above 2.0 but never TIGHTEN below. Letting Rob's N=1 noise-dominated history
+    pull the hardest gate down to ~1.9 turned ordinary accumulation into a
+    "fatigue spike" and grounded good days — the anti-progression trap."""
     for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
         conn.execute(
             "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
@@ -317,29 +323,35 @@ def test_personal_acwr_rest_gate_still_personalizes(conn) -> None:
         "VALUES ('conditioning', 'forbid_legs', 1.88, 50, now())"
     )
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.resistance_acwr = 1.97  # above personal rest (1.96), below population rest (2.0)
+    load.resistance_acwr = 1.97  # above the fitted 1.96 but below the population floor (2.0)
     g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
-    assert g.max_intensity == "rest"
+    # Floored REST band (2.0) is NOT crossed, so no rest; 1.97 clears the LOW
+    # band (floored to 1.8) → cap LOW, not rest.
+    assert g.max_intensity == "low"
 
 
 # ── Personal sleep-architecture bands (OSA baseline, not an acute flag) ──────
 
 
-def test_population_disturbance_threshold_fires_without_personal_band() -> None:
-    """Sanity check the population default (>=12) is what fires with no conn/history."""
+def test_single_sleep_marker_does_not_cap_osa_normal() -> None:
+    """A lone fragmented-sleep marker crossing the population default is Rob's
+    OSA-normal — surfaced, not capping. Corroboration (>=2 concurrent markers) is
+    required to cap, mirroring the soreness gate's M11 rule."""
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    sleep.disturbance_count_last = 14
+    sleep.disturbance_count_last = 14  # >= population 12 → one marker fires
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert g.max_intensity == "moderate"
-    assert any("fragmented night" in r for r in g.reasons)
+    assert g.max_intensity == "high"
+    assert any("single marker" in r for r in g.reasons)
 
 
-def test_population_cycle_threshold_fires_without_personal_band() -> None:
+def test_two_sleep_markers_concur_caps_moderate() -> None:
+    """>=2 concurrent fragmented-sleep markers = a genuinely bad night → MODERATE."""
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    sleep.sleep_cycle_count_last = 2
+    sleep.sleep_cycle_count_last = 2  # < population 4
+    sleep.disturbance_count_last = 14  # >= population 12
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "moderate"
-    assert any("fragmented architecture" in r for r in g.reasons)
+    assert any("Fragmented night" in r for r in g.reasons)
 
 
 def _insert_sleep_bands(conn, disturbance_p80: float, cycle_p20: float) -> None:

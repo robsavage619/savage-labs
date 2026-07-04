@@ -1289,20 +1289,23 @@ def _gates(
                 # above the fitter's own minimum so the bar to tighten is
                 # strictly stricter than the bar to merely fit. Gating is
                 # per-arm on each arm's own sample_weeks.
-                res_n, cond_n = _acwr_band_sample_weeks(conn)
-                res_floor = res_n < _ACWR_TIGHTEN_MIN_WEEKS
+                _res_n, cond_n = _acwr_band_sample_weeks(conn)
                 cond_floor = cond_n < _ACWR_TIGHTEN_MIN_WEEKS
-                # The MODERATE and LOW intensity caps are absolute injury-spike
-                # ceilings (Gabbett), not homeostats. Fitted as percentiles of
-                # Rob's own load (mod = 65th pct), they sit BELOW the population
+                # All three resistance bands (REST/LOW/MOD) are absolute
+                # injury-spike ceilings (Gabbett), not homeostats. Fitted as
+                # percentiles of Rob's own load they sit BELOW the population
                 # thresholds and gate ordinary progressive overload as if it were
                 # a fatigue spike — the ACWR-as-anti-progression trap, which is
-                # actively hostile to a hypertrophy goal. They may only ever
-                # LOOSEN above population (earn more rope), never tighten below
-                # it: floor_only is forced True regardless of sample depth. REST
-                # (the true danger gate) and conditioning keep sample-gated
-                # personalization and may still tighten once well-fit.
-                res_rest = _apply_band(personal["RES_ACWR_REST"], RES_ACWR_REST, res_floor)
+                # actively hostile to a hypertrophy goal. So every resistance band
+                # is floor_only: it may only LOOSEN above population (earn more
+                # rope), never tighten below it. Resistance ACWR on Rob's N=1
+                # noise-dominated chronic baseline is not injury-validated;
+                # letting his thin-data history tighten the hardest gate below 2.0
+                # turned ordinary accumulation into a "fatigue spike" and grounded
+                # good days. Conditioning keeps sample-gated personalization
+                # (field-sport evidence is stronger) and may still tighten once
+                # well-fit.
+                res_rest = _apply_band(personal["RES_ACWR_REST"], RES_ACWR_REST, floor_only=True)
                 res_low = _apply_band(personal["RES_ACWR_LOW"], RES_ACWR_LOW, floor_only=True)
                 res_mod = _apply_band(personal["RES_ACWR_MOD"], RES_ACWR_MOD, floor_only=True)
                 cond_forbid_legs = _apply_band(
@@ -1375,40 +1378,43 @@ def _gates(
                 "watch for additional illness signs"
             )
 
-    # Sleep architecture: <4 sleep cycles is structurally inadequate even when
-    # total hours look fine (Vitale 2019; one full cycle = ~90 min, 4 cycles is
-    # the minimum for full REM/SWS recovery).
+    # Sleep-architecture / quality caps. Every one of these markers is
+    # chronically "off" on Rob's diagnosed off-CPAP OSA baseline (Vitale 2019:
+    # <4 cycles is structurally inadequate; efficiency/disturbances/performance
+    # are the WHOOP score breakdown), so any ONE firing is his normal, not an
+    # acute red flag — capping intensity on it every night parked him at MODERATE.
+    # Following the same corroboration rule the soreness gate uses (M11), a lone
+    # marker is surfaced but only ≥2 concurrent markers — a genuinely fragmented
+    # night relative to his baseline — cap intensity.
+    sleep_flags: list[str] = []
     if sleep.sleep_cycle_count_last is not None and sleep.sleep_cycle_count_last < cycle_threshold:
-        if g.max_intensity == "high":
-            g.max_intensity = "moderate"
-        reasons.append(
-            f"Only {sleep.sleep_cycle_count_last} sleep cycles (personal floor "
-            f"{cycle_threshold:.1f}) — fragmented architecture, cap MODERATE"
+        sleep_flags.append(
+            f"only {sleep.sleep_cycle_count_last} sleep cycles (personal floor "
+            f"{cycle_threshold:.1f})"
         )
-
-    # Sleep-quality gates (WHOOP sleep score breakdown).
     if sleep.efficiency_pct_last is not None and sleep.efficiency_pct_last < 75:
-        if g.max_intensity == "high":
-            g.max_intensity = "moderate"
-        reasons.append(f"Sleep efficiency {sleep.efficiency_pct_last:.0f}% < 75% — cap MODERATE")
+        sleep_flags.append(f"sleep efficiency {sleep.efficiency_pct_last:.0f}% < 75%")
     if (
         sleep.disturbance_count_last is not None
         and sleep.disturbance_count_last >= disturbance_threshold
     ):
-        # Highly fragmented night → poor restoration even with adequate hours.
-        if g.max_intensity == "high":
-            g.max_intensity = "moderate"
-        reasons.append(
-            f"Sleep disturbances {sleep.disturbance_count_last} ≥ {disturbance_threshold:.1f} "
-            "(personal baseline) — fragmented night, cap MODERATE"
+        sleep_flags.append(
+            f"disturbances {sleep.disturbance_count_last} ≥ {disturbance_threshold:.1f} "
+            "(personal baseline)"
         )
     if sleep.performance_pct_last is not None and sleep.performance_pct_last < 60:
-        # Sleep need badly missed — recovery debt large enough to matter.
+        sleep_flags.append(f"sleep performance {sleep.performance_pct_last:.0f}% < 60%")
+    if len(sleep_flags) >= 2:
         if g.max_intensity == "high":
             g.max_intensity = "moderate"
         reasons.append(
-            f"Sleep performance {sleep.performance_pct_last:.0f}% < 60% — sleep debt, cap MODERATE"
+            "Fragmented night — " + "; ".join(sleep_flags) + " (≥2 sleep markers) → cap MODERATE"
         )
+    elif sleep_flags:
+        reasons.append(
+            f"Sleep marker: {sleep_flags[0]} — single marker (OSA-normal), noted but not capping"
+        )
+
     if chk.illness_flag:
         g.max_intensity = "rest"
         reasons.append("Illness flag set — rest day")
@@ -1420,8 +1426,19 @@ def _gates(
     # week from grounding under-stimulated upper-body lifting.
     res = load.resistance_acwr
     if res is not None and res > res_rest:
-        g.max_intensity = "rest"
-        reasons.append(f"Resistance ACWR {res} > {res_rest} — lifting fatigue spike, rest required")
+        # An overreaching signal reduces LOAD; it does not forbid training.
+        # Resistance ACWR on an N=1 noise-dominated chronic baseline is not an
+        # injury-validated stop-gate, and a full rest day drops chronic load →
+        # worsens tomorrow's ratio (the anti-progression trap). A reduced
+        # technique/pump day keeps chronic load climbing so the ratio
+        # self-corrects. Only an objective recovery gate above (illness, HRV,
+        # SpO₂) may push below LOW to rest.
+        if g.max_intensity in ("high", "moderate"):
+            g.max_intensity = "low"
+        reasons.append(
+            f"Resistance ACWR {res} > {res_rest} — high lifting fatigue, cap LOW "
+            "(reduced load, not rest — resting would worsen the ratio)"
+        )
     elif res is not None and res > res_low:
         if g.max_intensity in ("high", "moderate"):
             g.max_intensity = "low"
@@ -1475,10 +1492,18 @@ def _gates(
     # prescribes (maintain or increase frequency, not reduce it).
     for grp in ("legs", "push", "pull"):
         rest = getattr(load, f"days_since_{grp}")
-        threshold = 3 if grp == "legs" else 2
         last_rpe = getattr(load, f"last_rpe_{grp}")
-        if last_rpe is not None and last_rpe <= 6.5:
-            threshold -= 1
+        if grp == "legs":
+            # Frequency is the over-40 hypertrophy lever (vault: raise it, don't
+            # cut it). Default legs to 48h; only a genuine near-failure session
+            # (avg RPE ≥ 9) earns the full 72h. Per-muscle soreness (below) does
+            # the fine-grained gating a flat calendar rule can't — a flat 72h gate
+            # after moderate leg days was capping legs at ~2×/wk.
+            threshold = 3 if (last_rpe is not None and last_rpe >= 9.0) else 2
+        else:
+            threshold = 2
+            if last_rpe is not None and last_rpe <= 6.5:
+                threshold -= 1
         if rest is not None and rest < threshold:
             g.forbid_muscle_groups.append(grp)
             rpe_note = f" (last session avg RPE {last_rpe:.1f})" if last_rpe else ""
