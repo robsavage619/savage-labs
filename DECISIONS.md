@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-03 — ACWR uses a 21-day uncoupled chronic window (deliberate deviation from Gabbett 28-day)
+
+**Context.** The 2026-07-03 soundness audit flagged that the live ACWR gate uses a 7-day acute over a 21-day *uncoupled* chronic window `[today-27, today-7)`, while Gabbett/Malone's classic 1.5/1.8/2.0 injury thresholds were derived on a 28-day *coupled* chronic (acute ⊂ chronic). The band-fitter had drifted to a 28-day window and was corrected to match live (commit 5015e29).
+
+**Decision.** Keep the **21-day uncoupled** window as the standard. The population thresholds (`RES_ACWR_REST/LOW/MOD = 2.0/1.8/1.5`) stay as-is — they were deliberately shifted up (panel review M2) for the uncoupled scale, which runs higher than the coupled form.
+
+**Why.** Uncoupling (acute disjoint from chronic) removes the mathematical artifact where the acute window inflates its own chronic baseline and compresses ratios toward 1.0 (Windt & Gabbett 2019). For an N=1 athlete these thresholds are heuristic priors either way — not validated injury cutoffs — so re-deriving them for a 28-day window buys no rigor and risks miscalibration. Convention (the shipped, internally-consistent 21-day system) beats novelty. The personal bands are percentiles of Rob's own distribution, so they self-calibrate to whichever window is used, provided the fitter mirrors live — which is now enforced by `test_engine_invariants.test_acwr_fit_window_mirrors_live_gate`.
+
+**Consequences.** The window is now a documented invariant, not an accident. If it ever changes, change it in `metrics._arm_acwr`, `self_learning._historical_weekly_acwr`, and the test's reference impl together, and re-confirm the population thresholds. Revisit only if a personal injury/overreaching history gives real calibration data.
+
+---
+
 ## 2026-06-03 — Sports-science panel review: muscle taxonomy + signal-quality decisions
 
 **Context.** A panel of sports-science reviewers audited the self-learning hypertrophy engine and flagged a cluster of modeling choices that needed to be either fixed or documented as intentional.

@@ -22,12 +22,17 @@ Origin: the 2026-07-03 soundness audit (four parallel deep-dives, each finding v
 
 Any change to a gate, threshold, band-fit, volume decision, or classifier **must keep this suite green**, or must update an invariant *deliberately* — with the reasoning recorded here and in [DECISIONS.md](DECISIONS.md). "The test failed so I changed the assertion" is how the athlete gets quietly held back again. The test encodes the intent; the code serves it.
 
-## Known-open items (audit 2026-07-03, deferred — not yet invariants)
+## Audit follow-ups — status
 
-These were found and judged real but left for a follow-up decision rather than an in-place fix:
+**Resolved:**
+- **ACWR 21-day vs 28-day window** → decided: keep 21-day uncoupled, documented in [DECISIONS.md](DECISIONS.md) (2026-07-03). Fitter mirrors live, enforced by invariant 1.
+- **Deload-week contamination of confidence + progress-read-as-noise** → fixed (commit 5b0ecd3): deload weeks excluded from the perf series; stability now detrended. Guarded by `test_progress_reads_as_signal_not_noise`.
+- **Missing e1RM silently skipped the load-cap check** → now fail-visible: a weighted lift with no e1RM on a capped day logs a WARNING instead of skipping silently (`workout_planner`).
 
-- **ACWR window: 21-day (uncoupled) vs 28-day (Gabbett).** The live gate uses a 21-day uncoupled chronic; Gabbett's 1.5/1.8/2.0 thresholds were derived on 28-day. The M2 review shifted the thresholds up for the uncoupled scale deliberately, so this is a *science-calibration* question, not a bug — flagged for Rob.
-- **Deload-week contamination of confidence variance.** Deload weeks (low perf by design) inflate the perf CV → depress confidence. Invariant 2 neutralizes the *symptom* (progressing muscles no longer freeze); the root-cause fix (exclude deload weeks from the CV, or detrend the series) is a self-learning redesign pending review.
-- **`metrics` e1RM-regression deload not OR'd into `weekly_prescription`.** The planner still surfaces it as a hard constraint, so it is not a silent under-train; low priority.
-- **Missing e1RM silently skips the load-cap check** for that exercise (`workout_planner`). Fail-open; should surface a warning.
-- **Low-severity readiness items:** HRV gate at −1.5σ vs the vault's −1.0σ; RHR subscore on a coupled window (near-inert); sleep sub-components inheriting the duration score when stage/SpO₂ data is absent. All lean toward *over*-training on sparse data, not holding back.
+**Deliberately kept as-is (judged correct for the goal, not bugs):**
+- **HRV gate at −1.5σ (not the vault's −1.0σ).** Tightening to −1.0σ would cap intensity LOW on ~16% of days — *more* holding back, and HRV is a weak/propranolol-corrupted signal for Rob. Only a strong suppression (−1.5σ) should cap. Kept.
+- **RHR subscore on a coupled 28-day baseline (near-inert).** An uncoupled fix is neutral-direction and low-severity, but the field is surfaced on the visible readiness dashboard + DTO — not worth the blast radius for the gain. Kept.
+- **Sleep sub-components inheriting the duration score when stage/SpO₂ absent.** Low stakes; fixing leans *more* conservative. Kept.
+
+**Still deferred (low priority):**
+- **`metrics` e1RM-regression deload not OR'd into `weekly_prescription`.** The planner already surfaces it as a hard constraint, so it is not a silent under-train; plumbing it into the volume controller is belt-and-suspenders with real blast radius. Left for a dedicated change.

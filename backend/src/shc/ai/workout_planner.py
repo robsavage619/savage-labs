@@ -1307,7 +1307,24 @@ def validate_plan(
                     e1rm_kg = e1rm_ceilings.get(name)
                     w_lbs = ex.get("weight_lbs")
                     reps = _first_int(ex.get("reps"))
-                    if not e1rm_kg or not w_lbs or not reps:
+                    if not e1rm_kg:
+                        # No e1RM on record → the ceiling can't be enforced for this
+                        # lift. Skipping SILENTLY on a capped (deload/low/moderate)
+                        # day is a fail-OPEN: the "hold the max, add reps" pseudo-
+                        # deload sails through unchecked. We can't reject without a
+                        # reference, but the project's "fail visibly" rule means we
+                        # must surface it rather than pretend the lift was validated.
+                        if w_lbs and reps and cap < 1.0:
+                            log.warning(
+                                "load-cap UNVERIFIED for %r (%slb×%s) on a %d%% cap day — "
+                                "no e1RM on record; ceiling not enforced for this lift",
+                                name,
+                                w_lbs,
+                                reps,
+                                load_cap_pct(gates),
+                            )
+                        continue
+                    if not w_lbs or not reps:
                         continue
                     demand_kg = (w_lbs / 2.20462) * (1 + reps / 30)
                     ceiling_kg = e1rm_kg * cap
