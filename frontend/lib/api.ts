@@ -532,6 +532,42 @@ export interface WorkoutPlan {
   vault_insights: string[];
 }
 
+export interface ExperimentArm {
+  days: number;
+  adhered: number;
+  measured: number;
+}
+
+export interface Experiment {
+  id: string;
+  slug: string;
+  hypothesis: string;
+  manipulated: string;
+  condition_a: string;
+  condition_b: string;
+  outcome_metric: string;
+  outcome_direction: string;
+  min_per_arm: number;
+  min_effect: number;
+  started_on: string;
+  status: string;
+  arms: Record<string, ExperimentArm>;
+  result: {
+    verdict: "CONFIRMED" | "REFUTED" | "INCONCLUSIVE" | "INSUFFICIENT_N";
+    n_a: number;
+    n_b: number;
+    mean_a: number | null;
+    mean_b: number | null;
+    effect: number | null;
+    effect_ci_low: number | null;
+    effect_ci_high: number | null;
+    p_value: number | null;
+    summary: string | null;
+    scored_at: string | null;
+  } | null;
+  prior: { key: string; effect: number; ci_low: number | null; ci_high: number | null } | null;
+}
+
 export const api = {
   recoveryToday: () => get<RecoveryToday>("/api/recovery/today"),
   recoveryTrend: (days = 14) => get<RecoveryPoint[]>(`/api/recovery/trend?days=${days}`),
@@ -748,6 +784,27 @@ export const api = {
     const r = await fetch(`${BASE}/api/lab/run`, { method: "POST", headers: mutHeaders() });
     if (!r.ok) throw new Error(`labRun ${r.status}`);
     return r.json() as Promise<{ ran: number; verdicts: Record<string, string>; completed_at: string }>;
+  },
+  experiments: () => get<Experiment[]>("/api/experiments"),
+  experimentLog: async (
+    slug: string,
+    body: { day?: string; adhered?: boolean; note?: string },
+  ) => {
+    const r = await fetch(`${BASE}/api/experiments/${slug}/log`, {
+      method: "POST",
+      headers: mutHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`experimentLog ${r.status}`);
+    return r.json() as Promise<{ slug: string; day: string; assigned_arm: string; adhered: boolean }>;
+  },
+  experimentScore: async (slug: string) => {
+    const r = await fetch(`${BASE}/api/experiments/${slug}/score`, {
+      method: "POST",
+      headers: mutHeaders(),
+    });
+    if (!r.ok) throw new Error(`experimentScore ${r.status}`);
+    return r.json();
   },
   afterAction: () =>
     get<{

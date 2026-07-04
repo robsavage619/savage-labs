@@ -353,6 +353,71 @@ def _emit_prior(
              metric_short, pct)
 
 
+def overview(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """One row per experiment with its config, latest result, prior, and per-arm
+    adherence counts — everything the Lab UI needs in a single call."""
+    exps = conn.execute(
+        "SELECT id, slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric, "
+        "outcome_direction, min_per_arm, min_effect, started_on, status "
+        "FROM experiments ORDER BY preregistered_at DESC"
+    ).fetchall()
+    out: list[dict] = []
+    for e in exps:
+        eid = e[0]
+        res = conn.execute(
+            "SELECT verdict, n_a, n_b, mean_a, mean_b, effect, effect_ci_low, effect_ci_high, "
+            "p_value, summary, scored_at FROM experiment_result WHERE experiment_id = ?",
+            [eid],
+        ).fetchone()
+        prior = conn.execute(
+            "SELECT prior_key, effect, effect_ci_low, effect_ci_high FROM experiment_prior "
+            "WHERE experiment_id = ? AND active = TRUE",
+            [eid],
+        ).fetchone()
+        counts = conn.execute(
+            "SELECT assigned_arm, COUNT(*), "
+            "COUNT(*) FILTER (WHERE adhered), COUNT(*) FILTER (WHERE outcome_value IS NOT NULL) "
+            "FROM experiment_log WHERE experiment_id = ? GROUP BY assigned_arm",
+            [eid],
+        ).fetchall()
+        arms = {
+            c[0]: {"days": c[1], "adhered": c[2], "measured": c[3]} for c in counts
+        }
+        out.append(
+            {
+                "id": eid,
+                "slug": e[1],
+                "hypothesis": e[2],
+                "manipulated": e[3],
+                "condition_a": e[4],
+                "condition_b": e[5],
+                "outcome_metric": e[6],
+                "outcome_direction": e[7],
+                "min_per_arm": e[8],
+                "min_effect": e[9],
+                "started_on": str(e[10]),
+                "status": e[11],
+                "arms": arms,
+                "result": (
+                    {
+                        "verdict": res[0], "n_a": res[1], "n_b": res[2], "mean_a": res[3],
+                        "mean_b": res[4], "effect": res[5], "effect_ci_low": res[6],
+                        "effect_ci_high": res[7], "p_value": res[8], "summary": res[9],
+                        "scored_at": res[10].isoformat() if res[10] else None,
+                    }
+                    if res
+                    else None
+                ),
+                "prior": (
+                    {"key": prior[0], "effect": prior[1], "ci_low": prior[2], "ci_high": prior[3]}
+                    if prior
+                    else None
+                ),
+            }
+        )
+    return out
+
+
 def active_priors(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     """Confirmed, causal personal priors the engine may act on (read-only)."""
     rows = conn.execute(

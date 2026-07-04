@@ -6,6 +6,7 @@ import { AfterActionPanel } from "@/components/after-action-panel";
 import { PostWorkoutPanel } from "@/components/post-workout-panel";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { LabPanel } from "@/components/lab-panel";
+import { LabExperiments } from "@/components/lab-experiments";
 import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { FuelingPanel } from "@/components/fueling-panel";
 import { StrengthPanel } from "@/components/strength-panel";
@@ -126,6 +127,9 @@ export default function Dashboard() {
                 bottom; provenance, hypothesis tests, self-learning status) ── */}
           <CollapsibleSection id="engine" title="Engine & methodology">
             <div className="space-y-4">
+              <ErrorBoundary label="Self-experiments">
+                <LabExperiments />
+              </ErrorBoundary>
               <ErrorBoundary label="Research lab">
                 <LabPanel />
               </ErrorBoundary>

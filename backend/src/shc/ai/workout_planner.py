@@ -224,6 +224,25 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "to land at the prescribed RPE."
     )
 
+    # Confirmed n-of-1 experiment priors — CAUSAL, self-tested effects the plan may
+    # lean on. Read-only guidance (effect + CI shown so the model can weigh it), and
+    # governed: only CONFIRMED studies emit a prior, and a study that stops
+    # confirming retracts it, so nothing stale can leak in here.
+    try:
+        from shc import selflab as _selflab
+
+        _priors = _selflab.active_priors(conn)
+    except Exception as _exc:  # noqa: BLE001 — priors are optional guidance
+        log.debug("experiment priors unavailable: %s", _exc)
+        _priors = []
+    if _priors:
+        lines.append("\n## CONFIRMED PERSONAL EXPERIMENTS (n-of-1, causal — confirmed on your own data)")
+        for _p in _priors:
+            lines.append(
+                f"- {_p['hypothesis']} → {_p['effect']:+g}% "
+                f"(95% CI {_p['ci_low']:+g}..{_p['ci_high']:+g}) on {_p['outcome_metric']}"
+            )
+
     lines.append("\n## READINESS SNAPSHOT")
     if readiness["score"] is not None:
         adj = " (β-blocker reweighted)" if readiness["beta_blocker_adjusted"] else ""

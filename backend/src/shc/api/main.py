@@ -13,6 +13,7 @@ from shc.api.routers import (
     apple,
     auth,
     dashboard,
+    experiments,
     hevy,
     progress_photos,
     report,
@@ -63,6 +64,7 @@ app.include_router(training.router, prefix="/api")
 app.include_router(vault.router, prefix="/api")
 app.include_router(progress_photos.router, prefix="/api")
 app.include_router(report.router, prefix="/api")
+app.include_router(experiments.router, prefix="/api")
 
 
 @app.get("/healthz")
