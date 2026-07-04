@@ -4,13 +4,12 @@ import { useEffect, useState } from "react";
 
 const SECTIONS = [
   { id: "today", label: "Today" },
-  { id: "next-workout", label: "Plan" },
   { id: "signals", label: "Signals" },
-  { id: "goals", label: "Goals" },
+  { id: "plan", label: "Plan" },
+  { id: "engine", label: "Engine" },
   { id: "training", label: "Training" },
-  { id: "cardio", label: "Cardio" },
-  { id: "research", label: "Research" },
-  { id: "trends", label: "Trends" },
+  { id: "body", label: "Body" },
+  { id: "intel", label: "Intelligence" },
 ] as const;
 
 export function SectionNav() {

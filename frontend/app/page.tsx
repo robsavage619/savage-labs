@@ -6,6 +6,7 @@ import { AfterActionPanel } from "@/components/after-action-panel";
 import { PostWorkoutPanel } from "@/components/post-workout-panel";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { LabPanel } from "@/components/lab-panel";
+import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { FuelingPanel } from "@/components/fueling-panel";
 import { StrengthPanel } from "@/components/strength-panel";
 import { TrendIntelligence } from "@/components/trend-intelligence";
@@ -26,6 +27,20 @@ import { GoalScorecard } from "@/components/goal-scorecard";
 import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
 import { DailyReport } from "@/components/daily-report";
 import { MiddaySessionCard } from "@/components/midday-session-card";
+
+/** A labelled divider that opens a cluster of related detail sections. Anchor id
+ *  must stay in sync with the SECTIONS list in section-nav.tsx. */
+function ClusterHeader({ id, children }: { id: string; children: string }) {
+  return (
+    <div
+      id={id}
+      className="scroll-mt-20 pt-3 pb-1 text-[10px] uppercase tracking-[0.22em] text-[var(--text-faint)]"
+      style={{ fontFamily: "var(--font-orbitron)" }}
+    >
+      {children}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   return (
@@ -61,60 +76,83 @@ export default function Dashboard() {
       </div>
 
       {/*
-        Decision-first hierarchy. Today's essentials (verdict, plan, signals)
-        render expanded; history/research/detail collapse by default and are
-        reachable via SectionNav. Anchor ids must stay in sync with the
-        SECTIONS list in section-nav.tsx.
+        Decision-first, causally ordered: VERDICT → the SIGNALS it's built from →
+        the PLAN that follows → the ENGINE that produced it → collapsed detail
+        grouped into Training / Body / Intelligence. Anchor ids must stay in sync
+        with the SECTIONS list in section-nav.tsx.
       */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="space-y-4 min-w-0">
-          <ErrorBoundary label="Daily report">
-            <DailyReport />
-          </ErrorBoundary>
-
-          <section id="today" className="scroll-mt-20 space-y-4">
-            {/* Briefing, health story & health analysis retired — the unified
-                Daily Report (top of page) now covers readiness, training call,
-                health narrative, and body composition. Components retained in
-                the repo but no longer rendered. */}
-            <ErrorBoundary label="WHOOP vitals">
-              <WhoopVitals />
+          {/* ── VERDICT ── */}
+          <section id="today" className="scroll-mt-20">
+            <ErrorBoundary label="Daily report">
+              <DailyReport />
             </ErrorBoundary>
           </section>
 
-          <ErrorBoundary label="Next workout">
-            <NextWorkoutCard />
-          </ErrorBoundary>
+          {/* ── SIGNALS (the inputs behind the verdict) ── */}
+          <section id="signals" className="scroll-mt-20 space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <ErrorBoundary label="Recovery">
+                <PillarRecovery />
+              </ErrorBoundary>
+              <ErrorBoundary label="Sleep">
+                <PillarSleep />
+              </ErrorBoundary>
+              <ErrorBoundary label="Training load">
+                <PillarTrainingLoad />
+              </ErrorBoundary>
+            </div>
+            {/* Raw WHOOP vitals demoted to a drill-down — the pillars above are the
+                read; these are the underlying numbers, one click away. */}
+            <CollapsibleSection id="whoop" title="Raw WHOOP vitals">
+              <ErrorBoundary label="WHOOP vitals">
+                <WhoopVitals />
+              </ErrorBoundary>
+            </CollapsibleSection>
+          </section>
 
-          <ErrorBoundary label="Midday session">
-            <MiddaySessionCard />
-          </ErrorBoundary>
-
-          <section id="signals" className="scroll-mt-20 grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <ErrorBoundary label="Recovery">
-              <PillarRecovery />
+          {/* ── PLAN (the output) ── */}
+          <section id="plan" className="scroll-mt-20 space-y-4">
+            <ErrorBoundary label="Next workout">
+              <NextWorkoutCard />
             </ErrorBoundary>
-            <ErrorBoundary label="Sleep">
-              <PillarSleep />
-            </ErrorBoundary>
-            <ErrorBoundary label="Training load">
-              <PillarTrainingLoad />
+            <ErrorBoundary label="Midday session">
+              <MiddaySessionCard />
             </ErrorBoundary>
           </section>
 
-          <CollapsibleSection id="goals" title="2026 Goal scorecard">
-            <ErrorBoundary label="Goal scorecard">
-              <GoalScorecard />
-            </ErrorBoundary>
+          {/* ── ENGINE & METHODOLOGY (how the call was made — promoted from the
+                bottom; provenance, hypothesis tests, self-learning status) ── */}
+          <CollapsibleSection id="engine" title="Engine & methodology">
+            <div className="space-y-4">
+              <ErrorBoundary label="Research lab">
+                <LabPanel />
+              </ErrorBoundary>
+              <ErrorBoundary label="Engine status">
+                <EngineStatusPanel />
+              </ErrorBoundary>
+            </div>
           </CollapsibleSection>
 
+          {/* ── TRAINING ── */}
+          <ClusterHeader id="training">Training</ClusterHeader>
           <CollapsibleSection id="meso" title="Mesocycle">
             <ErrorBoundary label="Periodization">
               <PeriodizationStrip />
             </ErrorBoundary>
           </CollapsibleSection>
-
-          <CollapsibleSection id="after-action" title="Post-workout">
+          <CollapsibleSection id="strength" title="Strength">
+            <ErrorBoundary label="Strength">
+              <StrengthPanel />
+            </ErrorBoundary>
+          </CollapsibleSection>
+          <CollapsibleSection id="cardio" title="Cardio & sports">
+            <ErrorBoundary label="Cardio">
+              <CardioPanel />
+            </ErrorBoundary>
+          </CollapsibleSection>
+          <CollapsibleSection id="post" title="Post-workout">
             <div className="space-y-4">
               <ErrorBoundary label="Post-workout debrief">
                 <PostWorkoutPanel />
@@ -124,42 +162,32 @@ export default function Dashboard() {
               </ErrorBoundary>
             </div>
           </CollapsibleSection>
-
-          <CollapsibleSection id="research" title="Research">
-            <div className="space-y-4">
-              <ErrorBoundary label="Clinical research">
-                <ClinicalResearchPanel />
-              </ErrorBoundary>
-              <ErrorBoundary label="Research lab">
-                <LabPanel />
-              </ErrorBoundary>
-            </div>
+          <CollapsibleSection id="goals" title="2026 Goal scorecard">
+            <ErrorBoundary label="Goal scorecard">
+              <GoalScorecard />
+            </ErrorBoundary>
           </CollapsibleSection>
 
+          {/* ── BODY ── */}
+          <ClusterHeader id="body">Body</ClusterHeader>
           <CollapsibleSection id="fueling" title="Fueling">
             <ErrorBoundary label="Fueling">
               <FuelingPanel />
             </ErrorBoundary>
           </CollapsibleSection>
-
-          <CollapsibleSection id="training" title="Strength">
-            <ErrorBoundary label="Strength">
-              <StrengthPanel />
-            </ErrorBoundary>
-          </CollapsibleSection>
-
-          <CollapsibleSection id="cardio" title="Cardio & sports">
-            <ErrorBoundary label="Cardio">
-              <CardioPanel />
-            </ErrorBoundary>
-          </CollapsibleSection>
-
           <CollapsibleSection id="physique" title="Progress photos">
             <ErrorBoundary label="Progress photos">
               <ProgressPhotoPanel />
             </ErrorBoundary>
           </CollapsibleSection>
 
+          {/* ── INTELLIGENCE ── */}
+          <ClusterHeader id="intel">Intelligence</ClusterHeader>
+          <CollapsibleSection id="research" title="Clinical research">
+            <ErrorBoundary label="Clinical research">
+              <ClinicalResearchPanel />
+            </ErrorBoundary>
+          </CollapsibleSection>
           <CollapsibleSection id="trends" title="Trend intelligence">
             <ErrorBoundary label="Trends">
               <TrendIntelligence />
@@ -174,7 +202,6 @@ export default function Dashboard() {
           </ErrorBoundary>
         </div>
       </div>
-
     </main>
   );
 }
