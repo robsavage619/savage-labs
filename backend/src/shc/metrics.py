@@ -309,6 +309,16 @@ _HINGE = (
     "romanian deadlift",
     "deadlift",
     "good morning",
+    # Partial-ROM pulls and posterior-chain/erector isolation are the same
+    # hip-hinge pattern the pull gate protects — but their names lack "deadlift"
+    # so they used to fall through to "other" and slip past a pull-rested day.
+    "rack pull",
+    "pull through",
+    "back extension",
+    "hyperextension",
+    "reverse hyper",
+    "kettlebell swing",
+    "kb swing",
 )
 
 # Order matters — check HINGE first (→ pull), then LEGS and CORE before PUSH/PULL
@@ -419,6 +429,12 @@ def muscle_group(exercise: str) -> str:
         return "legs"
     if any(k in e for k in _CORE):
         return "core"
+    # "row" is a PULL pattern — check it before _PUSH so a row whose name contains
+    # a push keyword ("Chest Supported Row" → "chest") classifies as pull, not push,
+    # and can't slip past a pull-rested gate. "Upright Row" is the lone exception
+    # (a delt/push movement) and is left to _PUSH below.
+    if "row" in e and "upright row" not in e:
+        return "pull"
     if any(k in e for k in _PUSH):
         return "push"
     if any(k in e for k in _PULL):

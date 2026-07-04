@@ -470,7 +470,18 @@ def _decide(
             add_delta = 1
             hedge_note = f" [add capped: confidence {confidence:.0%} below bar for a large add]"
         scaled = round(add_delta * conf_factor)
-        if scaled < add_delta and not hedge_note:
+        # A muscle that is MEASURABLY progressing (perf >= 4) has an unambiguous
+        # OUTCOME signal. The confidence shrink exists to damp SPECULATIVE adds on
+        # noisy data — not to freeze a muscle that is demonstrably adapting. Without
+        # this floor, confidence (which tops out ~0.34 by design) rounds every add
+        # to zero and pins a progressing muscle at its grow-floor forever: e.g.
+        # glutes at max PR for 8 weeks stuck at 7 sets, unable to climb toward MRV
+        # 16. Guarantee a progressing add survives at >= 1 set/wk (the RP
+        # accumulation floor). Speculative adds (no perf signal) are still shrunk.
+        if perf is not None and perf >= 4 and scaled < 1:
+            scaled = 1
+            hedge_note = " [progressing (perf ≥4) → +1 floor applied despite low confidence]"
+        elif scaled < add_delta and not hedge_note:
             hedge_note = (
                 f" [add shrunk {add_delta}→{scaled}: low confidence {confidence:.0%}"
                 + (f"/accuracy {accuracy:.0%}" if accuracy is not None else "")

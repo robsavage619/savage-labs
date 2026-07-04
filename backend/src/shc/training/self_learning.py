@@ -148,9 +148,11 @@ def persist_volume_landmarks(
         ).fetchone()
 
         mrv = result["mrv"]
+        mev = result["mev"]
         floored = False
+        mev_floored = False
         if default:
-            pop_mrv = default[2]
+            pop_mev, pop_mrv = default[0], default[2]
             if mrv < pop_mrv and result["vmax"] < pop_mrv:
                 # Fitted MRV is below population AND no week ever reached the
                 # population MRV: the fit reflects historical habit, not a
@@ -170,9 +172,27 @@ def persist_volume_landmarks(
                 )
                 mrv = pop_mrv
                 floored = True
+            # MEV is the ADAPTATION FLOOR (vault: ~10 hard sets/wk for most muscles;
+            # "volume below MEV maintains fitness but does not produce new
+            # hypertrophy"). A personal MEV fitted below population reflects a
+            # low-volume HABIT, not a lower growth threshold — and would silently
+            # park the muscle below the volume that grows it (it reads "in range"
+            # while actually starved). Unlike MRV (a ceiling that only floors when
+            # the higher range was never tried), MEV floors ALWAYS: dropping below
+            # the growth floor is never the right call for a hypertrophy goal.
+            if mev < pop_mev:
+                log.info(
+                    "MEV floor %s: fitted MEV=%d below population MEV=%d — flooring "
+                    "(below-MEV habit would starve the muscle)",
+                    muscle,
+                    mev,
+                    pop_mev,
+                )
+                mev = pop_mev
+                mev_floored = True
 
-        # Recompute MAV if MRV was floored.
-        mav = (result["mev"] + mrv) // 2
+        # MAV is the midpoint of the (possibly floored) MEV/MRV.
+        mav = (mev + mrv) // 2
 
         conn.execute(
             """
@@ -185,17 +205,22 @@ def persist_volume_landmarks(
                 mrv_sets   = excluded.mrv_sets,
                 updated_at = now()
             """,
-            [muscle, result["mev"], mav, mrv, meso_id],
+            [muscle, mev, mav, mrv, meso_id],
         )
         stored += 1
 
         if default:
-            floor_note = " [MRV FLOORED — likely undertrained]" if floored else ""
+            notes = []
+            if floored:
+                notes.append("MRV FLOORED — likely undertrained")
+            if mev_floored:
+                notes.append("MEV FLOORED to growth floor")
+            floor_note = f" [{'; '.join(notes)}]" if notes else ""
             log.info(
                 "personal landmark %s: MEV %d→%d  MAV %d→%d  MRV %d→%d%s  (meso %s)",
                 muscle,
                 default[0],
-                result["mev"],
+                mev,
                 default[1],
                 mav,
                 default[2],
@@ -207,7 +232,7 @@ def persist_volume_landmarks(
             log.info(
                 "personal landmark %s: MEV=%d MAV=%d MRV=%d (no population default)",
                 muscle,
-                result["mev"],
+                mev,
                 mav,
                 mrv,
             )
@@ -238,15 +263,21 @@ def _historical_weekly_acwr(
 ) -> list[float]:
     """Compute uncoupled weekly ACWR ratios for ``column`` (hevy_tonnes | whoop_strain).
 
-    Mirrors the _arm_acwr formula used live in metrics.py exactly:
-      acute   = mean(column) over [ws, ws+7)     = SUM/7
-      chronic = mean(column) over [ws-35, ws-7)  = SUM/28  ← 28-day window, not 21
+    Mirrors the live ``_arm_acwr`` formula in metrics.py (lines ~890-899) EXACTLY —
+    the personal percentile bands are only meaningful if fitted on the same ratio
+    scale the live gate scores against:
+      acute   = mean(column) over the 7-day acute week  [ws, ws+7)     = SUM/7
+      chronic = mean(column) over the 21 days IMMEDIATELY BEFORE it     = SUM/21
+                [ws-21, ws)  — contiguous with acute, no gap, no overlap (uncoupled)
       ratio   = acute / chronic  (only when chronic > 0)
 
-    The chronic window was previously [ws-28, ws-7)/21 (21 days), but metrics.py
-    uses a 28-day chronic window. Mismatched windows meant personal ACWR bands
-    were fitted on different ratio distributions than the live gates apply — biasing
-    all personal thresholds downward (Bug 5).
+    HISTORY: this fitter previously used a 28-day chronic window [ws-35, ws-7)/28
+    whose docstring wrongly claimed metrics.py "uses a 28-day chronic window."
+    metrics.py uses a 21-day UNCOUPLED chronic ([today-27, today-7)/21), so that
+    "fix" moved the fitter AWAY from the live gate — every personal band (rest/low/
+    mod resistance + conditioning forbid_legs) was fitted on a distribution the gate
+    never produces, biasing the conditioning leg-forbid band (the one that can
+    tighten). Now realigned to the live 7:21 uncoupled window.
 
     Lookback is capped at 104 weeks (same horizon as the volume-landmark
     fitter). Unbounded history pulled in ~7 years of pre-platform low-volume
@@ -268,8 +299,8 @@ def _historical_weekly_acwr(
                AND d.date < w.ws + INTERVAL 7 DAYS) / 7.0  AS acute,
             (SELECT COALESCE(SUM(d.{column}), 0)
              FROM v_daily_load d
-             WHERE d.date >= w.ws - INTERVAL 35 DAYS
-               AND d.date < w.ws - INTERVAL 7 DAYS) / 28.0 AS chronic
+             WHERE d.date >= w.ws - INTERVAL 21 DAYS
+               AND d.date < w.ws) / 21.0 AS chronic
         FROM weeks w
         """
     ).fetchall()
