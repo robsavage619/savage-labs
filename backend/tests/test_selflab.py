@@ -109,6 +109,18 @@ def test_prior_is_retracted_when_a_study_stops_confirming(conn) -> None:
     assert selflab.active_priors(conn) == [], "a non-confirmed study left an active prior"
 
 
+def test_zero_variance_effect_confirms_via_permutation(conn) -> None:
+    """A perfectly consistent effect (no within-arm noise) must CONFIRM. Welch's t
+    is undefined here (zero variance); the permutation test is defined and correct
+    — a flawless separation is the strongest evidence, not the weakest."""
+    exp = _prereg(conn)
+    _fill(conn, exp, [100, 100, 100, 100, 100, 100], [106, 106, 106, 106, 106, 106])
+    r = selflab.score(conn, exp)
+    assert r["verdict"] == "CONFIRMED", r
+    assert r["p_value"] is not None and r["p_value"] < 0.05
+    assert len(selflab.active_priors(conn)) == 1
+
+
 def test_bootstrap_ci_is_reproducible(conn) -> None:
     exp = _prereg(conn)
     _fill(conn, exp, [100, 101, 99, 100, 102, 98], [110, 111, 109, 112, 108, 110])

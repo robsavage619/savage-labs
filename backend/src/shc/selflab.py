@@ -27,7 +27,7 @@ from statistics import mean
 
 import duckdb
 
-from shc.lab import _ALPHA, _welch_t
+from shc.lab import _ALPHA
 
 log = logging.getLogger(__name__)
 
@@ -214,6 +214,45 @@ def refresh_outcomes(conn: duckdb.DuckDBPyConnection, exp_id: str) -> int:
 # ── Scoring ──────────────────────────────────────────────────────────────────
 
 
+def _permutation_p(a: list[float], b: list[float], slug: str) -> float:
+    """Two-sided permutation (randomization) test on mean(B) − mean(A).
+
+    The correct significance test for n-of-1: it makes no normality assumption and
+    is DEFINED even when an arm has zero within-arm variance (where Welch's t is
+    not — a perfectly consistent effect is the *strongest* evidence, and this test
+    says so). Exact enumeration of every label split when the count is small; a
+    seeded Monte-Carlo approximation otherwise. p is never 0 (the observed split
+    always counts), so it can't manufacture false certainty.
+    """
+    import itertools
+    import math
+    import random
+
+    pooled = a + b
+    n, k = len(pooled), len(a)
+    obs = abs(sum(b) / len(b) - sum(a) / len(a))
+    total = math.comb(n, k)
+    if total <= 20_000:  # exact — every way to split the pooled data into two arms
+        ge = 0
+        for combo in itertools.combinations(range(n), k):
+            idx = set(combo)
+            ga = [pooled[i] for i in idx]
+            gb = [pooled[i] for i in range(n) if i not in idx]
+            if abs(sum(gb) / len(gb) - sum(ga) / len(ga)) >= obs - 1e-9:
+                ge += 1
+        return round(ge / total, 4)
+    # Monte Carlo (add-one smoothing so p is bounded away from 0).
+    seed = int(hashlib.sha256(slug.encode()).hexdigest(), 16) % (2**32)
+    rng = random.Random(seed)
+    n_iter, ge = 5000, 0
+    for _ in range(n_iter):
+        perm = pooled[:]
+        rng.shuffle(perm)
+        if abs(sum(perm[k:]) / (n - k) - sum(perm[:k]) / k) >= obs - 1e-9:
+            ge += 1
+    return round((ge + 1) / (n_iter + 1), 4)
+
+
 def _bootstrap_ci(a: list[float], b: list[float], slug: str) -> tuple[float, float]:
     """Seeded percentile bootstrap 95% CI on mean(B) − mean(A)."""
     import random
@@ -263,8 +302,7 @@ def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
 
     mean_a, mean_b = round(mean(a), 4), round(mean(b), 4)
     effect = round(mean_b - mean_a, 4)
-    tw = _welch_t(a, b)  # returns (t, two-tailed p) or None (e.g. zero within-arm variance)
-    p = round(tw[1], 4) if tw else None
+    p = _permutation_p(a, b, exp.slug)
     ci_low, ci_high = _bootstrap_ci(a, b, exp.slug)
 
     ci_excludes_zero = ci_low > 0 or ci_high < 0
