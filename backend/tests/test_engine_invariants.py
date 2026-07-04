@@ -246,3 +246,119 @@ def test_load_cap_monotonic_and_high_allows_top_sets() -> None:
 def test_floor_only_band_never_tightens_below_population(personal) -> None:
     population = 2.0
     assert _apply_band(personal, population, floor_only=True) >= population
+
+
+# ── INVARIANT 7 (BEHAVIORAL / END-TO-END): full mesocycle simulations. Where the
+# invariants above test single functions, these drive the WHOLE volume loop — the
+# real confidence computation feeding the real controller, week after week — the
+# way the bug actually manifested. Both are teeth-checked: revert the fix and they
+# fail (see the commit that added them). A behavioral fixture that passes on the
+# broken engine is worthless, which is exactly the trap a naive "climbs to MRV on
+# clean data" version fell into (clean data → high confidence → the shrink never
+# bites → the freeze fix is never exercised).
+
+
+# A realistically NOISY long history — the only thing that produces the LOW
+# confidence (~0.0–0.15) under which the muscle actually froze. A clean history
+# gives high confidence and would not test the fix at all.
+_NOISY_PERF_HISTORY = [1, 4, 2, 5, 1, 3, 2, 4] * 4  # 32 weeks, high variance
+
+
+def test_low_confidence_athlete_still_climbs_to_mrv(conn) -> None:
+    """The freeze bug, reproduced end-to-end: a muscle whose long noisy history
+    yields LOW confidence must still climb to MRV while progressing — the +1
+    progression floor carries it where the confidence shrink would zero the add.
+    Teeth: disable the floor in _decide and this fails (muscle strands ~7)."""
+    from datetime import date as _date
+
+    from shc.training.self_learning import compute_muscle_signal_quality
+
+    conn.execute(
+        "INSERT INTO exercise_muscle_map (exercise_name, primary_muscle) "
+        "VALUES ('Hip Thrust', 'glutes')"
+    )
+    base = _date(2024, 1, 1)
+    e1rm = 100.0
+    # Phase A: seed the noisy prehistory (no controller — just build the low-conf baseline).
+    for i, perf in enumerate(_NOISY_PERF_HISTORY):
+        e1rm *= 0.98 if perf <= 2 else 1.005
+        conn.execute(
+            "INSERT INTO exercise_weekly_e1rm (exercise, week_start, e1rm_kg, work_sets, "
+            "perf_score) VALUES ('Hip Thrust', ?, ?, 6, ?)",
+            [base + timedelta(weeks=i), e1rm, perf],
+        )
+
+    # Phase B: a progressing block, closed loop through the real engine.
+    mev, mav, mrv = 4, 10, 16
+    cur = 0.0
+    confs: list[float] = []
+    targets: list[int] = []
+    for wk in range(13):
+        ws = base + timedelta(weeks=len(_NOISY_PERF_HISTORY) + wk)
+        e1rm *= 1.01
+        conn.execute(
+            "INSERT INTO exercise_weekly_e1rm (exercise, week_start, e1rm_kg, work_sets, "
+            "perf_score) VALUES ('Hip Thrust', ?, ?, ?, 5)",
+            [ws, e1rm, max(1, round(cur))],
+        )
+        sq = compute_muscle_signal_quality(conn, "glutes")
+        p = _decide(
+            "glutes", current=cur, mev=mev, mav=mav, mrv=mrv, perf=5, soreness=0.0,
+            conditioning_acwr=None, emphasis=True, emphasis_factor=1.0,
+            confidence=sq["confidence"], scored_weeks=int(sq["scored_weeks"]), accuracy=None,
+        )
+        confs.append(float(sq["confidence"]))
+        targets.append(p.target_sets)
+        cur = float(p.target_sets)
+
+    # The scenario must actually be low-confidence, or it isn't testing the fix.
+    assert min(confs) < 0.22, f"prehistory not noisy enough — confidence {min(confs)} never low"
+    # And under that low confidence the muscle still reaches MRV and never stalls.
+    assert max(targets) >= mrv, f"low-confidence muscle never reached MRV: {targets}"
+    for i in range(1, len(targets)):
+        assert targets[i] >= targets[i - 1], f"went backwards at week {i}: {targets}"
+
+
+def test_deload_week_does_not_poison_confidence(conn) -> None:
+    """A deload week (low perf by design) in an otherwise-progressing block must
+    not lower the muscle's confidence — the self-reinforcing suppression that
+    froze glutes. Teeth: drop the deload-exclusion from the confidence query and
+    this fails (the perf-2 week spikes the variance and craters confidence)."""
+    from datetime import date as _date
+
+    from shc.training.self_learning import compute_muscle_signal_quality
+
+    conn.execute(
+        "INSERT INTO exercise_muscle_map (exercise_name, primary_muscle) "
+        "VALUES ('Hip Thrust', 'glutes')"
+    )
+    base = _date(2025, 1, 6)
+    deload_wk = 6
+    conf_before = conf_after = None
+    e1rm = 100.0
+    for wk in range(1, 13):
+        ws = base + timedelta(weeks=wk - 1)
+        if wk == deload_wk:
+            perf, e1rm = 2, e1rm * 0.97
+            conn.execute(
+                "INSERT INTO muscle_prescription_log (week_start, muscle, action, target_sets) "
+                "VALUES (?, 'glutes', 'deload', 8)",
+                [ws],
+            )
+        else:
+            perf, e1rm = 5, e1rm * 1.01
+        conn.execute(
+            "INSERT INTO exercise_weekly_e1rm (exercise, week_start, e1rm_kg, work_sets, "
+            "perf_score) VALUES ('Hip Thrust', ?, ?, 8, ?)",
+            [ws, e1rm, perf],
+        )
+        c = compute_muscle_signal_quality(conn, "glutes")["confidence"]
+        if wk == deload_wk - 1:
+            conf_before = c
+        if wk == deload_wk + 1:
+            conf_after = c
+
+    assert conf_before is not None and conf_after is not None
+    assert conf_after >= conf_before, (
+        f"deload cratered confidence {conf_before} -> {conf_after} — the self-reinforcing trap"
+    )
