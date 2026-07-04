@@ -679,21 +679,29 @@ def compute_muscle_signal_quality(
 ) -> dict[str, float | int]:
     """Compute confidence and signal stability for a muscle's prescription.
 
+    Deload weeks are EXCLUDED from the series (their perf is low by design), and
+    stability is measured around the TREND, not the level — so a steadily climbing
+    muscle reads as a clean signal, not noise.
+
     Returns:
-        scored_weeks: int — total weeks with a perf_score for this muscle
-        signal_stability: float [0–1] — calibrated inverse-dispersion of the
-            scored-week perf series. Computed from the coefficient of variation
-            (SD / mean) of the perf scores, mapped to [0,1] as
-            ``1 − min(1, CV / CV_REF)`` where CV_REF is the CV that maps to zero
-            stability. A flat series → 1.0; a wildly noisy one → ~0.0. This
-            replaces the old coarse "|Δperf| ≤ 1 step" pair-fraction rule, which
-            was insensitive to magnitude and not on a calibrated scale.
-        perf_cv: float — raw coefficient of variation of the perf series (0 = no
-            dispersion). Exposed so consumers can gate decisions on the underlying
+        scored_weeks: int — non-deload weeks with a perf_score for this muscle
+        signal_stability: float [0–1] — calibrated inverse-dispersion of the perf
+            series AROUND ITS OLS TREND, mapped as ``1 − min(1, CV / CV_REF)``.
+            A steady climb (3→4→5) → residual ~0 → 1.0; a series bouncing around
+            its trend → ~0.0. Detrending is deliberate: measuring dispersion around
+            the mean (the old rule) penalized progressing muscles for progressing.
+        perf_cv: float — coefficient of variation of the TREND RESIDUALS (0 = a
+            perfectly linear series). Exposed so consumers can gate on the raw
             measure rather than only the squashed stability score.
         confidence: float [0–1] — combined metric used to weight prescriptions.
             Derived from scored_weeks (sample size) × signal_stability (noise level).
     """
+    # Exclude DELOAD weeks: their perf is depressed BY DESIGN (lighter loads), so
+    # counting them made a normal accumulation block look "noisy" → crushed
+    # confidence → froze the muscle → it never logged the clean weeks that would
+    # rebuild confidence (a self-reinforcing suppression the 2026-07-03 audit
+    # traced on glutes: 0.58 → 0.08 across a deload cycle). Same deload-week
+    # identification the outcome scorer uses (muscle_prescription_log.action).
     rows = conn.execute(
         """
         SELECT e.week_start, AVG(e.perf_score) AS muscle_perf
@@ -701,30 +709,46 @@ def compute_muscle_signal_quality(
         JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
         WHERE m.primary_muscle = ?
           AND e.perf_score IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM muscle_prescription_log l
+              WHERE l.week_start = e.week_start AND l.muscle = ? AND l.action = 'deload'
+          )
         GROUP BY e.week_start
         ORDER BY e.week_start
         """,
-        [muscle],
+        [muscle, muscle],
     ).fetchall()
 
     n = len(rows)
     if n == 0:
         return {"scored_weeks": 0, "signal_stability": 0.0, "perf_cv": 0.0, "confidence": 0.0}
 
-    # Signal stability from dispersion of the scored-week perf series. We use the
-    # coefficient of variation (SD / mean) so the measure is scale-relative and
-    # comparable across muscles, then squash to a calibrated [0,1] stability.
+    # Signal stability from dispersion around the TREND, not around the mean. A
+    # muscle climbing 3→4→5 is the CLEAREST possible signal, yet its raw CV (SD/mean
+    # of the level) is high — so the old measure read a steadily-progressing muscle
+    # as "noisy" and throttled the exact muscles that were working. Fit an OLS line
+    # and measure the residual scatter instead: a linear climb → ~0 residual → high
+    # stability; a muscle bouncing around its trend → high residual → low stability.
     from statistics import mean, pstdev
 
     perfs = [float(r[1]) for r in rows]
-    if len(perfs) >= 2:
+    if len(perfs) >= 3:
         mu = mean(perfs)
-        sd = pstdev(perfs)  # population SD: we have the full observed series
-        cv = sd / mu if mu > 0 else _SIGNAL_CV_REF
+        n_p = len(perfs)
+        mean_x = (n_p - 1) / 2.0
+        den = sum((i - mean_x) ** 2 for i in range(n_p))
+        slope = (
+            sum((i - mean_x) * (p - mu) for i, p in enumerate(perfs)) / den if den else 0.0
+        )
+        intercept = mu - slope * mean_x
+        residuals = [p - (intercept + slope * i) for i, p in enumerate(perfs)]
+        cv = pstdev(residuals) / mu if mu > 0 else _SIGNAL_CV_REF
         stability = max(0.0, 1.0 - min(1.0, cv / _SIGNAL_CV_REF))
     else:
+        # <3 points: two always fit a line perfectly (residual 0 → false certainty),
+        # so there's no basis to judge noise yet. Neutral prior.
         cv = 0.0
-        stability = 0.5  # single week — no basis to judge
+        stability = 0.5
 
     # Confidence from sample size — asymptotic approach to 0.95.
     # < 10 weeks: 0.30  |  10–29: 0.50  |  30–59: 0.65  |  60–119: 0.75

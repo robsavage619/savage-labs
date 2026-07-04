@@ -118,6 +118,45 @@ def test_progressing_muscle_at_mrv_holds() -> None:
     assert p.target_sets == 16, "at MRV a progressing muscle holds, never exceeds the ceiling"
 
 
+# ── INVARIANT 2b: confidence reads steady PROGRESS as a clean signal, not noise.
+# The old raw-CV stability penalized a climbing perf series (3→4→5) for its
+# dispersion — the muscles that were working scored as the least trustworthy.
+# Stability is now measured around the OLS trend, so a steady climb beats a
+# same-mean series that bounces around. Deload weeks are excluded entirely.
+
+
+def test_progress_reads_as_signal_not_noise(conn) -> None:
+    from datetime import date as _date
+
+    from shc.training.self_learning import compute_muscle_signal_quality
+
+    conn.execute(
+        "INSERT INTO exercise_muscle_map (exercise_name, primary_muscle) "
+        "VALUES ('ClimbLift', 'glutes'), ('NoisyLift', 'quads')"
+    )
+    base = _date(2026, 1, 5)  # a Monday
+    climbing = [3, 3, 4, 4, 5, 5, 5]
+    noisy = [5, 1, 5, 1, 4, 2, 5]  # same rough mean, no trend
+    for i, (pc, pn) in enumerate(zip(climbing, noisy, strict=True)):
+        ws = base + timedelta(weeks=i)
+        conn.execute(
+            "INSERT INTO exercise_weekly_e1rm (exercise, week_start, e1rm_kg, work_sets, "
+            "perf_score) VALUES (?, ?, 100.0, 3, ?)",
+            ["ClimbLift", ws, pc],
+        )
+        conn.execute(
+            "INSERT INTO exercise_weekly_e1rm (exercise, week_start, e1rm_kg, work_sets, "
+            "perf_score) VALUES (?, ?, 100.0, 3, ?)",
+            ["NoisyLift", ws, pn],
+        )
+    climb = compute_muscle_signal_quality(conn, "glutes")
+    noise = compute_muscle_signal_quality(conn, "quads")
+    assert climb["signal_stability"] > noise["signal_stability"], (
+        f"steady progress ({climb['signal_stability']}) scored no better than noise "
+        f"({noise['signal_stability']}) — detrend regressed"
+    )
+
+
 # ── INVARIANT 3: the +1 progression floor did NOT defeat the confidence shrink
 # for SPECULATIVE adds. A muscle with no outcome signal (perf None) on thin,
 # low-confidence data must not get a speculative ramp above its MEV floor.
