@@ -130,6 +130,49 @@ def weekly_muscle_volume(
     return dict(totals)
 
 
+def weekly_region_volume(
+    conn: duckdb.DuckDBPyConnection,
+    week_start: date,
+    week_end: date | None = None,
+) -> dict[str, dict[str, float]]:
+    """Credited working sets per muscle HEAD/REGION for the window.
+
+    The head-level counterpart to :func:`weekly_muscle_volume`: it credits each
+    stimulating working set to the specific region(s) the ``exercise_science``
+    layer says the movement trains — so a Hammer Curl credits ``biceps/brachialis``
+    AND ``forearms/brachioradialis``, not just "biceps". This is what lets the
+    selector see WHICH head got stimulus and steer volume toward a neglected one
+    (e.g. long-head trained six sets, brachialis zero) instead of repeating the
+    same movement blind to head balance.
+
+    Only the ~curated exercises carry region rows, so this is a coverage SIGNAL
+    over the science-mapped movements, not a total-volume ledger; muscles/heads
+    with no curated movement simply don't appear. Same warmup/load/rep/RPE gates
+    as :func:`weekly_muscle_volume` so the two are directly comparable.
+
+    Returns:
+        ``{muscle: {region: credited_sets}}`` — one full set of credit per
+        (muscle, region) science row an exercise matches.
+    """
+    end = week_end or week_start + timedelta(days=7)
+    rows = conn.execute(
+        f"""
+        SELECT s.muscle, s.region, COUNT(*)::DOUBLE AS sets
+        FROM workout_sets_dedup ws
+        JOIN exercise_science s ON ws.exercise = s.exercise_name
+        WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
+          AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
+          AND {_RPE_GATE}
+        GROUP BY s.muscle, s.region
+        """,
+        [week_start.isoformat(), end.isoformat()],
+    ).fetchall()
+    out: dict[str, dict[str, float]] = defaultdict(dict)
+    for muscle, region, sets in rows:
+        out[muscle][region or muscle] = float(sets)
+    return {m: dict(r) for m, r in out.items()}
+
+
 @dataclass
 class RpeCoverage:
     """How much of the window's volume rests on the NULL-RPE assumption (#23).

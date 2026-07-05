@@ -39,7 +39,12 @@ from shc.training.mesocycle import (
     score_exercise,
     volume_targets,
 )
-from shc.training.volume import build_muscle_report, weekly_muscle_volume
+from shc.training.volume import (
+    MuscleVolume,
+    build_muscle_report,
+    weekly_muscle_volume,
+    weekly_region_volume,
+)
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +127,9 @@ class Prescription:
     # coverage + rep target + citation). Curated muscles only; the rest stay in
     # exercise_menu (recency). See :func:`evidence_menu`.
     exercise_science: dict[str, list[dict]] = field(default_factory=dict)
+    # Per-muscle head/region trained-volume this week ({muscle: {region: sets}}),
+    # so the plan can see which head (long/short/brachialis) is under-stimulated.
+    region_coverage: dict[str, dict[str, float]] = field(default_factory=dict)
     development: dict[str, dict] = field(default_factory=dict)  # per-muscle dev brief
     session_split: list[dict] = field(default_factory=list)  # [{session, muscles, sets}]
     protein_gate: dict = field(default_factory=dict)  # {adequate, avg_7d, target, pct}
@@ -609,33 +617,63 @@ def load_muscle_development(conn: duckdb.DuckDBPyConnection) -> dict[str, dict]:
     return out
 
 
-def _select_grounded(cands: list[tuple], per_muscle: int) -> list[tuple]:
-    """Pick exercises by evidence, not recency.
+def _select_grounded(
+    cands: list[tuple],
+    per_muscle: int,
+    region_volume: dict[str, float] | None = None,
+) -> list[tuple]:
+    """Pick exercises head-first, quality-ranked, and rotated — not repeated.
 
-    Ranking floats lengthened-position movements and high stimulus-to-fatigue
-    options to the top; Rob's recency breaks ties so it stays personal. Then a
-    coverage pass takes one movement per distinct head/region (long/short/
-    brachialis) in that ranked order, so the week trains every head, before
-    filling any remaining slots with the next-best movements.
+    Four-key ordering, most significant first:
+
+    1. **Head deficit** — the region (long/short/brachialis) with the LEAST
+       trained volume this week leads, so the neglected head gets programmed
+       first. ``region_volume`` maps this muscle's ``region → credited sets``
+       (from :func:`shc.training.volume.weekly_region_volume`); absent → all
+       heads tie and ordering falls through to quality.
+    2. **Length bias** — lengthened-position movements float up (stretch stimulus).
+    3. **Stimulus-to-fatigue** — high-SFR options preferred.
+    4. **Staleness** — among otherwise-equal options the LEAST-recently-trained
+       (or never-trained) movement wins, so the pick rotates week to week instead
+       of freezing on one exercise. (This replaces a dead recency term that read
+       the wrong tuple index and always returned 0, freezing selection.)
+
+    A coverage pass then takes one movement per distinct head in that order so
+    every head is trained, before filling remaining slots with the next best.
     """
+    rv = region_volume or {}
 
-    def _recency(c) -> float:
-        last = c[9]
+    def _region(c) -> str:
+        return c[2] or c[1]
+
+    def _deficit(c) -> float:
+        # Lower trained volume on this head → sorts earlier (trained first).
+        return rv.get(_region(c), 0.0)
+
+    def _staleness(c) -> float:
+        # last_done is the final selected column (index 10); older/never-done
+        # sorts earlier so equal-quality options rotate rather than repeat.
+        last = c[10] if len(c) > 10 else None
         try:
-            return -last.timestamp()
+            return last.timestamp()
         except (AttributeError, TypeError, ValueError, OSError):
             return 0.0
 
     ordered = sorted(
         cands,
-        key=lambda c: (_LENGTH_RANK.get(c[3], 1), _SFR_RANK.get(c[6], 1), _recency(c)),
+        key=lambda c: (
+            _deficit(c),
+            _LENGTH_RANK.get(c[3], 1),
+            _SFR_RANK.get(c[6], 1),
+            _staleness(c),
+        ),
     )
     picks: list[tuple] = []
     seen_regions: set[str] = set()
-    for c in ordered:  # coverage pass: one per head, lengthened-first
+    for c in ordered:  # coverage pass: one per head, most-neglected head first
         if len(picks) >= per_muscle:
             break
-        region = c[2] or c[1]
+        region = _region(c)
         if region not in seen_regions:
             picks.append(c)
             seen_regions.add(region)
@@ -667,6 +705,13 @@ def evidence_menu(
         }
     except Exception:  # noqa: BLE001
         avoid = set()
+    # This week's per-head trained volume steers selection toward the neglected
+    # head; degrade to recency/quality-only if the region ledger is unavailable.
+    try:
+        region_vol = weekly_region_volume(conn, _iso_week_start(date.today()))
+    except Exception as exc:  # noqa: BLE001 — region ledger optional
+        log.debug("weekly_region_volume unavailable: %s", exc)
+        region_vol = {}
     out: dict[str, list[dict]] = {}
     for muscle in muscles:
         try:
@@ -703,7 +748,7 @@ def evidence_menu(
                 "citation": c[8],
                 "citation_url": c[9],
             }
-            for c in _select_grounded(cands, per_muscle)
+            for c in _select_grounded(cands, per_muscle, region_vol.get(muscle))
         ]
     return out
 
@@ -1128,6 +1173,12 @@ def weekly_prescription(
     menu = _exercise_menu(conn, need_volume)
     science = evidence_menu(conn, need_volume)
     development = {m: d for m, d in load_muscle_development(conn).items() if m in need_volume}
+    try:
+        all_regions = weekly_region_volume(conn, this_week)
+    except Exception as exc:  # noqa: BLE001 — region ledger optional
+        log.debug("region coverage unavailable: %s", exc)
+        all_regions = {}
+    region_coverage = {m: all_regions[m] for m in need_volume if m in all_regions}
 
     return Prescription(
         week_start=this_week,
@@ -1137,6 +1188,7 @@ def weekly_prescription(
         lift_progressions=lift_progressions,
         exercise_menu=menu,
         exercise_science=science,
+        region_coverage=region_coverage,
         development=development,
         session_split=_session_split(muscle_rx),
         protein_gate=protein,
@@ -1185,6 +1237,26 @@ def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
                     )
                 else:
                     lines.append(f"- **{muscle}** (evidence-based selection):")
+                # Show EVERY head this muscle should cover — including the ones at
+                # zero this week, since a neglected head is exactly what the plan
+                # should lead. weekly_region_volume only returns trained heads, so
+                # backfill the rest from the development brief's region list.
+                cover = dict(rx.region_coverage.get(muscle) or {})
+                heads = list(dev["regions"]) if dev and dev.get("regions") else list(cover)
+                for h in cover:
+                    if h not in heads:
+                        heads.append(h)
+                if heads:
+                    vols = {h: cover.get(h, 0.0) for h in heads}
+                    least = min(vols.values())
+                    parts = [
+                        f"{h} {v:g}" + (" ←lead" if v == least else "")
+                        for h, v in sorted(vols.items(), key=lambda kv: kv[1])
+                    ]
+                    lines.append(
+                        f"    - heads trained this wk: {' · '.join(parts)} "
+                        "(lead the least-trained head)"
+                    )
                 for p in picks:
                     head = f"{p['region']}, " if p.get("region") else ""
                     lines.append(

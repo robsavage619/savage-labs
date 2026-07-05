@@ -7,7 +7,29 @@ from shc.training.volume import (
     build_muscle_report,
     unmapped_exercises,
     weekly_muscle_volume,
+    weekly_region_volume,
 )
+
+
+def test_region_volume_credits_each_head(conn, seed):
+    """A set credits the specific head(s) exercise_science maps, across muscles.
+
+    Hammer Curl carries two science rows (biceps/brachialis + forearms/
+    brachioradialis), so it must credit a head under EACH muscle — the crediting
+    that was invisible when only exercise_muscle_map (biceps, no secondaries)
+    drove volume.
+    """
+    today = date.today()
+    seed.workout(today, "Incline Curl (Dumbbell)", [(15.0, 12)] * 2)  # biceps/long_head
+    seed.workout(today, "Bicep Curl (Barbell)", [(30.0, 10)])  # biceps/short_head
+    seed.workout(today, "Hammer Curl (Dumbbell)", [(20.0, 12)] * 3)  # brachialis + brachioradialis
+
+    rv = weekly_region_volume(conn, _iso_week_start(today))
+
+    assert rv["biceps"]["long_head"] == 2.0
+    assert rv["biceps"]["short_head"] == 1.0
+    assert rv["biceps"]["brachialis"] == 3.0
+    assert rv["forearms"]["brachioradialis"] == 3.0  # credited under forearms too
 
 
 def test_secondary_muscle_credit(conn, seed):
