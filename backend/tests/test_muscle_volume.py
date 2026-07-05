@@ -47,6 +47,34 @@ def test_secondary_muscle_credit(conn, seed):
     assert vol["biceps"] == round(0.3 * 3, 1)  # arm secondary, reduced credit
 
 
+def test_hammer_curl_credits_forearms(conn, seed):
+    """0065: a neutral-grip curl now credits forearms (brachioradialis), not just
+    biceps — the landmark-crediting gap where head coverage existed but volume
+    didn't."""
+    today = date.today()
+    seed.workout(today, "Hammer Curl (Dumbbell)", [(20.0, 12)] * 4)
+    vol = weekly_muscle_volume(conn, _iso_week_start(today))
+    assert vol["biceps"] == 4.0  # primary, full credit
+    assert vol["forearms"] == round(0.3 * 4, 1)  # arm secondary, reduced credit
+
+
+def test_row_credits_mid_back(conn, seed):
+    """0065: rows credit mid_back (rhomboids/mid-traps) as a genuine synergist."""
+    today = date.today()
+    seed.workout(today, "T-Bar Row", [(60.0, 10)] * 4)
+    vol = weekly_muscle_volume(conn, _iso_week_start(today))
+    assert vol["mid_back"] == 2.0  # 0.5 × 4
+
+
+def test_wrist_curl_credits_forearms_not_biceps(conn, seed):
+    """0065: wrist curls were misclassified as biceps by the 'curl' substring."""
+    today = date.today()
+    seed.workout(today, "Palms-Down Dumbbell Wrist Curl", [(15.0, 15)] * 3)
+    vol = weekly_muscle_volume(conn, _iso_week_start(today))
+    assert vol["forearms"] == 3.0
+    assert vol.get("biceps", 0.0) == 0.0
+
+
 def test_non_arm_secondary_keeps_half_credit(conn, seed):
     today = date.today()
     # Hip Thrust → glutes primary, hamstrings secondary (a genuine synergist).
