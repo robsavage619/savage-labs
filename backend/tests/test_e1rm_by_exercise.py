@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+
 from shc.ai.workout_planner import e1rm_by_exercise
 
 
@@ -42,3 +44,31 @@ def test_multiple_exercises_keyed_separately(conn, seed, today: date) -> None:
     seed.workout(days_ago(today, 5), "Squat (Barbell)", [(140, 5)])
     result = e1rm_by_exercise(conn, today)
     assert set(result) == {"Bench Press (Barbell)", "Squat (Barbell)"}
+
+
+def test_dumbbell_pair_is_halved_to_per_hand(conn, seed, today: date) -> None:
+    # Rob logs a hammer-curl pair as the combined total; the e1RM must be the
+    # per-hand figure, not the total (the "95 lb each hand" bug).
+    ex = "Hammer Curl (Dumbbell)"
+    seed.workout(days_ago(today, 4), ex, [(54.4, 10)])  # 120 lb total → 60 lb/hand
+    result = e1rm_by_exercise(conn, today)
+    expected_per_hand = (54.4 / 2) * (1 + 10 / 30)  # ~36.3 kg per hand
+    assert result[ex] == pytest.approx(expected_per_hand)
+
+
+def test_barbell_not_halved(conn, seed, today: date) -> None:
+    ex = "Bench Press (Barbell)"
+    seed.workout(days_ago(today, 4), ex, [(100, 5)])
+    result = e1rm_by_exercise(conn, today)
+    assert result[ex] == pytest.approx(100 * (1 + 5 / 30))  # full bar load, no ÷2
+
+
+def test_gross_outlier_set_is_trimmed(conn, seed, today: date) -> None:
+    # A dense, consistent history plus one fat-fingered heavy log: the outlier
+    # must not float the ceiling. Barbell so per-hand normalization is a no-op.
+    ex = "Barbell Curl"
+    for i in range(10):
+        seed.workout(days_ago(today, 10 + i), ex, [(40, 10)])  # steady ~53kg e1RM
+    seed.workout(days_ago(today, 1), ex, [(400, 1)])  # impossible fat-finger
+    result = e1rm_by_exercise(conn, today)
+    assert result[ex] < 100  # outlier rejected, not the ~53kg MAD-consistent max

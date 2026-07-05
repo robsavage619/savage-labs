@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 from shc.ai.lab_findings import lab_findings_section
 from shc.ai.vault import retrieve_for_question as _retrieve_for_question
 from shc.ai.vault import vault_context as _vault_context
+from shc.training.load_mechanics import load_unit_label, per_hand_kg
 
 
 def load_vault_research(
@@ -223,6 +224,13 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "load ceiling at 8 reps. Use the ceiling as your upper bound; pick reps "
         "to land at the prescribed RPE."
     )
+    lines.append(
+        "- **PER-HAND LOADS**: for dumbbell and cable-crossover lifts, every "
+        "weight here is the load in ONE hand (what you physically pick up), NOT "
+        "the combined total. Prescribe `weight_lbs` as the per-hand number for "
+        "these lifts and say so in the notes (e.g. \"55 lb each hand\"). The e1RM "
+        "and ceiling above are already per-hand, so compare like with like."
+    )
 
     # Confirmed n-of-1 experiment priors — CAUSAL, self-tested effects the plan may
     # lean on. Read-only guidance (effect + CI shown so the model can weigh it), and
@@ -388,18 +396,26 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     ww_limit = 40
     lines.append(
         f"\n## WORKING WEIGHTS ({len(ww_rows)} exercises on record) — "
-        f"all-time max · e1RM · today's ceiling ({cap_pct}% @8 reps)"
+        f"all-time max · e1RM · today's ceiling ({cap_pct}% @8 reps). "
+        "Dumbbell / cable-crossover loads are shown PER HAND."
     )
     for ex, wkg, src in ww_rows[:ww_limit]:
-        lbs = round(wkg * 2.20462, 1) if wkg else 0
-        e1rm_kg = e1rm_by_ex.get(ex)
+        # Normalize the stored all-time max (Rob logs pairs as a combined total)
+        # and the e1RM to the SAME per-hand unit so they can't be compared across
+        # units. The combined figure is kept in parens for orientation.
+        unit = load_unit_label(ex)
+        ph_kg = per_hand_kg(ex, wkg) if wkg else 0
+        lbs = round(ph_kg * 2.20462, 1)
+        unit_sfx = f" {unit}" if unit else ""
+        total_sfx = f" ({round(wkg * 2.20462)} lbs total)" if unit and wkg else ""
+        e1rm_kg = e1rm_by_ex.get(ex)  # already per-hand
         if e1rm_kg:
             e1rm_lbs = round(e1rm_kg * 2.20462, 1)
             ceiling_lbs = round(e1rm_kg * (cap_pct / 100) / (1 + 8 / 30) * 2.20462, 1)
             extra = f" · e1RM ~{e1rm_lbs} · today ≤{ceiling_lbs} lbs @8"
         else:
             extra = " · e1RM n/a — set load by feel to RPE on first set"
-        lines.append(f"- {ex}: {lbs} lbs ({wkg:.1f} kg) [{src}]{extra}")
+        lines.append(f"- {ex}: {lbs} lbs{unit_sfx}{total_sfx} ({ph_kg:.1f} kg) [{src}]{extra}")
     if len(ww_rows) > ww_limit:
         lines.append(
             f"  ... {len(ww_rows) - ww_limit} more truncated "
@@ -411,9 +427,15 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         f"capped at SQL LIMIT 20)"
     )
     for ex, sets, max_kg, avg_rpe in top_exercises:
-        lbs = round(max_kg * 2.20462, 1) if max_kg else "bw"
+        unit = load_unit_label(ex)
+        if max_kg:
+            lbs_str = f"{round(per_hand_kg(ex, max_kg) * 2.20462, 1)} lbs" + (
+                f" {unit}" if unit else ""
+            )
+        else:
+            lbs_str = "bw"
         rpe_str = f" @RPE {avg_rpe:.1f}" if avg_rpe else ""
-        lines.append(f"- {ex}: {sets} sets, max {lbs} lbs{rpe_str}")
+        lines.append(f"- {ex}: {sets} sets, max {lbs_str}{rpe_str}")
 
     lines.append(f"\n## VOLUME TREND (8-week): {vol_trend_label}")
     if gates["e1rm_regression_4wk_pct"] is not None:
@@ -735,7 +757,7 @@ interface Plan {
       name: string;
       sets: number;
       reps: number | string;
-      weight_lbs: number | null;
+      weight_lbs: number | null;  // PER HAND for dumbbell/cable-crossover lifts, not combined
       rpe_target: number;
       rest_seconds: number; // REQUIRED on every exercise, no exceptions
       notes: string;
@@ -895,25 +917,76 @@ def load_cap_pct(gates: dict[str, Any]) -> int:
     return {"rest": 60, "low": 78, "moderate": 90}.get(gates.get("max_intensity", "high"), 103)
 
 
-def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
-    """Best Epley e1RM (kg) per exercise over the window. Basis for target load.
+# When the core history is near-identical the MAD collapses to zero and a normal
+# threshold can't be formed — yet that is exactly when a fat-fingered heavy log
+# stands out most. Fall back to a multiple of the median: a within-window e1RM
+# moves a few percent, so a single set at ~1.9× the 90-day median is bad data,
+# not a PR (which would still comfortably clear this bar).
+_DEGENERATE_OUTLIER_RATIO = 1.9
 
-    Reps are capped at 12 before estimating — Epley overestimates above ~10–12
-    reps, so an uncapped MAX floats the ceiling up on fluky high-rep sets and
-    partly defeats the deload guard it feeds (panel review M16).
+
+def _robust_max(vals: list[float], k: float = 3.5, min_n: int = 8) -> float | None:
+    """Max after dropping HIGH outliers via a median/MAD filter.
+
+    An inflated e1RM is the safety risk — it raises the load ceiling and lets a
+    supramaximal weight through — so only the high tail is trimmed; a low outlier
+    can't hurt. Below ``min_n`` samples there isn't enough distribution to call
+    an outlier, so the plain max is returned. A degenerate (zero-MAD) spread
+    falls back to a median-ratio ceiling (:data:`_DEGENERATE_OUTLIER_RATIO`)
+    rather than passing the outlier through.
     """
+    if not vals:
+        return None
+    if len(vals) < min_n:
+        return max(vals)
+    s = sorted(vals)
+    mid = len(s) // 2
+    med = s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+    devs = sorted(abs(v - med) for v in s)
+    mad = devs[mid] if len(devs) % 2 else (devs[mid - 1] + devs[mid]) / 2
+    if mad > 0:
+        thr = med + k * 1.4826 * mad  # 1.4826 scales MAD to a σ estimate for normal data
+    else:
+        thr = med * _DEGENERATE_OUTLIER_RATIO
+    kept = [v for v in vals if v <= thr]
+    return max(kept) if kept else max(vals)
+
+
+def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
+    """Best Epley e1RM (kg) per exercise, normalized to PER-HAND load.
+
+    Basis for today's target load and the validator's load ceiling. Two things
+    keep the number honest:
+
+    * **Per-hand normalization** — two-implement lifts (dumbbell pairs, cable
+      crossovers) are logged as the COMBINED weight but loaded per hand, so each
+      set is halved via :func:`shc.training.load_mechanics.per_hand_kg` before
+      the Epley estimate. Without this a per-hand target gets validated against a
+      total-load e1RM — the "95 lb each hand hammer curl" bug.
+    * **Rep cap + MAD guard** — reps are capped at 12 (Epley overestimates above
+      ~12), and a median/MAD filter (:func:`_robust_max`) drops grossly inflated
+      outlier sets so one fat-fingered log can't float the ceiling.
+    """
+    from collections import defaultdict
+
+    from shc.training.load_mechanics import per_hand_kg
+
     rows = conn.execute(
         """
-        SELECT ws.exercise, MAX(ws.weight_kg * (1 + LEAST(ws.reps, 12) / 30.0)) AS e1rm_kg
+        SELECT ws.exercise, ws.weight_kg, LEAST(ws.reps, 12) AS reps
         FROM workout_sets ws
         JOIN workouts w ON w.id = ws.workout_id
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL AND ws.reps > 0
           AND w.started_at::DATE >= $since
-        GROUP BY ws.exercise
         """,
         {"since": (today - timedelta(days=days)).isoformat()},
     ).fetchall()
-    return {r[0]: float(r[1]) for r in rows if r[1]}
+    by_ex: dict[str, list[float]] = defaultdict(list)
+    for ex, wkg, reps in rows:
+        if wkg is None:
+            continue
+        by_ex[ex].append(per_hand_kg(ex, float(wkg)) * (1 + reps / 30.0))
+    return {ex: m for ex, vals in by_ex.items() if (m := _robust_max(vals)) is not None}
 
 
 _CITATION_RE = re.compile(r"`?\b([\w-]+\.md)\b`?")
@@ -1345,6 +1418,10 @@ def validate_plan(
                         continue
                     if not w_lbs or not reps:
                         continue
+                    # Both sides speak PER-HAND: e1rm_ceilings comes from
+                    # e1rm_by_exercise (per-hand normalized) and the plan is told
+                    # to emit weight_lbs per-hand for dumbbell/cable lifts. Do not
+                    # re-halve here — the units already match.
                     demand_kg = (w_lbs / 2.20462) * (1 + reps / 30)
                     ceiling_kg = e1rm_kg * cap
                     # 3% tolerance for rounding/load-increment realities.
