@@ -340,6 +340,18 @@ score_prescription_outcomes()  → grade logged calls 3 weeks later
 
 ---
 
+### Exercise Intelligence — Per-Hand Loads, Muscle Heads, One Canonical Model
+
+A prescription once told me to hammer-curl 95 lbs *in each hand* — a weight I've never touched. It was a units bug, and chasing it exposed a whole layer worth getting right.
+
+**Per-hand load semantics.** I log a dumbbell lift as the combined weight of both bells, but I *pick up* — and should be prescribed — one bell. The engine was reading the combined number as the per-hand load, so a per-hand target got validated against a total-load estimated-1RM. A small load-mechanics classifier now tags every movement (dumbbell pair, cable crossover, single-arm, barbell, machine) and normalizes the e1RM, the load ceiling, and the prescription to per-hand — with a median/MAD guard so one fat-fingered set can't inflate the ceiling. That one fix dropped the hammer-curl ceiling from a level that permitted 95 lb/hand to ~47.
+
+**Muscle heads, not just muscle groups.** "Biceps" isn't specific enough to program well — the long head, short head, and brachialis grow from different exercises and joint positions. The engine credits each working set to the specific head an exercise trains (a hammer curl hits `biceps/brachialis` *and* `forearms/brachioradialis`, not just "biceps"), tracks per-head volume across the week, and leads exercise selection with the least-trained head — then rotates among equal-quality options instead of prescribing the same movement every week. Each pick is grounded in a cited study.
+
+**One canonical model instead of two.** The crediting data and the head/length/science data lived in two separate tables, keyed the same way but free to disagree about which muscles a movement trains — which is exactly how a wrist curl ended up crediting biceps. I merged them into a single `exercise_muscle` row per (exercise, muscle) that carries both the volume credit *and* the anatomy, so the two can never drift apart. The migration used expand-contract: the old table names became views over the new table, so every reader kept working untouched — verified byte-identical on real data before cutting over.
+
+---
+
 ### e1RM Tracking & Fatigue Detection
 
 Every set goes in with weight and reps. I compute estimated 1RM via the Epley formula:
@@ -803,7 +815,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 |---|---|
 | Language | Python 3.12 |
 | Framework | FastAPI 0.115 |
-| Database | DuckDB 1.1 (encrypted, 49 migrations) |
+| Database | DuckDB 1.1 (encrypted, 66 migrations) |
 | Background | APScheduler 3.10 |
 | HTTP | httpx 0.28 (async) |
 | XML | lxml 5 (Apple Health CCDA) |
@@ -834,7 +846,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 </tr>
 </table>
 
-**Infrastructure:** `dev-restart.sh` — API `:8000`, frontend `:3000`, WAL checkpoint on start · pre-push hook: ruff + pyright + pytest (214 tests) · APScheduler nightly jobs: WHOOP/Hevy/DUPR sync + `compute_all_scores` (full self-learning pipeline)
+**Infrastructure:** `dev-restart.sh` — API `:8000`, frontend `:3000`, WAL checkpoint on start · pre-push hook: ruff + pyright + pytest (424 tests) · APScheduler nightly jobs: WHOOP/Hevy/DUPR sync + `compute_all_scores` (full self-learning pipeline)
 
 ---
 
@@ -881,14 +893,14 @@ I spent more time on the UI than I probably should have. The whole thing uses OK
 
 ## Data Model
 
-32 tables, 4 views, 49 migrations applied.
+32 tables, 6 views, 66 migrations applied.
 
 | Group | What it stores |
 |---|---|
 | **Biometrics** | WHOOP recovery scores, HRV, RHR, skin temp, SpO2; sleep stage breakdown (SWS, REM, efficiency, disturbances, respiratory rate, cycles); Apple Health time-series; body measurements |
 | **Training** | Hevy sessions and sets (every lift back to 2015); cardio sessions with HR zone durations; AI-generated workout plans; post-workout retrospectives; prescription vs execution adherence |
 | **Self-learning engine** | Per-exercise weekly e1RM + tonnage + performance scores; fitted ACWR gate thresholds; materialized signal quality (scored weeks, stability, confidence per muscle); prescription feedback log |
-| **Periodization** | Active mesocycle (phase, planned weeks, deload trigger); per-muscle MEV/MAV/MRV targets (population defaults + personal fitted variants); exercise → muscle classification map |
+| **Periodization** | Active mesocycle (phase, planned weeks, deload trigger); per-muscle MEV/MAV/MRV targets (population defaults + personal fitted variants); one canonical `exercise → muscle` table carrying both volume crediting and per-head anatomy (region, length-bias, SFR, cited rep ranges) |
 | **Clinical** | Active medications with audit trail; diagnoses; lab results with reference ranges; pre-registered N-of-1 hypothesis catalogue; per-run statistical findings (verdict, n, effect size, p-value) |
 | **Sport** | DUPR rating snapshots (daily); full match history with per-game scores, partners, opponents, pre/post/delta ratings |
 | **Daily input** | Morning check-in (energy, stress, soreness, body weight, protein, medication flags); exercise training preferences; OAuth + sync state per data source |

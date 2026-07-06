@@ -4,6 +4,38 @@ All notable changes to this project. Dates are commit dates (Pacific time).
 
 ---
 
+## 2026-07-05 (exercise-intelligence pass)
+
+The trigger was a prescription that asked for a hammer curl at 95 lbs *in each hand* — a weight never lifted. Tracing it opened up the whole exercise-intelligence layer: load semantics, muscle-head anatomy, exercise selection, and the split-brain data model underneath all of it.
+
+### Fixed
+
+- **Per-hand load semantics for dumbbell / cable-pair lifts.** Two-implement lifts (a dumbbell in each hand, a cable stack per hand) are logged as the *combined* weight but loaded — and prescribed — per hand. The engine read the logged number as *the* load, so a per-hand target was validated against a total-load e1RM: the "95 lb each hand" hammer curl. New `load_mechanics.py` classifies each movement's load type (`dumbbell_pair` / `cable_pair` → ÷2 per hand; single-arm / barbell / machine as-is; a movement-default layer catches un-suffixed Fitbod names like bare `Hammer Curls`). `e1rm_by_exercise` now normalizes every set to per-hand before the Epley estimate; the working-weights table, top-exercises list, load rule, and output schema all speak per-hand ("85 lbs each hand (170 total)"). Verified on real data: the Hammer Curl ceiling dropped from a level that permitted 95 lb/hand to ~47 lb/hand.
+
+- **Fat-fingered e1RM outliers float the load ceiling.** A single mis-logged heavy set could inflate an exercise's e1RM and let a supramaximal weight through the validator. `_robust_max` trims the high tail via a median/MAD filter (with a median-ratio fallback when the core history is near-identical and MAD collapses to zero), so one bad log can't raise the ceiling.
+
+- **Landmark volume crediting disagreed with the anatomy.** 14 curated movements named a muscle in the science layer that the crediting map didn't credit — a hammer curl built brachioradialis *coverage* but contributed zero to the forearm *volume target*; rows never counted toward mid-back, squats missed adductors, hinges missed lower-back, the dumbbell press missed side-delts. Migration 0065 backfills those secondaries at the standard synergist rates (arm flexors/extensors 0.3, else 0.5). Verified across 8 weeks of real data: every muscle moves proportionally and stays within its landmarks — no spurious cut or deload. Also corrected a `"curl"`-substring misclassification that mapped Palms-Down/Up Dumbbell Wrist Curl to *biceps* primary; a wrist curl is a forearm movement.
+
+- **Exercise selection was frozen on the same pick every week.** `_select_grounded`'s recency tiebreaker read the wrong tuple index (a citation URL, not the last-trained timestamp) and always threw → returned 0, so selection was fully deterministic on (length-bias, SFR): the repetition problem. The rewrite (below) fixes the root cause; a deterministic exercise-name final tiebreaker also removes a latent dependence on row/storage order.
+
+### Added
+
+- **Head-level (muscle-region) volume crediting.** `weekly_region_volume` credits each stimulating set to the specific head the science layer maps — a Hammer Curl credits `biceps/brachialis` *and* `forearms/brachioradialis`, not just "biceps." This is the coverage ledger that lets the engine see *which* head got stimulus.
+
+- **Head-aware, rotating exercise selection.** `_select_grounded` now orders candidates head-first: the least-trained head (from `weekly_region_volume`) leads, then length-bias and SFR for quality, then staleness so the pick rotates among equal-quality options instead of freezing. The prescription context shows per-head coverage including zero-trained heads (`long_head 0 ←lead · short_head 3 · brachialis 5`) so the plan leads the neglected head.
+
+- **Curated the top frequently-trained movements off the recency fallback.** Only 78 exercises carried science rows; ~15 movements Rob trains often (Hammerstrength presses, rope pushdowns, cable crossovers, the Fitbod-named `Hammer Curls`, iso-lateral row, machine leg/calf work) fell back to blind recency. Migration 0064 curates them by copying each variant's row from its already-vetted canonical movement (`INSERT..SELECT`) — no invented science; every citation is one already grounded in the table, and the source is chosen to match the variant's mechanics (a low-to-high cable fly inherits the *upper-chest* incline-fly row). `exercise_science` 95 → 113 rows.
+
+### Changed
+
+- **Unified `exercise_muscle_map` + `exercise_science` into one canonical `exercise_muscle` table.** The two tables were a split-brain — one drove volume crediting (primary/secondary), the other head/length/SFR selection — keyed the same way but able to disagree about which muscles a movement trains. That disagreement was the root cause behind most of the fixes above. Migration 0066 collapses them into a single row per (exercise, muscle) carrying *both* the crediting (`role` + `credit`) and the anatomy (`region`, `length_bias`, `sfr_tier`, rep range, citation) — one row, so the two can never diverge again. Done as expand-contract: the old table names are recreated as **views** over `exercise_muscle` reproducing their exact prior shapes, so all seven reader files stayed unchanged. Proven byte-identical before/after on real data for `weekly_muscle_volume`, `weekly_region_volume`, `evidence_menu`, and `_planned_sets_by_muscle`. The one runtime writer (the classifier's auto-mapping backfill) and the affected tests now write `exercise_muscle` directly. This is the entity/master-data layer; the metrics semantic layer (`DailyState`, landmarks, gates) already existed.
+
+### Tests
+
+424 passing (+ per-hand and outlier cases, head-level crediting, selector head-priority/rotation, the migration-0064 coverage guard, and the unified-table contract test).
+
+---
+
 ## 2026-06-04 (engine fix pass)
 
 ### Fixed
