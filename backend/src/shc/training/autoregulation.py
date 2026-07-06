@@ -666,6 +666,7 @@ def _select_grounded(
             _LENGTH_RANK.get(c[3], 1),
             _SFR_RANK.get(c[6], 1),
             _staleness(c),
+            c[0],  # exercise name — deterministic final tiebreaker (storage-order independent)
         ),
     )
     picks: list[tuple] = []

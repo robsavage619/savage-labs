@@ -131,8 +131,8 @@ def test_progress_reads_as_signal_not_noise(conn) -> None:
     from shc.training.self_learning import compute_muscle_signal_quality
 
     conn.execute(
-        "INSERT INTO exercise_muscle_map (exercise_name, primary_muscle) "
-        "VALUES ('ClimbLift', 'glutes'), ('NoisyLift', 'quads')"
+        "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) "
+        "VALUES ('ClimbLift', 'glutes', 'primary', 1.0), ('NoisyLift', 'quads', 'primary', 1.0)"
     )
     base = _date(2026, 1, 5)  # a Monday
     climbing = [3, 3, 4, 4, 5, 5, 5]
@@ -274,8 +274,8 @@ def test_low_confidence_athlete_still_climbs_to_mrv(conn) -> None:
     from shc.training.self_learning import compute_muscle_signal_quality
 
     conn.execute(
-        "INSERT INTO exercise_muscle_map (exercise_name, primary_muscle) "
-        "VALUES ('Hip Thrust', 'glutes')"
+        "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) "
+        "VALUES ('Hip Thrust', 'glutes', 'primary', 1.0)"
     )
     base = _date(2024, 1, 1)
     e1rm = 100.0
@@ -329,8 +329,8 @@ def test_deload_week_does_not_poison_confidence(conn) -> None:
     from shc.training.self_learning import compute_muscle_signal_quality
 
     conn.execute(
-        "INSERT INTO exercise_muscle_map (exercise_name, primary_muscle) "
-        "VALUES ('Hip Thrust', 'glutes')"
+        "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) "
+        "VALUES ('Hip Thrust', 'glutes', 'primary', 1.0)"
     )
     base = _date(2025, 1, 6)
     deload_wk = 6

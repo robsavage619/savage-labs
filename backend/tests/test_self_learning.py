@@ -64,10 +64,12 @@ def _seed_e1rm(
 
 
 def _seed_muscle_map(conn, exercise: str, primary: str) -> None:
+    # exercise_muscle_map is now a view over exercise_muscle (migration 0066) —
+    # seed the canonical table directly.
     conn.execute(
-        "INSERT OR IGNORE INTO exercise_muscle_map (exercise_name, primary_muscle, secondary_muscles)"
-        " VALUES (?, ?, ?)",
-        [exercise, primary, []],
+        "INSERT OR IGNORE INTO exercise_muscle (exercise_name, muscle, role, credit)"
+        " VALUES (?, ?, 'primary', 1.0)",
+        [exercise, primary],
     )
 
 

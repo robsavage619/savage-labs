@@ -224,10 +224,10 @@ def backfill_exercise_map(conn: duckdb.DuckDBPyConnection) -> None:
     ON CONFLICT DO NOTHING).  Remaps any lingering 'core' primary → 'abs'.
     Logs a warning if >20% of trailing-90d sets are still unmapped after the run.
     """
-    # Fix any lingering core→abs taxonomy drift first.
-    conn.execute(
-        "UPDATE exercise_muscle_map SET primary_muscle = 'abs' WHERE primary_muscle = 'core'"
-    )
+    # Fix any lingering core→abs taxonomy drift first. exercise_muscle_map is now
+    # a view over the canonical exercise_muscle table (migration 0066), so writes
+    # target exercise_muscle directly.
+    conn.execute("UPDATE exercise_muscle SET muscle = 'abs' WHERE muscle = 'core'")
 
     # Fetch every exercise name not yet in the map.
     unmapped: list[str] = [
@@ -251,14 +251,22 @@ def backfill_exercise_map(conn: duckdb.DuckDBPyConnection) -> None:
             skipped.append(ex)
             continue
         primary, secondaries = result
+        # Write to the canonical exercise_muscle table (exercise_muscle_map is a
+        # view over it, 0066): one primary row (full credit) plus one row per
+        # secondary at the standard synergist rate (arm flexors/extensors 0.3,
+        # else 0.5) — the same rule volume.py credits by.
         conn.execute(
-            """
-            INSERT INTO exercise_muscle_map (exercise_name, primary_muscle, secondary_muscles)
-            VALUES (?, ?, ?)
-            ON CONFLICT (exercise_name) DO NOTHING
-            """,
-            [ex, primary, secondaries],
+            "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) "
+            "VALUES (?, ?, 'primary', 1.0) ON CONFLICT DO NOTHING",
+            [ex, primary],
         )
+        for sec in secondaries:
+            credit = 0.3 if sec in ("biceps", "triceps", "forearms") else 0.5
+            conn.execute(
+                "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) "
+                "VALUES (?, ?, 'secondary', ?) ON CONFLICT DO NOTHING",
+                [ex, sec, credit],
+            )
         inserted += 1
 
     if skipped:
