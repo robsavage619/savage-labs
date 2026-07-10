@@ -28,6 +28,7 @@ program the chat assembles the actual session from.
 import json
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -621,10 +622,11 @@ def _select_grounded(
     cands: list[tuple],
     per_muscle: int,
     region_volume: dict[str, float] | None = None,
+    progress_rank: Mapping[str, int] | None = None,
 ) -> list[tuple]:
-    """Pick exercises head-first, quality-ranked, and rotated — not repeated.
+    """Pick exercises head-first, quality-ranked, and stable — swap only on plateau.
 
-    Four-key ordering, most significant first:
+    Five-key ordering, most significant first:
 
     1. **Head deficit** — the region (long/short/brachialis) with the LEAST
        trained volume this week leads, so the neglected head gets programmed
@@ -633,15 +635,24 @@ def _select_grounded(
        heads tie and ordering falls through to quality.
     2. **Length bias** — lengthened-position movements float up (stretch stimulus).
     3. **Stimulus-to-fatigue** — high-SFR options preferred.
-    4. **Staleness** — among otherwise-equal options the LEAST-recently-trained
-       (or never-trained) movement wins, so the pick rotates week to week instead
-       of freezing on one exercise. (This replaces a dead recency term that read
-       the wrong tuple index and always returned 0, freezing selection.)
+    4. **Progress state** — among otherwise-equal options a lift Rob is actively
+       PROGRESSING on is kept (rank 0), an untried option is neutral (1), and a
+       PLATEAUED lift (stalled/regressing e1RM trend) is demoted (2) so an
+       equal-quality alternative for that head surfaces. This is the
+       evidence-based rotation trigger — swap on plateau, not on a weekly clock
+       (Balsalobre; Rauch): fixed selection matches or beats variation for
+       hypertrophy, so a movement is only rotated once progress on it stalls.
+       ``progress_rank`` maps ``exercise_name → {0,1,2}``; absent → all neutral.
+    5. **Name** — deterministic final tiebreaker (storage-order independent).
 
-    A coverage pass then takes one movement per distinct head in that order so
-    every head is trained, before filling remaining slots with the next best.
+    Because the ordering carries no time term, selection is STABLE week to week
+    (the same best set recurs) until a lift plateaus — exactly what the research
+    prescribes. A coverage pass then takes one movement per distinct head in that
+    order so every head is trained, before filling remaining slots with the next
+    best.
     """
     rv = region_volume or {}
+    pr = progress_rank or {}
 
     def _region(c) -> str:
         return c[2] or c[1]
@@ -650,14 +661,9 @@ def _select_grounded(
         # Lower trained volume on this head → sorts earlier (trained first).
         return rv.get(_region(c), 0.0)
 
-    def _staleness(c) -> float:
-        # last_done is the final selected column (index 10); older/never-done
-        # sorts earlier so equal-quality options rotate rather than repeat.
-        last = c[10] if len(c) > 10 else None
-        try:
-            return last.timestamp()
-        except (AttributeError, TypeError, ValueError, OSError):
-            return 0.0
+    def _progress(c) -> int:
+        # 0 progressing (keep) < 1 untried (neutral) < 2 plateaued (swap-eligible).
+        return pr.get(c[0], 1)
 
     ordered = sorted(
         cands,
@@ -665,7 +671,7 @@ def _select_grounded(
             _deficit(c),
             _LENGTH_RANK.get(c[3], 1),
             _SFR_RANK.get(c[6], 1),
-            _staleness(c),
+            _progress(c),
             c[0],  # exercise name — deterministic final tiebreaker (storage-order independent)
         ),
     )
@@ -684,6 +690,58 @@ def _select_grounded(
         if c not in picks:
             picks.append(c)
     return picks[:per_muscle]
+
+
+def _load_exercise_aliases(conn: duckdb.DuckDBPyConnection) -> dict[str, str]:
+    """Curated ``exercise_science`` name → the string Rob actually logs it under.
+
+    Bridges the naming gap between the curated science catalog and Hevy's logged
+    exercise strings (e.g. ``Tricep Pushdown (Cable)`` → ``Cable Tricep Pushdown``)
+    so a plateau signal can be read for staples logged under a variant name. Absent
+    table (pre-migration) degrades to no aliases — every name resolves to itself.
+    """
+    try:
+        return {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT canonical_name, logged_name FROM exercise_alias"
+            ).fetchall()
+        }
+    except Exception as exc:  # noqa: BLE001 — alias table optional
+        log.debug("exercise_alias unavailable: %s", exc)
+        return {}
+
+
+def _progress_ranks(
+    conn: duckdb.DuckDBPyConnection,
+    names: set[str],
+    aliases: Mapping[str, str] | None = None,
+) -> dict[str, int]:
+    """Map each curated exercise to a swap-priority rank from its e1RM trend.
+
+    ``0`` = actively progressing (keep it), ``1`` = untried / too little history
+    to judge (neutral), ``2`` = plateaued (stalled or regressing) and therefore
+    eligible to be swapped for an equal-quality alternative. This is what turns
+    :func:`_select_grounded` into a plateau-triggered rotator rather than a weekly
+    one. Curated names are resolved to Rob's logged variant via ``aliases`` (e.g.
+    ``Tricep Pushdown (Cable)`` → ``Cable Tricep Pushdown``) before scoring, so a
+    staple logged under a different string still contributes a plateau signal.
+    """
+    al = aliases or {}
+    ranks: dict[str, int] = {}
+    for name in names:
+        try:
+            ps = score_exercise(conn, al.get(name, name))
+        except Exception as exc:  # noqa: BLE001 — scoring optional, never blocks selection
+            log.debug("score_exercise failed for %s: %s", name, exc)
+            ps = None
+        if ps is None:
+            ranks[name] = 1
+        elif ps.trend == "progressing":
+            ranks[name] = 0
+        else:  # stalled | regressing
+            ranks[name] = 2
+    return ranks
 
 
 def evidence_menu(
@@ -713,21 +771,19 @@ def evidence_menu(
     except Exception as exc:  # noqa: BLE001 — region ledger optional
         log.debug("weekly_region_volume unavailable: %s", exc)
         region_vol = {}
-    out: dict[str, list[dict]] = {}
+
+    # Pull each muscle's curated candidates, then score every distinct candidate's
+    # progression once so selection can demote plateaued lifts (swap-on-plateau).
+    per_muscle_rows: dict[str, list[tuple]] = {}
     for muscle in muscles:
         try:
             rows = conn.execute(
                 """
                 SELECT s.exercise_name, s.muscle, s.region, s.length_bias,
                        s.rep_low, s.rep_high, s.sfr_tier, s.rationale, s.citation,
-                       s.citation_url,
-                       COALESCE(MAX(ws.started_at), '1900-01-01'::TIMESTAMP) AS last_done
+                       s.citation_url
                 FROM exercise_science s
-                LEFT JOIN workout_sets_dedup ws ON ws.exercise = s.exercise_name
                 WHERE s.muscle = ?
-                GROUP BY s.exercise_name, s.muscle, s.region, s.length_bias,
-                         s.rep_low, s.rep_high, s.sfr_tier, s.rationale, s.citation,
-                         s.citation_url
                 """,
                 [muscle],
             ).fetchall()
@@ -735,8 +791,15 @@ def evidence_menu(
             log.debug("exercise_science unavailable for %s: %s", muscle, exc)
             continue
         cands = [r for r in rows if r[0] not in avoid]
-        if not cands:
-            continue
+        if cands:
+            per_muscle_rows[muscle] = cands
+
+    aliases = _load_exercise_aliases(conn)
+    all_names = {c[0] for cands in per_muscle_rows.values() for c in cands}
+    progress = _progress_ranks(conn, all_names, aliases)
+
+    out: dict[str, list[dict]] = {}
+    for muscle, cands in per_muscle_rows.items():
         out[muscle] = [
             {
                 "exercise": c[0],
@@ -749,7 +812,7 @@ def evidence_menu(
                 "citation": c[8],
                 "citation_url": c[9],
             }
-            for c in _select_grounded(cands, per_muscle, region_vol.get(muscle))
+            for c in _select_grounded(cands, per_muscle, region_vol.get(muscle), progress)
         ]
     return out
 
