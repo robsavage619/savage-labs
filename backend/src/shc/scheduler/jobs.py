@@ -78,7 +78,7 @@ async def _recompute_adherence() -> None:
             LEFT JOIN workout_sets ws ON ws.workout_id = w.id
             WHERE w.started_at::DATE = $d
             GROUP BY w.id
-            ORDER BY w.started_at DESC LIMIT 1
+            ORDER BY MAX(w.started_at) DESC LIMIT 1
             """,
             {"d": yesterday},
         ).fetchone()

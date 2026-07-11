@@ -392,7 +392,7 @@ async def recompute_adherence() -> dict:
             LEFT JOIN workout_sets ws ON ws.workout_id = w.id
             WHERE w.started_at::DATE = $d
             GROUP BY w.id
-            ORDER BY w.started_at DESC LIMIT 1
+            ORDER BY MAX(w.started_at) DESC LIMIT 1
             """,
             {"d": plan_date.isoformat() if hasattr(plan_date, "isoformat") else str(plan_date)},
         ).fetchone()
