@@ -1357,25 +1357,39 @@ def _gates(
 
             _log.getLogger(__name__).debug("personal sleep bands unavailable: %s", exc)
 
+    # Freshness guard: WHOOP recovery data older than 2 days is stale — the HRV/
+    # skin-temp/SpO₂ values reflect a past night, not tonight's recovery.  Firing
+    # safety caps on stale data locks Rob into "low" indefinitely after a sync outage.
+    # Same 48h window the conditioning gate uses (see below).
+    whoop_stale = (
+        rec.score_date is not None and (date.today() - date.fromisoformat(rec.score_date)).days > 2
+    )
+
     # Hard rest gates.
-    if rec.hrv_sigma is not None and rec.hrv_sigma < -1.5:
-        g.max_intensity = "low"
-        reasons.append(f"HRV {rec.hrv_sigma:+.2f}σ → red — cap intensity LOW")
-    if rec.skin_temp_delta is not None and rec.skin_temp_delta >= 0.9:
-        # skin_temp_delta is already °F. 0.9°F ≈ 0.5°C — the illness/fever
-        # threshold. Only elevated (positive) deltas signal risk; negative
-        # deltas are normal (cooler environment, less peripheral blood flow).
-        g.max_intensity = "low"
+    if whoop_stale:
         reasons.append(
-            f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline — possible illness, Z2 only"
+            "WHOOP not synced >2d — HRV/skin-temp/SpO₂ safety caps are BLIND "
+            "(verify recovery manually)"
         )
+    else:
+        if rec.hrv_sigma is not None and rec.hrv_sigma < -1.5:
+            g.max_intensity = "low"
+            reasons.append(f"HRV {rec.hrv_sigma:+.2f}σ → red — cap intensity LOW")
+        if rec.skin_temp_delta is not None and rec.skin_temp_delta >= 0.9:
+            # skin_temp_delta is already °F. 0.9°F ≈ 0.5°C — the illness/fever
+            # threshold. Only elevated (positive) deltas signal risk; negative
+            # deltas are normal (cooler environment, less peripheral blood flow).
+            g.max_intensity = "low"
+            reasons.append(
+                f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline — possible illness, Z2 only"
+            )
+        if rec.spo2_pct is not None and rec.spo2_pct < 92.0:
+            # Clinical threshold for sleep-disordered breathing / hypoxia overnight.
+            g.max_intensity = "low" if g.max_intensity == "high" else g.max_intensity
+            reasons.append(f"Overnight SpO₂ {rec.spo2_pct:.1f}% < 92% — cap intensity LOW")
     if rec.user_calibrating:
         # WHOOP recovery score is unreliable while calibrating — flag it but don't gate.
         reasons.append("WHOOP user_calibrating=true — recovery score may be unreliable")
-    if rec.spo2_pct is not None and rec.spo2_pct < 92.0:
-        # Clinical threshold for sleep-disordered breathing / hypoxia overnight.
-        g.max_intensity = "low" if g.max_intensity == "high" else g.max_intensity
-        reasons.append(f"Overnight SpO₂ {rec.spo2_pct:.1f}% < 92% — cap intensity LOW")
 
     # Respiratory-rate sentinel — Bourdillon et al. RR baseline drift is a 4-day
     # leading indicator for viral illness. +1 bpm above 28d baseline = high
@@ -1464,14 +1478,10 @@ def _gates(
             g.max_intensity = "moderate"
         reasons.append(f"Resistance ACWR {res} > {res_mod} — accumulating fatigue, cap MODERATE")
 
-    # Bug 7: when WHOOP hasn't synced for >2 days, conditioning_acwr trends toward
-    # zero as the chronic window fills with zeros. Silently low ratio means
-    # leg/conditioning gates never fire — fail-open when data is stale.
-    # Treat WHOOP-derived conditioning as unavailable after 48h without a sync.
+    # When WHOOP hasn't synced for >2 days, conditioning_acwr trends toward zero as
+    # the chronic window fills with zeros — silently low ratio means leg/conditioning
+    # gates never fire. Reuse the whoop_stale flag computed above.
     cond_raw = load.conditioning_acwr
-    whoop_stale = (
-        rec.score_date is not None and (date.today() - date.fromisoformat(rec.score_date)).days > 2
-    )
     cond = None if whoop_stale else cond_raw
     if whoop_stale:
         # Fail VISIBLY: the conditioning/leg-protection gate runs on WHOOP strain.

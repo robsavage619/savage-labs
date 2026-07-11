@@ -489,11 +489,15 @@ async def stats_summary() -> dict:
     finally:
         conn.close()
 
-    recent_load = [float(r[1] or 0) for r in load_rows if r[0] >= today - timedelta(days=7)]
-    chronic_load = [float(r[1] or 0) for r in load_rows]
-    acute = round(sum(recent_load) / 7.0, 2) if chronic_load else None
-    chronic = round(sum(chronic_load) / 28.0, 2) if chronic_load else None
-    acwr = round(acute / chronic, 2) if (acute and chronic) else None
+    # Uncoupled ACWR: acute=[today-6, today]/7, chronic=[today-27, today-7)/21.
+    # Mirrors metrics._arm_acwr exactly so this endpoint agrees with DailyState.
+    _acute_start = today - timedelta(days=6)
+    _chronic_start = today - timedelta(days=27)
+    recent_load = [float(r[1] or 0) for r in load_rows if r[0] >= _acute_start]
+    prior_load = [float(r[1] or 0) for r in load_rows if _chronic_start <= r[0] < _acute_start]
+    acute = round(sum(recent_load) / 7.0, 2) if load_rows else None
+    chronic = round(sum(prior_load) / 21.0, 2) if load_rows else None
+    acwr = round(acute / chronic, 2) if (acute is not None and chronic) else None
 
     # Recovery scores still feed the 7-day recovery trend slope below.
     scores_7 = [r[1] for r in rec_rows[-7:] if r[1] is not None]
@@ -3008,11 +3012,13 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
     )
     sleep_hours = round(float(sleep_row[0]), 1) if sleep_row and sleep_row[0] else None
     _today = date.today()
-    _recent_load = [float(r[1] or 0) for r in load_rows if r[0] >= _today - timedelta(days=7)]
-    _chronic_load = [float(r[1] or 0) for r in load_rows]
-    acwr_acute = round(sum(_recent_load) / 7.0, 2) if _chronic_load else None
-    acwr_chronic = round(sum(_chronic_load) / 28.0, 2) if _chronic_load else None
-    acwr = round(acwr_acute / acwr_chronic, 2) if (acwr_acute and acwr_chronic) else None
+    _acute_start = _today - timedelta(days=6)
+    _chronic_start = _today - timedelta(days=27)
+    _recent_load = [float(r[1] or 0) for r in load_rows if r[0] >= _acute_start]
+    _prior_load = [float(r[1] or 0) for r in load_rows if _chronic_start <= r[0] < _acute_start]
+    acwr_acute = round(sum(_recent_load) / 7.0, 2) if load_rows else None
+    acwr_chronic = round(sum(_prior_load) / 21.0, 2) if load_rows else None
+    acwr = round(acwr_acute / acwr_chronic, 2) if (acwr_acute is not None and acwr_chronic) else None
 
     group_last_day: dict[str, str] = {}
     for row in workout_rows:

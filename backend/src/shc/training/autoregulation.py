@@ -434,7 +434,9 @@ def _decide(
         else:
             reason = f"regressing (perf {perf}/5) → cut toward MEV"
     elif under_recovered:
-        desired = max(mev, cur - 1)
+        # Below MEV: hold at cur — don't push toward MEV while under-recovered.
+        # At/above MEV: back off one set, floored at MEV.
+        desired = max(min(cur, mev), cur - 1)
         reason = f"under-recovered (soreness {soreness:.1f}/3) → back off a set"
     elif cur >= mrv:
         desired = mrv
@@ -468,7 +470,13 @@ def _decide(
     # Apply RPE-drift damper before the asymmetric step clamp.
     # rpe_factor ∈ [0.5, 1.0]: only dampens, never amplifies.
     raw_delta = desired - cur
-    desired = cur + round(raw_delta * rpe_factor)
+    if raw_delta > 0:
+        # Python's banker's rounding rounds 0.5 → 0 (nearest even), so
+        # round(1 * 0.5) = 0 would silently freeze a progressing muscle.
+        # Guarantee at least +1 when the branch intended an add.
+        desired = cur + max(1, round(raw_delta * rpe_factor))
+    else:
+        desired = cur + round(raw_delta * rpe_factor)
 
     # The tree's `desired` is the volume this muscle SHOULD train at; below the
     # productive floor it was set to that floor. Confidence may throttle the
@@ -1091,8 +1099,12 @@ def _rpe_drift_factor(
     signed_mean = rpe_drift_signed_mean(conn)
     if signed_mean is None or abs(signed_mean) < min_magnitude:
         return 1.0
-    raw = 1.0 + math.copysign(min(abs(signed_mean) / 3.0, 0.5), signed_mean)
-    return max(0.5, min(1.0, raw))
+    if signed_mean <= 0:
+        # Under-RPE: sessions were easier than target — don't reduce volume (only dampens, never amplifies).
+        return 1.0
+    # Over-RPE: athlete consistently working harder than prescribed — dampen the volume add.
+    raw = 1.0 - min(signed_mean / 3.0, 0.5)
+    return max(0.5, raw)
 
 
 def weekly_prescription(
