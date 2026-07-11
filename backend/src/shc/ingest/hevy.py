@@ -169,14 +169,17 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
     }
 
     set_rows = []
-    for ex in w.get("exercises", []):
+    for ex_i, ex in enumerate(w.get("exercises", [])):
         exercise_name = ex.get("title", "Unknown")
         exercise_notes = ex.get("notes") or None
         template_id = ex.get("exercise_template_id")
         superset_id = ex.get("superset_id")
-        exercise_index = ex.get("index")
+        exercise_index = ex.get("index", ex_i)
         for idx, s in enumerate(ex.get("sets", [])):
-            set_hash = _content_hash("hevy", hevy_id, exercise_name, str(idx))
+            # Include ex_i so two entries of the same exercise in one workout
+            # (e.g. superset + backoff) generate distinct IDs instead of the
+            # second entry silently overwriting the first.
+            set_hash = _content_hash("hevy", hevy_id, exercise_name, str(ex_i), str(idx))
             set_id = f"hevy_set_{set_hash}"
             set_rows.append(
                 {
@@ -222,6 +225,7 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
         """,
         workout_row,
     )
+    current_ids: list[str] = []
     for s in set_rows:
         conn.execute(
             """
@@ -245,6 +249,18 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
             """,
             s,
         )
+        current_ids.append(s["id"])
+
+    # Remove sets that were deleted from Hevy since last sync.
+    if current_ids:
+        placeholders = ", ".join("?" for _ in current_ids)
+        conn.execute(
+            f"DELETE FROM workout_sets WHERE workout_id = ? AND id NOT IN ({placeholders})",
+            [workout_row["id"], *current_ids],
+        )
+    else:
+        conn.execute("DELETE FROM workout_sets WHERE workout_id = ?", [workout_row["id"]])
+
     return True
 
 
