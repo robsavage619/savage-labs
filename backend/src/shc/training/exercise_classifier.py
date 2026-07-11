@@ -110,7 +110,7 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         return "forearms", ["biceps"]
     if (
         "curl" in n
-        or "hammer" in n
+        or ("hammer" in n and "hammerstrength" not in n)
         or "concentration" in n
         or "preacher" in n
         or "drag curl" in n
@@ -126,15 +126,23 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
     ):
         return "triceps", []
 
+    # ── Supported back rows — must precede chest keywords ────────────────────
+    if "chest supported" in n:
+        return "lats", ["mid_back", "biceps"]
+
+    # ── Reverse fly — must precede chest "fly" ───────────────────────────────
+    if "reverse fly" in n:
+        return "rear_delts", ["traps"]
+
     # ── Chest ────────────────────────────────────────────────────────────────
     if (
-        "fly" in n
+        ("fly" in n and "reverse fly" not in n)
         or "crossover" in n
         or "pec" in n
-        or "chest" in n
+        or ("chest" in n and "chest supported" not in n)
         or "bench press" in n
-        or "decline" in n
-        or "incline" in n
+        or ("decline" in n and "row" not in n)
+        or ("incline" in n and "row" not in n)
     ):
         return "chest", ["front_delts", "triceps"]
 
