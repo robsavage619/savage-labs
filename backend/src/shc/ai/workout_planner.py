@@ -986,6 +986,20 @@ def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
         if wkg is None:
             continue
         by_ex[ex].append(per_hand_kg(ex, float(wkg)) * (1 + reps / 30.0))
+
+    # Also index under canonical science names so the rep-window and load-ceiling
+    # validators can find e1RM when the plan uses a canonical name but the athlete
+    # logs under an alias (e.g. "Tricep Pushdown" logged as "Cable Tricep Pushdown").
+    try:
+        alias_rows = conn.execute(
+            "SELECT canonical_name, logged_name FROM exercise_alias"
+        ).fetchall()
+        for canonical, logged in alias_rows:
+            if logged in by_ex and canonical not in by_ex:
+                by_ex[canonical] = list(by_ex[logged])
+    except Exception:
+        pass
+
     return {ex: m for ex, vals in by_ex.items() if (m := _robust_max(vals)) is not None}
 
 
@@ -1217,6 +1231,35 @@ def _planned_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]
     return planned
 
 
+def _planned_primary_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]:
+    """Primary-only (direct) credited sets per muscle — no secondary credit.
+
+    Used alongside :func:`_planned_sets_by_muscle` to exempt secondary-only
+    volume from caps on muscles the engine targets at 0 sets. Secondary credit
+    from a compound (e.g. squats → 0.5 hamstring credit) should not block the
+    session when hamstrings are frozen — the direct load is zero, which is what
+    the hold means.
+    """
+    planned: dict[str, float] = {}
+    for block in plan.get("blocks", []):
+        for ex in block.get("exercises", []):
+            name = ex.get("name", "")
+            sets = ex.get("sets")
+            if not name or not isinstance(sets, (int, float)) or sets <= 0:
+                continue
+            try:
+                row = conn.execute(
+                    "SELECT primary_muscle FROM exercise_muscle_map WHERE exercise_name = ?",
+                    [name],
+                ).fetchone()
+            except Exception:
+                continue
+            if row:
+                primary = row[0]
+                planned[primary] = planned.get(primary, 0.0) + float(sets)
+    return planned
+
+
 def validate_plan(
     plan: dict[str, Any],
     state: dict[str, Any] | None = None,
@@ -1422,7 +1465,10 @@ def validate_plan(
                     # e1rm_by_exercise (per-hand normalized) and the plan is told
                     # to emit weight_lbs per-hand for dumbbell/cable lifts. Do not
                     # re-halve here — the units already match.
-                    demand_kg = (w_lbs / 2.20462) * (1 + reps / 30)
+                    # Cap demand reps at 12 to match the e1RM history formula
+                    # (LEAST(reps,12)); without this a 15-rep set prescribed at the
+                    # same load as the logged 15-rep best exceeds the ceiling.
+                    demand_kg = (w_lbs / 2.20462) * (1 + min(reps, 12) / 30)
                     ceiling_kg = e1rm_kg * cap
                     # 3% tolerance for rounding/load-increment realities.
                     if demand_kg > ceiling_kg * 1.03:
@@ -1469,10 +1515,14 @@ def validate_plan(
             # triple, or a loadable compound as a 25-rep burnout — each exercise
             # is selected FOR a rep range, and that range is part of the evidence.
             try:
+                # Aggregate across multiple rows per exercise (different head/region
+                # variants may have different windows) to get the widest evidence-
+                # based range rather than a nondeterministic single-row pick.
                 _sci_reps = {
                     r[0]: (r[1], r[2])
                     for r in conn.execute(
-                        "SELECT exercise_name, rep_low, rep_high FROM exercise_science"
+                        "SELECT exercise_name, MIN(rep_low) AS rep_low, MAX(rep_high) AS rep_high "
+                        "FROM exercise_science GROUP BY exercise_name"
                     ).fetchall()
                 }
             except Exception:  # noqa: BLE001 — evidence layer optional
@@ -1511,12 +1561,22 @@ def validate_plan(
                 # dampen weekly volume by lowering target_sets; if the LLM inflated
                 # a single session past that per-muscle target, reject it. A 1-set
                 # tolerance absorbs secondary-credit rounding.
+                # When the engine targets 0 sets (muscle frozen by conditioning ACWR
+                # or deload), secondary-only credit from compound movements is exempt:
+                # the intent is "don't directly train this muscle", not "block squats
+                # because hamstrings are secondary". Use primary-only sets for the
+                # target-0 check; combined sets for positive targets.
                 planned = _planned_sets_by_muscle(conn, plan)
+                planned_primary = _planned_primary_sets_by_muscle(conn, plan)
                 for m in rx.muscles:
-                    got = planned.get(m.muscle, 0.0)
-                    if got > m.target_sets + 1.0:
+                    effective_got = (
+                        planned_primary.get(m.muscle, 0.0)
+                        if m.target_sets == 0
+                        else planned.get(m.muscle, 0.0)
+                    )
+                    if effective_got > m.target_sets + 1.0:
                         raise GateViolation(
-                            f"Planned {got:.1f} sets for {m.muscle} exceeds the engine's "
+                            f"Planned {effective_got:.1f} sets for {m.muscle} exceeds the engine's "
                             f"{m.action.upper()} target of {m.target_sets} "
                             f"(reason: {m.reason}). The weekly volume was held/dampened — "
                             "do not inflate it in a single session."
