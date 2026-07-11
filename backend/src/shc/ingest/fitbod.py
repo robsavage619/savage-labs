@@ -142,6 +142,7 @@ def ingest_fitbod(csv_path: Path | None = None, rebuild: bool = False) -> dict[s
             weight_kg = EXCLUDED.weight_kg,
             updated_at = EXCLUDED.updated_at,
             source = EXCLUDED.source
+        WHERE working_weights.source != 'hevy'
     """)
 
     conn.close()

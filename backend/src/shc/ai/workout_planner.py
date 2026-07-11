@@ -974,10 +974,10 @@ def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
     rows = conn.execute(
         """
         SELECT ws.exercise, ws.weight_kg, LEAST(ws.reps, 12) AS reps
-        FROM workout_sets ws
-        JOIN workouts w ON w.id = ws.workout_id
+        FROM workout_sets_dedup ws
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL AND ws.reps > 0
-          AND w.started_at::DATE >= $since
+          AND ws.source = 'hevy'
+          AND ws.started_at::DATE >= $since
         """,
         {"since": (today - timedelta(days=days)).isoformat()},
     ).fetchall()
