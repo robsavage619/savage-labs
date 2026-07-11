@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, ReferenceLine, Scatter, ComposedChart, XAxis, YAxis, Tooltip } from "recharts";
 import { api } from "@/lib/api";
 import { Eyebrow, Metric } from "@/components/ui/metric";
-import { hasBetaBlocker } from "@/lib/readiness";
 
 function toneFor(score: number | null | undefined) {
   if (score == null) return { color: "var(--neutral)", token: "neutral" as const };
@@ -91,8 +90,10 @@ export function PillarRecovery() {
   const readiness = useQuery({ queryKey: ["readiness"], queryFn: api.readinessToday });
   const trend = useQuery({ queryKey: ["recovery-trend-14"], queryFn: () => api.recoveryTrend(14) });
   const stats = useQuery({ queryKey: ["stats-summary"], queryFn: api.statsSummary });
-  const clinical = useQuery({ queryKey: ["clinical-overview"], queryFn: api.clinicalOverview });
-  const betaBlocker = hasBetaBlocker(clinical.data);
+  const dailyState = useQuery({ queryKey: ["daily-state"], queryFn: api.dailyState });
+  // beta_blocker_adjusted is true only on days propranolol was actually taken (PRN).
+  // Reading from DailyState instead of the meds list prevents the badge firing every day.
+  const betaBlocker = dailyState.data?.readiness.beta_blocker_adjusted ?? false;
 
   const score = readiness.data?.recovery_score ?? null;
   const t = toneFor(score);
