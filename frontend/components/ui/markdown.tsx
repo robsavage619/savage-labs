@@ -24,7 +24,7 @@ function inline(text: string, keyBase: string): ReactNode[] {
   });
 }
 
-function parseTable(rows: string[]): ReactNode {
+function parseTable(rows: string[], tableIndex: number): ReactNode {
   const cells = (row: string) =>
     row.split("|").map((c) => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
 
@@ -32,7 +32,7 @@ function parseTable(rows: string[]): ReactNode {
   const headCells = cells(header);
 
   return (
-    <div key="table" className="overflow-x-auto -mx-1">
+    <div key={`table-${tableIndex}`} className="overflow-x-auto -mx-1">
       <table className="w-full text-[12px] border-collapse">
         <thead>
           <tr>
@@ -82,7 +82,7 @@ export function Markdown({ text }: { text: string }) {
 
   const flushTable = () => {
     if (!tableRows.length) return;
-    blocks.push(parseTable(tableRows));
+    blocks.push(parseTable(tableRows, blocks.length));
     tableRows = [];
   };
 

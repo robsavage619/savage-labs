@@ -15,15 +15,11 @@ Personal health intelligence platform. Single user (Rob). Always push to main di
 - **HRmax = Tanaka** (208 − 0.7 × age), not 220 − age. Applied in `cardio-panel.tsx`.
 - **Migrations**: numeric prefix `NNNN_<name>.sql`. Two files with the same prefix → silently skipped. Always check the highest applied version before adding.
 - **Apple Health XML**: `<Workout>` elements → `cardio_sessions`; `<Record>` elements → metrics. Strength/flexibility workout types skipped (handled by Hevy).
-- **Load semantics are per-hand**: dumbbell/cable pairs log combined weight but prescribe per hand. `training/load_mechanics.py` classifies; `e1rm_by_exercise` normalizes before Epley. Never read `working_weights` as total.
-- **ACWR windows are coupled**: the 21-day chronic window `[today-21, today-7)` must match between `metrics._arm_acwr()` (live gate) and `self_learning._historical_weekly_acwr()` (fitting). Test enforces; changing one without the other biases every gate.
-- **Deload trigger is not yet personalized**: `calibrate_deload_trigger()` can return `using_population_defaults: True`. Don't treat its output as fitted without checking that flag.
-- **Engine contract**: [ENGINE_INVARIANTS.md](ENGINE_INVARIANTS.md) — 6 enforced invariants, tests in `backend/tests/test_engine_invariants.py`. Read before touching `training/` or `metrics.py`.
 
 ## Servers
 
 - Always use `dev-restart.sh` to start API + frontend. Never start manually.
-- Preview server (when a screenshot is needed): see [feedback_preview_server](~/.claude/projects/-Users-robsavage-Projects-savage-health-center/memory/feedback_preview_server.md).
+- Preview server (when a screenshot is needed): see [feedback_preview_server](~/.Codex/projects/-Users-robsavage-Projects-savage-health-center/memory/feedback_preview_server.md).
 - API runs on `:8000`, frontend on `:3000`.
 
 ## Git
@@ -35,6 +31,6 @@ Personal health intelligence platform. Single user (Rob). Always push to main di
 ## Where things live
 
 - Architecture/decision history: [DECISIONS.md](DECISIONS.md)
-- Per-session learning: `~/.claude/projects/-Users-robsavage-Projects-savage-health-center/memory/`
-- Skills: `~/.claude/skills/shc-workout/` for plan generation; `session-debrief` for end-of-session lesson capture.
-- Health data sources: see [project_health_profile](~/.claude/projects/-Users-robsavage-Projects-savage-health-center/memory/project_health_profile.md)
+- Per-session learning: `~/.Codex/projects/-Users-robsavage-Projects-savage-health-center/memory/`
+- Skills: `~/.Codex/skills/shc-workout/` for plan generation; `session-debrief` for end-of-session lesson capture.
+- Health data sources: see [project_health_profile](~/.Codex/projects/-Users-robsavage-Projects-savage-health-center/memory/project_health_profile.md)

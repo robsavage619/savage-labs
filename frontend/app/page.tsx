@@ -28,6 +28,7 @@ import { GoalScorecard } from "@/components/goal-scorecard";
 import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
 import { DailyReport } from "@/components/daily-report";
 import { MiddaySessionCard } from "@/components/midday-session-card";
+import { AthleteOSPanel } from "@/components/athlete-os-panel";
 
 /** A labelled divider that opens a cluster of related detail sections. Anchor id
  *  must stay in sync with the SECTIONS list in section-nav.tsx. */
@@ -86,6 +87,11 @@ export default function Dashboard() {
         <div className="space-y-4 min-w-0">
           {/* ── VERDICT ── */}
           <section id="today" className="scroll-mt-20">
+            <ErrorBoundary label="Athlete operating system">
+              <AthleteOSPanel />
+            </ErrorBoundary>
+          </section>
+          <section className="scroll-mt-20">
             <ErrorBoundary label="Daily report">
               <DailyReport />
             </ErrorBoundary>
