@@ -200,7 +200,7 @@ def _recent_soreness(conn: duckdb.DuckDBPyConnection, days: int = 7) -> dict[str
     return {m: sum(v) / len(v) for m, v in acc.items() if v}
 
 
-def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str) -> int | None:
+def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str, recency_weeks: int = 12) -> int | None:
     """Set-weighted central tendency of Israetel perf scores for a muscle.
 
     Averages the perf score across exercises whose ``primary_muscle`` is
@@ -208,12 +208,23 @@ def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str) -> int | N
     Weighting by volume keeps a single fluke PR on a minor accessory from
     speaking for the whole muscle — the upward-bias failure of the old ``max()``
     aggregation (panel review C1). None when no exercise has enough history.
+
+    Only exercises with at least one logged week within ``recency_weeks`` of
+    today are included; exercises last trained months/years ago are excluded so
+    their stale perf scores don't drag down the current muscle signal.
     """
     exercises = [
         r[0]
         for r in conn.execute(
-            "SELECT exercise_name FROM exercise_muscle_map WHERE primary_muscle = ?",
-            [muscle],
+            """
+            SELECT exercise_name FROM exercise_muscle_map
+            WHERE primary_muscle = ?
+              AND exercise_name IN (
+                  SELECT exercise FROM exercise_weekly_e1rm
+                  WHERE week_start >= (CURRENT_DATE - INTERVAL (? || ' weeks'))
+              )
+            """,
+            [muscle, str(recency_weeks)],
         ).fetchall()
     ]
     weighted = 0.0
