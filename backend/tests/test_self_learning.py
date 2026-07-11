@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Tests for Phase 3 self-learning: volume landmark fitting and ACWR band fitting."""
 
+import uuid
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -73,6 +74,38 @@ def _seed_muscle_map(conn, exercise: str, primary: str) -> None:
     )
 
 
+def _seed_workout_sets(
+    conn,
+    exercise: str,
+    week: date,
+    n_sets: int,
+    weight_kg: float = 40.0,
+    reps: int = 10,
+) -> None:
+    """Seed a hevy workout + n_sets working sets on the Monday of ``week``.
+
+    Uses reps=10 (inside the 5–30 stimulating window) and rpe=NULL so every
+    set is counted as stimulating by muscle_weekly_volume_series.
+    """
+    if n_sets == 0:
+        return
+    started_at = datetime.combine(week, datetime.min.time())
+    wid = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO workouts (id, source, started_at, kind, content_hash)"
+        " VALUES (?, 'hevy', ?, 'strength', ?)",
+        [wid, started_at, wid],
+    )
+    for idx in range(n_sets):
+        sid = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO workout_sets"
+            " (id, workout_id, exercise, set_idx, reps, weight_kg, is_warmup, content_hash)"
+            " VALUES (?, ?, ?, ?, ?, ?, false, ?)",
+            [sid, wid, exercise, idx, reps, weight_kg, sid],
+        )
+
+
 # ── _percentile ───────────────────────────────────────────────────────────────
 
 
@@ -99,7 +132,9 @@ def test_fit_volume_landmarks_insufficient_weeks_returns_none(conn) -> None:
     # Only 5 weeks — below the 10-week minimum.
     base = _monday(date.today()) - timedelta(weeks=20)
     for i in range(5):
-        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i * 2), 40.0, 8 + i, perf=3)
+        week = base + timedelta(weeks=i * 2)
+        _seed_e1rm(conn, "Curl", week, 40.0, 8 + i, perf=3)
+        _seed_workout_sets(conn, "Curl", week, 8 + i)
     assert fit_volume_landmarks(conn, "biceps") is None
 
 
@@ -108,7 +143,9 @@ def test_fit_volume_landmarks_narrow_spread_returns_none(conn) -> None:
     base = _monday(date.today()) - timedelta(weeks=15)
     # 12 weeks all at volume 8 sets — spread = 0
     for i in range(12):
-        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0 + i, 8, perf=3)
+        week = base + timedelta(weeks=i)
+        _seed_e1rm(conn, "Curl", week, 40.0 + i, 8, perf=3)
+        _seed_workout_sets(conn, "Curl", week, 8)
     assert fit_volume_landmarks(conn, "biceps") is None
 
 
@@ -133,8 +170,10 @@ def test_fit_volume_landmarks_returns_mev_le_mav_le_mrv(conn) -> None:
         + [(18, 18), (18, 18), (18, 18), (18, 18)]  # over MRV, regress
     )
     for i, (sets, _) in enumerate(data):
+        week = base + timedelta(weeks=i)
         perf = 2 if sets <= 2 or sets >= 18 else 4
-        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, sets, perf=perf)
+        _seed_e1rm(conn, "Curl", week, 40.0, sets, perf=perf)
+        _seed_workout_sets(conn, "Curl", week, sets)
 
     result = fit_volume_landmarks(conn, "biceps")
     assert result is not None, "should fit with enough spread and samples"
@@ -396,9 +435,11 @@ def test_persist_volume_landmarks_writes_scoped_rows(conn) -> None:
     )
     base = _monday(date.today()) - timedelta(weeks=25)
     for i in range(20):
+        week = base + timedelta(weeks=i)
         sets = 4 + (i % 12)
         perf = 2 if sets <= 4 else (4 if sets <= 14 else 2)
-        _seed_e1rm(conn, "Curl", base + timedelta(weeks=i), 40.0, sets, perf=perf)
+        _seed_e1rm(conn, "Curl", week, 40.0, sets, perf=perf)
+        _seed_workout_sets(conn, "Curl", week, sets)
 
     stored = persist_volume_landmarks(conn, "test-meso-id")
     # May or may not fit depending on bin sampling, but must not crash.

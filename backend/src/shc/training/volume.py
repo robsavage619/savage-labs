@@ -291,6 +291,52 @@ def unmapped_exercise_sets(
     return [(r[0], int(r[1])) for r in rows]
 
 
+def muscle_weekly_volume_series(
+    conn: duckdb.DuckDBPyConnection,
+    muscle: str,
+    lookback_weeks: int,
+) -> list[tuple[str, float]]:
+    """Per-week credited set count for a muscle over the last N weeks.
+
+    Uses the same warmup/rep/RPE gates and primary+secondary credit rates as
+    :func:`weekly_muscle_volume`, so fitted landmarks and live volume are on the
+    same scale. Returns ``[(iso_week_start, credited_sets)]`` oldest-first.
+    """
+    rows = conn.execute(
+        f"""
+        WITH credited AS (
+            SELECT
+                date_trunc('week', ws.started_at)::DATE AS week_start,
+                1.0 AS credit
+            FROM workout_sets_dedup ws
+            JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
+            WHERE m.primary_muscle = ?
+              AND ws.started_at::DATE >= (CURRENT_DATE - INTERVAL (? || ' weeks'))
+              AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
+              AND {_RPE_GATE}
+            UNION ALL
+            SELECT
+                date_trunc('week', ws.started_at)::DATE AS week_start,
+                CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
+                     THEN {ARM_SECONDARY_CREDIT} ELSE {SECONDARY_CREDIT} END AS credit
+            FROM workout_sets_dedup ws
+            JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
+            CROSS JOIN UNNEST(m.secondary_muscles) AS u(sec)
+            WHERE u.sec = ?
+              AND ws.started_at::DATE >= (CURRENT_DATE - INTERVAL (? || ' weeks'))
+              AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
+              AND {_RPE_GATE}
+        )
+        SELECT week_start, SUM(credit) AS credited_sets
+        FROM credited
+        GROUP BY week_start
+        ORDER BY week_start
+        """,
+        [muscle, str(lookback_weeks), muscle, str(lookback_weeks)],
+    ).fetchall()
+    return [(str(r[0]), float(r[1])) for r in rows]
+
+
 def _status(actual: float, mev: int | None, mav: int | None, mrv: int | None) -> str:
     if mev is None or mav is None or mrv is None:
         return "untargeted"

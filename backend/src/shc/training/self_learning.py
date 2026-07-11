@@ -19,6 +19,8 @@ import logging
 
 import duckdb
 
+from shc.training.volume import muscle_weekly_volume_series
+
 log = logging.getLogger(__name__)
 
 # ── Volume landmark fitting ───────────────────────────────────────────────────
@@ -54,36 +56,71 @@ def fit_volume_landmarks(
     Returns ``{mev, mav, mrv}`` (all ints) or None when sample size or volume
     spread is insufficient — caller keeps population defaults.
     """
-    rows = conn.execute(
+    # Correctly-credited weekly volume using the same warmup/rep/RPE gates and
+    # primary+secondary credit rates as weekly_muscle_volume — so fitted landmarks
+    # and the live controller are on the same scale.
+    vol_series = muscle_weekly_volume_series(conn, muscle, lookback_weeks)
+
+    # Perf signal (exercise-level trend, set-weighted) — unchanged.
+    perf_rows = conn.execute(
         """
         SELECT
-            SUM(e.work_sets)                            AS weekly_sets,
-            -- Set-weighted perf: high-volume exercises dominate the signal,
-            -- same logic as _muscle_performance (panel review C1).
-            SUM(e.perf_score * e.work_sets) / SUM(e.work_sets) AS weighted_perf
+            e.week_start,
+            SUM(e.perf_score * e.work_sets) / NULLIF(SUM(e.work_sets), 0) AS weighted_perf
         FROM exercise_weekly_e1rm e
         JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
         WHERE m.primary_muscle = ?
           AND e.perf_score IS NOT NULL
           AND e.work_sets  IS NOT NULL
-          AND e.week_start >= (CURRENT_DATE - INTERVAL (? * 7) DAYS)
+          AND e.week_start >= (CURRENT_DATE - INTERVAL (? || ' weeks'))
         GROUP BY e.week_start
-        ORDER BY e.week_start
         """,
-        [muscle, lookback_weeks],
+        [muscle, str(lookback_weeks)],
     ).fetchall()
+    perf_by_week: dict[str, float] = {str(r[0]): float(r[1]) for r in perf_rows}
 
-    if len(rows) < min_weeks:
+    # Deload weeks — intentionally reduced volume, must not anchor the MRV floor.
+    deload_weeks: set[str] = {
+        str(r[0])
+        for r in conn.execute(
+            """
+            SELECT DISTINCT week_start
+            FROM muscle_prescription_log
+            WHERE muscle = ? AND action = 'deload'
+            """,
+            [muscle],
+        ).fetchall()
+    }
+
+    if len(vol_series) < min_weeks:
         log.debug(
-            "fit_volume_landmarks(%s): only %d scored weeks in lookback (need %d) — skip",
+            "fit_volume_landmarks(%s): only %d credited-volume weeks in lookback (need %d) — skip",
             muscle,
-            len(rows),
+            len(vol_series),
             min_weeks,
         )
         return None
 
-    volumes = [float(r[0]) for r in rows]
-    perfs = [float(r[1]) for r in rows]
+    # Merge volume + perf, skipping deload weeks.
+    volumes: list[float] = []
+    perfs: list[float] = []
+    for week_str, credited_sets in vol_series:
+        if week_str in deload_weeks:
+            continue
+        perf = perf_by_week.get(week_str)
+        if perf is None:
+            continue
+        volumes.append(credited_sets)
+        perfs.append(perf)
+
+    if len(volumes) < min_weeks:
+        log.debug(
+            "fit_volume_landmarks(%s): only %d weeks after deload exclusion (need %d) — skip",
+            muscle,
+            len(volumes),
+            min_weeks,
+        )
+        return None
 
     vol_range = max(volumes) - min(volumes)
     if vol_range < _LANDMARK_MIN_SPREAD:
