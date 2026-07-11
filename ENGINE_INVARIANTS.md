@@ -18,6 +18,8 @@ Origin: the 2026-07-03 soundness audit (four parallel deep-dives, each finding v
 
 6. **A progression-capping personal band may only loosen the population default, never tighten below it.** Resistance REST/LOW/MOD bands and personal MEV are floor-only against population. *Why:* Rob's thin, noise-dominated N=1 history must never make a growth gate stricter than the population floor — the anti-progression trap.
 
+7. **Conditioning interference never freezes an EMPHASIS lower-body muscle below MEV.** The `leg_interference` hold (`weekly_prescription`, cond. ACWR > 1.5) holds quads/hams/adductors in place — correct, they absorb the eccentric court load — but an emphasis lower-body muscle (glutes) still floors at MEV. *Why:* the hold was checked before the MEV-floor branch, so glutes (emphasis, `perf=None`, thin data, `cur=0`) sat at 0 for every week cond. ACWR > 1.5 — i.e. most weeks, given 1000+ min/mo of pickleball — the exact silent under-train of a lagging priority muscle that invariant 3 forbids. Non-emphasis legs still hold; the climb to MEV is rate-limited to +2/wk so it eases in while sport volume is high. Enforced by `test_conditioning_interference_never_freezes_emphasis_below_mev`.
+
 ## The rule for changing the engine
 
 Any change to a gate, threshold, band-fit, volume decision, or classifier **must keep this suite green**, or must update an invariant *deliberately* — with the reasoning recorded here and in [DECISIONS.md](DECISIONS.md). "The test failed so I changed the assertion" is how the athlete gets quietly held back again. The test encodes the intent; the code serves it.

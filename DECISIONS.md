@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-10 — Emphasis lower-body muscles keep an MEV floor under conditioning interference
+
+**Context.** `weekly_prescription`'s `leg_interference` branch holds every `LOWER_BODY` muscle in place when conditioning ACWR > 1.5 (pickleball/cardio load debits leg recovery). That branch was evaluated before the MEV-floor branch, and the floor clamp explicitly listed `leg_interference` as a "hold below MEV" case. So glutes — an ★ emphasis/lagging muscle with `perf=None`, ~9% confidence, and `cur=0` — got frozen at 0 sets for any week ACWR > 1.5. Given Rob plays 1000+ min/mo, that's most weeks: the prioritized bring-up muscle trained at zero indefinitely, a silent under-train contrary to the stated hypertrophy goal.
+
+**Decision.** Under `leg_interference` (and not genuinely under-recovered), an **emphasis** lower-body muscle floors at **MEV** (not the emphasis MEV–MAV midpoint — conservative while sport load is high). Non-emphasis legs (quads/hams/adductors) still hold in place. The +2/wk step clamp eases the climb to MEV over ~2–3 weeks rather than dumping full volume in one week.
+
+**Why.** Court load damages the big eccentric leg tissues (quads/hams) — holding them is correct. Glutes are a lagging priority that pickleball does not heavily damage, and low-fatigue isolation (hip thrust, abduction) fits inside the recovery budget. Codified as **invariant 7** in [ENGINE_INVARIANTS.md](ENGINE_INVARIANTS.md); the pre-existing MEV-floor logic already promised this for perf=None muscles (invariant 3), so this closes the one branch that bypassed it.
+
+**Consequences.** New test `test_conditioning_interference_never_freezes_emphasis_below_mev` enforces both halves (glutes climb, quads still hold). Downstream, this also unblocks glute volume against validator #22 (`workout_planner`), which rejects any plan exceeding a muscle's target — glutes were capped at ~1 set whenever interference was active. The scope is glutes-today because it's the only emphasis lower-body muscle; if hamstrings become an emphasis muscle, the same floor applies to it automatically.
+
+---
+
 ## 2026-07-03 — ACWR uses a 21-day uncoupled chronic window (deliberate deviation from Gabbett 28-day)
 
 **Context.** The 2026-07-03 soundness audit flagged that the live ACWR gate uses a 7-day acute over a 21-day *uncoupled* chronic window `[today-27, today-7)`, while Gabbett/Malone's classic 1.5/1.8/2.0 injury thresholds were derived on a 28-day *coupled* chronic (acute ⊂ chronic). The band-fitter had drifted to a 28-day window and was corrected to match live (commit 5015e29).

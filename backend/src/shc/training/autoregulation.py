@@ -520,6 +520,21 @@ def _decide(
     # this floor is still rate-limited above MEV by the step clamp below.
     if emphasized and not hold_below_mev and tree_target >= cur:
         desired = max(desired, min(grow_floor, mrv))
+    elif emphasized and leg_interference and not under_recovered:
+        # An emphasis lower-body muscle (e.g. glutes) is never frozen below MEV
+        # by conditioning interference alone. Court/cardio load debits leg
+        # RECOVERY, which is why quads/hams/adductors — the tissues that absorb
+        # the real eccentric court load — still hold in place (they fall to the
+        # else branch). But a lagging *priority* muscle that pickleball does not
+        # heavily damage still earns its minimum effective volume: without this,
+        # glutes sit at 0 for every week cond. ACWR > 1.5 (i.e. most weeks, given
+        # 1000+ min/mo of play), which is the silent under-train invariant 3
+        # forbids. Floor at MEV, not the emphasis midpoint — present but
+        # conservative while sport volume is high. The +MAX_WEEKLY_ADD step clamp
+        # below still eases the climb in over ~2–3 weeks rather than dumping it.
+        if mev > desired:
+            reason += " — but emphasis muscle floored at MEV (not frozen at 0 by court load)"
+        desired = max(desired, mev)
     else:
         desired = max(desired, mev_floor)
 

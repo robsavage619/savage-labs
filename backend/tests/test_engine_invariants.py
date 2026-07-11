@@ -118,6 +118,47 @@ def test_progressing_muscle_at_mrv_holds() -> None:
     assert p.target_sets == 16, "at MRV a progressing muscle holds, never exceeds the ceiling"
 
 
+# ── INVARIANT 3b: conditioning interference never freezes an EMPHASIS lower-body
+# muscle below MEV. The leg-interference hold (cond. ACWR > 1.5) exists because
+# court/cardio load debits leg RECOVERY — correct for quads/hams/adductors, the
+# tissues that absorb the real eccentric court pounding. But it was checked
+# before the MEV-floor branch, so glutes (emphasis, perf=None, thin data, cur=0)
+# got frozen at 0 for every high-pickleball week instead of climbing to MEV —
+# the silent under-train invariant 3 forbids, on the exact lagging priority
+# muscle Rob wants brought up. Teeth: delete the emphasis-interference branch in
+# `_decide` and the glutes assertion drops to 0.
+def test_conditioning_interference_never_freezes_emphasis_below_mev() -> None:
+    common = dict(
+        current=0.0,
+        mev=6,
+        mav=11,
+        mrv=16,
+        perf=None,  # no outcome signal — the exact case that fell to the hold
+        soreness=0.0,
+        conditioning_acwr=1.65,  # > 1.5 → leg_interference active
+        emphasis_factor=1.0,
+        confidence=0.09,  # glutes' real thin-data confidence
+        scored_weeks=8,
+        accuracy=None,
+    )
+    glutes = _decide("glutes", emphasis=True, **common)
+    assert glutes.target_sets > 0, (
+        f"emphasis glutes FROZEN at 0 under conditioning interference — {glutes.reason}"
+    )
+    assert glutes.target_sets <= common["mev"], (
+        "climb toward MEV is conservative under interference — never overshoots MEV in one step "
+        f"(got {glutes.target_sets})"
+    )
+
+    # Non-emphasis legs (quads/hams) STILL hold in place — they take the court
+    # load, so the interference hold is correct for them. This is the guardrail
+    # that keeps the fix targeted, not a blanket removal of the hold.
+    quads = _decide("quads", emphasis=False, **common)
+    assert quads.target_sets == 0, (
+        f"non-emphasis legs must still hold under interference (got {quads.target_sets}: {quads.reason})"
+    )
+
+
 # ── INVARIANT 2b: confidence reads steady PROGRESS as a clean signal, not noise.
 # The old raw-CV stability penalized a climbing perf series (3→4→5) for its
 # dispersion — the muscles that were working scored as the least trustworthy.
