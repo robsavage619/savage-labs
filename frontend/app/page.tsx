@@ -4,13 +4,9 @@ import { PillarTrainingLoad } from "@/components/pillar-training-load";
 import { PeriodizationStrip } from "@/components/periodization-strip";
 import { AfterActionPanel } from "@/components/after-action-panel";
 import { PostWorkoutPanel } from "@/components/post-workout-panel";
-import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
-import { LabPanel } from "@/components/lab-panel";
-import { LabExperiments } from "@/components/lab-experiments";
-import { EngineStatusPanel } from "@/components/engine-status-panel";
+import { RouteToggle } from "@/components/route-toggle";
 import { FuelingPanel } from "@/components/fueling-panel";
 import { StrengthPanel } from "@/components/strength-panel";
-import { TrendIntelligence } from "@/components/trend-intelligence";
 import { RightRail } from "@/components/right-rail";
 import { SyncStatus } from "@/components/sync-status";
 import { DashboardClock } from "@/components/dashboard-clock";
@@ -64,7 +60,8 @@ export default function Dashboard() {
         <div className="order-last w-full md:order-none md:w-auto md:flex-1 flex min-w-0">
           <HeaderHUD />
         </div>
-        <div className="shrink-0 flex items-end">
+        <div className="shrink-0 flex items-end gap-3">
+          <RouteToggle />
           <DashboardClock />
         </div>
       </header>
@@ -129,22 +126,6 @@ export default function Dashboard() {
             </ErrorBoundary>
           </section>
 
-          {/* ── ENGINE & METHODOLOGY (how the call was made — promoted from the
-                bottom; provenance, hypothesis tests, self-learning status) ── */}
-          <CollapsibleSection id="engine" title="Engine & methodology">
-            <div className="space-y-4">
-              <ErrorBoundary label="Self-experiments">
-                <LabExperiments />
-              </ErrorBoundary>
-              <ErrorBoundary label="Research lab">
-                <LabPanel />
-              </ErrorBoundary>
-              <ErrorBoundary label="Engine status">
-                <EngineStatusPanel />
-              </ErrorBoundary>
-            </div>
-          </CollapsibleSection>
-
           {/* ── TRAINING ── */}
           <ClusterHeader id="training">Training</ClusterHeader>
           <CollapsibleSection id="meso" title="Mesocycle">
@@ -191,18 +172,6 @@ export default function Dashboard() {
             </ErrorBoundary>
           </CollapsibleSection>
 
-          {/* ── INTELLIGENCE ── */}
-          <ClusterHeader id="intel">Intelligence</ClusterHeader>
-          <CollapsibleSection id="research" title="Clinical research">
-            <ErrorBoundary label="Clinical research">
-              <ClinicalResearchPanel />
-            </ErrorBoundary>
-          </CollapsibleSection>
-          <CollapsibleSection id="trends" title="Trend intelligence">
-            <ErrorBoundary label="Trends">
-              <TrendIntelligence />
-            </ErrorBoundary>
-          </CollapsibleSection>
         </div>
 
         {/* Single RightRail mount — responsive class controls placement */}

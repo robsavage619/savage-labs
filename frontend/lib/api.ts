@@ -568,6 +568,49 @@ export interface Experiment {
   prior: { key: string; effect: number; ci_low: number | null; ci_high: number | null } | null;
 }
 
+export interface SubjectProfile {
+  subject_id: string;
+  name: string;
+  enrolled_on: string | null;
+  days_observed: number | null;
+  data_sources: { source: string; last_sync_at: string; streaming: boolean }[];
+  personalization: {
+    fitted_params: number;
+    total_params: number;
+    families: {
+      volume_landmarks: { fitted: number; total: number };
+      acwr_bands: boolean;
+      sleep_bands: boolean;
+      deload_trigger: boolean;
+    };
+  };
+  phenotype: string[];
+  experiments: { registered: number; confirmed: number; active_priors: number };
+  engine_accuracy: {
+    current: number | null;
+    n_scored: number | null;
+    trend: number | null;
+    degrading: boolean;
+    history: { week_start: string; overall: number | null; n_scored: number }[];
+  };
+  muscle_coverage: { personalized: number; total: number };
+}
+
+export interface ExperimentSuggestion {
+  slug: string;
+  hypothesis: string;
+  manipulated: string;
+  condition_a: string;
+  condition_b: string;
+  outcome_metric: string;
+  outcome_direction: string;
+  min_per_arm: number;
+  min_effect: number;
+  vault_ref: string | null;
+  from_question_id: string;
+  lab_verdict: string;
+}
+
 export const api = {
   recoveryToday: () => get<RecoveryToday>("/api/recovery/today"),
   recoveryTrend: (days = 14) => get<RecoveryPoint[]>(`/api/recovery/trend?days=${days}`),
@@ -1048,6 +1091,8 @@ export const api = {
     get<{ prompt: string; attach_photos: { front: string | null; side: string | null }; basis: Record<string, number> }>(
       "/api/progress-photos/critique-prompt",
     ),
+  subjectProfile: () => get<SubjectProfile>("/api/subject/profile"),
+  experimentSuggestions: () => get<ExperimentSuggestion[]>("/api/experiments/suggestions"),
 };
 
 export interface DailyReport {

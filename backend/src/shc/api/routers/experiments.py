@@ -49,6 +49,20 @@ async def list_experiments() -> list[dict]:
         conn.close()
 
 
+@router.get("/experiments/suggestions")
+async def experiment_suggestions() -> list[dict]:
+    """Candidate n-of-1 study specs derived from unresolved lab findings.
+
+    Returns specs for controllable-behavior questions that are still
+    inconclusive/insufficient and don't have a registered study yet.
+    """
+    conn = get_read_conn()
+    try:
+        return selflab.suggest_experiments(conn)
+    finally:
+        conn.close()
+
+
 @router.get("/experiments/priors")
 async def experiment_priors() -> list[dict]:
     """Confirmed, causal personal priors the engine may act on."""

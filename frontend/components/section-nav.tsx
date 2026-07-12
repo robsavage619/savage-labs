@@ -2,21 +2,21 @@
 
 import { useEffect, useState } from "react";
 
-const SECTIONS = [
+export const SECTIONS = [
   { id: "today", label: "Today" },
   { id: "signals", label: "Signals" },
   { id: "plan", label: "Plan" },
-  { id: "engine", label: "Engine" },
   { id: "training", label: "Training" },
   { id: "body", label: "Body" },
-  { id: "intel", label: "Intelligence" },
 ] as const;
 
-export function SectionNav() {
-  const [active, setActive] = useState<string>("today");
+type SectionItem = { id: string; label: string };
+
+export function SectionNav({ sections = SECTIONS as readonly SectionItem[] }: { sections?: readonly SectionItem[] } = {}) {
+  const [active, setActive] = useState<string>(sections[0]?.id ?? "");
 
   useEffect(() => {
-    const els = SECTIONS.map((s) => document.getElementById(s.id)).filter(
+    const els = sections.map((s) => document.getElementById(s.id)).filter(
       (e): e is HTMLElement => e != null,
     );
     if (els.length === 0) return;
@@ -32,7 +32,7 @@ export function SectionNav() {
     );
     els.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, []);
+  }, [sections]);
 
   const go = (id: string) => {
     // Update the hash without a jump, then fire hashchange so a collapsed
@@ -52,7 +52,7 @@ export function SectionNav() {
       aria-label="Dashboard sections"
     >
       <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
-        {SECTIONS.map((s) => {
+        {sections.map((s) => {
           const on = active === s.id;
           return (
             <button
