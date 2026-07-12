@@ -15,6 +15,7 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "@/lib/api";
+import { localDate } from "@/lib/date";
 import { Eyebrow } from "@/components/ui/metric";
 import { ObsidianMark } from "@/components/obsidian-badge";
 import { CorrelationCards } from "@/components/correlation-cards";
@@ -75,7 +76,7 @@ function RecoveryHeatmap({
   // Each cell is { date, score } or null. We anchor the right column to today's
   // weekday so the bottom-right cell == today.
   const grid = useMemo(() => buildHeatmapGrid(data, 13), [data]);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
   const todayCell = data.find((d) => d.date === today);
 
   return (
@@ -180,7 +181,7 @@ function buildHeatmapGrid(
   for (let i = totalDays - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
-    const iso = d.toISOString().slice(0, 10);
+    const iso = localDate(d);
     const hit = byDate.get(iso);
     cells.push(hit ? { date: hit.date, score: hit.score } : null);
   }

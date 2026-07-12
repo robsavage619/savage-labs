@@ -11,6 +11,7 @@ import {
   YAxis,
 } from "recharts";
 import { api, type ProgressComparison } from "@/lib/api";
+import { localDate } from "@/lib/date";
 import { Eyebrow } from "@/components/ui/metric";
 
 const FLAG_LABEL: Record<string, string> = {
@@ -29,7 +30,7 @@ const METRIC_LABEL: Record<string, string> = {
   silhouette_area: "Silhouette area",
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localDate();
 
 // Rolling median absorbs single-shot noise (pose/lighting) so the trend reflects
 // real change, not capture variation. Window of 3 by default.

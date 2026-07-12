@@ -2051,10 +2051,11 @@ async def whoop_patterns() -> dict:
     finally:
         conn.close()
 
+    # DuckDB dayofweek(): 0=Sun, 1=Mon … 6=Sat. Shift by -1 to align with Mon-first labels.
     DOW_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     return {
         "by_day_of_week": [
-            {"day": DOW_LABELS[int(r[0]) % 7], "avg_recovery": round(r[1], 1), "n": r[2]}
+            {"day": DOW_LABELS[(int(r[0]) - 1) % 7], "avg_recovery": round(r[1], 1), "n": r[2]}
             for r in dow_rows
         ],
         "distribution": [{"bucket": r[0], "n": r[1]} for r in dist_rows],

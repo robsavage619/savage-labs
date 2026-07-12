@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { api } from "@/lib/api";
+import { reconciledVerdict } from "@/lib/readiness";
 import { Eyebrow, Metric } from "@/components/ui/metric";
 
 function acwrZone(ratio: number | null | undefined): { label: string; tone: "positive" | "neutral" | "negative"; color: string } {
@@ -56,13 +57,28 @@ export function PillarTrainingLoad() {
     queryFn: () => api.trainingHeatmap(6),
     refetchInterval: 600_000,
   });
+  const stateQ = useQuery({
+    queryKey: ["daily-state"],
+    queryFn: api.dailyState,
+    staleTime: 5 * 60 * 1000,
+  });
 
   const ratio = stats.data?.acwr.ratio ?? null;
   const acute = stats.data?.acwr.acute ?? null;
   const chronic = stats.data?.acwr.chronic ?? null;
   const sigma = stats.data?.hrv.deviation_sigma ?? null;
   const zone = acwrZone(ratio);
-  const readiness = readinessSignal(sigma, ratio);
+  const readiness = stateQ.data
+    ? (() => {
+        const v = reconciledVerdict(stateQ.data);
+        const detail = v.gated
+          ? `Engine gate capped verdict · base score ${stateQ.data.readiness.score ?? "—"}/100`
+          : stateQ.data.readiness.score != null
+            ? `Readiness ${stateQ.data.readiness.score}/100`
+            : "Awaiting biometric data";
+        return { label: v.label, tone: v.tone, detail };
+      })()
+    : readinessSignal(sigma, ratio);
   const todayRecovery = trend.data?.length ? trend.data[trend.data.length - 1].score : null;
 
   const trainStreak = useMemo(() => {

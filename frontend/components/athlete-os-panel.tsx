@@ -37,7 +37,7 @@ function readinessCommand(state: DailyState | undefined, plan: WorkoutPlan | und
   const rationale = plan?.recommendation.rationale ?? state.gates.reasons[0] ?? state.gates.deload_reason;
   const detail = rationale
     ? `${focus}: ${shorten(rationale, 118)}`
-    : `${focus}; readiness ${Math.round(state.readiness.score ?? 0)}/100.`;
+    : `${focus}; readiness ${state.readiness.score != null ? Math.round(state.readiness.score) : "—"}/100.`;
   return { label, detail, tone };
 }
 

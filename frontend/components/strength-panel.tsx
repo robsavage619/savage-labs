@@ -15,6 +15,7 @@ import {
   Line,
 } from "recharts";
 import { api } from "@/lib/api";
+import { localDate } from "@/lib/date";
 import { Eyebrow, Metric } from "@/components/ui/metric";
 
 // ── Heatmap ──────────────────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ function buildGrid(days: HDay[]): HDay[][] {
   let week: HDay[] = [];
   const cur = new Date(start);
   while (cur <= today) {
-    const k = cur.toISOString().slice(0, 10);
+    const k = localDate(cur);
     week.push(map.get(k) ?? { date: k, intensity: 0, sets: 0, volume_kg: 0 });
     if (week.length === 7) { weeks.push(week); week = []; }
     cur.setDate(cur.getDate() + 1);
@@ -608,7 +609,7 @@ function RecoveryCorrelation() {
 
       const next = new Date(day.date);
       next.setDate(next.getDate() + 1);
-      const nextScore = recoveryMap.get(next.toISOString().slice(0, 10));
+      const nextScore = recoveryMap.get(localDate(next));
       if (nextScore != null) {
         if (isTrain) nextDayAfterTrain.push(nextScore);
         else nextDayAfterRest.push(nextScore);

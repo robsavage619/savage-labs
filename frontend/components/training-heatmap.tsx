@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { localDate } from "@/lib/date";
 import { Eyebrow } from "@/components/ui/metric";
 
 const INTENSITY_COLORS = [
@@ -24,7 +25,7 @@ function buildWeekGrid(days: { date: string; intensity: number; sets: number; vo
   const cur = new Date(start);
 
   while (cur <= today) {
-    const key = cur.toISOString().slice(0, 10);
+    const key = localDate(cur);
     week.push(map.get(key) ?? { date: key, intensity: 0, sets: 0, volume_kg: 0 });
     if (week.length === 7) { weeks.push(week); week = []; }
     cur.setDate(cur.getDate() + 1);

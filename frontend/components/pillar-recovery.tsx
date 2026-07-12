@@ -163,7 +163,7 @@ export function PillarRecovery() {
 
       <div className="flex items-center gap-5 mt-3">
         <div className="relative flex-shrink-0">
-          <RecoveryArc score={score != null ? Math.round(score) : 0} color={t.color} />
+          <RecoveryArc score={score != null ? Math.round(score) : null} color={t.color} />
           <div className="shc-reticle" aria-hidden />
         </div>
         <div className="flex-1 min-w-0">

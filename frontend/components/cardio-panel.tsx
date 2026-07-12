@@ -16,15 +16,13 @@ import {
   YAxis,
 } from "recharts";
 import { api, type CardioSession } from "@/lib/api";
+import { localDate } from "@/lib/date";
 import { Eyebrow } from "@/components/ui/metric";
-
-const AGE = 40;
-const TANAKA_HR_MAX = Math.round(208 - 0.7 * AGE);
 
 // Returns the best-available HRmax: WHOOP-measured if present, else Tanaka.
 // `shift` subtracts a constant (used for propranolol-day adjustments).
-function resolveHrMax(measured: number | null | undefined, shift = 0): number {
-  return Math.max(80, (measured ?? TANAKA_HR_MAX) - shift);
+function resolveHrMax(measured: number | null | undefined, shift = 0, tanaka = 180): number {
+  return Math.max(80, (measured ?? tanaka) - shift);
 }
 
 const MODALITY_LABEL: Record<string, string> = {
@@ -63,9 +61,10 @@ function hrZone(
   hr: number | null | undefined,
   shift = 0,
   measuredMax: number | null = null,
+  tanaka = 180,
 ): string {
   if (hr == null) return "—";
-  const max = resolveHrMax(measuredMax, shift);
+  const max = resolveHrMax(measuredMax, shift, tanaka);
   const pct = hr / max;
   if (pct < 0.6) return "Z1";
   if (pct < 0.7) return "Z2";
@@ -87,10 +86,12 @@ function bucketByWeek(
   weeks: number,
   hrShift = 0,
   measuredMax: number | null = null,
+  tanaka = 180,
 ): { weekStart: string; label: string; z12: number; z3: number; z45: number; total: number }[] {
   // Anchor the rightmost bucket to this Monday so the bars stay aligned with
   // calendar weeks rather than rolling 7-day buckets.
   const today = new Date();
+  const todayStr = localDate(today);
   const monday = new Date(today);
   monday.setHours(0, 0, 0, 0);
   monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
@@ -99,7 +100,7 @@ function bucketByWeek(
     const start = new Date(monday);
     start.setDate(monday.getDate() - (weeks - 1 - i) * 7);
     return {
-      weekStart: start.toISOString().slice(0, 10),
+      weekStart: localDate(start),
       label: `${start.getMonth() + 1}/${start.getDate()}`,
       z12: 0,
       z3: 0,
@@ -120,7 +121,9 @@ function bucketByWeek(
     if (idx === -1) continue;
     const dur = s.duration_min ?? 0;
     if (!dur) continue;
-    const z = hrZone(s.avg_hr, hrShift, measuredMax);
+    // Only apply propranolol shift for today's session.
+    const shift = s.date === todayStr && hrShift > 0 ? hrShift : 0;
+    const z = hrZone(s.avg_hr, shift, measuredMax, tanaka);
     if (z === "Z4" || z === "Z5") bins[idx].z45 += dur;
     else if (z === "Z3") bins[idx].z3 += dur;
     else bins[idx].z12 += dur; // Z1, Z2, or unknown HR → assume base aerobic
@@ -133,14 +136,16 @@ function WeeklyZoneVolume({
   sessions,
   hrShift,
   measuredMax,
+  tanaka,
 }: {
   sessions: CardioSession[];
   hrShift: number;
   measuredMax: number | null;
+  tanaka: number;
 }) {
   const data = useMemo(
-    () => bucketByWeek(sessions, 12, hrShift, measuredMax),
-    [sessions, hrShift, measuredMax],
+    () => bucketByWeek(sessions, 12, hrShift, measuredMax, tanaka),
+    [sessions, hrShift, measuredMax, tanaka],
   );
   const recent4 = data.slice(-4);
   const totalMin = recent4.reduce((a, b) => a + b.total, 0);
@@ -238,12 +243,12 @@ function WeeklyZoneVolume({
 
 function PickleballEfficiency({
   sessions,
-  hrShift,
   measuredMax,
+  tanaka,
 }: {
   sessions: CardioSession[];
-  hrShift: number;
   measuredMax: number | null;
+  tanaka: number;
 }) {
   // Filter to pickleball sessions with HR, sort ascending by date, take last 16.
   const points = useMemo(() => {
@@ -251,14 +256,15 @@ function PickleballEfficiency({
       .filter((s) => modalityKey(s.kind) === "pickleball" && s.avg_hr != null && (s.duration_min ?? 0) >= 10)
       .sort((a, b) => a.date.localeCompare(b.date));
     const tail = filtered.slice(-16);
-    const max = resolveHrMax(measuredMax, hrShift);
+    // No hrShift: historical efficiency uses unshifted HRmax so comparisons are consistent.
+    const max = resolveHrMax(measuredMax, 0, tanaka);
     return tail.map((s) => ({
       date: s.date.slice(5),
       hr: s.avg_hr!,
       pctHrMax: Math.round((s.avg_hr! / max) * 100),
       duration: s.duration_min ?? 0,
     }));
-  }, [sessions, hrShift, measuredMax]);
+  }, [sessions, measuredMax, tanaka]);
 
   // Linear regression to detect drift direction.
   const slope = useMemo(() => {
@@ -330,9 +336,9 @@ function PickleballEfficiency({
               domain={["dataMin - 5", "dataMax + 5"]}
               tickFormatter={(v) => `${v}`}
             />
-            {/* Z2 ceiling: 70% HRmax */}
+            {/* Z2 ceiling: 70% HRmax — unshifted for consistent historical baseline */}
             <ReferenceLine
-              y={Math.round(resolveHrMax(measuredMax, hrShift) * 0.7)}
+              y={Math.round(resolveHrMax(measuredMax, 0, tanaka) * 0.7)}
               stroke="oklch(0.62 0.16 145 / 0.6)"
               strokeDasharray="3 3"
               label={{ value: "Z2 ceiling", position: "right", fontSize: 9, fill: "oklch(0.62 0.16 145)" }}
@@ -475,9 +481,8 @@ function LogForm({ onLogged }: { onLogged: () => void }) {
 }
 
 // Keytel formula (male): kcal/min = (-55.0969 + 0.6309×HR + 0.1988×kg + 0.2017×age) / 4.184
-// Rob: 108.8 kg, age 39. On propranolol days, HR is blunted ~20 bpm → multiply by kcal_multiplier (1.25).
-function estimateKcal(avgHr: number, durationMin: number, kcalMultiplier = 1.0): number {
-  const kcalPerMin = (-55.0969 + 0.6309 * avgHr + 0.1988 * 108.8 + 0.2017 * AGE) / 4.184;
+function estimateKcal(avgHr: number, durationMin: number, bodyWeightKg: number, age: number, kcalMultiplier = 1.0): number {
+  const kcalPerMin = (-55.0969 + 0.6309 * avgHr + 0.1988 * bodyWeightKg + 0.2017 * age) / 4.184;
   return Math.round(Math.max(0, kcalPerMin) * durationMin * kcalMultiplier);
 }
 
@@ -544,6 +549,8 @@ function SessionRow({
   hrShift,
   kcalMultiplier,
   measuredMax,
+  bodyWeightKg,
+  age,
   onDelete,
   onHide,
 }: {
@@ -551,6 +558,8 @@ function SessionRow({
   hrShift: number;
   kcalMultiplier: number;
   measuredMax: number | null;
+  bodyWeightKg: number;
+  age: number;
   onDelete: (id: string) => void;
   onHide: (id: string) => void;
 }) {
@@ -601,7 +610,7 @@ function SessionRow({
           ) : s.kcal
         ) : s.avg_hr && s.duration_min ? (
           <span title={`Estimated from avg HR (Keytel)${shifted ? ` ×${kcalMultiplier} β-adj` : ""}`}>
-            ~{estimateKcal(s.avg_hr, s.duration_min, shifted ? kcalMultiplier : 1.0)}
+            ~{estimateKcal(s.avg_hr, s.duration_min, bodyWeightKg, age, shifted ? kcalMultiplier : 1.0)}
             <span className="text-[9px] text-[var(--text-faint)] ml-0.5">{shifted ? "β-adj" : "est"}</span>
           </span>
         ) : "—"}
@@ -634,6 +643,10 @@ export function CardioPanel() {
   const hrShift = stateQ.data?.gates.hr_zone_shift_bpm ?? 0;
   const kcalMultiplier = stateQ.data?.gates.kcal_multiplier ?? 1.0;
   const measuredMax = stateQ.data?.training_load.max_hr_measured ?? null;
+  const tanaka = stateQ.data?.training_load.max_hr_tanaka ?? 180;
+  // Derive age from Tanaka formula: age = (208 − tanaka) / 0.7
+  const age = Math.round((208 - tanaka) / 0.7);
+  const bodyWeightKg = stateQ.data?.checkin.body_weight_kg ?? 100;
   const [hidden, setHidden] = useState<Set<string>>(() => loadHidden());
 
   function handleHide(id: string) {
@@ -802,8 +815,8 @@ export function CardioPanel() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-4 border-b border-[var(--hairline)]">
-        <WeeklyZoneVolume sessions={data?.sessions ?? []} hrShift={hrShift} measuredMax={measuredMax} />
-        <PickleballEfficiency sessions={data?.sessions ?? []} hrShift={hrShift} measuredMax={measuredMax} />
+        <WeeklyZoneVolume sessions={data?.sessions ?? []} hrShift={hrShift} measuredMax={measuredMax} tanaka={tanaka} />
+        <PickleballEfficiency sessions={data?.sessions ?? []} measuredMax={measuredMax} tanaka={tanaka} />
       </div>
 
       <LogForm onLogged={refresh} />
@@ -835,7 +848,7 @@ export function CardioPanel() {
                 </td>
               </tr>
             ) : (
-              (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} onDelete={handleDelete} onHide={handleHide} />)
+              (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} bodyWeightKg={bodyWeightKg} age={age} onDelete={handleDelete} onHide={handleHide} />)
             )}
           </tbody>
         </table>
@@ -852,8 +865,8 @@ export function CardioPanel() {
       </div>
       <p className="text-[10px] text-[var(--text-faint)] leading-snug">
         {measuredMax != null
-          ? `HR zones use WHOOP-measured max (${resolveHrMax(measuredMax, hrShift)} bpm`
-          : `HR zones use Tanaka formula (208 − 0.7×age ≈ ${resolveHrMax(null, hrShift)} bpm`}
+          ? `HR zones use WHOOP-measured max (${resolveHrMax(measuredMax, hrShift, tanaka)} bpm`
+          : `HR zones use Tanaka formula (208 − 0.7×${age} ≈ ${resolveHrMax(null, hrShift, tanaka)} bpm`}
         {hrShift > 0 ? `, shifted −${hrShift} bpm today for propranolol` : ""}).
         Z2 (60–70%) builds aerobic base, Z3 (70–80%) is tempo, Z4–5 are threshold/VO2.
         {hrShift > 0 && <> Zones marked * are propranolol-adjusted. kcal ×{kcalMultiplier} to correct for blunted HR.</>}
