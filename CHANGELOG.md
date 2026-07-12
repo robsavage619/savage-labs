@@ -4,6 +4,94 @@ All notable changes to this project. Dates are commit dates (Pacific time).
 
 ---
 
+## 2026-07-11 (comprehensive audit + fix pass)
+
+A full-codebase read-only audit across six dimensions — gates/ACWR, self-learning, exercise selection, API, ingest, and frontend — followed by a systematic fix pass. Every finding was verified against source before writing any code. 15 items fixed across Tier 1 (data-corrupting), Tier 2 (wrong numbers), and Tier 3 (cleanup).
+
+### Pre-audit additions (since last entry)
+
+- **Plateau-triggered exercise rotation.** Selection now rotates when a movement has plateaued (flat e1RM + stagnant tonnage for ≥3 weeks) rather than on a fixed weekly schedule — so a lift stays in the rotation as long as it's working, and gets swapped when it stops. Weekly churn was causing unnecessary variation before adaptation was signalled.
+
+- **MEV floor preserved under conditioning interference.** When ACWR conditions suppress a lower-body target to zero, the engine was dropping volume below MEV for emphasis muscles (glutes). A target-zero muscle on the forbidden list that also carries the MEV floor now keeps `desired = mev` instead of 0 — accumulation continues, just at floor, not at silence.
+
+- **Athlete OS Panel wired in.** New top-of-page card fuses today's readiness command (engine-gate-aware verdict + plan rationale), goal pressure (push:pull ratio / pickleball court load), active experiment status, and personal lab findings into a single decision surface. Reads `DailyState`, `WorkoutPlan`, `Experiments`, and `LabFindings` — four reads, one view.
+
+### Tier 1 — data-corrupting fixes
+
+- **`plan_adherence` never populated.** The nightly adherence job and the `/api/training/adherence/recompute` endpoint both used `GROUP BY w.id ORDER BY w.started_at` — invalid DuckDB syntax (can't `ORDER BY` a non-aggregated column in a grouped query). Threw every night since the feature shipped; the table was always empty. Fixed: `ORDER BY MAX(w.started_at)`.
+
+- **Classifier misattribution poisoning volume data.** The exercise keyword classifier checked `"hammer"` before `"hammerstrength"`, so all Hammerstrength machines (chest, back, shoulder) credited biceps — the emphasis muscle — instead of their actual primary. Same family: the chest block swallowed `Chest Supported Incline Row` and reverse flyes, crediting chest+push for pull work. Reordered the keyword blocks; backfilled 0068 to repair the 1,583 bad `exercise_muscle` rows accumulated in production.
+
+- **Fitbod contamination in e1RM ceilings and working weights.** `e1rm_by_exercise` read raw `workout_sets` with no source filter, so Fitbod sets (logged with a 2× dumbbell multiplier and non-Hevy naming) inflated every load ceiling. `working_weights` had no guard on Fitbod overwrites, so one `ingest-fitbod` run silently replaced Hevy's measured weights. Both now filter to `source='hevy'` / `workout_sets_dedup`.
+
+- **Beta-blocker badge fired every day.** `hasBetaBlocker()` in the frontend read the medications list — propranolol is PRN but always listed — so the "β-adj" badge rendered on every recovery panel, and every genuine HRV-below-baseline driver was silently downgraded to neutral ~95% of days. Badge now reads `readiness.beta_blocker_adjusted` from `DailyState`, which is true only on days the morning check-in logged the dose.
+
+- **Stale exercises causing phantom deloads.** `_muscle_performance()` iterated `weekly_e1rm` with no recency bound — exercises last touched in the Fitbod era (2022–2024) scored perpetually "regressing," averaged into per-muscle performance, and drove `deload_check` to a systemic deload (≥3 regressing muscles) with zero current fatigue. Added an 8-week recency filter.
+
+- **Volume landmarks fitted on a different scale than the gate reads.** `fit_volume_landmarks()` ran over `work_sets` (warmups included, no rep-window filter, no secondary credit). The live gate compares against `weekly_muscle_volume` (warmup-excluded, rep-windowed, 0.5/0.3 secondary credit). Fitted MRV understated the credited scale → early "at MRV — hold." Fitter now runs over the same computation path as the controller.
+
+- **Hevy set-ID collision for repeated exercises.** The set hash keyed on `(workout_id, exercise_name, set_index)` — a superset that contains the same exercise twice (e.g. backoff sets after main work logged as a second block) collides, and the second block silently overwrites the first. Hash now includes the exercise entry index within the workout.
+
+- **HAE ingest was a black hole.** `apple.py` used fire-and-forget on the ingest future and deleted the source file unconditionally in `finally:`, so permanent data loss on failure was silent. The metric mapping also stored raw WHOOP/HAE field names ("Heart Rate Variability") with no conversion — HAE ingested "successfully" and was never queryable. Fixed: future is awaited + file only unlinked on success; metric mapping reuses the `_SHORTCUT_UNITS` + `_IMPERIAL_TO_SI` table from the Shortcuts endpoint.
+
+### Tier 2 — wrong numbers / misfiring gates
+
+- **Stale WHOOP data silently disabling safety caps.** The skin-temp, SpO₂, and HRV gates read the most-recent recovery row with no freshness check. One bad sync + outage = capped `low` indefinitely — or no cap at all if the row was from a week ago. Applied the same staleness guard already present on the conditioning ACWR gate. When WHOOP is stale, caps don't silently open; they fire a "gate is BLIND" reason.
+
+- **ACWR on the dashboard contradicted DailyState.** Two dashboard endpoints (`/whoop/patterns` and `/acwr`) recomputed a coupled 28-day formula that was already fixed in `metrics.py` — so `/api/state/today` said 1.0 while the dashboard said 1.14. Both now delegate to the same `_arm_acwr()` call used by `DailyState`.
+
+- **RPE damper was backwards and reopened the progressing-freeze.** The damper applied `rpe_factor` *before* the `perf ≥ 4` floor, so `round(1 × 0.5) = 0` could freeze a progressing muscle in the same pass that was supposed to protect it. Additionally, over-RPE clamped to `1.0` (no damping — opposite of the docstring). Fixed sign/direction; floor now applied after damping.
+
+- **Under-recovered muscle below MEV jumped to MEV in one step.** `desired = max(mev, cur - 1)` raised `cur=3 → mev=8` in a single "back off a set" step. Fixed to `max(min(cur, mev), cur - 1)` — an under-recovered muscle at 3 backs off to 2, not up to 8.
+
+- **Validator false 409s blocking every plan resubmit (four bugs):**
+  - Rep-cap asymmetry: the e1RM ceiling capped history reps at 12 but the demand path used uncapped plan reps — represcribing your own logged 15-rep best failed validation. Cap now applied symmetrically.
+  - Alias gaps: `e1rm_by_exercise` and the rep-window resolver never consulted `exercise_alias`, so aliased movements (17 exercises) always 409'd as if no history existed. Both paths now join through the alias table.
+  - Conflicting rep windows: 7 exercises (e.g. Deadlift with overlapping 3–10 vs 6–8 rows) collapsed nondeterministically. Primary-muscle row now wins; fallback is min-low/max-high merge.
+  - Secondary spillover: 4 squat sets produce 2.0 hamstring secondary credit, which exceeded the per-muscle cap on a conditioning-frozen muscle with target=0. Secondary-only credit is now exempt from per-session caps on zero-target muscles.
+
+- **Frontend readiness verdict ignored engine gates.** `pillar-training-load.tsx` computed its verdict client-side from HRV σ and the load ratio — could say "Push" while the engine had a deload flagged. Panel now reads `reconciledVerdict(state)` from `DailyState`, with the same gate-ceiling logic used everywhere else.
+
+- **`hr_zone_shift_bpm` applied to 12 weeks of history.** `bucketByWeek` in `cardio-panel.tsx` shifted all historical sessions by the propranolol HR adjustment, flipping the polarization verdict on any week I happened to be in a chart during. Shift now applied only to today's sessions (`date === todayStr && hrShift > 0`). Same fix in `PickleballEfficiency` — historical comparison charts always use unshifted HRmax.
+
+- **UTC date truncation dropped evening sessions.** After 5pm PDT, `toISOString().slice(0, 10)` returns tomorrow in UTC, so training sessions logged in the evening vanished from heatmaps and recovery panels. New `localDate()` utility in `lib/date.ts` formats YYYY-MM-DD from local time; applied to all five affected components.
+
+- **Frontend hardcoded age 40 and bodyweight 108.8 kg.** `cardio-panel.tsx` had hardcoded constants for Tanaka HRmax and Keytel kcal formula. Both now sourced from `DailyState`: `max_hr_tanaka` for age (inverted: `(208 - tanaka) / 0.7`) and `checkin.body_weight_kg`.
+
+- **WHOOP UTC timestamps bucketing evening sessions to tomorrow.** `whoop.py` truncated UTC ISO strings directly (`r["start"][:10]`), putting any session that started after midnight UTC (5pm PDT) on the next calendar date — wrong ACWR day, DUPR competitive multiplier never applied to evening matches. Fixed with `_utc_to_local_date()` using `ZoneInfo("America/Los_Angeles")`. Same fix for recovery and sleep records. Apple Shortcuts naive timestamps were stamped UTC; now stamped as local iPhone time.
+
+- **Step count triple-counted from three sources.** Apple XML intervals, HAE daily totals, and Shortcuts snapshots all wrote `step_count` to the same `measurements` table. `dashboard.py` summed them → 3× actual steps. Fixed with a priority CTE: apple XML intervals > HAE > Shortcuts, one source wins per day.
+
+- **DuckDB `dayofweek()` offset.** WHOOP weekly patterns endpoint used `DOW_LABELS` indexed from 0=Monday but DuckDB's `dayofweek()` returns 0=Sunday. Every weekday was shifted by one. Fixed: `(int(r[0]) - 1) % 7`.
+
+### Tier 3 — cleanup
+
+- **Gate keyword misroutes.** "Step up" (space) was not in `_LEGS` (only "step-up" hyphen) — step-up variations escaped the legs gate. "Rear delt fly" and "reverse fly" classified as PUSH because `"fly"` in `_PUSH` fired before `"rear delt"` in `_PULL`. Both fixed: added `"step up"` to `_LEGS`; added an explicit guard before the `_PUSH` check.
+
+- **`forbid_muscle_groups` duplicate entries.** The rest-day loop appended a group without checking membership first — if both conditioning ACWR and rest thresholds fired for "legs," the list contained two "legs" entries, causing plan validators to double-count the gate. Added `if grp not in g.forbid_muscle_groups` guard.
+
+- **`personal_floored` used personal (low) values.** When a personal MRV is < 50% of population MRV, the engine flags the muscle as undertrained and is supposed to floor to population values. The code used `vt.mev, vt.mav, vt.mrv` (the low personal values) while labelling the result `"personal_floored"`. Now uses `pop.mev, pop.mav, pop.mrv`.
+
+- **Skin-temp unit bugs.** `briefing.py` double-converted `skin_temp_delta` (`* 9/5` when it was already °F from `dashboard.py`). `workout_planner.py` labelled a °F value as `°C`. `/recovery/today` returned raw `skin_temp` in °C while `DailyState` returns °F — now converts on the way out.
+
+- **Report prompt used wrong ACWR thresholds.** Prompt said `>1.5 = cap LOW; >1.65 = rest`. Actual gate constants: `RES_ACWR_MOD=1.5`, `RES_ACWR_LOW=1.8`, `RES_ACWR_REST=2.0`. Corrected.
+
+- **Hevy cursor set to wall-clock after sync.** `cursor = datetime.now(UTC)` after the sync window means events generated mid-sync fall in a blind spot. Cursor now captured before the sync begins so those events are re-fetched next run (deduplicated by ON CONFLICT).
+
+- **`_ms_to_min(0)` returned None.** `if ms` is falsy for 0 → zero-duration sleep stages became null zone values. Fixed to `0.0 if ms == 0 else None`.
+
+- **`body_measurement` upsert key never fired.** `measured_at = datetime.now(UTC)` generated a new timestamp on every sync call, preventing `ON CONFLICT (source, measured_at)` from ever matching. Now uses `date.today().isoformat()` so same-day re-syncs hit the same row.
+
+- **Fitbod per-row parse errors silently swallowed at DEBUG.** Promoted to `log.warning` so bad CSV rows are visible.
+
+- **Frontend label corrections.** "strength + fat loss" goal label → "build muscle · recomp". "Cardio strain" label → "Cardio volume" (field shows min/wk, not strain units). Sleep "Eff." cell shows "SpO₂" when falling back to overnight SpO₂ data. `trainStreak` now counts consecutive calendar days (prior loop over sparse heatmap entries skipped rest days and overcounted).
+
+### Tests
+
+428 passing, 1 skipped (unchanged from Tier 1 baseline — new fixes land in paths with no prior test coverage; invariant tests in `test_engine_invariants.py` continue to enforce the 6 ENGINE_INVARIANTS.md contracts).
+
+---
+
 ## 2026-07-05 (exercise-intelligence pass)
 
 The trigger was a prescription that asked for a hammer curl at 95 lbs *in each hand* — a weight never lifted. Tracing it opened up the whole exercise-intelligence layer: load semantics, muscle-head anatomy, exercise selection, and the split-brain data model underneath all of it.

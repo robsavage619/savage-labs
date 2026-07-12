@@ -658,8 +658,11 @@ What I actually look at every day. Built with Next.js 15 + React 19.
 <tr>
 <td width="50%">
 
-**⚡ Command Briefing**
-The top card. Green/yellow/red, the score, the three signals that drove it, and a paragraph from Claude explaining what it means for today. This is the whole point — one read, one decision.
+**⚡ Athlete OS Panel**
+The top card. Fuses today's readiness verdict (engine-gate-aware, not client-side), goal pressure (push:pull ratio, court load), active experiment status, and personal lab findings into four decision cells. One read, one decision.
+
+**🧠 Command Briefing**
+Claude's written assessment of the day — recovery, training intent, and what to watch. Sits below the OS Panel.
 
 **📡 Biometric HUD**
 Always-on header with live WHOOP and Hevy sync status, today's vitals, and data freshness. I want to know if something hasn't synced.
@@ -846,7 +849,7 @@ Plan comes back as JSON, gets validated against gates, cached for 24h. `?regen=t
 </tr>
 </table>
 
-**Infrastructure:** `dev-restart.sh` — API `:8000`, frontend `:3000`, WAL checkpoint on start · pre-push hook: ruff + pyright + pytest (424 tests) · APScheduler nightly jobs: WHOOP/Hevy/DUPR sync + `compute_all_scores` (full self-learning pipeline)
+**Infrastructure:** `dev-restart.sh` — API `:8000`, frontend `:3000`, WAL checkpoint on start · pre-push hook: ruff + pyright + pytest (428 tests) · APScheduler nightly jobs: WHOOP/Hevy/DUPR sync + `compute_all_scores` (full self-learning pipeline)
 
 ---
 
@@ -893,7 +896,7 @@ I spent more time on the UI than I probably should have. The whole thing uses OK
 
 ## Data Model
 
-32 tables, 6 views, 66 migrations applied.
+32 tables, 6 views, 68 migrations applied.
 
 | Group | What it stores |
 |---|---|
