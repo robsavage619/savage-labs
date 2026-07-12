@@ -49,6 +49,14 @@ def test_per_hand_is_identity_hevy_logs_per_hand() -> None:
     assert per_hand_kg("Cable Fly Crossovers", 45.4) == pytest.approx(45.4)  # ~100 lb
 
 
+def test_per_hand_halves_verified_combined_logged_lifts() -> None:
+    # RDL is the one verified exception: Rob enters the two-dumbbell TOTAL, so
+    # 150 lb (68 kg) is 75 lb / 34 kg per hand. The single-leg variant is logged
+    # per-hand (one bell) and must NOT halve.
+    assert per_hand_kg("Romanian Deadlift (Dumbbell)", 68.0) == pytest.approx(34.0)
+    assert per_hand_kg("Single Leg Romanian Deadlift (Dumbbell)", 13.6) == pytest.approx(13.6)
+
+
 def test_per_hand_leaves_bilateral_lifts_alone() -> None:
     assert per_hand_kg("Bench Press (Barbell)", 100.0) == 100.0
     assert per_hand_kg("Single Arm Dumbbell Row", 40.0) == 40.0

@@ -14,7 +14,14 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 **Why.** The logged number and the e1RM/ceiling must share one unit; Hevy's unit is per-hand, so any conversion is a corruption. Halving "down" felt safe (a low ceiling can't prescribe an unsafe load) but silently *under*-trained Rob on every dumbbell lift — the opposite of the training goal.
 
-**Consequences.** Tests updated in `test_load_mechanics.py` and `test_e1rm_by_exercise.py` (the old `test_dumbbell_pair_is_halved` asserted the bug). CLAUDE.md invariant corrected. **Exposed a separate, pre-existing bug** the halving had been masking: contaminated all-time max rows now show as physically-impossible per-hand dumbbell loads — **Hammer Curl (Dumbbell) 170**, **Romanian Deadlift (Dumbbell) 150** — inflating those two ceilings. These are bad data rows (no such dumbbells exist), pending Rob's confirmation on whether RDL is logged as a total, then quarantine/correction. Cable Fly 160 is a plausible cable-stack value and left as-is.
+**Consequences.** Tests updated in `test_load_mechanics.py` and `test_e1rm_by_exercise.py` (the old `test_dumbbell_pair_is_halved` asserted the bug). CLAUDE.md invariant corrected. **Exposed a separate, pre-existing bug** the halving had been masking: contaminated all-time max rows showed as physically-impossible per-hand dumbbell loads.
+
+Resolved 2026-07-12 (Rob-confirmed):
+- **Romanian Deadlift (Dumbbell)** — Rob logs the two-dumbbell TOTAL (150 = 75/hand; progression reads 15→20→30→45→75). Added `_LOGGED_AS_COMBINED` — the narrow, evidence-based inverse of the per-hand default (exact-match, so single-leg RDL is unaffected). `per_hand_kg` halves only these. Ceiling 142 → 71. This is the ONE verified total-logged lift; everything else stays per-hand.
+- **Hammer Curl (Dumbbell)** — a 15-set cluster (Apr 7–29 2026, 120–130 lb) that defeats the median/MAD guard (a cluster, not a lone spike). Migration `0069` marks them `is_warmup = TRUE` — non-destructive, reversible, and dropped from e1RM/ceiling math. Ceiling 108 → 47 (his real ~50 lb/hand).
+- Cable Fly 160 left as-is (a plausible cable-stack value, not a dumbbell).
+
+**Still open:** `working_weights` is an all-time ratcheting MAX (`WHERE EXCLUDED > existing`, Hevy+Fitbod) that permanently holds contaminated highs (e.g. the Hammer Curl "170" from Fitbod combined-logging) — the *display* stays inflated even after the ceiling path is fixed. This is the known "working_weights is Fitbod-contaminated" issue; a recompute/reset pass is a separate data-hygiene change. The actionable load ceiling (`e1rm_by_exercise`, 90d, quarantine-aware) is NOT affected.
 
 ---
 

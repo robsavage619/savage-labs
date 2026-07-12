@@ -49,6 +49,19 @@ _PER_HAND = frozenset(
     }
 )
 
+# The narrow, EVIDENCE-BASED inverse of the per-hand default: exercises Rob
+# enters as the COMBINED weight of both dumbbells, verified case-by-case against
+# his own numbers. These halve to per-hand. Everything else is per-hand as logged
+# (Hevy's default). Confirmed 2026-07-12: Romanian Deadlift (Dumbbell) 150 = 75
+# each hand (his progression reads 15→20→30→45→75/hand; 150 lb dumbbells don't
+# exist). Match is exact (lower-cased) so "Single Leg Romanian Deadlift (Dumbbell)"
+# — logged per-hand with one bell — is NOT caught.
+_LOGGED_AS_COMBINED = frozenset(
+    {
+        "romanian deadlift (dumbbell)",
+    }
+)
+
 _SINGLE_ARM_KEYS = (
     "single arm",
     "single-arm",
@@ -109,11 +122,13 @@ def per_hand_kg(name: str, logged_kg: float) -> float:
     """Return the load in ONE hand for a logged weight (kg).
 
     Hevy logs the weight of a single implement, so the logged weight already IS
-    the per-hand load — this is the identity. Kept as the single choke point that
-    every e1RM / ceiling / prescription path routes through, so if a future data
-    source ever logs a combined weight, the conversion lands here and nowhere
-    else. ``name`` is retained for that forward-compatibility.
+    the per-hand load — the identity — EXCEPT for the verified handful in
+    :data:`_LOGGED_AS_COMBINED` that Rob enters as a two-dumbbell total, which
+    halve. This is the single choke point every e1RM / ceiling / prescription
+    path routes through.
     """
+    if name.strip().lower() in _LOGGED_AS_COMBINED:
+        return logged_kg / 2.0
     return logged_kg
 
 
