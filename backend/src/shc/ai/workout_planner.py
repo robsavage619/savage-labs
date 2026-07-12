@@ -37,7 +37,12 @@ log = logging.getLogger(__name__)
 from shc.ai.lab_findings import lab_findings_section
 from shc.ai.vault import retrieve_for_question as _retrieve_for_question
 from shc.ai.vault import vault_context as _vault_context
-from shc.training.load_mechanics import load_unit_label, per_hand_kg
+from shc.training.load_mechanics import (
+    LoadType,
+    classify_load,
+    load_unit_label,
+    per_hand_kg,
+)
 
 
 def load_vault_research(
@@ -404,14 +409,16 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "Dumbbell / cable-crossover loads are shown PER HAND."
     )
     for ex, wkg, src in ww_rows[:ww_limit]:
-        # Normalize the stored all-time max (Rob logs pairs as a combined total)
-        # and the e1RM to the SAME per-hand unit so they can't be compared across
-        # units. The combined figure is kept in parens for orientation.
+        # Hevy logs per-hand, so the stored weight already IS the per-hand load
+        # (per_hand_kg is the identity) and matches the per-hand e1RM unit — the
+        # two can be compared directly. For pair lifts the physical whole-body
+        # total is 2× per-hand, shown in parens for orientation.
         unit = load_unit_label(ex)
         ph_kg = per_hand_kg(ex, wkg) if wkg else 0
         lbs = round(ph_kg * 2.20462, 1)
         unit_sfx = f" {unit}" if unit else ""
-        total_sfx = f" ({round(wkg * 2.20462)} lbs total)" if unit and wkg else ""
+        is_pair = classify_load(ex) in (LoadType.DUMBBELL_PAIR, LoadType.CABLE_PAIR)
+        total_sfx = f" ({round(ph_kg * 2.20462 * 2)} lbs total both hands)" if is_pair and wkg else ""
         e1rm_kg = e1rm_by_ex.get(ex)  # already per-hand
         if e1rm_kg:
             e1rm_lbs = round(e1rm_kg * 2.20462, 1)
@@ -964,14 +971,16 @@ def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
     Basis for today's target load and the validator's load ceiling. Two things
     keep the number honest:
 
-    * **Per-hand normalization** — two-implement lifts (dumbbell pairs, cable
-      crossovers) are logged as the COMBINED weight but loaded per hand, so each
-      set is halved via :func:`shc.training.load_mechanics.per_hand_kg` before
-      the Epley estimate. Without this a per-hand target gets validated against a
-      total-load e1RM — the "95 lb each hand hammer curl" bug.
+    * **Per-hand unit** — Hevy logs dumbbell/crossover lifts as the per-hand
+      (single-implement) weight already, so the logged number IS the per-hand
+      load; :func:`shc.training.load_mechanics.per_hand_kg` routes it through as
+      the identity, keeping e1RM, ceiling, and prescription in one unit. (It used
+      to halve here on the false premise that Rob logs the combined weight, which
+      corrupted every dumbbell ceiling — see the module docstring.)
     * **Rep cap + MAD guard** — reps are capped at 12 (Epley overestimates above
       ~12), and a median/MAD filter (:func:`_robust_max`) drops grossly inflated
-      outlier sets so one fat-fingered log can't float the ceiling.
+      outlier sets so one fat-fingered log (e.g. a "150 lb Romanian Deadlift
+      (Dumbbell)") can't float the ceiling.
     """
     from collections import defaultdict
 

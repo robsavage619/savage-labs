@@ -39,15 +39,19 @@ def test_classify_load(name: str, expected: LoadType) -> None:
     assert classify_load(name) == expected
 
 
-def test_per_hand_halves_two_implement_lifts() -> None:
-    # 120 lb combined hammer curl → 60 lb each hand (54.4 kg → 27.2 kg).
-    assert per_hand_kg("Hammer Curl (Dumbbell)", 54.4) == pytest.approx(27.2)
-    assert per_hand_kg("Cable Crossover", 40.0) == pytest.approx(20.0)
+def test_per_hand_is_identity_hevy_logs_per_hand() -> None:
+    # Hevy logs the weight of ONE dumbbell/stack, so the logged number already IS
+    # the per-hand load — per_hand_kg must NOT halve it. A 20 lb lateral raise
+    # (9.07 kg) stays 20 lb; halving it to 10 was the ceiling-corruption bug.
+    assert per_hand_kg("Lateral Raise (Dumbbell)", 9.07) == pytest.approx(9.07)
+    assert per_hand_kg("Hammer Curl (Dumbbell)", 15.9) == pytest.approx(15.9)  # ~35 lb
+    assert per_hand_kg("Cable Crossover", 40.0) == pytest.approx(40.0)
+    assert per_hand_kg("Cable Fly Crossovers", 45.4) == pytest.approx(45.4)  # ~100 lb
 
 
-def test_per_hand_leaves_single_implement_lifts_alone() -> None:
+def test_per_hand_leaves_bilateral_lifts_alone() -> None:
     assert per_hand_kg("Bench Press (Barbell)", 100.0) == 100.0
-    assert per_hand_kg("Single Arm Dumbbell Row", 40.0) == 40.0  # already one hand
+    assert per_hand_kg("Single Arm Dumbbell Row", 40.0) == 40.0
     assert per_hand_kg("Tricep Pushdown (Cable)", 45.0) == 45.0
 
 

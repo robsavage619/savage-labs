@@ -46,13 +46,15 @@ def test_multiple_exercises_keyed_separately(conn, seed, today: date) -> None:
     assert set(result) == {"Bench Press (Barbell)", "Squat (Barbell)"}
 
 
-def test_dumbbell_pair_is_halved_to_per_hand(conn, seed, today: date) -> None:
-    # Rob logs a hammer-curl pair as the combined total; the e1RM must be the
-    # per-hand figure, not the total (the "95 lb each hand" bug).
-    ex = "Hammer Curl (Dumbbell)"
-    seed.workout(days_ago(today, 4), ex, [(54.4, 10)])  # 120 lb total → 60 lb/hand
+def test_dumbbell_e1rm_uses_logged_weight_as_per_hand(conn, seed, today: date) -> None:
+    # Hevy logs the weight of ONE dumbbell, so the logged number already IS the
+    # per-hand load — e1RM must NOT halve it. A 20 lb lateral raise (9.07 kg)
+    # yields a per-hand e1RM of 20*1.4 lb; halving it to 10 lb/hand and
+    # prescribing 7.5 lb was the ceiling-corruption bug.
+    ex = "Lateral Raise (Dumbbell)"
+    seed.workout(days_ago(today, 4), ex, [(9.07, 12)])  # 20 lb dumbbells, per hand
     result = e1rm_by_exercise(conn, today)
-    expected_per_hand = (54.4 / 2) * (1 + 10 / 30)  # ~36.3 kg per hand
+    expected_per_hand = 9.07 * (1 + 12 / 30)  # ~12.7 kg = ~28 lb, NOT halved
     assert result[ex] == pytest.approx(expected_per_hand)
 
 

@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-12 — Hevy logs per-hand; load mechanics no longer halves
+
+**Context.** `load_mechanics.per_hand_kg` halved every dumbbell/cable-crossover lift on the premise (stated in its own docstring) that "Rob logs two-implement lifts as the COMBINED weight." That premise is false — Hevy logs the weight of a *single* implement (one dumbbell / one cable stack). The halving therefore corrupted every dumbbell ceiling: a real **20 lb Lateral Raise** (logged 20, done at RPE 7) was halved to a phantom "10 lb each hand", dropping its e1RM from 28 to 14 and prescribing an absurd **7.5 lb** — flagged by Rob against a lift he moves easily. Audit found **12 exercises** being wrongly halved (lateral raise, hammer curl, rear-delt fly, split squat, shrug, incline curl, crossovers, RDLs); for 11 of 12 the halved figure was physically too light to be real.
+
+**Decision.** `per_hand_kg` is now the **identity** — the logged Hevy weight already IS the per-hand load. The `LoadType` taxonomy is retained for the per-hand *label* ("each hand") only, not for any weight math. `e1rm_by_exercise` was already Hevy-only, so no source mixing. The working-weights display shows the physical whole-body total as "N lbs total both hands" (2× per-hand) instead of the old (wrong) parenthetical.
+
+**Why.** The logged number and the e1RM/ceiling must share one unit; Hevy's unit is per-hand, so any conversion is a corruption. Halving "down" felt safe (a low ceiling can't prescribe an unsafe load) but silently *under*-trained Rob on every dumbbell lift — the opposite of the training goal.
+
+**Consequences.** Tests updated in `test_load_mechanics.py` and `test_e1rm_by_exercise.py` (the old `test_dumbbell_pair_is_halved` asserted the bug). CLAUDE.md invariant corrected. **Exposed a separate, pre-existing bug** the halving had been masking: contaminated all-time max rows now show as physically-impossible per-hand dumbbell loads — **Hammer Curl (Dumbbell) 170**, **Romanian Deadlift (Dumbbell) 150** — inflating those two ceilings. These are bad data rows (no such dumbbells exist), pending Rob's confirmation on whether RDL is logged as a total, then quarantine/correction. Cable Fly 160 is a plausible cable-stack value and left as-is.
+
+---
+
 ## 2026-07-12 — Illness gate requires corroboration (allergy vs infection)
 
 **Context.** `_gates` capped intensity to LOW whenever `skin_temp_delta ≥ 0.9°F` **alone**, and downgraded to MODERATE on `respiratory_rate_delta ≥ 1.0` alone. For a chronic allergic-rhinitis + asthma athlete (Rob, on year-round grass SLIT), those two signals are inflated by H1-mediated peripheral vasodilation and sleep-disordered breathing **without systemic infection**. On Rob's own history the skin-temp gate fired on **~15–20% of all days**, and **~52% of the days it fired were GREEN-recovery days** — the athlete told to go easy on a lone, confounded signal. The wearable literature agrees single-model illness detection is low-specificity: a validated RHR+RR+HRV algorithm had a **4–10% positive predictive value**, with exercise/poor-sleep/stress logged as false-positive drivers (grounded in `savage_vault/wiki/allergic-rhinitis-confounds-recovery-metrics.md`).
