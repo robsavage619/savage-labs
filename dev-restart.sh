@@ -56,12 +56,14 @@ WAL="$CANONICAL_DATA/shc.duckdb.wal"
 if [[ -f "$DB" ]]; then
   (
     cd "$WT/backend"
-    export _SHC_DB="$DB" _SHC_WAL="$WAL"
+    export _SHC_DB="$DB"
     uv run python - <<'PYEOF'
-import duckdb, os, sys
+import os
+import sys
+
+import duckdb
 
 db  = os.environ["_SHC_DB"]
-wal = os.environ["_SHC_WAL"]
 
 try:
     conn = duckdb.connect(db)
@@ -69,9 +71,8 @@ try:
     conn.close()
     print("  WAL checkpointed")
 except Exception as e:
-    print(f"  WAL replay failed ({e}); removing stale WAL", file=sys.stderr)
-    if os.path.exists(wal):
-        os.unlink(wal)
+    print(f"  WAL checkpoint failed ({e}); refusing to delete WAL", file=sys.stderr)
+    sys.exit(1)
 PYEOF
   )
 fi
@@ -105,24 +106,42 @@ if [[ ! -d "$WT/frontend/node_modules" ]]; then
 fi
 
 # ── Start backend ─────────────────────────────────────────────────────────────
-(cd "$WT/backend" && nohup uv run uvicorn shc.api.main:app \
-  --host 0.0.0.0 --port 8000 --reload \
-  --log-config ../logging.yaml \
-  > "$CANONICAL_DATA/logs/api.log" 2>&1 &)
-echo "  API PID $!"
+(cd "$WT/backend" && {
+  nohup uv run uvicorn shc.api.main:app \
+    --host 0.0.0.0 --port 8000 --reload \
+    --log-config ../logging.yaml \
+    </dev/null > "$CANONICAL_DATA/logs/api.log" 2>&1 &
+  launch_pid=$!
+  echo $launch_pid > "$CANONICAL_DATA/logs/api.pid"
+})
+API_LAUNCH_PID=$(cat "$CANONICAL_DATA/logs/api.pid")
+echo "  API launch PID $API_LAUNCH_PID"
 
 # ── Start frontend ────────────────────────────────────────────────────────────
-(cd "$WT/frontend" && nohup npm run dev > "$CANONICAL_DATA/logs/web.log" 2>&1 &)
-echo "  Web PID $!"
+(cd "$WT/frontend" && {
+  nohup npm run dev </dev/null > "$CANONICAL_DATA/logs/web.log" 2>&1 &
+  launch_pid=$!
+  echo $launch_pid > "$CANONICAL_DATA/logs/web.pid"
+})
+WEB_LAUNCH_PID=$(cat "$CANONICAL_DATA/logs/web.pid")
+echo "  Web launch PID $WEB_LAUNCH_PID"
 
 # Wait for ports
 for i in {1..20}; do
   sleep 1
   API=$(lsof -ti :8000 2>/dev/null | head -1)
   WEB=$(lsof -ti :3000 2>/dev/null | head -1)
-  [[ -n "$API" && -n "$WEB" ]] && break
+  API_OK=$(curl -sf http://127.0.0.1:8000/api/state/today >/dev/null 2>&1 && echo yes || true)
+  WEB_OK=$(curl -sf http://127.0.0.1:3000/ >/dev/null 2>&1 && echo yes || true)
+  [[ -n "$API" && -n "$WEB" && "$API_OK" == yes && "$WEB_OK" == yes ]] && break
 done
 
 echo ""
+if [[ -z "$API" || -z "$WEB" || "$API_OK" != yes || "$WEB_OK" != yes ]]; then
+  echo "✗ SHC restart failed"
+  echo "  API log: $CANONICAL_DATA/logs/api.log"
+  echo "  Web log: $CANONICAL_DATA/logs/web.log"
+  exit 1
+fi
 echo "✓ API  → http://127.0.0.1:8000  (PID $API)"
 echo "✓ Web  → http://localhost:3000   (PID $WEB)"

@@ -157,8 +157,10 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     prior_plan: dict | None = None
     if prior_plan_row:
         try:
-            prior_plan = json.loads(prior_plan_row[1])
-            prior_plan["_date"] = str(prior_plan_row[0])
+            decoded = json.loads(prior_plan_row[1])
+            if isinstance(decoded, dict):
+                prior_plan = decoded
+                prior_plan["_date"] = str(prior_plan_row[0])
         except (json.JSONDecodeError, TypeError):
             prior_plan = None
     adherence_row = conn.execute(
@@ -228,7 +230,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "- **PER-HAND LOADS**: for dumbbell and cable-crossover lifts, every "
         "weight here is the load in ONE hand (what you physically pick up), NOT "
         "the combined total. Prescribe `weight_lbs` as the per-hand number for "
-        "these lifts and say so in the notes (e.g. \"55 lb each hand\"). The e1RM "
+        'these lifts and say so in the notes (e.g. "55 lb each hand"). The e1RM '
         "and ceiling above are already per-hand, so compare like with like."
     )
 
@@ -244,7 +246,9 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         log.debug("experiment priors unavailable: %s", _exc)
         _priors = []
     if _priors:
-        lines.append("\n## CONFIRMED PERSONAL EXPERIMENTS (n-of-1, causal — confirmed on your own data)")
+        lines.append(
+            "\n## CONFIRMED PERSONAL EXPERIMENTS (n-of-1, causal — confirmed on your own data)"
+        )
         for _p in _priors:
             lines.append(
                 f"- {_p['hypothesis']} → {_p['effect']:+g}% "
@@ -412,10 +416,12 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         if e1rm_kg:
             e1rm_lbs = round(e1rm_kg * 2.20462, 1)
             ceiling_lbs = round(e1rm_kg * (cap_pct / 100) / (1 + 8 / 30) * 2.20462, 1)
-            extra = f" · e1RM ~{e1rm_lbs} · today ≤{ceiling_lbs} lbs @8"
+            weight_note = f" · e1RM ~{e1rm_lbs} · today ≤{ceiling_lbs} lbs @8"
         else:
-            extra = " · e1RM n/a — set load by feel to RPE on first set"
-        lines.append(f"- {ex}: {lbs} lbs{unit_sfx}{total_sfx} ({ph_kg:.1f} kg) [{src}]{extra}")
+            weight_note = " · e1RM n/a — set load by feel to RPE on first set"
+        lines.append(
+            f"- {ex}: {lbs} lbs{unit_sfx}{total_sfx} ({ph_kg:.1f} kg) [{src}]{weight_note}"
+        )
     if len(ww_rows) > ww_limit:
         lines.append(
             f"  ... {len(ww_rows) - ww_limit} more truncated "

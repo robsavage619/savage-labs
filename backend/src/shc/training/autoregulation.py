@@ -35,6 +35,8 @@ from datetime import date, timedelta
 import duckdb
 
 from shc.training.mesocycle import (
+    MesocycleState,
+    VolumeTarget,
     _iso_week_start,
     active_mesocycle,
     score_exercise,
@@ -200,7 +202,9 @@ def _recent_soreness(conn: duckdb.DuckDBPyConnection, days: int = 7) -> dict[str
     return {m: sum(v) / len(v) for m, v in acc.items() if v}
 
 
-def _muscle_performance(conn: duckdb.DuckDBPyConnection, muscle: str, recency_weeks: int = 12) -> int | None:
+def _muscle_performance(
+    conn: duckdb.DuckDBPyConnection, muscle: str, recency_weeks: int = 12
+) -> int | None:
     """Set-weighted central tendency of Israetel perf scores for a muscle.
 
     Averages the perf score across exercises whose ``primary_muscle`` is
@@ -568,6 +572,9 @@ def _decide(
     target = max(cur - MAX_WEEKLY_CUT, min(add_ceiling, target))
     delta = target - cur
     action = "add" if delta > 0 else "cut" if delta < 0 else "hold"
+    if cur < mev and target == mev and not hold_below_mev:
+        reason = "below MEV → initialize at minimum productive volume"
+        hedge_note = ""
 
     return MusclePrescription(
         muscle=muscle,
@@ -575,7 +582,12 @@ def _decide(
         target_sets=target,
         delta=delta,
         action=action,
-        reason=reason + _src_tag() + hedge_note,
+        reason=(
+            reason
+            + _src_tag()
+            + hedge_note
+            + f" [final weekly target: {round(current, 1):g}→{target} sets ({delta:+d})]"
+        ),
         emphasis=emphasis,
         landmark_source=landmark_source,
         confidence=round(confidence, 2),
@@ -956,7 +968,7 @@ def _session_split(
             "weekday": "Tue",              # real training day
             "region": "upper" | "lower",
             "cap": PER_SESSION_SET_CAP,    # per-muscle ceiling to enforce
-            "total_sets": int,             # sum across muscles this session
+            "credited_muscle_sets": int,  # volume credit; not physical exercise sets
             "muscles": [{"muscle": str, "sets": int, "over_cap": bool}, ...],
         }
 
@@ -1002,7 +1014,7 @@ def _session_split(
                 "weekday": m["weekday"],
                 "region": m["region"],
                 "cap": PER_SESSION_SET_CAP,
-                "total_sets": sum(e["sets"] for e in entries),
+                "credited_muscle_sets": sum(e["sets"] for e in entries),
                 "muscles": entries,
             }
         )
@@ -1107,6 +1119,68 @@ def _rpe_drift_factor(
     return max(0.5, raw)
 
 
+def _weekly_deload_context(
+    conn: duckdb.DuckDBPyConnection,
+) -> tuple[
+    MesocycleState | None,
+    dict[str, VolumeTarget],
+    list[MuscleVolume],
+    dict[str, int | None],
+    dict,
+]:
+    """Compute the shared calendar/systemic deload decision and its inputs."""
+    state = active_mesocycle(conn)
+    meso_id = state.id if state else ""
+    this_week = _iso_week_start(date.today())
+    targets = volume_targets(conn, meso_id)
+    actuals = weekly_muscle_volume(conn, this_week)
+    report = build_muscle_report(actuals, targets)
+    targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
+    perfs = {r.muscle: _muscle_performance(conn, r.muscle) for r in targeted}
+
+    from shc.metrics import _deload_in_cooldown
+    from shc.training.self_learning import read_deload_threshold
+
+    signal_deload = deload_check(perfs, targeted, threshold=read_deload_threshold(conn))
+    if signal_deload["recommended"] and _deload_in_cooldown(conn, date.today()):
+        signal_deload = {
+            **signal_deload,
+            "recommended": False,
+            "reason": "signal deload suppressed during post-deload cooldown",
+        }
+
+    is_calendar = bool(state and state.is_deload_week)
+    is_signal = bool(signal_deload["recommended"])
+    if is_calendar and is_signal:
+        deload_reason = "both"
+    elif is_calendar:
+        deload_reason = "calendar"
+    elif is_signal:
+        deload_reason = "signal"
+    else:
+        deload_reason = None
+    deload = {
+        **signal_deload,
+        "recommended": is_calendar or is_signal,
+        "deload_reason": deload_reason,
+        "reason": (
+            signal_deload["reason"]
+            if is_signal
+            else (
+                f"calendar deload — week {state.week_number} exceeds planned {state.planned_weeks}"
+                if is_calendar and state
+                else signal_deload["reason"]
+            )
+        ),
+    }
+    return state, targets, report, perfs, deload
+
+
+def weekly_deload_status(conn: duckdb.DuckDBPyConnection) -> dict:
+    """Return the canonical weekly calendar/systemic deload decision."""
+    return _weekly_deload_context(conn)[4]
+
+
 def weekly_prescription(
     conn: duckdb.DuckDBPyConnection,
     propranolol_day: bool = False,
@@ -1121,53 +1195,13 @@ def weekly_prescription(
     unreliable on dosed days) and restores full RPE-drift authority to the
     volume decision.
     """
-    state = active_mesocycle(conn)
+    state, targets, report, perfs, deload = _weekly_deload_context(conn)
     meso_id = state.id if state else ""
     this_week = _iso_week_start(date.today())
-
-    targets = volume_targets(conn, meso_id)
-    actuals = weekly_muscle_volume(conn, this_week)
-    report = build_muscle_report(actuals, targets)
     soreness = _recent_soreness(conn)
     conditioning_acwr = _conditioning_pressure(conn, use_rpe_only=propranolol_day)
 
     targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
-    perfs = {r.muscle: _muscle_performance(conn, r.muscle) for r in targeted}
-    from shc.training.self_learning import read_deload_threshold
-
-    deload_threshold = read_deload_threshold(conn)
-    signal_deload = deload_check(perfs, targeted, threshold=deload_threshold)
-
-    # Unify signal-based and calendar-based deloads under a single OR gate.
-    # Either triggers a deload; the distinction is preserved in deload_reason
-    # so the planner can apply the correct volume reduction depth.
-    is_deload_week = state.is_deload_week if state else False
-    signal_based = signal_deload["recommended"]
-    is_deloading = is_deload_week or signal_based
-    if is_deloading:
-        if is_deload_week and signal_based:
-            deload_reason_str = "both"
-        elif is_deload_week:
-            deload_reason_str = "calendar"
-        else:
-            deload_reason_str = "signal"
-    else:
-        deload_reason_str = None
-
-    deload = {
-        **signal_deload,
-        "recommended": is_deloading,
-        "deload_reason": deload_reason_str,
-        "reason": (
-            signal_deload["reason"]
-            if signal_based
-            else (
-                f"calendar deload — week {state.week_number} exceeds planned {state.planned_weeks}"
-                if is_deload_week and state
-                else signal_deload["reason"]
-            )
-        ),
-    }
 
     # Protein gate: flag if recent intake is inadequate for hypertrophy.
     protein = _protein_gate(conn)
@@ -1378,8 +1412,11 @@ def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
                 for e in sess["muscles"]
             )
             day = sess.get("weekday", "")
-            total = sess.get("total_sets", "")
-            lines.append(f"- **{sess['session']} ({day})** [{total} sets]: {entries}")
+            credited = sess.get("credited_muscle_sets", "")
+            lines.append(
+                f"- **{sess['session']} ({day})** "
+                f"[{credited} credited muscle-sets; compounds overlap]: {entries}"
+            )
 
     # Protein gate.
     pg = rx.protein_gate

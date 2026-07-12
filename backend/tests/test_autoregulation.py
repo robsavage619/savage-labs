@@ -108,6 +108,8 @@ def test_below_mev_seeds_to_mev_in_one_step():
     rx = _d("chest", current=2, perf=None, mev=10, mav=16, mrv=22)
     assert rx.action == "add"
     assert rx.target_sets == 10  # 2 → MEV(10) in one step
+    assert "initialize at minimum productive volume" in rx.reason
+    assert "final weekly target: 2→10 sets (+8)" in rx.reason
 
 
 def test_above_mev_ramp_still_capped_at_two():
@@ -479,6 +481,14 @@ def test_session_split_respects_10_set_ceiling() -> None:
     for sess in split:
         for entry in sess["muscles"]:
             assert entry["sets"] <= 10, f"{sess['session']} has {entry['sets']} biceps sets > 10"
+
+
+def test_session_split_does_not_label_credited_volume_as_physical_sets() -> None:
+    rx = [_make_rx("biceps", 12), _make_rx("chest", 10)]
+    split = _session_split(rx)
+
+    assert all("total_sets" not in session for session in split)
+    assert all("credited_muscle_sets" in session for session in split)
 
 
 def test_session_split_zero_target_excluded() -> None:

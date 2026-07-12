@@ -117,6 +117,7 @@ class RecoveryMetrics:
 
 @dataclass
 class SleepMetrics:
+    last_date: str | None = None
     last_hours: float | None = None
     avg_7d: float | None = None
     consistency_stdev_7d: float | None = None
@@ -809,6 +810,7 @@ def _sleep(conn, today: date) -> SleepMetrics:
     nights = [by_night[k] for k in sorted(by_night.keys())]
     last = nights[-1]
 
+    m.last_date = str(last[0])
     m.last_hours = round(float(last[1]), 2) if last[1] is not None else None
     sws, rem, light, awake = last[2], last[3], last[4], last[5]
     # Fallback: parse stages_json if dedicated columns are null (older rows).
@@ -1407,6 +1409,10 @@ def _gates(
     whoop_stale = (
         rec.score_date is not None and (date.today() - date.fromisoformat(rec.score_date)).days > 2
     )
+    sleep_stale = (
+        sleep.last_date is not None
+        and (date.today() - date.fromisoformat(sleep.last_date)).days > 2
+    )
 
     # Hard rest gates.
     if whoop_stale:
@@ -1475,22 +1481,31 @@ def _gates(
     # marker is surfaced but only ≥2 concurrent markers — a genuinely fragmented
     # night relative to his baseline — cap intensity.
     sleep_flags: list[str] = []
-    if sleep.sleep_cycle_count_last is not None and sleep.sleep_cycle_count_last < cycle_threshold:
+    if (
+        not sleep_stale
+        and sleep.sleep_cycle_count_last is not None
+        and sleep.sleep_cycle_count_last < cycle_threshold
+    ):
         sleep_flags.append(
             f"only {sleep.sleep_cycle_count_last} sleep cycles (personal floor "
             f"{cycle_threshold:.1f})"
         )
-    if sleep.efficiency_pct_last is not None and sleep.efficiency_pct_last < 75:
+    if not sleep_stale and sleep.efficiency_pct_last is not None and sleep.efficiency_pct_last < 75:
         sleep_flags.append(f"sleep efficiency {sleep.efficiency_pct_last:.0f}% < 75%")
     if (
-        sleep.disturbance_count_last is not None
+        not sleep_stale
+        and sleep.disturbance_count_last is not None
         and sleep.disturbance_count_last >= disturbance_threshold
     ):
         sleep_flags.append(
             f"disturbances {sleep.disturbance_count_last} ≥ {disturbance_threshold:.1f} "
             "(personal baseline)"
         )
-    if sleep.performance_pct_last is not None and sleep.performance_pct_last < 60:
+    if (
+        not sleep_stale
+        and sleep.performance_pct_last is not None
+        and sleep.performance_pct_last < 60
+    ):
         sleep_flags.append(f"sleep performance {sleep.performance_pct_last:.0f}% < 60%")
     if len(sleep_flags) >= 2:
         if g.max_intensity == "high":
@@ -2023,6 +2038,23 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
     gates = _gates(
         rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift, conn=conn
     )
+    recovery_missing = (
+        rec.score_date is None and rec.score is None and rec.hrv_ms is None and rec.rhr is None
+    )
+    if recovery_missing and gates.max_intensity == "high":
+        gates.max_intensity = "moderate"
+        gates.reasons.insert(
+            0,
+            "Recovery data unavailable — cap intensity MODERATE until recovery is verified manually",
+        )
+    from shc.training.autoregulation import weekly_deload_status
+
+    weekly_deload = weekly_deload_status(conn)
+    if weekly_deload.get("recommended"):
+        gates.deload_required = True
+        gates.deload_reason = str(weekly_deload.get("reason") or "weekly fatigue deload")
+        if gates.deload_reason not in gates.reasons:
+            gates.reasons.append(gates.deload_reason)
     freshness = _freshness(conn, today, rec, sleep, load)
 
     body_comp = _body_composition(conn, today)

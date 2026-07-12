@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from shc.metrics import compute_daily_state
 
@@ -12,16 +12,25 @@ def days_ago(n: int) -> date:
 
 # ── pipeline assembly ────────────────────────────────────────────────────────
 
+
 def test_empty_db_returns_well_formed_state(conn) -> None:
     """The whole pipeline runs and serializes on an empty DB without crashing."""
     state = compute_daily_state(conn)
     assert isinstance(state, dict)
-    for section in ("recovery", "sleep", "training_load", "checkin",
-                    "readiness", "gates", "freshness"):
+    for section in (
+        "recovery",
+        "sleep",
+        "training_load",
+        "checkin",
+        "readiness",
+        "gates",
+        "freshness",
+    ):
         assert section in state
-    # No data → no readiness score, default gates (high, no deload).
+    # No data → no readiness score and a conservative cap until signals arrive.
     assert state["readiness"]["score"] is None
-    assert state["gates"]["max_intensity"] == "high"
+    assert state["gates"]["max_intensity"] == "moderate"
+    assert any("Recovery data unavailable" in r for r in state["gates"]["reasons"])
     assert state["gates"]["deload_required"] is False
 
 
@@ -29,7 +38,41 @@ def test_as_of_is_today(conn) -> None:
     assert compute_daily_state(conn)["as_of"] == date.today().isoformat()
 
 
+def test_stale_sleep_does_not_cap_today(conn, seed) -> None:
+    conn.execute(
+        "INSERT INTO recovery (id, date, source, content_hash, score, hrv, rhr) "
+        "VALUES ('stale-sleep-test', ?, 'whoop', 'stale-sleep-test', 80, 120, 45)",
+        [days_ago(0)],
+    )
+    seed.sleep(
+        days_ago(5),
+        ts_in=datetime.combine(days_ago(6), time(23)),
+        ts_out=datetime.combine(days_ago(5), time(4)),
+        sleep_cycle_count=2,
+        sleep_efficiency_pct=60,
+        sleep_performance_pct=50,
+    )
+
+    state = compute_daily_state(conn)
+
+    assert state["sleep"]["last_date"] == days_ago(5).isoformat()
+    assert not any("Fragmented night" in r for r in state["gates"]["reasons"])
+
+
+def test_weekly_deload_is_promoted_into_daily_state(conn, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "shc.training.autoregulation.weekly_deload_status",
+        lambda *_args, **_kwargs: {"recommended": True, "reason": "calendar deload"},
+    )
+
+    state = compute_daily_state(conn)
+
+    assert state["gates"]["deload_required"] is True
+    assert state["gates"]["deload_reason"] == "calendar deload"
+
+
 # ── beta-blocker integration (med present AND taken) ─────────────────────────
+
 
 def test_beta_blocker_adjusted_requires_med_and_taken(conn, seed) -> None:
     seed.med("Propranolol (Inderal) 10 mg PRN", active=True)
@@ -53,6 +96,7 @@ def test_no_beta_blocker_adjust_without_checkin(conn, seed) -> None:
 
 
 # ── deload cooldown integration ──────────────────────────────────────────────
+
 
 def test_recent_deload_plan_suppresses_via_pipeline(conn, seed) -> None:
     """A real regression that would fire a deload is suppressed end-to-end when

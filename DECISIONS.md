@@ -144,3 +144,12 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 **Decision.** Always push directly to `main`. No feature branches except for Claude session worktrees (auto-created, throwaway).
 
 **Consequences.** Every session worktree starts behind main. Sync protocol in `CLAUDE.md` and `feedback_worktree_sync` memory.
+## 2026-07-12 — Fail conservative on missing/stale signals; one deload authority
+
+**Context.** The audit found three decision-path splits: no recovery data retained the default HIGH gate, stale sleep architecture could still cap a later day, and weekly/calendar deloads were not promoted into `DailyState`. The session allocator also labeled summed per-muscle credit as physical sets, producing apparent 60+ set sessions.
+
+**Decision.** Missing recovery caps intensity at MODERATE pending manual verification. Sleep architecture only gates when its source night is at most two days old. Weekly/calendar/systemic deload status is computed once and promoted into `DailyState.gates`, including the existing post-deload cooldown. Session allocation exposes `credited_muscle_sets`, never `total_sets`, because compound-set muscle credits overlap. Final volume rationales always state the actual post-floor target and delta.
+
+**Consequences.** Unknown data can no longer authorize HIGH work, stale sleep cannot suppress a current day, and every validator/persistence/UI consumer sees the same deload flag. Regression coverage lives in `test_compute_daily_state.py` and `test_autoregulation.py`.
+
+---
