@@ -7,12 +7,32 @@ import secrets
 import urllib.parse
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from shc.auth.keychain import load_token, store_token
 from shc.config import settings
 from shc.db.schema import write_ctx
+
+_LOCAL_TZ = ZoneInfo("America/Los_Angeles")
+
+
+def _utc_to_local_date(ts: str) -> str:
+    """Convert a UTC ISO-8601 timestamp to local calendar date (YYYY-MM-DD).
+
+    WHOOP timestamps are UTC; truncating to date directly puts late-evening
+    PDT sessions on tomorrow's date, skewing ACWR and zone calculations.
+    """
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(_LOCAL_TZ).date().isoformat()
+    except ValueError:
+        return ts[:10]
 
 
 class WHOOPAuthError(RuntimeError):
@@ -196,7 +216,7 @@ async def sync_recovery() -> int:
                 skipped_no_score += 1
                 continue
             external_id = str(r["cycle_id"])
-            rec_date = r.get("created_at", "")[:10]
+            rec_date = _utc_to_local_date(r.get("created_at", ""))
             row = {
                 "id": external_id,
                 "source": "whoop",
@@ -262,7 +282,7 @@ async def sync_sleep() -> int:
             row = {
                 "id": external_id,
                 "source": "whoop",
-                "night_date": r.get("start", "")[:10],
+                "night_date": _utc_to_local_date(r.get("start", "")),
                 "ts_in": r.get("start"),
                 "ts_out": r.get("end"),
                 "stages_json": str(ss),
@@ -530,7 +550,7 @@ async def sync_workout() -> int:
                     """,
                     {
                         "id": wid,
-                        "date": (r.get("start") or "")[:10],
+                        "date": _utc_to_local_date(r.get("start") or ""),
                         "modality": kind,
                         "duration_min": _duration_min(r.get("start"), r.get("end")),
                         "avg_hr": score.get("average_heart_rate"),

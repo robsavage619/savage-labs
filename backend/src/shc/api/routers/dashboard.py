@@ -2088,11 +2088,29 @@ async def body_steps(days: int = Query(90, gt=0, le=5000)) -> list[dict]:
     try:
         rows = conn.execute(
             """
-            SELECT ts::DATE AS day, SUM(value_num) AS steps
-            FROM measurements
-            WHERE metric = 'step_count' AND ts::DATE >= $since
-            GROUP BY day
-            ORDER BY day
+            -- Three sources can write step_count for the same day (apple XML intervals,
+            -- HAE daily total, Shortcuts snapshot). Pick the highest-priority source per
+            -- day to avoid triple-counting: apple intervals (1) > HAE total (2) > shortcut (3).
+            WITH ranked AS (
+                SELECT
+                    ts::DATE AS day,
+                    value_num,
+                    CASE
+                        WHEN external_id LIKE 'apple:%' THEN 1
+                        WHEN external_id LIKE 'hae:%'   THEN 2
+                        ELSE                                 3
+                    END AS prio
+                FROM measurements
+                WHERE metric = 'step_count' AND ts::DATE >= $since
+            ),
+            best_prio AS (
+                SELECT day, MIN(prio) AS prio FROM ranked GROUP BY day
+            )
+            SELECT r.day, SUM(r.value_num) AS steps
+            FROM ranked r
+            JOIN best_prio b ON r.day = b.day AND r.prio = b.prio
+            GROUP BY r.day
+            ORDER BY r.day
             """,
             {"since": since},
         ).fetchall()

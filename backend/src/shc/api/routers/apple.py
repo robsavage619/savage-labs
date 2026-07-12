@@ -4,6 +4,9 @@ import hashlib
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
+
+_LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
@@ -36,7 +39,8 @@ def _parse_ts(raw: str) -> str:
         try:
             dt = datetime.strptime(raw.strip(), fmt)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=UTC)
+                # Shortcuts sends local iPhone time (PDT/PST), not UTC.
+                dt = dt.replace(tzinfo=_LOCAL_TZ)
             return dt.isoformat()
         except ValueError:
             continue
