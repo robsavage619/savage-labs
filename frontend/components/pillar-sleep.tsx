@@ -155,8 +155,8 @@ export function PillarSleep() {
             tone={avgRemPct >= 20 && avgRemPct <= 28 ? "positive" : avgRemPct ? "neutral" : "neutral"}
           />
         </div>
-        <div title="Sleep efficiency = time asleep / time in bed. >85% is the target.">
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Eff.</p>
+        <div title="Sleep efficiency = time asleep / time in bed. >85% is the target. Falls back to overnight SpO₂ when efficiency data is unavailable.">
+          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{effLast != null ? "Eff." : spo2Last != null ? "SpO₂" : "Eff."}</p>
           <Metric
             value={effLast != null ? effLast.toFixed(0) : spo2Last != null ? spo2Last.toFixed(1) : "—"}
             unit={effLast != null || spo2Last != null ? "%" : undefined}

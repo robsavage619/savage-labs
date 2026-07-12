@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
 import { api } from "@/lib/api";
 import { reconciledVerdict } from "@/lib/readiness";
+import { localDate } from "@/lib/date";
 import { Eyebrow, Metric } from "@/components/ui/metric";
 
 function acwrZone(ratio: number | null | undefined): { label: string; tone: "positive" | "neutral" | "negative"; color: string } {
@@ -83,11 +84,14 @@ export function PillarTrainingLoad() {
 
   const trainStreak = useMemo(() => {
     if (!heatmap.data?.length) return null;
-    const sorted = [...heatmap.data].sort((a, b) => b.date.localeCompare(a.date));
+    const trainedDates = new Set(heatmap.data.map((d) => d.date));
     let streak = 0;
-    for (const day of sorted) {
-      if (day.intensity > 0) streak++;
-      else break;
+    const cur = new Date();
+    // If today has no training yet, start counting from yesterday.
+    if (!trainedDates.has(localDate(cur))) cur.setDate(cur.getDate() - 1);
+    while (trainedDates.has(localDate(cur))) {
+      streak++;
+      cur.setDate(cur.getDate() - 1);
     }
     return streak;
   }, [heatmap.data]);

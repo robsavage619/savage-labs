@@ -493,7 +493,7 @@ export function NextWorkoutPane() {
                     : data.source}
               </span>
               <span className="text-[10px] text-[var(--text-faint)]">
-                Goal: <span className="text-[var(--text-muted)] font-medium">strength + fat loss</span>
+                Goal: <span className="text-[var(--text-muted)] font-medium">build muscle · recomp</span>
               </span>
             </div>
           )}

@@ -141,7 +141,7 @@ export function WhoopVitals() {
               className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
               style={{ fontFamily: "var(--font-orbitron)" }}
             >
-              Cardio strain · 7d avg
+              Cardio volume · 7d avg
             </p>
             <div className="flex items-baseline gap-1">
               <span
