@@ -295,7 +295,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             f"(28d {rec['rhr_baseline_28d']:.0f}, {rec['rhr_elevated_pct']:+.1f}%)"
         )
     if rec["skin_temp_delta"] is not None:
-        lines.append(f"- Skin temp Δ {rec['skin_temp_delta']:+.2f}°C vs 28d baseline")
+        lines.append(f"- Skin temp Δ {rec['skin_temp_delta']:+.2f}°F vs 28d baseline")
 
     # Daily check-in inputs.
     chk_parts: list[str] = []

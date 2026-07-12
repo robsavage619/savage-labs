@@ -84,8 +84,8 @@ async def recovery_today() -> dict:
         "score": row[1],
         "hrv": row[2],
         "rhr": row[3],
-        "skin_temp": row[4],
-        "skin_temp_baseline_28d": round(base, 2) if base else None,
+        "skin_temp": round(float(row[4]) * 9 / 5 + 32, 2) if row[4] is not None else None,
+        "skin_temp_baseline_28d": round(float(base) * 9 / 5 + 32, 2) if base else None,
         # °F delta (×9/5, no offset for a difference) — matches DailyState and
         # the project's imperial-units invariant.
         "skin_temp_delta": round((float(row[4]) - base) * 9 / 5, 2)

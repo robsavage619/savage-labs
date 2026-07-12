@@ -301,6 +301,9 @@ async def sync_workouts() -> dict[str, int]:
         read_conn.close()
 
     cursor = row[0] if row and row[0] else None
+    # Capture before the sync so any events generated during the sync window
+    # are re-fetched next run (ON CONFLICT handles duplicates).
+    before_sync = datetime.now(UTC)
     synced = 0
     deleted = 0
 
@@ -363,7 +366,7 @@ async def sync_workouts() -> dict[str, int]:
                 cursor = EXCLUDED.cursor,
                 needs_reauth = FALSE
             """,
-            {"ts": datetime.now(UTC).isoformat(), "cursor": datetime.now(UTC).isoformat()},
+            {"ts": before_sync.isoformat(), "cursor": before_sync.isoformat()},
         )
 
     log.info("Hevy sync complete: %d synced, %d deleted", synced, deleted)

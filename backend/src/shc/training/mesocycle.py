@@ -173,7 +173,7 @@ def volume_targets(
         # If the fitted MRV is below 50% of the population MRV, flag as
         # undertrained — the fit is measuring habit, not physiology.
         if pop and vt.mrv < pop.mrv * 0.5:
-            targets[mg] = VolumeTarget(mg, vt.mev, vt.mav, vt.mrv, source="personal_floored")
+            targets[mg] = VolumeTarget(mg, pop.mev, pop.mav, pop.mrv, source="personal_floored")
         else:
             targets[mg] = vt
     return targets

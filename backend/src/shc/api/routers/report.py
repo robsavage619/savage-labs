@@ -87,7 +87,7 @@ SAY SO in the relevant section — never silently fabricate a number around miss
   • HRmax → max_hr_measured if present, else **Tanaka (208−0.7·age)** — NEVER 220−age.
   • Respiratory rate → **Bourdillon** illness sentinel (+~1 bpm = flag).
   • Deep sleep → **OSA-aware**: deep% weighs more than raw duration.
-  • ACWR → true **Gabbett** acute/chronic; >1.3 = reduce volume; >1.5 = cap LOW; >1.65 = rest.
+  • ACWR → true **Gabbett** acute/chronic; >1.5 = cap MODERATE; >1.8 = cap LOW; >2.0 = rest.
   • Readiness → weighted composite, β-blocker-reweighted when propranolol taken.
 
 ## Timing awareness — the API decides the MODE (do NOT re-infer it)

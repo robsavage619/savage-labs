@@ -338,6 +338,7 @@ _LEGS = (
     "quad",
     "calf",
     "step-up",
+    "step up",
     "adduct",
     "abduct",
     "thigh",
@@ -429,6 +430,9 @@ def muscle_group(exercise: str) -> str:
         return "legs"
     if any(k in e for k in _CORE):
         return "core"
+    # "rear delt fly" and "reverse fly" are PULL patterns despite "fly" in _PUSH.
+    if "rear delt" in e or ("reverse" in e and "fly" in e):
+        return "pull"
     # "row" is a PULL pattern — check it before _PUSH so a row whose name contains
     # a push keyword ("Chest Supported Row" → "chest") classifies as pull, not push,
     # and can't slip past a pull-rested gate. "Upright Row" is the lone exception
@@ -1531,7 +1535,8 @@ def _gates(
             if last_rpe is not None and last_rpe <= 6.5:
                 threshold -= 1
         if rest is not None and rest < threshold:
-            g.forbid_muscle_groups.append(grp)
+            if grp not in g.forbid_muscle_groups:
+                g.forbid_muscle_groups.append(grp)
             rpe_note = f" (last session avg RPE {last_rpe:.1f})" if last_rpe else ""
             reasons.append(f"{grp.title()} {rest}d ago — needs ≥{threshold}d rest{rpe_note}")
 

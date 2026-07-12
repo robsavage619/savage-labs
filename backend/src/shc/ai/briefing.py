@@ -418,7 +418,7 @@ def build_daily_context(conn) -> str:
         )
     if rec["skin_temp_delta"] is not None:
         temp_f = rec["skin_temp"] * 9 / 5 + 32
-        delta_f = rec["skin_temp_delta"] * 9 / 5
+        delta_f = rec["skin_temp_delta"]
         lines.append(f"Skin temp: {temp_f:.1f}°F (Δ {delta_f:+.1f}°F vs 28d)")
     if rec.get("spo2_pct") is not None:
         lines.append(f"Overnight SpO₂ (recovery): {rec['spo2_pct']:.1f}%")
