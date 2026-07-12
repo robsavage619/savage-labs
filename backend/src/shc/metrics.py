@@ -1274,6 +1274,45 @@ def _apply_band_loosen_down(personal: float, population: float) -> float:
     return min(personal, population)
 
 
+# Illness-gate corroboration thresholds. A skin-temp / respiratory-rate rise is
+# used as an illness sentinel, but for someone with chronic allergic rhinitis +
+# asthma those signals are inflated by H1-mediated peripheral vasodilation and
+# sleep-disordered breathing WITHOUT systemic infection — so a lone-signal cap
+# false-positives constantly (see wiki/allergic-rhinitis-confounds-recovery-metrics.md
+# and the 4-10% PPV of single-model wearable illness detection). Require an
+# independent signal to agree before capping; reserve a lone cap for a fever-range
+# spike no peripheral vasodilation can produce.
+_ILLNESS_CORROB_HRV_SIGMA = -1.0  # HRV suppressed beyond mild day-to-day noise
+_ILLNESS_CORROB_RECOVERY = 50.0  # WHOOP recovery clearly depressed (not just yellow)
+_ILLNESS_CORROB_RHR_PCT = 8.0  # RHR meaningfully elevated vs 28d baseline
+_GREEN_RECOVERY_MIN = 67.0  # WHOOP green floor — affirmative "recovered" evidence
+_SKIN_TEMP_FEVER_DELTA = 2.0  # °F rise too large to be peripheral vasodilation alone
+
+
+def _illness_gate_corroborated(rec: RecoveryMetrics) -> bool:
+    """Whether a skin-temp / resp-rate rise should be treated as possible illness.
+
+    Returns True (cap) when an independent signal corroborates infection — suppressed
+    HRV, depressed recovery, or elevated RHR — OR when recovery evidence is missing
+    (fail conservative). Returns False (don't cap) only when recovery is affirmatively
+    green with normal HRV: on such a day an isolated temp/RR bump is far more likely
+    allergy or environment than infection for a chronic-rhinitis athlete.
+    """
+    illness_signal = (
+        (rec.hrv_sigma is not None and rec.hrv_sigma < _ILLNESS_CORROB_HRV_SIGMA)
+        or (rec.score is not None and rec.score < _ILLNESS_CORROB_RECOVERY)
+        or (rec.rhr_elevated_pct is not None and rec.rhr_elevated_pct >= _ILLNESS_CORROB_RHR_PCT)
+    )
+    if illness_signal:
+        return True
+    recovery_affirmatively_green = (rec.score is not None and rec.score >= _GREEN_RECOVERY_MIN) or (
+        rec.score is None
+        and rec.hrv_sigma is not None
+        and rec.hrv_sigma >= _ILLNESS_CORROB_HRV_SIGMA
+    )
+    return not recovery_affirmatively_green
+
+
 def _gates(
     rec: RecoveryMetrics,
     sleep: SleepMetrics,
@@ -1380,13 +1419,25 @@ def _gates(
             g.max_intensity = "low"
             reasons.append(f"HRV {rec.hrv_sigma:+.2f}σ → red — cap intensity LOW")
         if rec.skin_temp_delta is not None and rec.skin_temp_delta >= 0.9:
-            # skin_temp_delta is already °F. 0.9°F ≈ 0.5°C — the illness/fever
-            # threshold. Only elevated (positive) deltas signal risk; negative
-            # deltas are normal (cooler environment, less peripheral blood flow).
-            g.max_intensity = "low"
-            reasons.append(
-                f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline — possible illness, Z2 only"
-            )
+            # skin_temp_delta is already °F. 0.9°F ≈ 0.5°C. Only elevated (positive)
+            # deltas signal risk. But a lone skin-temp rise is heavily confounded by
+            # allergic vasodilation/environment for a chronic-rhinitis athlete, so it
+            # only caps when a fever-range spike OR an independent illness signal
+            # corroborates it (see _illness_gate_corroborated).
+            fever_range = rec.skin_temp_delta >= _SKIN_TEMP_FEVER_DELTA
+            if fever_range or _illness_gate_corroborated(rec):
+                g.max_intensity = "low"
+                cause = "fever-range spike" if fever_range else "corroborated by HRV/RHR/recovery"
+                reasons.append(
+                    f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline "
+                    f"({cause}) — possible illness, Z2 only"
+                )
+            else:
+                reasons.append(
+                    f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline but recovery green "
+                    "& HRV normal — reads as allergy/environment, not illness; not capping "
+                    "[allergic-rhinitis-confounds-recovery-metrics]"
+                )
         if rec.spo2_pct is not None and rec.spo2_pct < 92.0:
             # Clinical threshold for sleep-disordered breathing / hypoxia overnight.
             g.max_intensity = "low" if g.max_intensity == "high" else g.max_intensity
@@ -1399,17 +1450,20 @@ def _gates(
     # leading indicator for viral illness. +1 bpm above 28d baseline = high
     # specificity early warning; +0.5 bpm = elevated suspicion.
     if rec.respiratory_rate_delta is not None:
-        if rec.respiratory_rate_delta >= 1.0:
+        # Same allergy confound as skin temp: nasal congestion + sleep-disordered
+        # breathing raise the sleeping RR without infection. Only cap when an
+        # independent signal corroborates; otherwise surface it as a watch note.
+        if rec.respiratory_rate_delta >= 1.0 and _illness_gate_corroborated(rec):
             if g.max_intensity == "high":
                 g.max_intensity = "moderate"
             reasons.append(
                 f"Resp rate +{rec.respiratory_rate_delta:.1f} bpm vs baseline — "
-                "early-warning illness signal, cap MODERATE"
+                "corroborated early-warning illness signal, cap MODERATE"
             )
         elif rec.respiratory_rate_delta >= 0.5:
             reasons.append(
                 f"Resp rate +{rec.respiratory_rate_delta:.1f} bpm vs baseline — "
-                "watch for additional illness signs"
+                "watch for additional illness signs (uncorroborated; may be allergy/congestion)"
             )
 
     # Sleep-architecture / quality caps. Every one of these markers is

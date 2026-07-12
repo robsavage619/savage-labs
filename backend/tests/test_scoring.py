@@ -13,11 +13,37 @@ from datetime import date, timedelta
 import pytest
 
 from shc.training.mesocycle import (
+    _drop_contaminated_e1rm,
     _score_from_trend,
     _trend_pct_per_week,
     backfill_weekly_e1rm,
     score_exercise,
 )
+
+
+# ── _drop_contaminated_e1rm ───────────────────────────────────────────────────
+
+
+def test_drop_contaminated_removes_high_outlier() -> None:
+    # A per-hand dumbbell curl (~49–67) with one combined-stack contaminant (152).
+    # The 152 must be dropped so it can't anchor the OLS slope steeply negative.
+    assert _drop_contaminated_e1rm([152.0, 49.0, 66.0, 66.0]) == [49.0, 66.0, 66.0]
+
+
+def test_drop_contaminated_removes_low_outlier() -> None:
+    # A per-side cable value logged against the combined-stack series.
+    assert _drop_contaminated_e1rm([133.0, 140.0, 45.0, 130.0]) == [133.0, 140.0, 130.0]
+
+
+def test_drop_contaminated_preserves_genuine_progression() -> None:
+    # 100→160 over a block sits within ±35% of its median — never dropped.
+    series = [100.0, 110.0, 125.0, 140.0, 160.0]
+    assert _drop_contaminated_e1rm(series) == series
+
+
+def test_drop_contaminated_noop_below_three_points() -> None:
+    # Too few points to establish a robust median — leave untouched.
+    assert _drop_contaminated_e1rm([152.0, 49.0]) == [152.0, 49.0]
 
 
 # ── _trend_pct_per_week ───────────────────────────────────────────────────────
@@ -117,6 +143,55 @@ def test_score_exercise_declining_returns_low_score(conn) -> None:
     result = score_exercise(conn, "Squat")
     assert result is not None
     assert result.perf_score <= 2, f"expected ≤2 for declining series, got {result.perf_score}"
+
+
+def _seed_e1rm_tonnage_weeks(conn, exercise, points, this_week) -> None:
+    """Seed weekly (e1rm_kg, tonnage_kg) pairs into completed weeks, oldest first."""
+    n = len(points)
+    for i, (e1rm, ton) in enumerate(points):
+        week = this_week - timedelta(weeks=n - i)
+        conn.execute(
+            """
+            INSERT INTO exercise_weekly_e1rm
+                (exercise, week_start, e1rm_kg, work_sets, weekly_tonnage_kg, computed_at)
+            VALUES (?, ?, ?, 5, ?, now())
+            ON CONFLICT (exercise, week_start) DO UPDATE SET
+                e1rm_kg = excluded.e1rm_kg,
+                weekly_tonnage_kg = excluded.weekly_tonnage_kg
+            """,
+            [exercise, week.isoformat(), e1rm, ton],
+        )
+
+
+def test_declining_e1rm_with_rising_tonnage_is_not_regression(conn) -> None:
+    # Rep-range shift into a hypertrophy block: e1RM falls (heavier low-rep → lighter
+    # high-rep) but volume-load climbs. Must NOT read as regression / trip a deload.
+    today = date.today()
+    this_week = _monday(today)
+    _seed_e1rm_tonnage_weeks(
+        conn,
+        "Iso-Lateral Row (Machine)",
+        [(174.0, 3480.0), (150.0, 4200.0), (140.0, 4900.0), (127.0, 5100.0)],
+        this_week,
+    )
+    result = score_exercise(conn, "Iso-Lateral Row (Machine)")
+    assert result is not None
+    assert result.perf_score >= 3, f"rep-range shift must not read as regressing, got {result.perf_score}"
+
+
+def test_declining_e1rm_with_falling_tonnage_is_real_regression(conn) -> None:
+    # Both e1RM and volume-load falling = genuine de-training. Deload signal preserved.
+    today = date.today()
+    this_week = _monday(today)
+    _seed_e1rm_tonnage_weeks(
+        conn,
+        "Bench Press (Barbell)",
+        [(100.0, 6000.0), (96.0, 5600.0), (92.0, 5100.0), (88.0, 4700.0)],
+        this_week,
+    )
+    result = score_exercise(conn, "Bench Press (Barbell)")
+    assert result is not None
+    assert result.perf_score <= 2, f"real regression must survive, got {result.perf_score}"
 
 
 def test_score_exercise_exactly_two_completed_weeks_returns_none(conn) -> None:

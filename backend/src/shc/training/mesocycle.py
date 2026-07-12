@@ -225,6 +225,35 @@ _EPLEY_REP_CAP = 12
 _CAPPED_E1RM = f"weight_kg * (1 + LEAST(reps, {_EPLEY_REP_CAP}) / 30.0)"
 
 
+# A true weekly-e1RM series moves gradually — even aggressive strength gain is a
+# few %/week. A point sitting >35% off the series' median is not physiology; it is
+# a load-logging artifact (a per-hand lift logged as combined-stack total, a Fitbod
+# import in different units, or a stray mis-typed weight). Left in, one such point
+# anchors a 12-week OLS slope steeply negative and reads a healthy muscle as
+# "regressing" — which is exactly what was falsely tripping the fatigue deload.
+_MAX_E1RM_MEDIAN_DEVIATION = 0.35
+
+
+def _drop_contaminated_e1rm(e1rms: list[float]) -> list[float]:
+    """Drop weekly e1RM points that deviate >35% from the series median.
+
+    Median is outlier-robust, so a minority of unit-inconsistent weeks doesn't move
+    the reference. Genuine progression (even 100→160 over a block sits within ±35%
+    of its median) survives untouched; only physiologically-impossible excursions —
+    the per-hand/total-load contamination — are removed before the trend is fit.
+    """
+    positive = [y for y in e1rms if y > 0]
+    if len(positive) < 3:
+        return e1rms
+    ordered = sorted(positive)
+    mid = len(ordered) // 2
+    median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+    if median <= 0:
+        return e1rms
+    lo, hi = median * (1 - _MAX_E1RM_MEDIAN_DEVIATION), median * (1 + _MAX_E1RM_MEDIAN_DEVIATION)
+    return [y for y in e1rms if lo <= y <= hi]
+
+
 def _trend_pct_per_week(e1rms: list[float]) -> float:
     """OLS slope of an e1RM series (oldest→newest) as % of its mean per week."""
     n = len(e1rms)
@@ -299,17 +328,34 @@ def score_exercise(
     n = len(history)
     window = 12 if n >= 12 else (9 if n >= 8 else 6)
     series = [h.e1rm_kg for h in history[-window:]]
-    pct_per_week = _trend_pct_per_week(series)
+    # Strip load-logging artifacts (per-hand vs combined-stack, unit drift) before
+    # fitting the trend — one contaminated point otherwise reads a healthy muscle as
+    # regressing and falsely trips the fatigue deload. If too few trustworthy weeks
+    # remain, the trend is unknowable → return None rather than a spurious call.
+    clean = _drop_contaminated_e1rm(series)
+    if len(clean) < 3:
+        return None
+    pct_per_week = _trend_pct_per_week(clean)
     perf_score, trend = _score_from_trend(pct_per_week)
 
-    # Tonnage blend: flat e1RM + rising volume-load = hypertrophy progress, not stall.
-    if perf_score == 3:
-        tonnage_series = [h.tonnage_kg for h in history[-6:] if h.tonnage_kg is not None]
-        if len(tonnage_series) >= 3:
-            tonnage_pct = _trend_pct_per_week(tonnage_series)
-            if tonnage_pct >= 0.5:
-                perf_score = 4
-                trend = "progressing"
+    # Estimated-1RM is rep-range-dependent: shifting from a low-rep strength block
+    # into a higher-rep hypertrophy block drops the Epley e1RM even as the muscle
+    # does MORE total work. So an e1RM decline is only real regression when weekly
+    # volume-load (tonnage) fell too. Corroborate every call against the tonnage
+    # trend over the same window — the primary progress signal for a hypertrophy
+    # goal is volume-load, not a rep-capped 1RM proxy.
+    tonnage_series = [h.tonnage_kg for h in history[-window:] if h.tonnage_kg is not None]
+    tonnage_pct = _trend_pct_per_week(tonnage_series) if len(tonnage_series) >= 3 else None
+    if tonnage_pct is not None:
+        if perf_score == 3 and tonnage_pct >= 0.5:
+            # Flat e1RM + rising volume-load = hypertrophy progress, not a stall.
+            perf_score, trend = 4, "progressing"
+        elif perf_score <= 2 and tonnage_pct >= -0.5:
+            # e1RM "regressing" but volume-load holding or rising: this is a
+            # rep-range / periodization shift, NOT strength loss. Reclassify so it
+            # cannot falsely trip the fatigue deload. Genuine regression (both
+            # e1RM AND tonnage falling) is left untouched.
+            perf_score, trend = (4, "progressing") if tonnage_pct >= 0.5 else (3, "stalled")
 
     latest = history[-1]
     return ProgressionScore(

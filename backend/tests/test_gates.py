@@ -143,11 +143,54 @@ def test_no_deload_when_regression_none() -> None:
 # ── a couple of sanity checks on the legitimate intensity gates ──────────────
 
 
-def test_skin_temp_elevation_caps_low() -> None:
+def test_skin_temp_elevation_caps_low_when_recovery_data_absent() -> None:
+    # No recovery evidence to disambiguate allergy from illness → fail conservative.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    rec.skin_temp_delta = 1.0  # °C above baseline
+    rec.skin_temp_delta = 1.0
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "low"
+
+
+def test_skin_temp_elevation_does_not_cap_on_green_recovery() -> None:
+    # Chronic-rhinitis confound: an isolated skin-temp bump on a green-recovery,
+    # normal-HRV day reads as allergy/environment, not illness — must NOT cap.
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec.skin_temp_delta = 1.1
+    rec.score = 68.0
+    rec.hrv_sigma = -0.5
+    rec.rhr_elevated_pct = 5.9
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "high"
+
+
+def test_skin_temp_fever_range_caps_even_on_green() -> None:
+    # A fever-range spike is too large to be peripheral vasodilation — caps regardless.
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec.skin_temp_delta = 2.3
+    rec.score = 70.0
+    rec.hrv_sigma = 0.0
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "low"
+
+
+def test_skin_temp_elevation_caps_when_corroborated_by_hrv() -> None:
+    # Skin-temp rise + suppressed HRV = genuine illness pattern → cap.
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec.skin_temp_delta = 1.1
+    rec.score = 45.0
+    rec.hrv_sigma = -1.6
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "low"
+
+
+def test_resp_rate_alone_does_not_cap_on_green_recovery() -> None:
+    # Elevated overnight RR (congestion/SDB) without corroboration must not downgrade.
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec.respiratory_rate_delta = 1.2
+    rec.score = 70.0
+    rec.hrv_sigma = -0.3
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "high"
 
 
 def test_illness_flag_forces_rest() -> None:

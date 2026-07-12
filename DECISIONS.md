@@ -6,6 +6,28 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-12 — Illness gate requires corroboration (allergy vs infection)
+
+**Context.** `_gates` capped intensity to LOW whenever `skin_temp_delta ≥ 0.9°F` **alone**, and downgraded to MODERATE on `respiratory_rate_delta ≥ 1.0` alone. For a chronic allergic-rhinitis + asthma athlete (Rob, on year-round grass SLIT), those two signals are inflated by H1-mediated peripheral vasodilation and sleep-disordered breathing **without systemic infection**. On Rob's own history the skin-temp gate fired on **~15–20% of all days**, and **~52% of the days it fired were GREEN-recovery days** — the athlete told to go easy on a lone, confounded signal. The wearable literature agrees single-model illness detection is low-specificity: a validated RHR+RR+HRV algorithm had a **4–10% positive predictive value**, with exercise/poor-sleep/stress logged as false-positive drivers (grounded in `savage_vault/wiki/allergic-rhinitis-confounds-recovery-metrics.md`).
+
+**Decision.** A skin-temp / resp-rate rise caps intensity only when **corroborated** by an independent signal — HRV < −1.0σ, WHOOP recovery < 50, or RHR ≥ 8% above baseline — OR when recovery evidence is absent (fail conservative). A **fever-range spike (≥2.0°F)** still caps standalone (no peripheral vasodilation produces that). On a green-recovery, normal-HRV day, an isolated temp/RR bump reads as allergy/environment and does **not** cap. Implemented as `_illness_gate_corroborated(rec)` in `metrics.py`.
+
+**Why.** The gate's job is to stop training for *infection*, not for allergic inflammation — which sports-medicine consensus (ARIA/EAACI/IOC) treats as a train-through condition. A high-sensitivity/low-specificity lone-signal trip was systematically holding a recovered athlete back, contrary to the "train like an athlete, not a fragile 40-year-old" directive.
+
+**Consequences.** New tests in `test_gates.py` (green-day no-cap, fever-range still caps, HRV-corroborated caps, resp-rate no-cap on green). Missing-recovery-data still caps (conservative), so the fresh-user path is unchanged. Today (2026-07-12) this moved Rob from LOW → MODERATE on a green day.
+
+## 2026-07-12 — Progression trend is contamination- and rep-range-robust
+
+**Context.** The fatigue deload (`deload_check`) fires when ≥3 muscles read "regressing" (perf ≤ 2), where perf is an OLS slope of weekly estimated-1RM. Two artifacts drove a **~6-week false deload**: (1) load-logging contamination — a per-hand dumbbell lift logged as combined-stack total (e.g. a 130 lb "hammer curl") put one impossible point in the 12-week window and anchored the slope steeply negative; (2) rep-range periodization — shifting from a low-rep strength block into a higher-rep hypertrophy block mechanically lowers the Epley e1RM even as **volume-load rises** (Iso-Lateral Row: e1RM −27% while tonnage +46%). The controller read planned hypertrophy work as strength loss and prescribed a permanent deload.
+
+**Decision.** In `score_exercise`: (a) `_drop_contaminated_e1rm` removes weekly points >35% off the series median before the trend fit (physiologically-impossible excursions are logging artifacts, not physiology; genuine progression sits within ±35% of its median); if <3 trustworthy weeks remain, return None rather than a spurious call. (b) A "regressing" e1RM call is **corroborated against the tonnage trend** — real regression is e1RM down **and** volume-load down; e1RM down with tonnage flat/rising is a rep-range shift and is reclassified (not regressing).
+
+**Why.** For a hypertrophy-primary goal, weekly volume-load is the truer progress signal than a rep-capped 1RM proxy. A deload controller must not fire on its own measurement artifacts, and it especially must not use e1RM as the trigger while prescribing an e1RM reduction as the treatment (a self-perpetuating loop).
+
+**Consequences.** New tests in `test_scoring.py` (contamination drop preserves genuine progression; declining-e1RM-with-rising-tonnage is not regression; both-falling is). Live effect: the false deload cleared (24 progressing / 8 genuinely regressing / 4 excluded) and the prescription returned to accumulation. Genuine regression (both signals down) still fires the deload.
+
+---
+
 ## 2026-07-10 — Emphasis lower-body muscles keep an MEV floor under conditioning interference
 
 **Context.** `weekly_prescription`'s `leg_interference` branch holds every `LOWER_BODY` muscle in place when conditioning ACWR > 1.5 (pickleball/cardio load debits leg recovery). That branch was evaluated before the MEV-floor branch, and the floor clamp explicitly listed `leg_interference` as a "hold below MEV" case. So glutes — an ★ emphasis/lagging muscle with `perf=None`, ~9% confidence, and `cur=0` — got frozen at 0 sets for any week ACWR > 1.5. Given Rob plays 1000+ min/mo, that's most weeks: the prioritized bring-up muscle trained at zero indefinitely, a silent under-train contrary to the stated hypertrophy goal.
