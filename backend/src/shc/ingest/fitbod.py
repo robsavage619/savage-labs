@@ -120,7 +120,7 @@ def ingest_fitbod(csv_path: Path | None = None, rebuild: bool = False) -> dict[s
                     )
                     sets_inserted += 1
             except Exception as e:
-                log.debug("Skipping row in %s: %s", date_str, e)
+                log.warning("Skipping row in %s: %s", date_str, e)
 
     # Update working_weights from most recent non-warmup max per exercise
     log.info("Rebuilding working_weights...")

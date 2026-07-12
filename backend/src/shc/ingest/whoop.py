@@ -5,7 +5,7 @@ import hashlib
 import logging
 import secrets
 import urllib.parse
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -172,7 +172,7 @@ def _hash(data: dict) -> str:
 
 def _ms_to_min(ms: int | None) -> float | None:
     """Convert a WHOOP `*_milli` field to minutes (rounded)."""
-    return round(ms / 60_000, 1) if ms else None
+    return round(ms / 60_000, 1) if ms else (0.0 if ms == 0 else None)
 
 
 def _require(record: dict, *keys: str, kind: str) -> None:
@@ -628,7 +628,9 @@ async def sync_body_measurement() -> int:
     """Fetch height/weight/max-HR. Single row endpoint — no pagination."""
     data = await _get("/v2/user/measurement/body")
     _require(data, "height_meter", "weight_kilogram", "max_heart_rate", kind="body_measurement")
-    measured_at = datetime.now(UTC).isoformat()
+    # Use date-only so same-day re-syncs hit the same row; datetime.now() would
+    # generate a new key on every call and prevent the ON CONFLICT from firing.
+    measured_at = date.today().isoformat()
     row = {
         "source": "whoop",
         "measured_at": measured_at,
