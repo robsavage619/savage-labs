@@ -198,6 +198,77 @@ def test_override_reason_does_not_bypass_forbidden_muscle_groups() -> None:
         )
 
 
+# ── override_muscle_groups (deliberate train-through of a recovery gate) ──────
+
+FORBID_LEGS_STATE = {
+    "gates": {
+        "max_intensity": "moderate",
+        "deload_required": False,
+        "forbid_muscle_groups": ["legs"],
+        "reasons": ["Legs 1d ago — needs ≥2d rest"],
+    }
+}
+FORBID_PULL_STATE = {
+    "gates": {
+        "max_intensity": "moderate",
+        "deload_required": False,
+        "forbid_muscle_groups": ["pull"],
+        "reasons": ["Pull 1d ago — needs ≥2d rest"],
+    }
+}
+
+
+def test_muscle_group_override_allows_a_gated_group() -> None:
+    """An explicit override_muscle_groups + reason lets a rested-gate group train."""
+    p = _plan(intensity="low", exercises=[_ex("Goblet Squat", None, "8")])
+    assert (
+        validate_plan(
+            p,
+            state=FORBID_LEGS_STATE,
+            e1rm_ceilings=CEIL,
+            override_reason="deliberate light legs, feel great",
+            override_muscle_groups=["legs"],
+        )
+        is True
+    )
+
+
+def test_muscle_group_override_requires_a_reason() -> None:
+    """No silent bypass — overriding a recovery gate demands a recorded reason."""
+    p = _plan(intensity="low", exercises=[_ex("Goblet Squat", None, "8")])
+    with pytest.raises(ValueError, match="override_reason"):
+        validate_plan(
+            p, state=FORBID_LEGS_STATE, e1rm_ceilings=CEIL, override_muscle_groups=["legs"]
+        )
+
+
+def test_muscle_group_override_only_loosens_listed_groups() -> None:
+    """Overriding one group must not unlock a different forbidden group."""
+    p = _plan(intensity="low", exercises=[_ex("Goblet Squat", None, "8")])
+    with pytest.raises(GateViolation, match="forbidden"):
+        validate_plan(
+            p,
+            state=FORBID_LEGS_STATE,
+            e1rm_ceilings=CEIL,
+            override_reason="wrong group listed",
+            override_muscle_groups=["push"],  # legs still blocked
+        )
+
+
+def test_muscle_group_override_does_not_unlock_hip_hinge() -> None:
+    """The hinge guard (#19) is an injury-pattern constraint, not a recovery
+    window — overriding the pull group must NOT let a hinge through."""
+    p = _plan(intensity="low", exercises=[_ex("Romanian Deadlift (Dumbbell)", None, "8")])
+    with pytest.raises(GateViolation, match="hinge"):
+        validate_plan(
+            p,
+            state=FORBID_PULL_STATE,
+            e1rm_ceilings=CEIL,
+            override_reason="want some posterior work",
+            override_muscle_groups=["pull"],
+        )
+
+
 def test_override_reason_unused_when_plan_already_within_gate() -> None:
     """A reason present on a plan that's already within the true gate changes
     nothing — validate_plan just passes, same as with no reason at all."""

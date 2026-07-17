@@ -38,6 +38,10 @@ class WorkoutPlanSubmission(BaseModel):
     override_reason: str | None = (
         None  # non-empty → train through max_intensity by one tier, logged
     )
+    override_muscle_groups: list[str] | None = (
+        None  # explicit groups (e.g. ["push","pull"]) to train through their
+        # recovery gate; REQUIRES override_reason; hinge/deload/clinical guards stay
+    )
 
 
 class EmphasisSubmission(BaseModel):
@@ -2800,6 +2804,7 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
             allowed_citations=valid_citation_filenames(),
             conn=conn,
             override_reason=body.override_reason,
+            override_muscle_groups=body.override_muscle_groups,
         )
 
         # Audit only a GENUINE override — a reason was supplied AND the plan
@@ -2813,6 +2818,17 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
             and req_intensity in INTENSITY_ORDER
             and INTENSITY_ORDER.index(req_intensity) > INTENSITY_ORDER.index(true_max)
         )
+        # Muscle-group override: audit only the groups that were BOTH forbidden and
+        # actually trained in the plan — a listed group that wasn't gated or wasn't
+        # used bypassed nothing.
+        forbid_set = set(gates.get("forbid_muscle_groups", []))
+        requested_groups = set(body.override_muscle_groups or [])
+        trained_groups = {
+            _muscle_group(ex.get("name", ""))
+            for block in body.plan.get("blocks", [])
+            for ex in block.get("exercises", [])
+        }
+        mg_overridden = sorted(forbid_set & requested_groups & trained_groups)
     except GateViolation as exc:
         raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
@@ -2820,10 +2836,13 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     finally:
         conn.close()
 
-    if override_used:
+    if override_used or mg_overridden:
         import json
         import uuid
 
+        bypassed = {"gate_reasons": gates.get("reasons", [])}
+        if mg_overridden:
+            bypassed["muscle_groups_overridden"] = mg_overridden
         async with write_ctx() as wconn:
             wconn.execute(
                 "INSERT INTO gate_overrides (id, plan_date, requested_intensity, "
@@ -2831,17 +2850,18 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
                 [
                     str(uuid.uuid4()),
                     plan_date,
-                    req_intensity,
+                    req_intensity or "n/a",
                     true_max,
                     body.override_reason,
-                    json.dumps(gates.get("reasons", [])),
+                    json.dumps(bypassed),
                 ],
             )
         log.warning(
-            "gate override exercised: %s requested (gate=%s) on %s — %s",
-            req_intensity,
-            true_max,
+            "gate override exercised on %s — intensity=%s (gate=%s) muscle_groups=%s — %s",
             plan_date.isoformat(),
+            req_intensity if override_used else "—",
+            true_max,
+            mg_overridden or "—",
             body.override_reason,
         )
 

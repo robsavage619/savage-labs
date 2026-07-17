@@ -1285,6 +1285,7 @@ def validate_plan(
     conn: Any | None = None,
     prescription: Any | None = None,
     override_reason: str | None = None,
+    override_muscle_groups: list[str] | None = None,
 ) -> bool:
     """Validate a plan dict against the schema AND the deterministic gates.
 
@@ -1321,6 +1322,18 @@ def validate_plan(
     tissue-recovery-timing and medical constraints, not the discretionary
     fatigue signal max_intensity represents, and overriding them isn't a
     training-preference decision.
+
+    Pass `override_muscle_groups` (an explicit list, e.g. ``["push", "pull"]``) to
+    deliberately train a muscle group whose recovery-window gate is active — an
+    experienced athlete choosing a light train-through (e.g. a pump the day before
+    a competition) has a real reason to. It is deliberately SEPARATE from
+    `override_reason` (which would otherwise unlock groups as a side effect of an
+    intensity override) and REQUIRES a non-empty `override_reason` — no reason, no
+    override. Only the listed groups loosen; every other forbidden group still
+    blocks. It loosens the group-membership block ONLY — the hip-hinge guard (#19,
+    an injury-pattern constraint under posterior-chain fatigue, not a mere recovery
+    window) stays active, as do deload and clinical guards. Caller logs it for
+    audit alongside the intensity override.
 
     The session-budget cap (#17 — working-set count + estimated duration) and the
     pull-gate hinge block (#19) run from `state` alone and need no `conn`.
@@ -1403,13 +1416,19 @@ def validate_plan(
                 + f". Reasons: {'; '.join(gates.get('reasons', [])) or 'see DailyState.gates'}"
             )
         forbid = set(gates.get("forbid_muscle_groups", []))
+        overridden = set(override_muscle_groups or [])
+        if overridden and not (override_reason and override_reason.strip()):
+            raise ValueError(
+                "override_muscle_groups requires a non-empty override_reason — "
+                "training through a recovery gate must be a recorded, justified choice."
+            )
         if forbid:
             pull_forbidden = "pull" in forbid
             for block in blocks:
                 for ex in block.get("exercises", []):
                     name = ex.get("name", "")
                     g = muscle_group(name)
-                    if g in forbid:
+                    if g in forbid and g not in overridden:
                         raise GateViolation(
                             f"Exercise {name!r} targets {g}, which is "
                             f"forbidden today (gate: {sorted(forbid)})."

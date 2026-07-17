@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-17 — Muscle-group gate is overridable, explicitly and audited
+
+**Context.** The `/api/workout/plan` gate blocks exercises whose muscle group is in `forbid_muscle_groups` (a recovery window — e.g. push/pull trained yesterday need 2 days). Unlike `max_intensity`, this had NO override path: even a deliberate, well-reasoned light train-through (Rob wanting a light upper-body pump the day before a pickleball tournament, to spare his legs) was hard-rejected, and the intensity `override_reason` explicitly does not touch it. For a single-user tool meant to serve the athlete, that was too rigid — the engine should let Rob make an informed choice, not forbid it outright.
+
+**Decision.** Added `override_muscle_groups: list[str]` to the plan submission. It loosens the group-membership block for exactly the listed groups and **requires a non-empty `override_reason`** (no silent bypass). It is deliberately SEPARATE from the intensity `override_reason` so an intensity override can't unlock muscle groups as a side effect. It does NOT loosen the hip-hinge guard (#19 — an injury-pattern constraint under posterior-chain fatigue, not merely a recovery window), nor deload/clinical guards. Every genuine use (a listed group that was both gated and actually trained) is written to `gate_overrides` alongside intensity overrides, with the overridden groups recorded in `gates_bypassed_json`.
+
+**Why.** Recovery windows are discretionary fatigue signals an experienced athlete can reasonably choose to train through; injury-pattern and clinical guards are not. Making the concession explicit + reason-required + audited keeps it a conscious, recorded decision rather than a loophole.
+
+**Consequences.** `validate_plan` gained an `override_muscle_groups` param; the submission model and the audit block in `dashboard.py` were extended. `gates_bypassed_json` shifted from a bare array to an object (`{gate_reasons, muscle_groups_overridden}`) — safe, the table is write-only (no readers). Coverage in `test_validate_plan.py` (override allows a gated group, requires a reason, only loosens listed groups, never unlocks a hinge).
+
+---
+
 ## 2026-07-17 — Exercise selection rotates on LIVE plateaus and explains itself
 
 **Context.** Rob reported getting the same exercises repeatedly and doubted the engine was intelligent. Inspection confirmed the swap-on-plateau *philosophy* is sound (stable picks + progressive overload is good hypertrophy science), but three mechanics defeated it: (1) the plateau state was only the 4th of 5 sort keys, so a plateaued lift that won on head/length/SFR led its head forever; (2) `score_exercise` fits the most recent *available* e1RM weeks regardless of age, so a lift last trained in 2021 — or one whose alias now points at a name Rob stopped logging (e.g. Incline Curl) — read as "progressing" off ancient data and was pinned as a "kept" lead; (3) the fallback menu ordered `last_done DESC` (most-recent first), actively re-surfacing habit. None of the reasoning was visible to the plan author, and the frequency-sorted TOP EXERCISES list read as a menu.
