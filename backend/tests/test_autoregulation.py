@@ -270,6 +270,18 @@ def test_biceps_menu_is_evidence_grounded(conn):
     assert picks[0]["length_bias"] == "lengthened"  # lengthened leads
     regions = {p["region"] for p in picks}
     assert {"long_head", "short_head", "brachialis"} <= regions  # all heads covered
+    # Every pick is legible: it carries its plateau state + a one-line rank reason.
+    for p in picks:
+        assert p["trend"] in {
+            "progressing",
+            "stalled",
+            "regressing",
+            "young",
+            "stale",
+            "untrained",
+        }
+        assert p["status"]
+        assert "weeks" in p and "last_done" in p
 
 
 def test_biceps_picks_carry_citation_and_rep_target(conn):

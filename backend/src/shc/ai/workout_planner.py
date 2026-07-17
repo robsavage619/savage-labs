@@ -394,7 +394,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     for row in workout_rows[:history_limit]:
         vol_str = f"{row[3] / 1000:.1f} tonnes" if row[3] else "bw/machine"
         rpe_str = f" @RPE {row[4]:.1f}" if row[4] else ""
-        ex_preview = (row[1] or "")[:120]
+        ex_preview = (row[1] or "")[:300]
         lines.append(f"- {row[0]}: {row[2]} sets | {vol_str}{rpe_str} | {ex_preview}")
     if len(workout_rows) > history_limit:
         lines.append(
@@ -437,7 +437,9 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
 
     lines.append(
         f"\n## TOP EXERCISES (last 90d by frequency — top {len(top_exercises)}, "
-        f"capped at SQL LIMIT 20)"
+        f"capped at SQL LIMIT 20) — HABIT MIRROR, not a menu. This is what you've "
+        f"done MOST, not what to program. Select from THIS WEEK'S PRESCRIPTION; use "
+        f"this only for load context."
     )
     for ex, sets, max_kg, avg_rpe in top_exercises:
         unit = load_unit_label(ex)

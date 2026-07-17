@@ -125,7 +125,7 @@ class Prescription:
     deload: dict = field(default_factory=dict)  # {recommended, reason, triggers}
     muscles: list[MusclePrescription] = field(default_factory=list)
     lift_progressions: list[dict] = field(default_factory=list)
-    exercise_menu: dict[str, list[str]] = field(default_factory=dict)
+    exercise_menu: dict[str, list[dict]] = field(default_factory=dict)
     # Sports-science-grounded picks per muscle (lengthened-position + head
     # coverage + rep target + citation). Curated muscles only; the rest stay in
     # exercise_menu (recency). See :func:`evidence_menu`.
@@ -597,36 +597,64 @@ def _decide(
 
 def _exercise_menu(
     conn: duckdb.DuckDBPyConnection, muscles: list[str], per_muscle: int = 4
-) -> dict[str, list[str]]:
-    """Candidate exercises per muscle, Rob's history first, excluding 'no' prefs."""
+) -> dict[str, list[dict]]:
+    """Fallback candidates per muscle (no curated science) — STALE-FIRST rotation.
+
+    Orders least-recently-trained first so a repeat is only shown once it is the
+    freshest option, with never-logged movements LAST — a zero-log count often
+    just means the equipment isn't in Rob's gym (catalog presence ≠ availability),
+    so those shouldn't crowd out real rotatable candidates. The final slot is
+    reserved for the most-recently-trained option so the menu isn't four abandoned
+    lifts hiding what Rob actually runs. Each entry is ``{exercise, last_done}``
+    (ISO date or None). Excludes 'no' preferences.
+    """
     avoid = {
         r[0]
         for r in conn.execute(
             "SELECT exercise FROM exercise_preferences WHERE status = 'no'"
         ).fetchall()
     }
-    menu: dict[str, list[str]] = {}
+    menu: dict[str, list[dict]] = {}
     for muscle in muscles:
         rows = conn.execute(
             """
-            SELECT m.exercise_name,
-                   COALESCE(MAX(ws.started_at), '1900-01-01'::TIMESTAMP) AS last_done
+            SELECT m.exercise_name, MAX(ws.started_at)::DATE AS last_done
             FROM exercise_muscle_map m
-            LEFT JOIN workout_sets_dedup ws ON ws.exercise = m.exercise_name
+            LEFT JOIN workout_sets_dedup ws
+                ON ws.exercise = m.exercise_name
+               AND COALESCE(ws.is_warmup, FALSE) = FALSE
             WHERE m.primary_muscle = ?
             GROUP BY m.exercise_name
-            ORDER BY last_done DESC
+            ORDER BY (last_done IS NULL), last_done ASC
             """,
             [muscle],
         ).fetchall()
-        picks = [r[0] for r in rows if r[0] not in avoid][:per_muscle]
-        if picks:
-            menu[muscle] = picks
+        cand = [
+            {"exercise": r[0], "last_done": r[1].isoformat() if r[1] else None}
+            for r in rows
+            if r[0] not in avoid
+        ]
+        if not cand:
+            continue
+        picks = cand[:per_muscle]
+        # Reserve the last slot for the most-recent staple so the stalest-first
+        # list still shows something Rob is currently running.
+        logged = [c for c in cand if c["last_done"] is not None]
+        if logged and per_muscle >= 2:
+            recent = max(logged, key=lambda c: c["last_done"])
+            if recent not in picks:
+                picks = cand[: per_muscle - 1] + [recent]
+        menu[muscle] = picks
     return menu
 
 
 _LENGTH_RANK = {"lengthened": 0, "mid": 1, "shortened": 2}
 _SFR_RANK = {"high": 0, "moderate": 1, "low": 2}
+
+# A progression trend is only a live selection signal if the exercise was trained
+# within this window; older than this, score_exercise is fitting stale weeks and
+# the "progressing/plateaued" read no longer reflects what Rob is doing now.
+_STALE_TREND_WEEKS = 6
 
 
 def load_muscle_development(conn: duckdb.DuckDBPyConnection) -> dict[str, dict]:
@@ -669,7 +697,7 @@ def _select_grounded(
     per_muscle: int,
     region_volume: dict[str, float] | None = None,
     progress_rank: Mapping[str, int] | None = None,
-) -> list[tuple]:
+) -> tuple[list[tuple], dict[str, str]]:
     """Pick exercises head-first, quality-ranked, and stable — swap only on plateau.
 
     Five-key ordering, most significant first:
@@ -692,10 +720,20 @@ def _select_grounded(
     5. **Name** — deterministic final tiebreaker (storage-order independent).
 
     Because the ordering carries no time term, selection is STABLE week to week
-    (the same best set recurs) until a lift plateaus — exactly what the research
-    prescribes. A coverage pass then takes one movement per distinct head in that
-    order so every head is trained, before filling remaining slots with the next
-    best.
+    (the same best set recurs) until a lift plateaus. But progress is only the 4th
+    key, so a plateaued lift that WINS on head/length/SFR (keys 1–3) would still
+    lead its head forever — the swap signal is real but never actuates. So after
+    the coverage pass takes one movement per head, a plateaued lead is displaced by
+    the best non-plateaued same-head alternative **within science bands**: the swap
+    may relax length lengthened→mid but never step INTO shortened (length bias is
+    RCT-grade — a hard floor), and may drop at most one SFR tier (high→moderate ok,
+    high→low never). No in-band alternative → the plateaued lead is held. The
+    displaced lead reappears when the remaining slots are filled with next-best, so
+    it stays visible (tagged) rather than vanishing.
+
+    Returns ``(picks, notes)`` where ``notes`` maps an exercise name to a one-line
+    rank reason (``swapped in`` / ``swap candidate: plateaued`` / ``held``) for the
+    menu to surface. Absence of a note means the pick led on merit.
     """
     rv = region_volume or {}
     pr = progress_rank or {}
@@ -711,6 +749,13 @@ def _select_grounded(
         # 0 progressing (keep) < 1 untried (neutral) < 2 plateaued (swap-eligible).
         return pr.get(c[0], 1)
 
+    def _in_band(lead: tuple, alt: tuple) -> bool:
+        # A swap may relax length lengthened→mid but never into shortened, and
+        # may drop at most one SFR tier — the "acceptable science" envelope.
+        len_ok = _LENGTH_RANK.get(alt[3], 1) <= max(_LENGTH_RANK.get(lead[3], 1), 1)
+        sfr_ok = _SFR_RANK.get(alt[6], 1) <= _SFR_RANK.get(lead[6], 1) + 1
+        return len_ok and sfr_ok
+
     ordered = sorted(
         cands,
         key=lambda c: (
@@ -721,21 +766,35 @@ def _select_grounded(
             c[0],  # exercise name — deterministic final tiebreaker (storage-order independent)
         ),
     )
+    notes: dict[str, str] = {}
     picks: list[tuple] = []
     seen_regions: set[str] = set()
     for c in ordered:  # coverage pass: one per head, most-neglected head first
         if len(picks) >= per_muscle:
             break
         region = _region(c)
-        if region not in seen_regions:
-            picks.append(c)
-            seen_regions.add(region)
-    for c in ordered:  # fill remaining slots with next-best
+        if region in seen_regions:
+            continue
+        pick = c
+        if _progress(c) == 2:  # this head's lead has plateaued — try an in-band swap
+            for alt in ordered:
+                if _region(alt) != region or alt is c or _progress(alt) == 2:
+                    continue
+                if _in_band(c, alt):
+                    pick = alt
+                    notes[alt[0]] = f"swapped in: replaces plateaued {c[0]}"
+                    notes[c[0]] = "swap candidate: plateaued"
+                    break
+            else:
+                notes[c[0]] = "held: plateaued, no in-band alternative"
+        picks.append(pick)
+        seen_regions.add(region)
+    for c in ordered:  # fill remaining slots with next-best (displaced lead resurfaces here)
         if len(picks) >= per_muscle:
             break
         if c not in picks:
             picks.append(c)
-    return picks[:per_muscle]
+    return picks[:per_muscle], notes
 
 
 def _load_exercise_aliases(conn: duckdb.DuckDBPyConnection) -> dict[str, str]:
@@ -758,36 +817,88 @@ def _load_exercise_aliases(conn: duckdb.DuckDBPyConnection) -> dict[str, str]:
         return {}
 
 
-def _progress_ranks(
+def _progress_info(
     conn: duckdb.DuckDBPyConnection,
     names: set[str],
     aliases: Mapping[str, str] | None = None,
-) -> dict[str, int]:
-    """Map each curated exercise to a swap-priority rank from its e1RM trend.
+) -> dict[str, dict]:
+    """Per curated exercise: swap-priority rank + the evidence behind it.
 
-    ``0`` = actively progressing (keep it), ``1`` = untried / too little history
-    to judge (neutral), ``2`` = plateaued (stalled or regressing) and therefore
-    eligible to be swapped for an equal-quality alternative. This is what turns
-    :func:`_select_grounded` into a plateau-triggered rotator rather than a weekly
-    one. Curated names are resolved to Rob's logged variant via ``aliases`` (e.g.
-    ``Tricep Pushdown (Cable)`` → ``Cable Tricep Pushdown``) before scoring, so a
-    staple logged under a different string still contributes a plateau signal.
+    Returns ``{name: {rank, trend, weeks, last_done, logged_name}}``:
+
+    * ``rank`` — ``0`` progressing (keep) < ``1`` untried/young (neutral) < ``2``
+      plateaued (stalled/regressing, swap-eligible). Drives :func:`_select_grounded`.
+    * ``trend`` — ``progressing`` | ``stalled`` | ``regressing`` | ``young``
+      (logged but <3 completed weeks) | ``stale`` (last trained too long ago for
+      its trend to be a live signal) | ``untrained`` (no logs at all under the
+      name or its alias — the "verify the equipment exists" case, distinct from
+      ``young``).
+    * ``weeks`` — completed weeks of e1RM behind the trend (0 when unscored).
+    * ``last_done`` — ISO date of the most recent working set, alias-resolved.
+
+    Curated names are resolved to Rob's logged variant via ``aliases`` before
+    scoring, so a staple logged under a different string still shows its trend.
+
+    A trend is only a LIVE signal if the exercise was trained recently:
+    :func:`score_exercise` fits the most recent *available* weeks regardless of
+    age, so a lift last done years ago (or whose alias now points at a name Rob
+    stopped logging) would otherwise read ``progressing`` off ancient data and be
+    pinned as a "kept" lead forever. Beyond :data:`_STALE_TREND_WEEKS` the trend is
+    demoted to neutral (``stale``) so a fresh alternative can surface.
     """
     al = aliases or {}
-    ranks: dict[str, int] = {}
+    last_done: dict[str, str] = {}
+    try:
+        for ex, dt in conn.execute(
+            "SELECT exercise, MAX(started_at)::DATE FROM workout_sets_dedup "
+            "WHERE COALESCE(is_warmup, FALSE) = FALSE GROUP BY exercise"
+        ).fetchall():
+            if dt is not None:
+                last_done[ex] = dt.isoformat()
+    except Exception as exc:  # noqa: BLE001 — last-done lookup optional
+        log.debug("last-done lookup unavailable: %s", exc)
+
+    stale_before = date.today() - timedelta(weeks=_STALE_TREND_WEEKS)
+    info: dict[str, dict] = {}
     for name in names:
+        logged = al.get(name, name)
+        ld = last_done.get(logged)
         try:
-            ps = score_exercise(conn, al.get(name, name))
+            ps = score_exercise(conn, logged)
         except Exception as exc:  # noqa: BLE001 — scoring optional, never blocks selection
             log.debug("score_exercise failed for %s: %s", name, exc)
             ps = None
+        latest_week = ps.history[-1].week_start if ps and ps.history else None
         if ps is None:
-            ranks[name] = 1
+            rank, weeks = 1, 0
+            trend = "young" if ld is not None else "untrained"
+        elif latest_week is not None and latest_week < stale_before:
+            # Trend fitted on old data — not a live signal. Neutral, not "kept".
+            rank, weeks, trend = 1, len(ps.history), "stale"
         elif ps.trend == "progressing":
-            ranks[name] = 0
+            rank, weeks, trend = 0, len(ps.history), "progressing"
         else:  # stalled | regressing
-            ranks[name] = 2
-    return ranks
+            rank, weeks, trend = 2, len(ps.history), ps.trend
+        info[name] = {
+            "rank": rank,
+            "trend": trend,
+            "weeks": weeks,
+            "last_done": ld,
+            "logged_name": logged,
+        }
+    return info
+
+
+def _default_status(trend: str) -> str:
+    """One-line rank reason when selection left no explicit swap/held note."""
+    return {
+        "progressing": "kept: progressing",
+        "stalled": "stalled: swap-eligible",
+        "regressing": "regressing: swap-eligible",
+        "young": "young: <3wk data — building signal",
+        "stale": f"stale: not trained in >{_STALE_TREND_WEEKS}wk — trend not live",
+        "untrained": "untrained: no logs — verify equipment exists",
+    }.get(trend, "kept")
 
 
 def evidence_menu(
@@ -842,24 +953,34 @@ def evidence_menu(
 
     aliases = _load_exercise_aliases(conn)
     all_names = {c[0] for cands in per_muscle_rows.values() for c in cands}
-    progress = _progress_ranks(conn, all_names, aliases)
+    info = _progress_info(conn, all_names, aliases)
+    ranks = {n: v["rank"] for n, v in info.items()}
 
     out: dict[str, list[dict]] = {}
     for muscle, cands in per_muscle_rows.items():
-        out[muscle] = [
-            {
-                "exercise": c[0],
-                "region": c[2],
-                "length_bias": c[3],
-                "rep_low": c[4],
-                "rep_high": c[5],
-                "sfr_tier": c[6],
-                "rationale": c[7],
-                "citation": c[8],
-                "citation_url": c[9],
-            }
-            for c in _select_grounded(cands, per_muscle, region_vol.get(muscle), progress)
-        ]
+        selected, notes = _select_grounded(cands, per_muscle, region_vol.get(muscle), ranks)
+        picks: list[dict] = []
+        for c in selected:
+            pi = info.get(c[0], {})
+            trend = pi.get("trend", "untrained")
+            picks.append(
+                {
+                    "exercise": c[0],
+                    "region": c[2],
+                    "length_bias": c[3],
+                    "rep_low": c[4],
+                    "rep_high": c[5],
+                    "sfr_tier": c[6],
+                    "rationale": c[7],
+                    "citation": c[8],
+                    "citation_url": c[9],
+                    "trend": trend,
+                    "weeks": pi.get("weeks", 0),
+                    "last_done": pi.get("last_done"),
+                    "status": notes.get(c[0]) or _default_status(trend),
+                }
+            )
+        out[muscle] = picks
     return out
 
 
@@ -1400,8 +1521,25 @@ def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
                         f"{p['rep_low']}–{p['rep_high']} reps · {p['rationale']} "
                         f"[{p['citation']}]"
                     )
+                    # Legibility line: why this pick is here and its plateau state,
+                    # so a repeat is visibly earned (progressing) vs a swap/verify.
+                    if "status" in p:
+                        last = p.get("last_done") or "never"
+                        wk = p.get("weeks", 0)
+                        lines.append(
+                            f"        · last {last} · {wk}wk data · "
+                            f"{p.get('trend', 'untrained')} · {p['status']}"
+                        )
             else:
-                lines.append(f"- {muscle}: {', '.join(exs)}")
+                names = ", ".join(
+                    (
+                        f"{e['exercise']} (last done {e['last_done']})"
+                        if e.get("last_done")
+                        else f"{e['exercise']} (never logged — verify equipment exists)"
+                    )
+                    for e in exs
+                )
+                lines.append(f"- {muscle} (stalest-first): {names}")
 
     # Session split (advisory — the validator agent enforces cap + allocation).
     if rx.session_split:
