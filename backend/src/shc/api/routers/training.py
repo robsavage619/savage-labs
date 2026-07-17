@@ -505,6 +505,28 @@ async def get_prescription() -> dict[str, Any]:
         conn.close()
 
 
+@router.get("/training/alias-gaps")
+async def get_alias_gaps() -> dict[str, Any]:
+    """Curated exercise names the plateau signal can't see, plus alias candidates.
+
+    Diagnostic for the ``exercise_alias`` bridge: every ``exercise_science`` name
+    with no logged match, each paired with muscle- and equipment-guarded candidate
+    logged names to confirm and add via migration. Read-only — mutates nothing.
+    """
+    from shc.training.alias_audit import alias_gap_report
+
+    conn = get_read_conn()
+    try:
+        gaps = alias_gap_report(conn)
+        return {
+            "gaps": gaps,
+            "unresolved": len(gaps),
+            "with_candidates": sum(1 for g in gaps if g["verdict"] == "candidates_found"),
+        }
+    finally:
+        conn.close()
+
+
 @router.get("/pickleball/trend")
 async def get_pickleball_trend(days: int = 90) -> dict[str, Any]:
     """Pickleball session history with recovery context.
