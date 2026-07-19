@@ -305,7 +305,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         zone = "safe" if 0.8 <= load["acwr"] <= 1.3 else ("⚠ HIGH" if load["acwr"] > 1.3 else "low")
         lines.append(
             f"- ACWR (true Gabbett, pooled): {load['acwr']} ({zone}) — "
-            f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_28d']:.1f}"
+            f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_21d']:.1f}"
         )
 
         def _zone(v: float | None) -> str:

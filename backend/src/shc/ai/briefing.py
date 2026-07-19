@@ -500,7 +500,7 @@ def build_daily_context(conn) -> str:
         zone = "safe" if 0.8 <= load["acwr"] <= 1.3 else ("⚠ HIGH" if load["acwr"] > 1.3 else "low")
         lines.append(
             f"ACWR (true Gabbett): {load['acwr']} ({zone}) — "
-            f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_28d']:.1f}"
+            f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_21d']:.1f}"
         )
     if load["last_session_date"]:
         lines.append(

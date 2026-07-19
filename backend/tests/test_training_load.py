@@ -191,3 +191,24 @@ def test_body_weight_trend_anchors_to_today(conn, today: date) -> None:
     m = _checkin(conn, today)
     # current_date cutoff (~today+30 − 28d) would pick the recent 80 → ~0%.
     assert m.body_weight_trend_4wk == -20.0
+
+
+def test_no_chronic_28d_key_survives_in_serialized_daily_state(conn) -> None:
+    """chronic_load_28d/conditioning_chronic_28d/resistance_chronic_28d were
+    renamed to *_21d — the fields hold a 21-day window (metrics._arm_acwr),
+    always did after the 21-day uncoupled fix, and the old names invited a
+    future "fix" back toward a real 28-day window that would silently
+    re-desync the fitter from the live gate (invariant 1)."""
+    from dataclasses import asdict
+
+    from shc.metrics import TrainingLoadMetrics, compute_daily_state
+
+    field_names = {f for f in asdict(TrainingLoadMetrics()) if "chronic" in f}
+    assert field_names == {"chronic_load_21d", "resistance_chronic_21d", "conditioning_chronic_21d"}
+
+    state = compute_daily_state(conn)
+    load_keys = state["training_load"].keys()
+    assert not any(k.endswith("chronic_28d") for k in load_keys), (
+        f"a *_chronic_28d key survived in the serialized DailyState: {list(load_keys)}"
+    )
+    assert "chronic_load_21d" in load_keys

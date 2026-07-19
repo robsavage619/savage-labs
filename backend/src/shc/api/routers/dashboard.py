@@ -3515,7 +3515,7 @@ def _slim_training_context(conn, today: date, state: dict) -> dict:
         "acwr": {
             "value": state["training_load"]["acwr"],
             "acute_7d": state["training_load"]["acute_load_7d"],
-            "chronic_28d": state["training_load"]["chronic_load_28d"],
+            "chronic_21d": state["training_load"]["chronic_load_21d"],
         },
         "rest_status": {
             "days_since_legs": state["training_load"]["days_since_legs"],

@@ -376,7 +376,7 @@ export interface DailyStateSleep {
 
 export interface DailyStateLoad {
   acute_load_7d: number | null;
-  chronic_load_28d: number | null;
+  chronic_load_21d: number | null;
   acwr: number | null;
   last_session_date: string | null;
   days_since_last: number | null;

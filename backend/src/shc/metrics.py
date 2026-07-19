@@ -168,7 +168,11 @@ class SleepMetrics:
 @dataclass
 class TrainingLoadMetrics:
     acute_load_7d: float | None = None  # composite_load mean over 7d
-    chronic_load_28d: float | None = None  # composite_load mean over 28d
+    # composite_load mean over the 21-day chronic window immediately before the
+    # acute week (uncoupled, see metrics._arm_acwr) — NOT 28 days; renamed from
+    # chronic_load_28d, which mislabeled the window this field has held since
+    # the 21-day uncoupled fix (see ENGINE_INVARIANTS.md invariant 1).
+    chronic_load_21d: float | None = None
     acwr: float | None = None  # acute / chronic, true Gabbett (pooled, display)
     # Modality-split ACWR. Pooled composite ACWR is blind to *which* system is
     # overloaded — a pickleball spike inflates it and rest-gates lifting that
@@ -176,10 +180,10 @@ class TrainingLoadMetrics:
     # conditioning ACWR (WHOOP strain: pickleball/cardio) governs court/cardio.
     resistance_acwr: float | None = None
     resistance_acute_7d: float | None = None
-    resistance_chronic_28d: float | None = None
+    resistance_chronic_21d: float | None = None
     conditioning_acwr: float | None = None
     conditioning_acute_7d: float | None = None
-    conditioning_chronic_28d: float | None = None
+    conditioning_chronic_21d: float | None = None
     last_session_date: str | None = None
     days_since_last: int | None = None
     days_since_legs: int = 99
@@ -945,9 +949,9 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             )
             return round(acute, 2), round(chronic, 2), ratio
 
-        m.acute_load_7d, m.chronic_load_28d, m.acwr = _arm_acwr(1)
-        m.conditioning_acute_7d, m.conditioning_chronic_28d, m.conditioning_acwr = _arm_acwr(2)
-        m.resistance_acute_7d, m.resistance_chronic_28d, m.resistance_acwr = _arm_acwr(3)
+        m.acute_load_7d, m.chronic_load_21d, m.acwr = _arm_acwr(1)
+        m.conditioning_acute_7d, m.conditioning_chronic_21d, m.conditioning_acwr = _arm_acwr(2)
+        m.resistance_acute_7d, m.resistance_chronic_21d, m.resistance_acwr = _arm_acwr(3)
 
     last_session = conn.execute("SELECT MAX(started_at::DATE) FROM workouts").fetchone()
     if last_session and last_session[0]:

@@ -70,7 +70,7 @@ Recovery: HRV + **hrv_sigma** (σ vs 28d baseline), RHR + elevation%, skin-temp 
 (already °F), **respiratory_rate_delta**, SpO2, calibration flag. Sleep: deep%/**REM%**/
 **efficiency%**/consistency/performance, the **sleep-need breakdown** (base/debt/strain/
 nap), debt_7d, midpoint + midpoint variability. Training load: ACWR (+ acute_load_7d /
-chronic_load_28d), days-since legs/push/pull, push:pull balance, **pickleball_min_7d/28d**,
+chronic_load_21d), days-since legs/push/pull, push:pull balance, **pickleball_min_7d/28d**,
 **cardio zone minutes (z0–z5)**, max HR. Plus readiness (weighted, β-blocker), check-in
 subjectives, gates, body_composition, freshness.
 
