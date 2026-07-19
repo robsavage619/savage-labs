@@ -150,6 +150,18 @@ def weekly_region_volume(
     with no curated movement simply don't appear. Same warmup/load/rep/RPE gates
     as :func:`weekly_muscle_volume` so the two are directly comparable.
 
+    Resolves ``ws.exercise`` through ``exercise_alias`` before matching
+    ``exercise_science.exercise_name`` — the same alias table the progression
+    lookup uses (:func:`shc.ai.workout_planner.e1rm_by_exercise`). Without this,
+    a curated staple logged under its Hevy variant string (e.g. "Cable Tricep
+    Pushdown" for the curated "Tricep Pushdown (Cable)") reads zero region
+    volume forever, so its head permanently looks "never trained" and leads
+    every rotation regardless of how many sets were actually logged. Extending
+    the deliberately progression-only 0067 alias table to volume crediting is
+    safe here: ``exercise_alias.canonical_name`` is a primary key, so each
+    logged name resolves to at most one canonical name — a set still credits
+    exactly the science rows that one canonical name matches, no fan-out.
+
     Returns:
         ``{muscle: {region: credited_sets}}`` — one full set of credit per
         (muscle, region) science row an exercise matches.
@@ -159,7 +171,8 @@ def weekly_region_volume(
         f"""
         SELECT s.muscle, s.region, COUNT(*)::DOUBLE AS sets
         FROM workout_sets_dedup ws
-        JOIN exercise_science s ON ws.exercise = s.exercise_name
+        LEFT JOIN exercise_alias a ON a.logged_name = ws.exercise
+        JOIN exercise_science s ON s.exercise_name = COALESCE(a.canonical_name, ws.exercise)
         WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
           AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
           AND {_RPE_GATE}

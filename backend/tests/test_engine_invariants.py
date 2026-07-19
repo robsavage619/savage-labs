@@ -499,3 +499,45 @@ def test_weekly_prescription_end_to_end_blind_on_stale_whoop(conn, seed) -> None
     assert any("blind" in gap.lower() for gap in rx.data_gaps), (
         "end-to-end prescription did not blind on a genuinely stale recovery row"
     )
+
+
+# ── INVARIANT 9: an aliased curated staple never reads as "never trained". The
+# 2026-07-10 audit found weekly_region_volume joining exercise_science by EXACT
+# name match — a curated lift logged under its Hevy variant string (the same
+# mismatch exercise_alias exists to bridge for progression scoring) read zero
+# region volume forever, so its head phantom-led every rotation regardless of
+# how many real sets were logged. Teeth: revert the join to exact-match and the
+# aliased-name assertion below fails (falls back to zero).
+
+
+def test_aliased_exercise_credits_region_volume(conn, seed) -> None:
+    from shc.training.volume import weekly_region_volume
+
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    # 'Cable Tricep Pushdown' is the Hevy string Rob logs; the curated
+    # exercise_science row lives under 'Tricep Pushdown (Cable)' (see migration
+    # 0067). A set logged under the Hevy name must still credit the curated
+    # muscle/region.
+    seed.workout(week_start, "Cable Tricep Pushdown", [(30.0, 10)] * 3)
+
+    regions = weekly_region_volume(conn, week_start)
+
+    assert "triceps" in regions, f"aliased staple credited nothing: {regions}"
+    assert regions["triceps"].get("lateral_head", 0.0) > 0, (
+        f"aliased staple did not reach its curated region: {regions['triceps']}"
+    )
+
+
+def test_unaliased_exact_match_still_credits_region_volume(conn, seed) -> None:
+    """Sanity check on the other branch: logging under the CANONICAL name
+    directly (no alias needed) must keep working exactly as before."""
+    from shc.training.volume import weekly_region_volume
+
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    seed.workout(week_start, "Tricep Pushdown (Cable)", [(30.0, 10)] * 3)
+
+    regions = weekly_region_volume(conn, week_start)
+
+    assert regions.get("triceps", {}).get("lateral_head", 0.0) > 0

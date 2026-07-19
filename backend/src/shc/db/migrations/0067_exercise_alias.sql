@@ -8,10 +8,14 @@
 -- its stall was never seen and it was never swapped.
 --
 -- This table resolves each curated (canonical) name to the single logged string
--- Rob actually uses for the SAME movement + SAME equipment. It is consumed ONLY
--- by the progression lookup in autoregulation._progress_ranks — it never touches
--- muscle/region VOLUME crediting (that already sees ~100% of logged volume), so
--- there is no double-counting risk.
+-- Rob actually uses for the SAME movement + SAME equipment. Originally consumed
+-- ONLY by the progression lookup in autoregulation._progress_ranks; as of the
+-- 2026-07 engine remediation it ALSO resolves weekly_region_volume's join
+-- (shc.training.volume), because leaving that join exact-match meant any
+-- curated staple logged under its alias read zero region volume forever and
+-- permanently led its head's rotation as "never trained" — see DECISIONS.md.
+-- Safe: canonical_name is a PRIMARY KEY, so one logged name resolves to at most
+-- one canonical name — no fan-out, no double-counting.
 --
 -- Mappings are hand-vetted, not fuzzy-matched: token matching produced dangerous
 -- false pairs (e.g. "Rear Delt Fly (Dumbbell)" → "Dumbbell Fly", a CHEST fly), so
