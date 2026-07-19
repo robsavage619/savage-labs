@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from shc.api.deps import require_admin_key
+from shc.api.routers.training import dupr_rating
 from shc.db.schema import get_read_conn, write_ctx
 from shc.ingest import dupr, hevy, whoop
 from shc.metrics import compute_daily_state
@@ -135,9 +136,9 @@ note; `rest_seconds` is required on every exercise.
 - **Patterns** — noteworthy items from /insights + correlations (omit if none).
 - **Training call + next session** — call (Push/Train/Maintain/Easy/Rest) + the session
   from workout/context (timing-aware), respecting gates. Rob is 40 and training to peak
-  athletic form — not maintaining, PEAKING. Goal: 4.5 → 5.0 DUPR doubles pickleball by
-  end of 2026, concurrent strength + size (not generic recomp). He refuses to let age set
-  the ceiling; your job is to design sessions that honor that. Push hard when gates allow.
+  athletic form — not maintaining, PEAKING. Goal: __DUPR_GOAL__, concurrent strength +
+  size (not generic recomp). He refuses to let age set the ceiling; your job is to
+  design sessions that honor that. Push hard when gates allow.
   Cite vault notes.
 - **Health story** — knowledgeable-friend narrative tying it together.
 - **Body composition** — waist:shoulder / waist:hip + critique verdict vs lean-out-keep-size.
@@ -174,10 +175,29 @@ Remember: also POST the structured workout to /api/workout/plan (above).
 """
 
 
+def _dupr_goal_clause() -> str:
+    """Render the DUPR goal from the live synced rating, not a hardcoded absolute.
+
+    A static "4.5 → 5.0" drifted years away from the real rating and made every
+    narrative claim a goal Rob is nowhere near. Reuses the training router's
+    target so the report prompt and the goal scorecard can never disagree.
+    """
+    try:
+        rating = dupr_rating()
+        current = (rating.get("current") or {}).get("doubles")
+        target = rating.get("target_doubles")
+    except Exception as exc:  # a goal line must never break the prompt
+        log.warning("dupr goal clause failed: %s", exc)
+        return "raise DUPR doubles pickleball rating"
+    if current is None or target is None:
+        return "raise DUPR doubles pickleball rating"
+    return f"{current:.3f} → {target:.2f} DUPR doubles pickleball"
+
+
 @router.get("/daily/report/prompt")
 async def daily_report_prompt() -> dict:
     """Return the single prompt that generates the whole daily report."""
-    return {"prompt": _PROMPT}
+    return {"prompt": _PROMPT.replace("__DUPR_GOAL__", _dupr_goal_clause())}
 
 
 class SectionIn(BaseModel):
