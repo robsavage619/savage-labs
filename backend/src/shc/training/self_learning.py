@@ -337,6 +337,15 @@ def _historical_weekly_acwr(
     fitter). Unbounded history pulled in ~7 years of pre-platform low-volume
     eras (sample_weeks=373), whose near-zero ratios dragged every percentile
     threshold down — the bands must describe the current training era.
+
+    KNOWN LIMITATION (accepted, not fixed): this samples one ratio per
+    Monday-anchored ISO week (``date_trunc('week', date)``), so the fitted
+    distribution is ~52 Monday-anchored snapshots/year. The live gate computes
+    a rolling ratio ending TODAY, any day of the week — a load spike landing
+    mid-week (e.g. a heavy Tuesday/Wednesday) is never sampled at the exact
+    phase the fitter would see it. The ratio FORMULA matches (what the live
+    gate needs); the SAMPLING GRID does not fully cover the live gate's
+    domain. Not restructured here — accepted as a lower-priority gap.
     """
     from shc.metrics import _ACWR_MIN_CHRONIC_DAYS
 
@@ -1399,6 +1408,14 @@ def _regressing_precursor_count(
     Counts distinct primary muscles whose mean perf_score that week was ≤ 2 — the
     same regression definition deload_check() uses live. Returns None when no
     scored exercises exist in that week (the precursor is unobservable).
+
+    KNOWN LIMITATION (accepted, not fixed): this counts muscles at perf<=2, the
+    SAME threshold deload_check() itself fires on — mild target leakage, since
+    the "learned" trigger is fit to reproduce (roughly) the signal that
+    generated the deload events it's learning from. calibrate_deload_trigger's
+    [2, 4] clamp bounds the practical impact: with a 2-wide output range, most
+    of the personalization is absorbed by the clamp regardless, so the
+    leakage's effect on the final threshold is small.
     """
     from datetime import timedelta
 

@@ -1,5 +1,7 @@
 -- Seed global MEV/MAV/MRV volume landmarks (Israetel et al.)
--- NULL mesocycle_id = global defaults; mesocycle-scoped rows override these.
+-- mesocycle_id = '' (empty string, NOT NULL) = global defaults; mesocycle-
+-- scoped rows (a real UUID) override these. NOT NULL, so comparing against
+-- SQL NULL instead of '' would silently match nothing.
 
 INSERT INTO muscle_volume_targets (muscle_group, mev_sets, mav_sets, mrv_sets, mesocycle_id)
 VALUES

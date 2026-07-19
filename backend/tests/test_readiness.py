@@ -123,6 +123,27 @@ def test_readiness_single_component_equals_that_component() -> None:
     assert snap.tier == "green"
 
 
+def test_readiness_subjective_only_cannot_reach_green() -> None:
+    """A lone subj component gets full renormalized weight — if it's the ONLY
+    thing present (no hrv/sleep/rhr corroboration), a green tier would be
+    trusting one self-reported, gameable number as if it were the full
+    weighted signal. Capped at yellow until an objective component backs it."""
+    chk = CheckinMetrics(energy=9, stress=1, soreness_overall=1, sleep_quality=9, motivation=9)
+    snap = _readiness_snapshot(RecoveryMetrics(), SleepMetrics(), chk, beta_blocker=False)
+    assert snap.score is not None and snap.score >= 67, "fixture must score in the green range"
+    assert snap.tier == "yellow"
+
+
+def test_readiness_subjective_plus_objective_can_reach_green() -> None:
+    """The cap only applies to subj-ALONE — once any objective component is
+    present, the normal tier thresholds apply."""
+    chk = CheckinMetrics(energy=9, stress=1, soreness_overall=1, sleep_quality=9, motivation=9)
+    rec = RecoveryMetrics(hrv_sigma=1.0)
+    snap = _readiness_snapshot(rec, SleepMetrics(), chk, beta_blocker=False)
+    assert snap.score is not None and snap.score >= 67
+    assert snap.tier == "green"
+
+
 def test_readiness_uses_default_weights_without_beta_blocker() -> None:
     snap = _readiness_snapshot(
         RecoveryMetrics(hrv_sigma=0.0), SleepMetrics(score=80), CheckinMetrics(), beta_blocker=False

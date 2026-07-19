@@ -162,6 +162,19 @@ def weekly_region_volume(
     logged name resolves to at most one canonical name — a set still credits
     exactly the science rows that one canonical name matches, no fan-out.
 
+    A set matching MULTIPLE science rows credits EACH ONE fully (not split) —
+    verified intentional: Hammer Curl carries rows under both biceps/
+    brachialis AND forearms/brachioradialis, and both muscles genuinely
+    receive real working stimulus from the same set (`test_muscle_volume.py::
+    test_region_volume_credits_each_head`). A splitting scheme (e.g. 1/N per
+    row) was evaluated for the Face-Pull-style case — one movement labeled
+    under three synergist regions of the SAME muscle group — but rejected: it
+    can't distinguish that case from genuine independent multi-muscle stimulus
+    without deeper science-layer judgment (which rows represent one movement's
+    redundant labeling vs. truly separate targets) that's out of scope here.
+    Coverage-signal semantics (not a total-volume ledger) already documented
+    above.
+
     Returns:
         ``{muscle: {region: credited_sets}}`` — one full set of credit per
         (muscle, region) science row an exercise matches.

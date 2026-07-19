@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-19 — Two low-priority ACWR/deload-fitting gaps accepted, not fixed
+
+**Context.** The 2026-07 remediation pass found two smaller data-quality gaps in the self-learning fitters while fixing the higher-severity ones: (1) `self_learning._historical_weekly_acwr` samples one ratio per Monday-anchored ISO week, while the live gate (`metrics._arm_acwr`) computes a rolling ratio ending TODAY on any day of the week — a mid-week load spike is never sampled at the phase the fitter would see it. (2) `_regressing_precursor_count` (feeds `calibrate_deload_trigger`) counts muscles at perf≤2 in the week before a deload — the SAME threshold `deload_check` itself fires on, so the "learned" deload trigger is mildly fit to reproduce the signal that generated its own training events.
+
+**Decision.** Both accepted as documented limitations, not fixed in this pass. (1) The ratio *formula* the fitter and gate share is what invariant 1 requires and tests — the sampling *grid* mismatch is a real but lower-priority gap; restructuring the fitter to a rolling-window sample is a bigger change than the remediation's scope. (2) The deload-trigger clamp `[2, 4]` (a 2-wide output range) absorbs most of the leakage's practical effect regardless of the mild circularity in how the precursor count is defined.
+
+**Why.** Both are real, but neither is currently causing an observed bad outcome the way the resistance-ACWR theater or the confidence-saturation bug were — they're precision gaps in an already-conservative direction, not silent-harm bugs. Time is better spent verifying the higher-severity fixes than restructuring a sampling scheme or de-circularizing a tightly-clamped calibration.
+
+**Consequences.** Both limitations are documented in `self_learning._historical_weekly_acwr` and `_regressing_precursor_count`'s docstrings (KNOWN LIMITATION sections) so a future pass has the context without re-deriving it. No test coverage added for either — nothing to assert against that isn't already covered by invariant 1 (ratio formula) and the deload-trigger clamp tests.
+
+---
+
 ## 2026-07-19 — Resistance ACWR bands retired; only conditioning is personalized
 
 **Context.** `self_learning.fit_acwr_bands` fitted personal percentiles for all four ACWR thresholds (resistance REST/LOW/MOD + conditioning forbid_legs), persisted them, and every status surface (mesocycle context block, `/api/training/self-learning/status`) reported them as "personal (fitted)". But `metrics._gates` applied the three resistance bands `floor_only` (`max(personal, population)`) — and a percentile of Rob's own load distribution is, by construction, always at or below the population thresholds it's fitted from a noise-dominated N=1 baseline against. `max()` therefore always resolved to population. The resistance fit was real math, real persistence, real status reporting — and could provably never once change the gate.

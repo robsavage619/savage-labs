@@ -431,6 +431,16 @@ def test_decide_deload_halves_volume():
     assert dl.target_sets == 9
 
 
+def test_weekly_prescription_flags_missing_soreness_data(conn, seed) -> None:
+    """No soreness check-in data at all this week means the under-recovery
+    hold can't actuate for ANY muscle — visible enough to warrant a data_gaps
+    note, unlike a single missing muscle key (soreness.get(muscle, 0.0))."""
+    today = date.today()
+    seed.workout(today, "Bicep Curl (Barbell)", [(20.0, 10)] * 4)
+    rx = weekly_prescription(conn)
+    assert any("soreness" in gap.lower() for gap in rx.data_gaps), rx.data_gaps
+
+
 def test_weekly_prescription_smoke(conn, seed):
     """End-to-end: prescription emits per-muscle calls from logged volume."""
     today = date.today()

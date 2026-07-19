@@ -1369,6 +1369,17 @@ def weekly_prescription(
             "interference hold cannot actuate this week (verify court/cardio "
             "load manually before trusting a leg ADD)"
         )
+    if not soreness:
+        # soreness.get(muscle, 0.0) reads a genuinely sore, un-checked-in muscle
+        # as 0.0 (relies on exact key parity between the check-in JSON and the
+        # 17-muscle vocabulary — no per-muscle warn on a miss). When the WHOLE
+        # map is empty, under-recovery holds can't fire for anyone this week —
+        # visible enough to warrant a note even though a single missing key
+        # doesn't.
+        data_gaps.append(
+            "No soreness check-in data this week — under-recovery hold cannot "
+            "actuate for any muscle (verify recovery manually)"
+        )
 
     targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
 
@@ -1473,9 +1484,11 @@ def weekly_prescription(
             }
         )
 
-    # Exercise menu for muscles that need volume (adding, or below MAV).
-    # Sports-science-grounded selection (evidence_menu) leads; the legacy recency
-    # menu fills any muscle not yet curated in the exercise-science layer.
+    # Exercise menu for muscles that need volume: this week's prescription is
+    # "add", OR the muscle is an emphasis priority (surfaced even on a hold/cut
+    # week, so a lagging priority muscle's menu stays visible). Sports-science-
+    # grounded selection (evidence_menu) leads; the legacy recency menu fills
+    # any muscle not yet curated in the exercise-science layer.
     need_volume = [m.muscle for m in muscle_rx if m.action == "add" or m.emphasis]
     menu = _exercise_menu(conn, need_volume)
     science = evidence_menu(conn, need_volume)

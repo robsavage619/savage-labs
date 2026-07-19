@@ -150,7 +150,10 @@ def volume_targets(
 ) -> dict[str, VolumeTarget]:
     """Return MEV/MAV/MRV per muscle group.
 
-    Mesocycle-scoped rows take precedence over global (NULL) defaults.
+    Mesocycle-scoped rows take precedence over global defaults. The global-
+    default sentinel is mesocycle_id = '' (empty string, NOT NULL — the
+    column is NOT NULL DEFAULT ''); a future "fix" toward comparing against
+    NULL here would silently zero out every landmark.
     """
     rows = conn.execute(
         """

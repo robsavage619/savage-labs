@@ -141,6 +141,25 @@ def test_skips_exercises_without_e1rm_record() -> None:
     assert validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL) is True
 
 
+def test_unverified_ceiling_surfaces_a_validation_note_on_a_capped_day() -> None:
+    """A loaded exercise with no e1RM on record is a fail-OPEN (the ceiling
+    can't be enforced) on a capped day — must be visible on the plan itself,
+    not just in the log, so Rob sees it, not just an operator reading logs."""
+    p = _plan(exercises=[_ex("Brand New Lift", 500, "8")])
+    assert validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL) is True
+    assert any("UNVERIFIED" in n for n in p.get("validation_notes", [])), p.get(
+        "validation_notes"
+    )
+
+
+def test_unverified_ceiling_silent_on_a_high_day() -> None:
+    """cap == 1.0 on a high day means there's no ceiling to fail open on —
+    no note should be added."""
+    p = _plan(intensity="high", exercises=[_ex("Brand New Lift", 500, "8")])
+    validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL)
+    assert "validation_notes" not in p
+
+
 def test_parses_reps_from_each_side_string() -> None:
     # 70lb × 10/side still parses reps=10 → demand 93lb, over deload ceiling.
     p = _plan(exercises=[_ex("Face Pull", 70, "10 each side")])

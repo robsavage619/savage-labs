@@ -1527,14 +1527,17 @@ def validate_plan(
                         # reference, but the project's "fail visibly" rule means we
                         # must surface it rather than pretend the lift was validated.
                         if w_lbs and reps and cap < 1.0:
-                            log.warning(
-                                "load-cap UNVERIFIED for %r (%slb×%s) on a %d%% cap day — "
-                                "no e1RM on record; ceiling not enforced for this lift",
-                                name,
-                                w_lbs,
-                                reps,
-                                load_cap_pct(gates),
+                            note = (
+                                f"load-cap UNVERIFIED for {name!r} ({w_lbs}lb×{reps}) on a "
+                                f"{load_cap_pct(gates)}% cap day — no e1RM on record; "
+                                "ceiling not enforced for this lift"
                             )
+                            log.warning(note)
+                            # Fail-visibly at the product surface too, not just the log —
+                            # a skipped ceiling check on a capped day is the exact
+                            # "hold the max, add reps" pseudo-deload the check exists to
+                            # catch; Rob should see it, not just an operator reading logs.
+                            plan.setdefault("validation_notes", []).append(note)
                         continue
                     if not w_lbs or not reps:
                         continue

@@ -59,6 +59,12 @@ BETA_BLOCKER_WEIGHTS = {"hrv": 0.15, "sleep": 0.50, "rhr": 0.10, "subj": 0.25}
 # random (panel review M7/M13).
 BASELINE_MIN_N = 14
 
+# Nightly sleep-need baseline used ONLY for the display-only debt_7d_h trend
+# (not consumed by any gate). A generic 8h reference, not personalized to
+# Rob's diagnosed off-CPAP OSA (which likely needs more) — flagged as a
+# threshold with no cited basis; low stakes since it doesn't gate anything.
+SLEEP_NEED_BASELINE_H = 8.0
+
 # ACWR gate thresholds on the UNCOUPLED scale (see _arm_acwr). Uncoupled ratios
 # run systematically higher than the coupled form these bands were first set
 # against, so they're shifted up (panel review M2). These are HEURISTIC priors
@@ -905,7 +911,7 @@ def _sleep(conn, today: date) -> SleepMetrics:
         m.avg_7d = round(sum(last7) / len(last7), 2)
         if len(last7) >= 2:
             m.consistency_stdev_7d = round(_st.pstdev(last7), 2)
-        m.debt_7d_h = round(sum(max(0.0, 8.0 - h) for h in last7), 1)
+        m.debt_7d_h = round(sum(max(0.0, SLEEP_NEED_BASELINE_H - h) for h in last7), 1)
     m.score = _sleep_subscore(m.last_hours, m.deep_pct_last, m.spo2_avg_last)
     return m
 
@@ -1255,9 +1261,20 @@ def _readiness_snapshot(
         )
     wsum = sum(weights[k] for k, _ in present) or 1.0
     score = sum(weights[k] / wsum * v for k, v in present)
+    tier = _tier(score)
+    # Renormalizing over whatever's present means a LONE present component gets
+    # full weight — if that component is the self-reported (gameable, optimism-
+    # prone) "subj" score with no objective corroboration (hrv/sleep/rhr all
+    # missing), a green tier is trusting one subjective number as if it were
+    # the full weighted signal. Cap at yellow until at least one objective
+    # component is on record; a green day should mean the body backs it up,
+    # not just how Rob feels typing the check-in.
+    has_objective = any(k in ("hrv", "sleep", "rhr") for k, _ in present)
+    if tier == "green" and not has_objective:
+        tier = "yellow"
     return ReadinessSnapshot(
         score=round(score, 1),
-        tier=_tier(score),
+        tier=tier,
         weights=weights,
         components=components,
         beta_blocker_adjusted=beta_blocker,
