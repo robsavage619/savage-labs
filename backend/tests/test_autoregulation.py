@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from shc.training.autoregulation import (
     EMPHASIS_MUSCLES,
@@ -475,6 +475,38 @@ def test_weekly_prescription_reuses_passed_in_daily_state(conn, seed, monkeypatc
 
     weekly_prescription(conn, daily_state=precomputed)
     assert calls["n"] == 1, "weekly_prescription recomputed daily_state despite receiving one"
+
+
+def test_weekly_prescription_uses_personalized_leg_hold(conn, seed) -> None:
+    """A well-sampled, tightened personal conditioning band must actually reach
+    `_decide` — 1.45 sits BELOW the population hold (1.5, no interference) but
+    ABOVE a tightened personal hold of 1.4 (interference active). Only the
+    personalized path can make quads hold in this exact window."""
+    for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 50, now())",
+            [name, value],
+        )
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.7, 30, now())"
+    )
+    today = date.today()
+    seed.workout(today - timedelta(weeks=1), "Squat (Barbell)", [(60.0, 8)] * 4)
+
+    fake_state = {
+        "freshness": {"whoop_stale": False},
+        "training_load": {"conditioning_acwr": 1.45},
+    }
+    rx = weekly_prescription(conn, daily_state=fake_state)
+
+    quads = next((m for m in rx.muscles if m.muscle == "quads"), None)
+    assert quads is not None
+    assert "court/cardio load high" in quads.reason, (
+        f"quads did not hold under the personalized (tightened) leg-interference "
+        f"threshold: {quads.reason}"
+    )
 
 
 def _make_rx(muscle: str, target: int, action: str = "add") -> MusclePrescription:

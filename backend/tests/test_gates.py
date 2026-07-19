@@ -6,6 +6,8 @@ import pytest
 
 from shc.ai.workout_planner import load_cap_pct
 from shc.metrics import (
+    COND_ACWR_FORBID_LEGS,
+    COND_ACWR_HOLD_LEGS,
     CheckinMetrics,
     ReadinessSnapshot,
     RecoveryMetrics,
@@ -13,6 +15,7 @@ from shc.metrics import (
     TrainingLoadMetrics,
     _gates,
     _is_strength_lift,
+    personalized_cond_thresholds,
 )
 
 # ── _is_strength_lift ────────────────────────────────────────────────────────
@@ -397,6 +400,55 @@ def test_personal_acwr_rest_band_floored_at_population(conn) -> None:
     # Floored REST band (2.0) is NOT crossed, so no rest; 1.97 clears the LOW
     # band (floored to 1.8) → cap LOW, not rest.
     assert g.max_intensity == "low"
+
+
+# ── personalized_cond_thresholds: hold derives from the effective forbid ────
+
+
+def _seed_all_acwr_bands(conn, *, cond_forbid: float, cond_weeks: int) -> None:
+    for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 50, now())",
+            [name, value],
+        )
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', ?, ?, now())",
+        [cond_forbid, cond_weeks],
+    )
+
+
+def test_personalized_cond_thresholds_tightens_when_well_sampled(conn) -> None:
+    """A well-sampled (>= _ACWR_TIGHTEN_MIN_WEEKS) fit may tighten forbid below
+    population, and hold moves down WITH it, preserving the 0.3 gap."""
+    _seed_all_acwr_bands(conn, cond_forbid=1.7, cond_weeks=30)
+    hold, forbid = personalized_cond_thresholds(conn)
+    assert forbid == pytest.approx(1.7)
+    assert hold == pytest.approx(1.4)
+    assert hold < forbid
+
+
+def test_personalized_cond_thresholds_floored_when_thin_sample(conn) -> None:
+    """Below the tighten bar, a fit wanting to tighten forbid is floored at
+    population — and hold follows the floored (population) forbid, not the
+    thin-sample fit."""
+    _seed_all_acwr_bands(conn, cond_forbid=1.2, cond_weeks=10)
+    hold, forbid = personalized_cond_thresholds(conn)
+    assert forbid == pytest.approx(COND_ACWR_FORBID_LEGS)
+    assert hold == pytest.approx(COND_ACWR_HOLD_LEGS)
+
+
+def test_personalized_cond_thresholds_no_conn_returns_population(conn) -> None:
+    hold, forbid = personalized_cond_thresholds(None)
+    assert forbid == COND_ACWR_FORBID_LEGS
+    assert hold == COND_ACWR_HOLD_LEGS
+
+
+def test_personalized_cond_thresholds_empty_table_returns_population(conn) -> None:
+    hold, forbid = personalized_cond_thresholds(conn)
+    assert forbid == COND_ACWR_FORBID_LEGS
+    assert hold == COND_ACWR_HOLD_LEGS
 
 
 # ── Personal sleep-architecture bands (OSA baseline, not an acute flag) ──────

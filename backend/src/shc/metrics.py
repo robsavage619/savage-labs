@@ -68,6 +68,11 @@ BASELINE_MIN_N = 14
 # stronger (field-sport) evidence behind the leg-load language.
 RES_ACWR_REST, RES_ACWR_LOW, RES_ACWR_MOD = 2.0, 1.8, 1.5
 COND_ACWR_FORBID_LEGS = 1.8
+# Graded leg-volume HOLD (autoregulation._decide's leg_interference) kicks in
+# below the hard FORBID gate above — court/cardio load debits leg recovery
+# before it's severe enough to forbid legs outright. Population gap is fixed at
+# 0.3; personalized_cond_thresholds() preserves this gap when forbid is fitted.
+COND_ACWR_HOLD_LEGS = 1.5
 
 # Minimum days of actual (nonzero) load inside the 21-day chronic window before
 # an arm's ACWR ratio is trusted. chronic is deliberately averaged over the full
@@ -1275,6 +1280,39 @@ def _acwr_band_sample_weeks(conn) -> tuple[int, int]:
     return by_arm.get("resistance", 0), by_arm.get("conditioning", 0)
 
 
+def personalized_cond_thresholds(conn) -> tuple[float, float]:
+    """Return ``(hold, forbid)`` — the leg-interference thresholds `_gates`
+    (hard forbid) and `autoregulation._decide` (graded hold) must agree on.
+
+    ``forbid`` is personalized exactly as `_gates` does: sample-gated tighten,
+    unrestricted loosen (see `_apply_band`). ``hold`` is derived from the
+    EFFECTIVE forbid (population or personalized) so `hold < forbid` always
+    holds by construction — the two constants were previously independent
+    (`COND_ACWR_HOLD_LEGS` hardcoded in autoregulation.py, `forbid` fitted here),
+    so a tightened personal forbid could cross below the hold, making the
+    graded hold dead code in that regime. Callers must pass a live ``conn``;
+    ``None`` returns the population thresholds unchanged.
+    """
+    forbid = COND_ACWR_FORBID_LEGS
+    if conn is not None:
+        try:
+            from shc.training.self_learning import read_acwr_bands
+
+            personal = read_acwr_bands(conn)
+            if personal:
+                _res_n, cond_n = _acwr_band_sample_weeks(conn)
+                cond_floor = cond_n < _ACWR_TIGHTEN_MIN_WEEKS
+                forbid = _apply_band(
+                    personal["COND_ACWR_FORBID_LEGS"], COND_ACWR_FORBID_LEGS, cond_floor
+                )
+        except Exception as exc:
+            import logging as _log
+
+            _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
+    hold = forbid - (COND_ACWR_FORBID_LEGS - COND_ACWR_HOLD_LEGS)
+    return hold, forbid
+
+
 def _apply_band(personal: float, population: float, floor_only: bool) -> float:
     """Reconcile a personal ACWR threshold against its population default.
 
@@ -1367,7 +1405,6 @@ def _gates(
     res_rest = RES_ACWR_REST
     res_low = RES_ACWR_LOW
     res_mod = RES_ACWR_MOD
-    cond_forbid_legs = COND_ACWR_FORBID_LEGS
     if conn is not None:
         try:
             from shc.training.self_learning import read_acwr_bands
@@ -1384,8 +1421,7 @@ def _gates(
                 # above the fitter's own minimum so the bar to tighten is
                 # strictly stricter than the bar to merely fit. Gating is
                 # per-arm on each arm's own sample_weeks.
-                _res_n, cond_n = _acwr_band_sample_weeks(conn)
-                cond_floor = cond_n < _ACWR_TIGHTEN_MIN_WEEKS
+                #
                 # All three resistance bands (REST/LOW/MOD) are absolute
                 # injury-spike ceilings (Gabbett), not homeostats. Fitted as
                 # percentiles of Rob's own load they sit BELOW the population
@@ -1399,17 +1435,17 @@ def _gates(
                 # turned ordinary accumulation into a "fatigue spike" and grounded
                 # good days. Conditioning keeps sample-gated personalization
                 # (field-sport evidence is stronger) and may still tighten once
-                # well-fit.
+                # well-fit — handled by personalized_cond_thresholds() below, the
+                # single place that computes it (autoregulation._decide's graded
+                # hold reads the same call so the two thresholds can't diverge).
                 res_rest = _apply_band(personal["RES_ACWR_REST"], RES_ACWR_REST, floor_only=True)
                 res_low = _apply_band(personal["RES_ACWR_LOW"], RES_ACWR_LOW, floor_only=True)
                 res_mod = _apply_band(personal["RES_ACWR_MOD"], RES_ACWR_MOD, floor_only=True)
-                cond_forbid_legs = _apply_band(
-                    personal["COND_ACWR_FORBID_LEGS"], COND_ACWR_FORBID_LEGS, cond_floor
-                )
         except Exception as exc:
             import logging as _log
 
             _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
+    _cond_hold_legs, cond_forbid_legs = personalized_cond_thresholds(conn)
 
     # Load personal sleep-architecture bands if available; fall back to
     # population constants. Loosen-only (see _apply_band_loosen_down): a thin

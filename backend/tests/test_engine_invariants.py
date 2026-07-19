@@ -145,14 +145,16 @@ def test_progressing_muscle_at_mrv_holds() -> None:
 
 
 # ── INVARIANT 3b: conditioning interference never freezes an EMPHASIS lower-body
-# muscle below MEV. The leg-interference hold (cond. ACWR > 1.5) exists because
-# court/cardio load debits leg RECOVERY — correct for quads/hams/adductors, the
-# tissues that absorb the real eccentric court pounding. But it was checked
-# before the MEV-floor branch, so glutes (emphasis, perf=None, thin data, cur=0)
-# got frozen at 0 for every high-pickleball week instead of climbing to MEV —
-# the silent under-train invariant 3 forbids, on the exact lagging priority
-# muscle Rob wants brought up. Teeth: delete the emphasis-interference branch in
-# `_decide` and the glutes assertion drops to 0.
+# muscle below MEV. The leg-interference hold (cond. ACWR > leg_hold_threshold,
+# population default 1.5 — see metrics.COND_ACWR_HOLD_LEGS /
+# personalized_cond_thresholds) exists because court/cardio load debits leg
+# RECOVERY — correct for quads/hams/adductors, the tissues that absorb the real
+# eccentric court pounding. But it was checked before the MEV-floor branch, so
+# glutes (emphasis, perf=None, thin data, cur=0) got frozen at 0 for every
+# high-pickleball week instead of climbing to MEV — the silent under-train
+# invariant 3 forbids, on the exact lagging priority muscle Rob wants brought
+# up. Teeth: delete the emphasis-interference branch in `_decide` and the
+# glutes assertion drops to 0.
 def test_conditioning_interference_never_freezes_emphasis_below_mev() -> None:
     common = dict(
         current=0.0,
@@ -161,7 +163,7 @@ def test_conditioning_interference_never_freezes_emphasis_below_mev() -> None:
         mrv=16,
         perf=None,  # no outcome signal — the exact case that fell to the hold
         soreness=0.0,
-        conditioning_acwr=1.65,  # > 1.5 → leg_interference active
+        conditioning_acwr=1.65,  # > default leg_hold_threshold (1.5) → interference active
         emphasis_factor=1.0,
         confidence=0.09,  # glutes' real thin-data confidence
         scored_weeks=8,

@@ -391,6 +391,12 @@ def _decide(
     confidence: float = 0.0,
     scored_weeks: int = 0,
     accuracy: float | None = None,
+    # Default matches the population metrics.COND_ACWR_HOLD_LEGS; real callers
+    # (weekly_prescription) pass the possibly-personalized value from
+    # metrics.personalized_cond_thresholds() so this and the hard FORBID gate in
+    # metrics._gates can never diverge (`_decide` stays a pure function of
+    # primitives — no DB access — so the personalization happens one level up).
+    leg_hold_threshold: float = 1.5,
 ) -> MusclePrescription:
     """Apply the RP set-progression tree + emphasis + interference for one muscle.
 
@@ -444,9 +450,12 @@ def _decide(
     cur = round(current)
     under_recovered = soreness >= SORENESS_BLOCK
     # Uncoupled conditioning ACWR runs higher than the old coupled scale (M2);
-    # graded leg-volume hold kicks in above 1.5, below the gate's >1.8 forbid.
+    # graded leg-volume hold kicks in above leg_hold_threshold, below the gate's
+    # hard forbid (metrics.personalized_cond_thresholds keeps hold < forbid).
     leg_interference = (
-        muscle in LOWER_BODY and conditioning_acwr is not None and conditioning_acwr > 1.5
+        muscle in LOWER_BODY
+        and conditioning_acwr is not None
+        and conditioning_acwr > leg_hold_threshold
     )
 
     if perf is not None and perf <= 2:
@@ -1350,6 +1359,9 @@ def weekly_prescription(
     conditioning_acwr, conditioning_blind = _conditioning_pressure(
         conn, use_rpe_only=propranolol_day, state=daily_state
     )
+    from shc.metrics import personalized_cond_thresholds
+
+    leg_hold_threshold, _cond_forbid_legs = personalized_cond_thresholds(conn)
     data_gaps: list[str] = []
     if conditioning_blind:
         data_gaps.append(
@@ -1424,6 +1436,7 @@ def weekly_prescription(
             confidence=float(sq.get("confidence", 0.0)),
             scored_weeks=int(sq.get("scored_weeks", 0)),
             accuracy=accuracy,
+            leg_hold_threshold=leg_hold_threshold,
         )
         # If protein is inadequate, cap "add" actions at "hold" for non-emphasis muscles.
         if rx.action == "add" and not rx.emphasis and protein.get("adequate") is False:
