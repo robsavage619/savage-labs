@@ -20,7 +20,10 @@ def test_empty_defaults(conn, today: date) -> None:
 
 def test_acwr_high_when_recent_load_spikes(conn, seed, today: date) -> None:
     # composite_load = hevy_volume_kg / 5000 (no WHOOP strain seeded).
-    seed.workout(ago(today, 25), "Bench Press (Barbell)", [(50, 10)])  # vol 500
+    # >=7 nonzero chronic days (metrics._ACWR_MIN_CHRONIC_DAYS) so the ratio is
+    # scoreable — a single chronic bout is now treated as too thin to trust.
+    for n in (25, 22, 20, 18, 16, 14, 12):
+        seed.workout(ago(today, n), "Bench Press (Barbell)", [(50, 10)])  # vol 500 each
     seed.workout(ago(today, 2), "Bench Press (Barbell)", [(200, 50)])  # vol 10000
     m = _training_load(conn, today)
     assert m.acwr is not None
@@ -28,7 +31,9 @@ def test_acwr_high_when_recent_load_spikes(conn, seed, today: date) -> None:
 
 
 def test_acwr_low_when_no_recent_load(conn, seed, today: date) -> None:
-    seed.workout(ago(today, 25), "Bench Press (Barbell)", [(200, 50)])  # only old
+    # >=7 nonzero chronic days, no acute activity.
+    for n in (25, 22, 20, 18, 16, 14, 12):
+        seed.workout(ago(today, n), "Bench Press (Barbell)", [(200, 50)])
     m = _training_load(conn, today)
     assert m.acwr is not None
     assert m.acwr < 0.8
@@ -45,9 +50,13 @@ def test_acwr_equals_one_under_constant_load(conn, seed, today: date) -> None:
 
 
 def test_acwr_excludes_day_seven_from_acute(conn, seed, today: date) -> None:
-    # A single bout exactly 7 days ago belongs to the CHRONIC window now, not the
-    # acute one. With acute load = 0 the ratio is 0 (or near-0), never elevated.
-    seed.workout(ago(today, 7), "Bench Press (Barbell)", [(200, 50)])
+    # A bout exactly 7 days ago belongs to the CHRONIC window now, not the acute
+    # one. With acute load = 0 the ratio is 0 (or near-0), never elevated. Six
+    # more chronic-window bouts satisfy the >=7-nonzero-day floor while keeping
+    # the acute window (days 0-6) empty, so day-7's boundary placement is still
+    # the thing under test.
+    for n in (7, 8, 9, 10, 11, 12, 13):
+        seed.workout(ago(today, n), "Bench Press (Barbell)", [(200, 50)])
     m = _training_load(conn, today)
     assert m.acwr is not None
     assert m.acwr < 0.2  # day-7 load is chronic; acute window is empty
@@ -106,13 +115,17 @@ def test_arm_acwr_resistance_and_conditioning_are_independent(conn, seed, today:
             [wid, "whoop", started, "running", strain, wid],
         )
 
-    # Chronic conditioning baseline: low strain 15 days ago.
-    _whoop(15, 8.0)
+    # Chronic conditioning baseline: >=7 nonzero chronic days (the new
+    # metrics._ACWR_MIN_CHRONIC_DAYS floor), low strain throughout.
+    for n in (15, 14, 13, 12, 11, 10, 9):
+        _whoop(n, 5.0)
     # Acute conditioning spike: high strain 3 days ago.
     _whoop(3, 18.5)
 
-    # Hevy lifting only in the chronic window; no acute Hevy load.
-    seed.workout(ago(today, 15), "Bench Press (Barbell)", [(80, 10)] * 5)
+    # Hevy lifting only in the chronic window (also >=7 nonzero days); no acute
+    # Hevy load.
+    for n in (15, 14, 13, 12, 11, 10, 9):
+        seed.workout(ago(today, n), "Bench Press (Barbell)", [(80, 10)] * 5)
 
     m = _training_load(conn, today)
 

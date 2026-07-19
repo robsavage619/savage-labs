@@ -19,6 +19,7 @@ import pytest
 
 from shc.ai.workout_planner import load_cap_pct
 from shc.metrics import (
+    _ACWR_MIN_CHRONIC_DAYS,
     CheckinMetrics,
     ReadinessSnapshot,
     RecoveryMetrics,
@@ -36,20 +37,31 @@ from shc.training.self_learning import (
 )
 
 # ── INVARIANT 1: the ACWR band-fitter measures on the SAME window the live gate
-# scores against. A drift here silently biases every personalized ACWR band
-# (the 2026-07-03 audit found the fitter on a 28-day chronic window while the
-# live gate used 21-day). The fitter is tested against an INDEPENDENT re-
-# implementation of the live uncoupled 7:21 formula (metrics.py `_arm_acwr`).
+# scores against, over the SAME admissible sample. A drift here silently biases
+# every personalized ACWR band (the 2026-07-03 audit found the fitter on a
+# 28-day chronic window while the live gate used 21-day; the 2026-07
+# remediation found the live gate treats a week whose chronic window has fewer
+# than metrics._ACWR_MIN_CHRONIC_DAYS nonzero-load days as unscoreable — a
+# thin-history week — but the fitter had no such floor, so it could fit a
+# percentile band partly on ratios the gate itself would never produce). The
+# fitter is tested against an INDEPENDENT re-implementation of the live
+# uncoupled 7:21 formula (metrics.py `_arm_acwr`).
 
 
 def _ref_live_uncoupled_acwr(load_by_date: dict[date, float], ws: date) -> float | None:
     """Reference impl of metrics.py `_arm_acwr` — acute [ws, ws+7)/7 over the
-    contiguous 21-day chronic [ws-21, ws)/21. This is the source of truth the
-    fitter must mirror; if metrics.py's live window changes, change it HERE too
-    and both this test and the fitter must be reconciled."""
+    contiguous 21-day chronic [ws-21, ws)/21, admissible only when the chronic
+    window has >= _ACWR_MIN_CHRONIC_DAYS nonzero-load days. This is the source
+    of truth the fitter must mirror; if metrics.py's live window or admissibility
+    rule changes, change it HERE too and both this test and the fitter must be
+    reconciled."""
+    chronic_vals = [load_by_date.get(ws - timedelta(days=d), 0.0) for d in range(1, 22)]
     acute = sum(load_by_date.get(ws + timedelta(days=d), 0.0) for d in range(0, 7)) / 7.0
-    chronic = sum(load_by_date.get(ws - timedelta(days=d), 0.0) for d in range(1, 22)) / 21.0
-    return round(acute / chronic, 4) if chronic > 0 else None
+    chronic = sum(chronic_vals) / 21.0
+    chronic_days = sum(1 for v in chronic_vals if v > 0)
+    if chronic <= 0 or chronic_days < _ACWR_MIN_CHRONIC_DAYS:
+        return None
+    return round(acute / chronic, 4)
 
 
 def test_acwr_fit_window_mirrors_live_gate(conn, seed) -> None:
@@ -637,3 +649,57 @@ def test_signal_size_factor_below_ten_weeks_cannot_reach_confidence_full(n: int)
     """Even PERFECT stability (1.0) must not reach _CONFIDENCE_FULL below the
     10-scored-week anchor — the n=3 case above is the concrete instance."""
     assert _signal_size_factor(n) * 1.0 < _CONFIDENCE_FULL
+
+
+# ── INVARIANT 11: a thin chronic ACWR window (return from layoff / new block /
+# post-deload) must not produce a spurious spike ratio. chronic is deliberately
+# averaged over the FULL 21-day window length (so a real rest week reads low),
+# but a nearly-empty window with even a modest acute week divides by a tiny
+# denominator and reads as an absurd spike — the exact anti-progression trap
+# pattern. metrics._ACWR_MIN_CHRONIC_DAYS makes that ratio None instead, visibly.
+
+
+def test_layoff_week_does_not_produce_spurious_acwr_spike(conn, seed, today) -> None:
+    from shc.metrics import _training_load
+
+    # A genuine layoff: nothing in the 21-day chronic window, one solid session
+    # 3 days ago (well inside the acute window).
+    seed.workout(today - timedelta(days=3), "Bench Press (Barbell)", [(100.0, 8)] * 4)
+
+    m = _training_load(conn, today)
+
+    assert m.resistance_acwr is None, (
+        f"thin/empty chronic window produced a ratio ({m.resistance_acwr}) instead of "
+        "None — a return-from-layoff week would spuriously spike the fatigue gate"
+    )
+
+    rec, sleep, load, chk, readiness = (
+        RecoveryMetrics(),
+        SleepMetrics(),
+        m,
+        CheckinMetrics(),
+        ReadinessSnapshot(tier="green"),
+    )
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "high", (
+        f"a genuinely empty chronic window must not cap intensity via a fabricated "
+        f"ACWR spike: {g.reasons}"
+    )
+    assert any("chronic training-load window too thin" in r for r in g.reasons), (
+        "gate did not surface a visible reason for the unscoreable ratio"
+    )
+
+
+def test_normal_history_acwr_unaffected_by_min_chronic_days_guard(conn, seed, today) -> None:
+    """A well-populated chronic window (>=7 nonzero days) scores exactly as
+    before — the guard only excludes genuinely thin windows."""
+    from shc.metrics import _training_load
+
+    for n in range(7, 28):  # 21 days of chronic activity, dense
+        seed.workout(today - timedelta(days=n), "Bench Press (Barbell)", [(100.0, 8)])
+    for n in range(0, 7):  # a full acute week at the same load
+        seed.workout(today - timedelta(days=n), "Bench Press (Barbell)", [(100.0, 8)])
+
+    m = _training_load(conn, today)
+    assert m.resistance_acwr is not None
+    assert m.resistance_acwr == 1.0  # constant load throughout → exactly 1.0

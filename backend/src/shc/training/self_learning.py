@@ -316,11 +316,19 @@ def _historical_weekly_acwr(
     never produces, biasing the conditioning leg-forbid band (the one that can
     tighten). Now realigned to the live 7:21 uncoupled window.
 
+    Also mirrors metrics._ACWR_MIN_CHRONIC_DAYS: a week whose chronic window has
+    fewer than that many nonzero-load days is excluded from the fitted sample —
+    the live gate treats that ratio as unscoreable (too thin to trust, see
+    metrics._arm_acwr), so a fitted percentile band must not be built partly
+    from ratios the gate itself would never produce.
+
     Lookback is capped at 104 weeks (same horizon as the volume-landmark
     fitter). Unbounded history pulled in ~7 years of pre-platform low-volume
     eras (sample_weeks=373), whose near-zero ratios dragged every percentile
     threshold down — the bands must describe the current training era.
     """
+    from shc.metrics import _ACWR_MIN_CHRONIC_DAYS
+
     rows = conn.execute(
         f"""
         WITH weeks AS (
@@ -337,11 +345,20 @@ def _historical_weekly_acwr(
             (SELECT COALESCE(SUM(d.{column}), 0)
              FROM v_daily_load d
              WHERE d.date >= w.ws - INTERVAL 21 DAYS
-               AND d.date < w.ws) / 21.0 AS chronic
+               AND d.date < w.ws) / 21.0 AS chronic,
+            (SELECT COUNT(*)
+             FROM v_daily_load d
+             WHERE d.date >= w.ws - INTERVAL 21 DAYS
+               AND d.date < w.ws
+               AND d.{column} > 0) AS chronic_days
         FROM weeks w
         """
     ).fetchall()
-    return [float(r[0]) / float(r[1]) for r in rows if r[1] and float(r[1]) > 0]
+    return [
+        float(r[0]) / float(r[1])
+        for r in rows
+        if r[1] and float(r[1]) > 0 and r[2] and int(r[2]) >= _ACWR_MIN_CHRONIC_DAYS
+    ]
 
 
 def _percentile(values: list[float], p: float) -> float:

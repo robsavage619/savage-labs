@@ -69,6 +69,19 @@ BASELINE_MIN_N = 14
 RES_ACWR_REST, RES_ACWR_LOW, RES_ACWR_MOD = 2.0, 1.8, 1.5
 COND_ACWR_FORBID_LEGS = 1.8
 
+# Minimum days of actual (nonzero) load inside the 21-day chronic window before
+# an arm's ACWR ratio is trusted. chronic is deliberately averaged over the full
+# 21-day window length, not just days with data (a real rest week SHOULD read
+# low) — but a return-from-layoff / new-block / post-deload week can leave the
+# chronic window holding only a couple of low-tonnage days. That tiny, mostly-
+# zero denominator inflates the ratio on the very first solid week back, firing
+# a spurious REST/LOW cap on ordinary re-accumulation (the "anti-progression
+# trap" pattern documented elsewhere in this module). Below this floor the ratio
+# is unknowable rather than merely low, so _arm_acwr returns None instead of a
+# number. v_daily_load._historical_weekly_acwr (self_learning.py) mirrors this
+# exact threshold — see ENGINE_INVARIANTS.md invariant 1.
+_ACWR_MIN_CHRONIC_DAYS = 7
+
 # Minimum fitted weeks before a personal ACWR band is allowed to TIGHTEN below
 # the population floor. The fitter itself accepts a band at 12 weeks
 # (self_learning._ACWR_MIN_WEEKS); tightening is the riskier direction, so the
@@ -918,8 +931,13 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             prior = [float(r[idx] or 0) for r in load_rows if chronic_start <= r[0] < acute_start]
             acute = sum(recent) / 7.0
             chronic = sum(prior) / 21.0
+            chronic_days = sum(1 for v in prior if v > 0)
             # Ratio from RAW means — rounding chronic first can zero a small arm.
-            ratio = round(acute / chronic, 2) if chronic > 0 else None
+            ratio = (
+                round(acute / chronic, 2)
+                if chronic > 0 and chronic_days >= _ACWR_MIN_CHRONIC_DAYS
+                else None
+            )
             return round(acute, 2), round(chronic, 2), ratio
 
         m.acute_load_7d, m.chronic_load_28d, m.acwr = _arm_acwr(1)
@@ -1543,6 +1561,16 @@ def _gates(
     # rather than capping global intensity. This prevents a heavy pickleball
     # week from grounding under-stimulated upper-body lifting.
     res = load.resistance_acwr
+    if res is None and load.resistance_acute_7d:
+        # Ratio unscoreable despite active training this week — either the
+        # chronic window is genuinely too thin (post-layoff/new-block/post-
+        # deload) or momentarily zero. Say so rather than silently skipping the
+        # gate — a thin-chronic ratio would otherwise spuriously spike LOW/REST
+        # on the first solid week back (the anti-progression trap).
+        reasons.append(
+            "Resistance ACWR not scored — chronic training-load window too thin "
+            "(recent layoff/new block/post-deload); verify fatigue manually"
+        )
     if res is not None and res > res_rest:
         # An overreaching signal reduces LOAD; it does not forbid training.
         # Resistance ACWR on an N=1 noise-dominated chronic baseline is not an
@@ -1578,6 +1606,14 @@ def _gates(
         reasons.append(
             "WHOOP not synced >48h — conditioning ACWR unavailable; leg/court-load "
             "protection gate is BLIND today (verify pickleball/cardio load manually)"
+        )
+    elif cond is None and load.conditioning_acute_7d:
+        # Same thin-chronic case as resistance, WHOOP is fresh so this is not
+        # the staleness branch above — the chronic conditioning window itself
+        # doesn't have enough history yet.
+        reasons.append(
+            "Conditioning ACWR not scored — chronic training-load window too thin "
+            "(recent layoff/new block/post-deload); verify court/cardio load manually"
         )
     if cond is not None and cond > cond_forbid_legs:
         # Court/cardio overload. Protect the lower body that absorbs court load;
