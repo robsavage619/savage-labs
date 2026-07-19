@@ -135,3 +135,28 @@ def per_hand_kg(name: str, logged_kg: float) -> float:
 def load_unit_label(name: str) -> str:
     """``'each hand'`` for per-hand lifts, ``''`` for bilateral single-implement lifts."""
     return "each hand" if is_per_hand(name) else ""
+
+
+MAX_PER_HAND_LB = 105.0
+"""Rob's confirmed maximum load in ONE hand (2026-07-18).
+
+A hard physical bound, not a training target: no per-hand lift can legitimately
+exceed it, so a set that does is a mis-entry. Deliberately NOT applied to
+bilateral lifts, where the logged number is a whole-implement load — Standing
+Calf Raise at 495 lb is real.
+"""
+
+_LB_PER_KG = 2.20462
+
+
+def exceeds_per_hand_max(name: str, logged_kg: float | None) -> bool:
+    """True when a logged set implies an impossible load in one hand.
+
+    Routes through :func:`per_hand_kg` rather than testing the raw logged weight,
+    so the lifts Rob enters as a two-dumbbell total are halved before the bound
+    is applied. Comparing the raw value instead is what made migration 0071
+    quarantine six legitimate 150 lb (= 75 lb/hand) Romanian Deadlift sets.
+    """
+    if logged_kg is None or not is_per_hand(name):
+        return False
+    return per_hand_kg(name, logged_kg) * _LB_PER_KG > MAX_PER_HAND_LB

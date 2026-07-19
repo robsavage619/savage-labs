@@ -3,8 +3,10 @@ from __future__ import annotations
 import pytest
 
 from shc.training.load_mechanics import (
+    MAX_PER_HAND_LB,
     LoadType,
     classify_load,
+    exceeds_per_hand_max,
     is_per_hand,
     load_unit_label,
     per_hand_kg,
@@ -67,3 +69,36 @@ def test_unit_label() -> None:
     assert is_per_hand("Hammer Curl (Dumbbell)") is True
     assert load_unit_label("Hammer Curl (Dumbbell)") == "each hand"
     assert load_unit_label("Bench Press (Barbell)") == ""
+
+
+# ── per-hand ceiling guard ────────────────────────────────────────────────────
+
+
+def test_ceiling_flags_impossible_per_hand_loads() -> None:
+    # 130 lb (59 kg) in one hand on a curl — above Rob's confirmed 105 lb max.
+    assert exceeds_per_hand_max("Hammer Curl (Dumbbell)", 59.0) is True
+    assert exceeds_per_hand_max("Incline Bench Press (Dumbbell)", 72.6) is True
+
+
+def test_ceiling_halves_combined_logged_lifts_before_testing() -> None:
+    """The regression migration 0071 shipped: RDL logs the two-dumbbell TOTAL.
+
+    150 lb logged is 75 lb per hand — legal. Testing the raw logged value instead
+    quarantined six legitimate working sets.
+    """
+    assert exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 68.0) is False
+    # Only above 2x the ceiling does the combined-logged lift actually breach it.
+    assert exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 100.0) is True
+
+
+def test_ceiling_ignores_bilateral_lifts() -> None:
+    # Whole-implement loads are not bounded by a per-hand number: Rob's calf
+    # raise runs 495 lb and his incline press 250 lb.
+    assert exceeds_per_hand_max("Standing Calf Raise (Machine)", 224.5) is False
+    assert exceeds_per_hand_max("Hammerstrength Incline Chest Press", 113.4) is False
+    assert exceeds_per_hand_max("Lat Pulldown - Close Grip (Cable)", 65.8) is False
+
+
+def test_ceiling_tolerates_missing_weight() -> None:
+    assert exceeds_per_hand_max("Hammer Curl (Dumbbell)", None) is False
+    assert MAX_PER_HAND_LB == 105.0

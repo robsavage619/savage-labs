@@ -13,6 +13,7 @@ import httpx
 from shc.auth.keychain import load_token
 from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
+from shc.training.load_mechanics import MAX_PER_HAND_LB, exceeds_per_hand_max, per_hand_kg
 
 log = logging.getLogger(__name__)
 
@@ -148,8 +149,15 @@ def _find_template_id(name: str, templates: list[tuple[str, str]]) -> str | None
 # ── Workout sync (Hevy → SHC) ─────────────────────────────────────────────────
 
 
-def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
-    """Convert a Hevy workout JSON into (workout_row, set_rows)."""
+def _map_workout_to_db(w: dict) -> tuple[dict, list[dict], list[dict]]:
+    """Convert a Hevy workout JSON into (workout_row, set_rows, quarantined).
+
+    Sets implying an impossible per-hand load are marked ``is_warmup`` on the way
+    in — the same non-destructive, reversible mechanism migrations 0069/0071 use,
+    so they stay in history but drop out of every e1RM and ceiling calculation.
+    Each one is also returned in ``quarantined`` so the sync surfaces it instead
+    of silently correcting the data.
+    """
     hevy_id = w["id"]
     workout_id = f"hevy_{hevy_id}"
     started_at = w.get("start_time")
@@ -168,7 +176,8 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
         "routine_id": w.get("routine_id"),
     }
 
-    set_rows = []
+    set_rows: list[dict] = []
+    quarantined: list[dict] = []
     for ex_i, ex in enumerate(w.get("exercises", [])):
         exercise_name = ex.get("title", "Unknown")
         exercise_notes = ex.get("notes") or None
@@ -181,6 +190,27 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
             # second entry silently overwriting the first.
             set_hash = _content_hash("hevy", hevy_id, exercise_name, str(ex_i), str(idx))
             set_id = f"hevy_set_{set_hash}"
+            weight_kg = s.get("weight_kg")
+            impossible = exceeds_per_hand_max(exercise_name, weight_kg)
+            if impossible:
+                entry = {
+                    "workout_id": workout_id,
+                    "started_at": started_at,
+                    "exercise": exercise_name,
+                    "logged_lbs": round(weight_kg * 2.20462, 1),
+                    "per_hand_lbs": round(per_hand_kg(exercise_name, weight_kg) * 2.20462, 1),
+                    "reps": s.get("reps"),
+                }
+                quarantined.append(entry)
+                log.warning(
+                    "Hevy set exceeds %.0f lb per-hand ceiling — quarantined: "
+                    "%s %.1f lb/hand on %s (workout %s)",
+                    MAX_PER_HAND_LB,
+                    exercise_name,
+                    entry["per_hand_lbs"],
+                    started_at,
+                    workout_id,
+                )
             set_rows.append(
                 {
                     "id": set_id,
@@ -188,10 +218,10 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
                     "exercise": exercise_name,
                     "set_idx": s.get("index", idx),
                     "reps": s.get("reps"),
-                    "weight_kg": s.get("weight_kg"),
+                    "weight_kg": weight_kg,
                     "rpe": s.get("rpe"),
                     "duration_seconds": s.get("duration_seconds"),
-                    "is_warmup": s.get("type") == "warmup",
+                    "is_warmup": s.get("type") == "warmup" or impossible,
                     "exercise_notes": exercise_notes,
                     "exercise_template_id": template_id,
                     "superset_id": superset_id,
@@ -199,7 +229,7 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict]]:
                     "content_hash": set_hash,
                 }
             )
-    return workout_row, set_rows
+    return workout_row, set_rows, quarantined
 
 
 async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) -> bool:
@@ -306,6 +336,7 @@ async def sync_workouts() -> dict[str, int]:
     before_sync = datetime.now(UTC)
     synced = 0
     deleted = 0
+    quarantined: list[dict] = []
 
     if cursor:
         # Incremental sync via events
@@ -328,7 +359,8 @@ async def sync_workouts() -> dict[str, int]:
                         conn.execute("DELETE FROM workouts WHERE id = $id", {"id": wid})
                         deleted += 1
                     elif ev_type == "updated":
-                        workout_row, set_rows = _map_workout_to_db(ev["workout"])
+                        workout_row, set_rows, bad = _map_workout_to_db(ev["workout"])
+                        quarantined.extend(bad)
                         if await _upsert_workout(conn, workout_row, set_rows):
                             synced += 1
 
@@ -346,7 +378,8 @@ async def sync_workouts() -> dict[str, int]:
                 break
             async with write_ctx() as conn:
                 for w in workouts:
-                    workout_row, set_rows = _map_workout_to_db(w)
+                    workout_row, set_rows, bad = _map_workout_to_db(w)
+                    quarantined.extend(bad)
                     if await _upsert_workout(conn, workout_row, set_rows):
                         synced += 1
             page_count = data.get("page_count", 1)
@@ -369,8 +402,14 @@ async def sync_workouts() -> dict[str, int]:
             {"ts": before_sync.isoformat(), "cursor": before_sync.isoformat()},
         )
 
+    if quarantined:
+        log.warning(
+            "Hevy sync quarantined %d set(s) above the %.0f lb per-hand ceiling",
+            len(quarantined),
+            MAX_PER_HAND_LB,
+        )
     log.info("Hevy sync complete: %d synced, %d deleted", synced, deleted)
-    return {"synced": synced, "deleted": deleted}
+    return {"synced": synced, "deleted": deleted, "quarantined": quarantined}
 
 
 # ── Push routine (SHC plan → Hevy) ───────────────────────────────────────────
