@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS lab_findings (
     effect_size  DOUBLE,                       -- mean delta or correlation
     effect_unit  VARCHAR,                      -- 'ms', '%', 'σ', 'pts', etc.
     p_value      DOUBLE,                       -- null when test doesn't yield one
-    verdict      VARCHAR NOT NULL,           -- 'confirmed' | 'refuted' | 'insufficient' | 'inconclusive'
+    verdict      VARCHAR NOT NULL,           -- 'confirmed' | 'refuted' | 'insufficient' | 'inconclusive' | 'error' (runner raised; not a result)
     summary      VARCHAR NOT NULL,           -- one-sentence narrative
     evidence     VARCHAR                       -- JSON dump of the per-day rows used
 );

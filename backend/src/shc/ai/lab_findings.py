@@ -17,6 +17,7 @@ _VERDICT_TAG = {
     "refuted": "REFUTED",
     "inconclusive": "INCONCLUSIVE",
     "insufficient": "INSUFFICIENT DATA",
+    "error": "ERROR — RUNNER FAILED",
 }
 
 
@@ -49,10 +50,11 @@ def lab_findings_section(conn) -> str:
             WHERE q.enabled = TRUE
             ORDER BY
                 CASE f.verdict
-                    WHEN 'confirmed'    THEN 0
-                    WHEN 'refuted'      THEN 1
-                    WHEN 'inconclusive' THEN 2
-                    ELSE 3
+                    WHEN 'error'        THEN 0
+                    WHEN 'confirmed'    THEN 1
+                    WHEN 'refuted'      THEN 2
+                    WHEN 'inconclusive' THEN 3
+                    ELSE 4
                 END,
                 q.id
             """
@@ -68,13 +70,19 @@ def lab_findings_section(conn) -> str:
         "## YOUR PERSONAL LAB FINDINGS",
         "Pre-registered hypotheses tested against your own data. "
         "These override population assumptions — a REFUTED finding means "
-        "the effect doesn't hold for you personally.",
+        "the effect doesn't hold for you personally. An ERROR entry is a "
+        "broken runner, not a result: draw no conclusion from it.",
     ]
 
     for title, hypothesis, verdict, effect, unit, pval, n, summary in rows:
         if verdict is None:
             tag = "NOT YET RUN"
             detail = hypothesis
+        elif verdict == "error":
+            # No stats suffix: the runner crashed, so n/p/effect describe
+            # nothing. "(n=0)" here would read as a test that found no data.
+            tag = _VERDICT_TAG["error"]
+            detail = f"{summary or 'runner failed'} Treat this hypothesis as untested."
         else:
             tag = _VERDICT_TAG.get(verdict, verdict.upper())
             parts: list[str] = []

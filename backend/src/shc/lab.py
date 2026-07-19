@@ -33,7 +33,10 @@ class LabFinding:
     effect_size: float | None
     effect_unit: str
     p_value: float | None
-    verdict: str  # 'confirmed' | 'refuted' | 'insufficient' | 'inconclusive'
+    # 'error' is not a result — it means the runner raised and the hypothesis
+    # was never actually tested. Kept distinct from 'inconclusive' so a crash
+    # can't masquerade as a null finding.
+    verdict: str  # 'confirmed' | 'refuted' | 'insufficient' | 'inconclusive' | 'error'
     summary: str
     evidence: list[dict]
 
@@ -918,6 +921,9 @@ def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
                           f"Only {len(rows)} days with both HRV and RHR.", [])
     baselines = _hrv_baseline_28d(rows)
     rhr_by_day = {r[0]: int(r[2]) for r in rows}
+    # rows are (date, hrv, rhr) 3-tuples — dict(rows) would raise. Key date→hrv
+    # explicitly, and hoist out of the inner loop.
+    hrv_by_day = {r[0]: r[1] for r in rows}
     days_sorted = [r[0] for r in rows]
     triggers, trigger_hits, total_triggers, evidence = 0, 0, 0, []
     for i, d in enumerate(days_sorted):
@@ -946,7 +952,7 @@ def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
             if i + j >= len(days_sorted):
                 break
             future_day = days_sorted[i + j]
-            future_hrv = dict(rows).get(future_day)
+            future_hrv = hrv_by_day.get(future_day)
             future_baseline = baselines.get(future_day)
             if future_hrv and future_baseline and float(future_hrv) < future_baseline:
                 hit = True
@@ -1162,8 +1168,8 @@ def run_all(conn) -> list[LabFinding]:
         except Exception as exc:  # noqa: BLE001
             log.exception("lab runner failed: %s", qd["id"])
             findings.append(LabFinding(
-                qd["id"], 0, None, "", None, "inconclusive",
-                f"runner error: {exc}", [],
+                qd["id"], 0, None, "", None, "error",
+                f"runner raised {type(exc).__name__}: {exc} — hypothesis NOT tested.", [],
             ))
     _apply_fdr(findings)
     return findings
