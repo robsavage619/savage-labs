@@ -66,9 +66,9 @@ def preregister(
     condition_a: str,
     condition_b: str,
     outcome_metric: str,
+    min_effect: float,
     outcome_direction: str = "higher_better",
     min_per_arm: int = 6,
-    min_effect: float = 0.0,
     washout_hours: int = 0,
     started_on: date | None = None,
     planned_end: date | None = None,
@@ -76,10 +76,23 @@ def preregister(
 ) -> str:
     """Register a study before any data is collected. Returns the experiment id.
 
-    ``min_effect`` is the smallest effect worth acting on (in outcome units); it
-    is what makes a REFUTED verdict possible — you can only rule out an effect
-    relative to a defined "meaningful" threshold.
+    ``min_effect`` is the smallest effect worth acting on (in outcome units) and
+    is REQUIRED, not optional: it is what makes a REFUTED verdict possible at
+    all (see `score()` — `refuted` requires `min_effect > 0` structurally), and
+    at the default of 0.0 the study can never be refuted and CONFIRMS on a
+    trivially small effect the moment p clears alpha. A study that can't be
+    wrong isn't a test of anything — state the smallest effect worth acting on
+    before looking at data, not after.
+
+    Raises:
+        ValueError: if ``min_effect`` is not strictly positive.
     """
+    if min_effect <= 0:
+        raise ValueError(
+            f"min_effect must be > 0 (got {min_effect}) — a study preregistered at "
+            "min_effect=0 can never be REFUTED and trivially CONFIRMS; state the "
+            "smallest effect worth acting on before collecting data."
+        )
     started = started_on or date.today()
     conn.execute(
         """
@@ -270,13 +283,12 @@ def _bootstrap_ci(a: list[float], b: list[float], slug: str) -> tuple[float, flo
     return round(lo, 4), round(hi, 4)
 
 
-def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
-    """Score an experiment: N-gated verdict + effect + bootstrap CI, and — when
-    CONFIRMED — emit a governed personal prior. Returns the result dict."""
-    exp = load(conn, exp_id)
-    if exp is None:
-        raise ValueError(f"no experiment {exp_id!r}")
-
+def _score_raw(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
+    """Compute an experiment's verdict + effect + bootstrap CI WITHOUT
+    persisting or emitting a prior — the pure-compute core shared by `score()`
+    (single experiment, no cross-experiment correction) and `score_all()`
+    (batch, Benjamini–Hochberg corrected across the batch's p-values before
+    anything is written)."""
     rows = conn.execute(
         "SELECT assigned_arm, outcome_value FROM experiment_log "
         "WHERE experiment_id = ? AND adhered = TRUE AND outcome_value IS NOT NULL",
@@ -288,6 +300,23 @@ def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
 
     result: dict = {"experiment_id": exp.id, "n_a": n_a, "n_b": n_b}
 
+    # A study preregistered before min_effect became required (or written
+    # directly to the DB) can have min_effect<=0 — REFUTED is structurally
+    # impossible for it (see the `refuted` computation below) and CONFIRMED is
+    # reachable on a trivially small effect the moment p clears alpha. Flag it
+    # rather than silently scoring a claim that can't be wrong.
+    if exp.min_effect <= 0:
+        result |= {
+            "verdict": "UNFALSIFIABLE", "mean_a": None, "mean_b": None, "effect": None,
+            "effect_ci_low": None, "effect_ci_high": None, "p_value": None,
+            "summary": (
+                f"min_effect={exp.min_effect} — this study cannot be REFUTED and "
+                "would CONFIRM on any statistically significant effect regardless "
+                "of size. Re-preregister with a positive min_effect to score it."
+            ),
+        }
+        return result
+
     if n_a < exp.min_per_arm or n_b < exp.min_per_arm:
         result |= {
             "verdict": "INSUFFICIENT_N", "mean_a": None, "mean_b": None, "effect": None,
@@ -297,7 +326,6 @@ def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
                 f"outcome — need ≥{exp.min_per_arm} per arm."
             ),
         }
-        _persist_result(conn, result)
         return result
 
     mean_a, mean_b = round(mean(a), 4), round(mean(b), 4)
@@ -333,14 +361,86 @@ def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
             f"n={n_a}/{n_b}. → {verdict}"
         ),
     }
-    _persist_result(conn, result)
+    return result
 
-    if verdict == "CONFIRMED":
-        _emit_prior(conn, exp, effect, ci_low, ci_high, mean_a)
+
+def _finalize_score(conn: duckdb.DuckDBPyConnection, exp: Experiment, result: dict) -> dict:
+    """Persist a scored result and actuate its prior — shared tail of `score()`
+    and `score_all()`, called AFTER any cross-experiment correction has already
+    settled the final verdict."""
+    _persist_result(conn, result)
+    if result["verdict"] == "CONFIRMED":
+        _emit_prior(
+            conn, exp, result["effect"], result["effect_ci_low"], result["effect_ci_high"],
+            result["mean_a"],
+        )
     else:
         # A study that is no longer CONFIRMED must not keep actuating a stale prior.
         conn.execute("DELETE FROM experiment_prior WHERE experiment_id = ?", [exp.id])
     return result
+
+
+def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
+    """Score ONE experiment: N-gated verdict + effect + bootstrap CI, and —
+    when CONFIRMED — emit a governed personal prior. Returns the result dict.
+
+    No cross-experiment correction is applied here — scoring a single study in
+    isolation has nothing to correct against. Prefer `score_all()` when scoring
+    more than one experiment in the same pass; running many single-experiment
+    scores back-to-back skips the Benjamini–Hochberg control that path applies.
+    """
+    exp = load(conn, exp_id)
+    if exp is None:
+        raise ValueError(f"no experiment {exp_id!r}")
+    result = _score_raw(conn, exp)
+    return _finalize_score(conn, exp, result)
+
+
+def _apply_fdr(results: list[dict], alpha: float = _ALPHA) -> None:
+    """Benjamini–Hochberg correction across concurrently-scored experiments, in
+    place on `results`. Mirrors `lab._apply_fdr`.
+
+    Running N experiments through the same scoring pass without correction
+    risks a false CONFIRMED verdict by chance alone as N grows — the audit
+    that flagged the missing `min_effect` gate also flagged this: no
+    multiplicity control across the portfolio, unlike the observational lab
+    catalogue's `_apply_fdr`. A CONFIRMED verdict whose p-value doesn't clear
+    the BH step-up critical value is downgraded to INCONCLUSIVE.
+    """
+    indexed = [(i, r["p_value"]) for i, r in enumerate(results) if r.get("p_value") is not None]
+    m = len(indexed)
+    if m == 0:
+        return
+    ordered = sorted(indexed, key=lambda t: t[1])
+    max_k = 0
+    for rank, (_, p) in enumerate(ordered, start=1):
+        if p <= (rank / m) * alpha:
+            max_k = rank
+    crit_p = ordered[max_k - 1][1] if max_k > 0 else -1.0
+    for r in results:
+        if r.get("verdict") == "CONFIRMED" and r.get("p_value") is not None and r["p_value"] > crit_p:
+            r["verdict"] = "INCONCLUSIVE"
+            r["summary"] += (
+                " · did not survive Benjamini–Hochberg correction across "
+                f"{m} simultaneously-scored experiments — treat as suggestive, not confirmed."
+            )
+
+
+def score_all(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Score every active experiment together, applying Benjamini–Hochberg
+    correction across the batch's p-values BEFORE any result is persisted or
+    prior emitted — so a downgraded verdict never briefly writes a stale
+    CONFIRMED row or prior. This is the FDR-controlled path; prefer it over
+    repeated single-experiment `score()` calls whenever scoring more than one
+    experiment."""
+    exps = [
+        load(conn, row[0])
+        for row in conn.execute("SELECT id FROM experiments WHERE status = 'active'").fetchall()
+    ]
+    exps = [e for e in exps if e is not None]
+    results = [_score_raw(conn, e) for e in exps]
+    _apply_fdr(results)
+    return [_finalize_score(conn, e, r) for e, r in zip(exps, results, strict=True)]
 
 
 def _persist_result(conn: duckdb.DuckDBPyConnection, r: dict) -> None:

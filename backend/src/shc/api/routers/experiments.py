@@ -10,7 +10,7 @@ in ``selflab`` (deterministic, tested) — this layer only marshals I/O.
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shc import selflab
 from shc.api.deps import require_admin_key
@@ -26,9 +26,13 @@ class PreregisterIn(BaseModel):
     condition_a: str
     condition_b: str
     outcome_metric: str
+    # Required, not defaulted: min_effect=0 makes REFUTED structurally
+    # impossible and CONFIRMS on a trivially small effect — see
+    # selflab.preregister's docstring. The caller must state the smallest
+    # effect worth acting on before data collection starts.
+    min_effect: float = Field(gt=0)
     outcome_direction: str = "higher_better"
     min_per_arm: int = 6
-    min_effect: float = 0.0
     washout_hours: int = 0
     notes: str | None = None
 
@@ -112,10 +116,32 @@ async def log_experiment_day(slug: str, body: LogDayIn) -> dict:
 
 @router.post("/experiments/{slug}/score", dependencies=[Depends(require_admin_key)])
 async def score_experiment(slug: str) -> dict:
-    """Pull outcomes from the training stream, then score → verdict + effect + CI."""
+    """Pull outcomes from the training stream, then score → verdict + effect + CI.
+
+    Scores this ONE experiment in isolation — no Benjamini–Hochberg correction
+    against other studies. Prefer POST /experiments/score-all when scoring more
+    than one experiment (e.g. a routine portfolio-wide re-score); calling this
+    endpoint repeatedly across several experiments skips the multiplicity
+    control that path applies.
+    """
     async with write_ctx() as conn:
         exp = selflab.load(conn, slug)
         if exp is None:
             raise HTTPException(status_code=404, detail=f"no experiment {slug!r}")
         selflab.refresh_outcomes(conn, exp.id)
         return selflab.score(conn, exp.id)
+
+
+@router.post("/experiments/score-all", dependencies=[Depends(require_admin_key)])
+async def score_all_experiments() -> list[dict]:
+    """Refresh outcomes and score every active experiment together, with
+    Benjamini–Hochberg correction across the batch's p-values — the
+    multiplicity-controlled way to re-score the whole portfolio."""
+    async with write_ctx() as conn:
+        active_ids = [
+            row[0]
+            for row in conn.execute("SELECT id FROM experiments WHERE status = 'active'").fetchall()
+        ]
+        for exp_id in active_ids:
+            selflab.refresh_outcomes(conn, exp_id)
+        return selflab.score_all(conn)

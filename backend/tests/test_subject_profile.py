@@ -109,6 +109,7 @@ def test_suggest_suppresses_registered_slug(conn: duckdb.DuckDBPyConnection):
         condition_a="train",
         condition_b="rest",
         outcome_metric="hrv_next_morning",
+        min_effect=1.0,
     )
     suggestions = selflab.suggest_experiments(conn)
     slugs = [s["slug"] for s in suggestions]

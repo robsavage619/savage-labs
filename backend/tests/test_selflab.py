@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+
 from shc import selflab
 
 
@@ -96,6 +98,40 @@ def test_tight_null_with_min_effect_is_refuted(conn) -> None:
     assert selflab.active_priors(conn) == []
 
 
+def test_preregister_rejects_zero_min_effect(conn) -> None:
+    """min_effect=0 makes REFUTED structurally impossible and CONFIRMS on a
+    trivially small effect — reject it at preregistration, not after data
+    collection."""
+    with pytest.raises(ValueError, match="min_effect"):
+        _prereg(conn, min_effect=0.0)
+
+
+def test_preregister_rejects_negative_min_effect(conn) -> None:
+    with pytest.raises(ValueError, match="min_effect"):
+        _prereg(conn, min_effect=-1.0)
+
+
+def test_legacy_zero_min_effect_study_flagged_unfalsifiable(conn) -> None:
+    """A study inserted directly (bypassing preregister's guard — e.g. a row
+    from before this remediation) with min_effect<=0 must be flagged, not
+    silently scored as if it could be REFUTED or trivially CONFIRMED."""
+    conn.execute(
+        """
+        INSERT INTO experiments
+            (slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
+             min_per_arm, min_effect)
+        VALUES ('legacy-zero', 'test', 'x', 'a', 'b', 'top_set_e1rm:Bench Press (Barbell)', 6, 0.0)
+        """
+    )
+    exp_id = conn.execute("SELECT id FROM experiments WHERE slug = 'legacy-zero'").fetchone()[0]
+    _fill(conn, exp_id, [100, 101, 99, 100, 102, 98], [110, 111, 109, 112, 108, 110])
+
+    r = selflab.score(conn, exp_id)
+
+    assert r["verdict"] == "UNFALSIFIABLE"
+    assert selflab.active_priors(conn) == []
+
+
 def test_prior_is_retracted_when_a_study_stops_confirming(conn) -> None:
     exp = _prereg(conn)
     _fill(conn, exp, [100, 101, 99, 100, 102, 98], [110, 111, 109, 112, 108, 110])
@@ -150,3 +186,89 @@ def test_full_loop_pulls_outcome_from_training_data(conn, seed) -> None:
     r = selflab.score(conn, exp.id)
     assert r["verdict"] == "CONFIRMED", r
     assert r["effect"] > 0
+
+
+# ── Benjamini–Hochberg correction across concurrently-scored experiments ────
+
+
+def test_apply_fdr_downgrades_the_weaker_of_two_confirmed_when_padded_by_a_third():
+    """Direct unit test of the correction (real permutation-test p-values can't
+    be dialed to exact values, so exercise the BH math on constructed results —
+    the same approach as scoring's other pure-function pieces).
+
+    With only 2 hypotheses, BH is toothless: the largest-p entry always sits at
+    rank m with threshold == alpha, so any p < alpha (required for CONFIRMED)
+    auto-survives, and everyone below it survives too. A 3rd (non-confirmed,
+    high-p) result is what actually tightens the correction here — realistic,
+    since a real portfolio scores its INCONCLUSIVE studies in the same pass."""
+    results = [
+        {"verdict": "CONFIRMED", "p_value": 0.01, "summary": "A"},
+        {"verdict": "CONFIRMED", "p_value": 0.08, "summary": "B"},
+        {"verdict": "INCONCLUSIVE", "p_value": 0.50, "summary": "C"},
+    ]
+    selflab._apply_fdr(results, alpha=0.10)
+
+    assert results[0]["verdict"] == "CONFIRMED", "the strongest result must survive"
+    assert results[1]["verdict"] == "INCONCLUSIVE", "the weaker CONFIRMED must be downgraded"
+    assert "Benjamini" in results[1]["summary"]
+    assert results[2]["verdict"] == "INCONCLUSIVE"  # was never CONFIRMED; untouched
+
+
+def test_apply_fdr_survives_when_all_p_values_are_strong():
+    results = [
+        {"verdict": "CONFIRMED", "p_value": 0.001, "summary": "A"},
+        {"verdict": "CONFIRMED", "p_value": 0.005, "summary": "B"},
+    ]
+    selflab._apply_fdr(results, alpha=0.10)
+    assert results[0]["verdict"] == "CONFIRMED"
+    assert results[1]["verdict"] == "CONFIRMED"
+
+
+def test_apply_fdr_noop_on_no_p_values():
+    results = [{"verdict": "INSUFFICIENT_N", "p_value": None, "summary": "x"}]
+    selflab._apply_fdr(results)  # must not raise
+    assert results[0]["verdict"] == "INSUFFICIENT_N"
+
+
+def test_score_all_applies_correction_before_persisting(conn) -> None:
+    """Integration check: score_all() scores a real 3-experiment portfolio
+    (strong signal, weak-but-raw-significant signal, and clean null) and the
+    persisted verdicts reflect the same BH downgrade the unit test proves —
+    padding the batch changes what gets left CONFIRMED in the DB."""
+    strong = _prereg(
+        conn, slug="strong-effect", min_effect=2.0, outcome_metric="top_set_e1rm:Squat (Barbell)"
+    )
+    _fill(conn, strong, [100, 99, 101, 100, 98, 100], [130, 129, 131, 130, 128, 131])
+
+    weak = _prereg(
+        conn, slug="weak-effect", min_effect=2.0,
+        outcome_metric="top_set_e1rm:Deadlift (Barbell)",
+    )
+    _fill(conn, weak, [100, 96, 104, 98, 102, 99], [107, 103, 111, 104, 108, 106])
+
+    null = _prereg(
+        conn, slug="null-effect", min_effect=2.0, outcome_metric="top_set_e1rm:Row (Barbell)"
+    )
+    _fill(conn, null, [100, 104, 96, 101, 99, 103], [101, 97, 105, 100, 102, 98])
+
+    results = selflab.score_all(conn)
+    by_id = {r["experiment_id"]: r for r in results}
+    strong_r, weak_r, null_r = by_id[strong], by_id[weak], by_id[null]
+
+    # The strong effect must survive correction regardless of what its
+    # neighbors do; assert on the DB row rather than assuming exact verdicts
+    # for the weak/null studies, whose real permutation p-values aren't
+    # dialed to exact numbers the way the unit test above controls them.
+    assert strong_r["verdict"] == "CONFIRMED", strong_r
+    persisted = {
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT experiment_id, verdict FROM experiment_result"
+        ).fetchall()
+    }
+    assert persisted[strong] == "CONFIRMED"
+    # If the weak study raw-CONFIRMED but didn't survive BH, its persisted
+    # verdict must match the corrected (not the raw) call — the whole point
+    # of finalizing AFTER correction.
+    assert persisted[weak] == weak_r["verdict"]
+    assert persisted[null] == null_r["verdict"]
