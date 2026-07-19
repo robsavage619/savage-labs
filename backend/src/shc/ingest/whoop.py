@@ -5,7 +5,7 @@ import hashlib
 import logging
 import secrets
 import urllib.parse
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -15,14 +15,41 @@ from shc.auth.keychain import load_token, store_token
 from shc.config import settings
 from shc.db.schema import write_ctx
 
+# Fallback only — used when a record carries no `timezone_offset` (recovery
+# records don't have this field at all; see _utc_to_local_date) or the offset
+# fails to parse. Sleep/workout/cycle records DO carry a real offset and
+# should always prefer it — a hardcoded zone silently mis-dates every session
+# logged while traveling outside Pacific time.
 _LOCAL_TZ = ZoneInfo("America/Los_Angeles")
 
 
-def _utc_to_local_date(ts: str) -> str:
+def _parse_offset(offset: str | None) -> timezone | None:
+    """Parse a WHOOP `timezone_offset` string ("+HH:MM" / "-HH:MM") into a
+    fixed-offset tzinfo, or None if missing/malformed."""
+    if not offset or len(offset) < 6 or offset[0] not in "+-":
+        return None
+    try:
+        sign = 1 if offset[0] == "+" else -1
+        hours, minutes = offset[1:].split(":")
+        return timezone(sign * timedelta(hours=int(hours), minutes=int(minutes)))
+    except (ValueError, IndexError):
+        return None
+
+
+def _utc_to_local_date(ts: str, tz_offset: str | None = None) -> str:
     """Convert a UTC ISO-8601 timestamp to local calendar date (YYYY-MM-DD).
 
     WHOOP timestamps are UTC; truncating to date directly puts late-evening
-    PDT sessions on tomorrow's date, skewing ACWR and zone calculations.
+    local sessions on tomorrow's date, skewing ACWR and zone calculations.
+
+    Prefers the record's own `timezone_offset` (sleep/workout/cycle records
+    carry one) over the hardcoded Pacific-time fallback — without this, a
+    session logged while traveling outside Pacific time silently lands on the
+    wrong calendar date, shifting which week it counts toward. Recovery
+    records carry NO `timezone_offset` field at all (confirmed against the
+    live API — not a parsing gap, WHOOP simply doesn't send one there), so
+    recovery dates always use the fallback; every other caller should pass
+    the record's real offset.
     """
     if not ts:
         return ""
@@ -30,7 +57,8 @@ def _utc_to_local_date(ts: str) -> str:
         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
-        return dt.astimezone(_LOCAL_TZ).date().isoformat()
+        tz = _parse_offset(tz_offset) or _LOCAL_TZ
+        return dt.astimezone(tz).date().isoformat()
     except ValueError:
         return ts[:10]
 
@@ -216,6 +244,8 @@ async def sync_recovery() -> int:
                 skipped_no_score += 1
                 continue
             external_id = str(r["cycle_id"])
+            # No timezone_offset on recovery records (confirmed against the
+            # live API) — this always uses _utc_to_local_date's Pacific fallback.
             rec_date = _utc_to_local_date(r.get("created_at", ""))
             row = {
                 "id": external_id,
@@ -282,7 +312,7 @@ async def sync_sleep() -> int:
             row = {
                 "id": external_id,
                 "source": "whoop",
-                "night_date": _utc_to_local_date(r.get("start", "")),
+                "night_date": _utc_to_local_date(r.get("start", ""), r.get("timezone_offset")),
                 "ts_in": r.get("start"),
                 "ts_out": r.get("end"),
                 "stages_json": str(ss),
@@ -550,7 +580,7 @@ async def sync_workout() -> int:
                     """,
                     {
                         "id": wid,
-                        "date": _utc_to_local_date(r.get("start") or ""),
+                        "date": _utc_to_local_date(r.get("start") or "", r.get("timezone_offset")),
                         "modality": kind,
                         "duration_min": _duration_min(r.get("start"), r.get("end")),
                         "avg_hr": score.get("average_heart_rate"),
@@ -585,7 +615,11 @@ async def sync_cycle() -> int:
                 continue
             row = {
                 "id": str(r["id"]),
-                "date": r.get("start", "")[:10],
+                # Was a raw UTC-timestamp truncation (r.get("start", "")[:10]) —
+                # exactly the "late-evening session lands on tomorrow's date"
+                # bug _utc_to_local_date exists to prevent, just not applied
+                # here. Cycle records DO carry timezone_offset; use it.
+                "date": _utc_to_local_date(r.get("start", ""), r.get("timezone_offset")),
                 "score_state": score_state,
                 "strain": score.get("strain"),
                 "kilojoule": score.get("kilojoule"),
