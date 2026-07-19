@@ -675,7 +675,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     try:
         from shc.training.autoregulation import prescription_context_block
 
-        rx_block = prescription_context_block(conn)
+        rx_block = prescription_context_block(conn, daily_state=state)
         if rx_block:
             lines.append("\n" + rx_block)
     except Exception as _e:
@@ -1611,7 +1611,7 @@ def validate_plan(
                 try:
                     from shc.training.autoregulation import weekly_prescription
 
-                    rx = weekly_prescription(conn)
+                    rx = weekly_prescription(conn, daily_state=state)
                 except Exception as exc:
                     log.debug("validate_plan: prescription unavailable (#18/#22): %s", exc)
                     rx = None

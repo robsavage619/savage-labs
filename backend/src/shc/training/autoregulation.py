@@ -136,6 +136,9 @@ class Prescription:
     development: dict[str, dict] = field(default_factory=dict)  # per-muscle dev brief
     session_split: list[dict] = field(default_factory=list)  # [{session, muscles, sets}]
     protein_gate: dict = field(default_factory=dict)  # {adequate, avg_7d, target, pct}
+    # Visible fail-visibly notes for any signal this prescription had to run blind
+    # on (e.g. stale WHOOP blinding the conditioning-interference hold below).
+    data_gaps: list[str] = field(default_factory=list)
 
 
 # Number of muscles that must independently signal fatigue to trigger a deload.
@@ -248,26 +251,40 @@ def _muscle_performance(
 def _conditioning_pressure(
     conn: duckdb.DuckDBPyConnection,
     use_rpe_only: bool = False,
-) -> float | None:
+    state: dict | None = None,
+) -> tuple[float | None, bool]:
     """Conditioning ACWR — proxy for how much pickleball/cardio load is live.
 
-    Read lazily from the daily state; None if unavailable. > 1.3 means the
-    lower body is already absorbing meaningful court/cardio stimulus.
+    Read lazily from the daily state (pass an already-computed one via ``state``
+    to avoid recomputing it); > 1.3 means the lower body is already absorbing
+    meaningful court/cardio stimulus.
 
-    When ``use_rpe_only=True`` (propranolol day), returns None to bypass the
-    WHOOP-derived conditioning ACWR — HR is suppressed by the beta-blocker,
-    making strain systematically understate real load; RPE is the only unbiased
-    signal on dosed days.
+    When ``use_rpe_only=True`` (propranolol day), returns ``(None, False)`` to
+    bypass the WHOOP-derived conditioning ACWR — HR is suppressed by the
+    beta-blocker, making strain systematically understate real load; RPE is the
+    only unbiased signal on dosed days. This is a deliberate bypass, not a data
+    blindness, so it does not set the blind flag.
+
+    Returns ``(acwr, blind)``. ``blind=True`` when WHOOP hasn't synced in >2
+    days — the exact same staleness ``_gates`` uses to null ``conditioning_acwr``
+    before scoring the leg-protection gate (see ``metrics.py::_gates``). Without
+    this, a sync outage makes the chronic conditioning window fill with zeros,
+    the ratio silently reads ~0, and this controller would grow leg volume on a
+    fabricated "no court load" signal in the same moment the gate is printing a
+    BLIND warning about the same data.
     """
     if use_rpe_only:
-        return None
+        return None, False
     try:
         from shc.metrics import compute_daily_state
 
-        return compute_daily_state(conn)["training_load"].get("conditioning_acwr")
+        s = state if state is not None else compute_daily_state(conn)
+        if s.get("freshness", {}).get("whoop_stale"):
+            return None, True
+        return s["training_load"].get("conditioning_acwr"), False
     except Exception as exc:  # noqa: BLE001 — state optional; missing → no debit
         log.debug("conditioning pressure unavailable: %s", exc)
-        return None
+        return None, False
 
 
 def _confidence_add_factor(
@@ -1305,6 +1322,7 @@ def weekly_deload_status(conn: duckdb.DuckDBPyConnection) -> dict:
 def weekly_prescription(
     conn: duckdb.DuckDBPyConnection,
     propranolol_day: bool = False,
+    daily_state: dict | None = None,
 ) -> Prescription:
     """Build this week's per-muscle volume prescription from Rob's logged data.
 
@@ -1315,12 +1333,25 @@ def weekly_prescription(
     ``propranolol_day`` bypasses WHOOP-derived conditioning ACWR (HR-suppressed,
     unreliable on dosed days) and restores full RPE-drift authority to the
     volume decision.
+
+    Pass ``daily_state`` (an already-computed ``DailyState`` dict) when the
+    caller has one in scope, to avoid recomputing it just to read the
+    conditioning ACWR + staleness flag.
     """
-    state, targets, report, perfs, deload = _weekly_deload_context(conn)
-    meso_id = state.id if state else ""
+    meso_state, targets, report, perfs, deload = _weekly_deload_context(conn)
+    meso_id = meso_state.id if meso_state else ""
     this_week = _iso_week_start(date.today())
     soreness = _recent_soreness(conn)
-    conditioning_acwr = _conditioning_pressure(conn, use_rpe_only=propranolol_day)
+    conditioning_acwr, conditioning_blind = _conditioning_pressure(
+        conn, use_rpe_only=propranolol_day, state=daily_state
+    )
+    data_gaps: list[str] = []
+    if conditioning_blind:
+        data_gaps.append(
+            "WHOOP not synced >2d — conditioning ACWR blind; the leg-volume "
+            "interference hold cannot actuate this week (verify court/cardio "
+            "load manually before trusting a leg ADD)"
+        )
 
     targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
 
@@ -1449,15 +1480,24 @@ def weekly_prescription(
         development=development,
         session_split=_session_split(muscle_rx),
         protein_gate=protein,
+        data_gaps=data_gaps,
     )
 
 
-def prescription_context_block(conn: duckdb.DuckDBPyConnection) -> str:
-    """Markdown block injected into the workout planner — the build order."""
-    rx = weekly_prescription(conn)
+def prescription_context_block(
+    conn: duckdb.DuckDBPyConnection, daily_state: dict | None = None
+) -> str:
+    """Markdown block injected into the workout planner — the build order.
+
+    Pass ``daily_state`` (an already-computed ``DailyState`` dict) when the
+    caller has one in scope to avoid recomputing it.
+    """
+    rx = weekly_prescription(conn, daily_state=daily_state)
     if not rx.muscles:
         return ""
     lines = ["## THIS WEEK'S PRESCRIPTION (build the session from this)"]
+    for gap in rx.data_gaps:
+        lines.append(f"⚠ **DATA GAP** — {gap}")
     if rx.deload.get("recommended"):
         lines.append(
             f"⚠ **DELOAD WEEK** — {rx.deload['reason']}. Volume is halved toward MEV "

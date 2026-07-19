@@ -451,6 +451,32 @@ def test_weekly_prescription_smoke(conn, seed):
     assert "target" in rx.protein_gate
 
 
+def test_weekly_prescription_reuses_passed_in_daily_state(conn, seed, monkeypatch) -> None:
+    """Passing an already-computed `daily_state` must not trigger a second
+    `compute_daily_state` call inside `_conditioning_pressure` — the redundant
+    recompute the audit flagged (every caller that already has a state in scope
+    was silently paying for it twice)."""
+    import shc.metrics as metrics_mod
+
+    calls = {"n": 0}
+    real_compute = metrics_mod.compute_daily_state
+
+    def _counting_compute(*args, **kwargs):
+        calls["n"] += 1
+        return real_compute(*args, **kwargs)
+
+    monkeypatch.setattr(metrics_mod, "compute_daily_state", _counting_compute)
+
+    today = date.today()
+    seed.workout(today, "Squat (Barbell)", [(60.0, 8)] * 4)
+
+    precomputed = metrics_mod.compute_daily_state(conn)
+    assert calls["n"] == 1  # the precompute itself
+
+    weekly_prescription(conn, daily_state=precomputed)
+    assert calls["n"] == 1, "weekly_prescription recomputed daily_state despite receiving one"
+
+
 def _make_rx(muscle: str, target: int, action: str = "add") -> MusclePrescription:
     return MusclePrescription(
         muscle=muscle,

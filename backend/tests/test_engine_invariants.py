@@ -12,13 +12,23 @@ See ENGINE_INVARIANTS.md for the prose contract.
 
 from __future__ import annotations
 
+import uuid
 from datetime import date, timedelta
 
 import pytest
 
 from shc.ai.workout_planner import load_cap_pct
-from shc.metrics import _apply_band, muscle_group
-from shc.training.autoregulation import _decide
+from shc.metrics import (
+    CheckinMetrics,
+    ReadinessSnapshot,
+    RecoveryMetrics,
+    SleepMetrics,
+    TrainingLoadMetrics,
+    _apply_band,
+    _gates,
+    muscle_group,
+)
+from shc.training.autoregulation import _decide, weekly_prescription
 from shc.training.self_learning import _historical_weekly_acwr
 
 # ── INVARIANT 1: the ACWR band-fitter measures on the SAME window the live gate
@@ -402,4 +412,90 @@ def test_deload_week_does_not_poison_confidence(conn) -> None:
     assert conf_before is not None and conf_after is not None
     assert conf_after >= conf_before, (
         f"deload cratered confidence {conf_before} -> {conf_after} — the self-reinforcing trap"
+    )
+
+
+# ── INVARIANT 8: the safety gate and the volume controller consume ONE
+# conditioning-ACWR staleness read. The audit found `_gates` printing a visible
+# "BLIND" warning on stale WHOOP while `_conditioning_pressure` (the volume
+# controller) kept reading the raw, un-blinded ratio — which trends toward zero
+# as the chronic window fills with zeros, silently switching OFF the
+# leg-interference hold in the same moment the gate says it can't see the data.
+# Teeth: stop threading `state["freshness"]["whoop_stale"]` into
+# `_conditioning_pressure` and this fails (the controller sees the raw ratio).
+
+
+def test_gate_and_controller_agree_whoop_is_stale() -> None:
+    """`_gates` fires its visible BLIND reason exactly when WHOOP is stale."""
+    rec = RecoveryMetrics(score_date=(date.today() - timedelta(days=5)).isoformat())
+    sleep = SleepMetrics()
+    load = TrainingLoadMetrics()
+    chk = CheckinMetrics()
+    readiness = ReadinessSnapshot(tier="green")
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert any("BLIND" in r for r in g.reasons), "gate did not surface the stale-WHOOP warning"
+
+
+def test_volume_controller_blind_when_whoop_stale(conn, seed) -> None:
+    """`weekly_prescription` must not trust `conditioning_acwr` when the daily
+    state it's handed says WHOOP is stale — regardless of what raw ratio happens
+    to be sitting on the DTO (the real pipeline zero-fills it, but the controller
+    must not rely on that incidental behavior; it must honor the blind flag)."""
+    today = date.today()
+    for wk in range(3):
+        seed.workout(date.fromordinal(today.toordinal() - wk * 7), "Squat (Barbell)", [(60.0, 8)] * 4)
+
+    fake_state = {
+        "freshness": {"whoop_stale": True},
+        # Deliberately a HIGH raw ratio — proves the blind flag wins over the
+        # number, not merely over an incidentally-zeroed one.
+        "training_load": {"conditioning_acwr": 2.5},
+    }
+    rx = weekly_prescription(conn, daily_state=fake_state)
+
+    assert any("blind" in gap.lower() for gap in rx.data_gaps), (
+        "prescription did not surface the WHOOP-stale/conditioning-blind data gap"
+    )
+    # With the signal blind, no muscle's HOLD reason may cite conditioning/court
+    # load — that would mean the raw (untrusted) ratio leaked through anyway.
+    for m in rx.muscles:
+        assert "court/cardio load high" not in m.reason, (
+            f"{m.muscle} cites conditioning interference despite a blind signal: {m.reason}"
+        )
+
+
+def test_volume_controller_sees_fresh_conditioning_signal() -> None:
+    """Sanity check on the other branch: a fresh (non-blind) state's real ratio
+    still reaches `_decide` normally — the fix only suppresses the STALE case."""
+    from shc.training.autoregulation import _conditioning_pressure
+
+    class _FakeConn:
+        pass
+
+    fake_state = {
+        "freshness": {"whoop_stale": False},
+        "training_load": {"conditioning_acwr": 1.9},
+    }
+    acwr, blind = _conditioning_pressure(_FakeConn(), state=fake_state)
+    assert blind is False
+    assert acwr == 1.9
+
+
+def test_weekly_prescription_end_to_end_blind_on_stale_whoop(conn, seed) -> None:
+    """Full wiring check with NO daily_state passed: `weekly_prescription`
+    computes its own state via `compute_daily_state`, which must derive the
+    same blind flag `_gates` derives from a genuinely stale `recovery` row."""
+    today = date.today()
+    for wk in range(3):
+        seed.workout(date.fromordinal(today.toordinal() - wk * 7), "Squat (Barbell)", [(60.0, 8)] * 4)
+    conn.execute(
+        "INSERT INTO recovery (id, source, date, score, hrv, rhr, content_hash) "
+        "VALUES (?, 'whoop', ?, 70.0, 60.0, 55, 'h')",
+        [str(uuid.uuid4()), today - timedelta(days=5)],
+    )
+
+    rx = weekly_prescription(conn)
+
+    assert any("blind" in gap.lower() for gap in rx.data_gaps), (
+        "end-to-end prescription did not blind on a genuinely stale recovery row"
     )
