@@ -32,14 +32,26 @@ async def _recompute_scores() -> None:
     """
     from shc.db.schema import write_ctx
     from shc.training.mesocycle import compute_all_scores, ensure_active_mesocycle
-    from shc.training.self_learning import detect_accuracy_degradation, fit_all
+    from shc.training.self_learning import (
+        acwr_fit_data_changed_since_last_fit,
+        detect_accuracy_degradation,
+        fit_all,
+    )
 
     async with write_ctx() as conn:
         compute_all_scores(conn)
         deg = detect_accuracy_degradation(conn)
         if deg.get("degrading"):
-            fit_all(conn, ensure_active_mesocycle(conn).id)
-            log.warning("engine accuracy degradation — re-fit triggered: %s", deg.get("message"))
+            if acwr_fit_data_changed_since_last_fit(conn):
+                fit_all(conn, ensure_active_mesocycle(conn).id)
+                log.warning(
+                    "engine accuracy degradation — re-fit triggered: %s", deg.get("message")
+                )
+            else:
+                log.info(
+                    "engine accuracy degradation detected but no new data since last "
+                    "ACWR fit — skipping re-fit (would be a no-op): %s", deg.get("message")
+                )
 
 
 async def _recompute_adherence() -> None:

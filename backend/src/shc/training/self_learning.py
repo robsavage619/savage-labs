@@ -416,6 +416,17 @@ def fit_acwr_bands(
     return {"resistance": res_bands, "conditioning": cond_bands}
 
 
+# Max downward move (tightening) of the personal conditioning forbid_legs band
+# per fit, and the hard floor it can never cross. Conditioning is the one ACWR
+# band that can actually tighten the gate (resistance is floor_only downstream —
+# see metrics._gates). That creates a feedback risk the audit named: a tighter
+# forbid_legs suppresses leg training → lowers the load distribution the NEXT
+# fit draws from → tightens further. Loosening (the band moving UP) is
+# unclamped — only the direction that reduces training gets rate-limited.
+_COND_TIGHTEN_MAX_STEP = 0.1
+_COND_TIGHTEN_FLOOR_FACTOR = 0.85
+
+
 def persist_acwr_bands(
     conn: duckdb.DuckDBPyConnection,
     min_weeks: int = _ACWR_MIN_WEEKS,
@@ -424,6 +435,8 @@ def persist_acwr_bands(
 
     Returns True if bands were stored, False if insufficient data.
     """
+    from shc.metrics import COND_ACWR_FORBID_LEGS
+
     bands = fit_acwr_bands(conn, min_weeks=min_weeks)
     if bands is None:
         return False
@@ -431,11 +444,34 @@ def persist_acwr_bands(
     res_n = len(_historical_weekly_acwr(conn, "hevy_tonnes"))
     cond_n = len(_historical_weekly_acwr(conn, "whoop_strain"))
 
+    prior_forbid = conn.execute(
+        "SELECT value FROM personal_acwr_bands "
+        "WHERE arm = 'conditioning' AND threshold_name = 'forbid_legs'"
+    ).fetchone()
+    new_forbid = bands["conditioning"]["forbid_legs"]
+    if prior_forbid is not None:
+        prior_value = float(prior_forbid[0])
+        hard_floor = COND_ACWR_FORBID_LEGS * _COND_TIGHTEN_FLOOR_FACTOR
+        if new_forbid < prior_value:
+            clamped = max(new_forbid, prior_value - _COND_TIGHTEN_MAX_STEP, hard_floor)
+            if clamped != new_forbid:
+                log.info(
+                    "persist_acwr_bands: conditioning forbid_legs tighten clamped "
+                    "%.2f -> %.2f -> %.2f (max step %.2f, floor %.2f)",
+                    prior_value,
+                    new_forbid,
+                    clamped,
+                    _COND_TIGHTEN_MAX_STEP,
+                    hard_floor,
+                )
+            new_forbid = clamped
+    bands["conditioning"]["forbid_legs"] = new_forbid
+
     rows = [
         ("resistance", "rest", bands["resistance"]["rest"], res_n),
         ("resistance", "low", bands["resistance"]["low"], res_n),
         ("resistance", "mod", bands["resistance"]["mod"], res_n),
-        ("conditioning", "forbid_legs", bands["conditioning"]["forbid_legs"], cond_n),
+        ("conditioning", "forbid_legs", new_forbid, cond_n),
     ]
     for arm, name, value, n in rows:
         conn.execute(
@@ -450,6 +486,37 @@ def persist_acwr_bands(
             [arm, name, value, n],
         )
     return True
+
+
+def acwr_fit_data_changed_since_last_fit(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Whether any workout/sleep/cardio data is newer than the last ACWR fit.
+
+    Re-fitting deterministic percentile bands on an UNCHANGED dataset produces
+    the same parameters — a logged "re-fit triggered" that is actually a no-op.
+    The nightly job's accuracy-degradation branch calls fit_all() moments after
+    compute_all_scores() already fit on the same data in the same run; without
+    this guard that call always re-fits nothing while looking like a
+    self-correction (and feeds the conditioning-tighten spiral risk
+    _COND_TIGHTEN_MAX_STEP exists to bound). No prior fit at all counts as
+    "changed" — there's nothing to skip re-fitting.
+    """
+    last_fit = conn.execute("SELECT MAX(fitted_at) FROM personal_acwr_bands").fetchone()
+    if not last_fit or last_fit[0] is None:
+        return True
+    fitted_at = last_fit[0]
+
+    latest_data = conn.execute(
+        """
+        SELECT GREATEST(
+            COALESCE((SELECT MAX(started_at) FROM workouts), TIMESTAMP '1970-01-01'),
+            COALESCE((SELECT MAX(night_date)::TIMESTAMP FROM sleep), TIMESTAMP '1970-01-01'),
+            COALESCE((SELECT MAX(date)::TIMESTAMP FROM cardio_sessions), TIMESTAMP '1970-01-01')
+        )
+        """
+    ).fetchone()
+    if not latest_data or latest_data[0] is None:
+        return False
+    return bool(latest_data[0] > fitted_at)
 
 
 def read_acwr_bands(conn: duckdb.DuckDBPyConnection) -> dict[str, float] | None:

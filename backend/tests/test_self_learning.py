@@ -191,6 +191,26 @@ def test_fit_acwr_bands_insufficient_data_returns_none(conn) -> None:
     assert result is None
 
 
+def _whoop_strain(conn, day: date, strain: float) -> None:
+    wid = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO workouts (id, source, started_at, kind, strain, content_hash) "
+        "VALUES (?, 'whoop', ?, 'running', ?, ?)",
+        [wid, datetime.combine(day, datetime.min.time()), strain, wid],
+    )
+
+
+def _seed_dense_acwr_history(conn, seed, weeks: int = 20) -> None:
+    """Dense daily hevy tonnage + WHOOP strain for `weeks` weeks — comfortably
+    clears both _ACWR_MIN_WEEKS (12) and the per-week _ACWR_MIN_CHRONIC_DAYS (7)
+    floor, since every day has nonzero load for both arms."""
+    base = date.today() - timedelta(weeks=weeks)
+    for i in range(weeks * 7):
+        d = base + timedelta(days=i)
+        seed.workout(d, "Bench Press (Barbell)", [(100.0, 8)])
+        _whoop_strain(conn, d, 10.0)
+
+
 # ── persist + read_acwr_bands ─────────────────────────────────────────────────
 
 
@@ -228,6 +248,121 @@ def test_read_acwr_bands_partial_returns_none(conn) -> None:
         " VALUES ('resistance', 'rest', 2.0, 10)"
     )
     assert read_acwr_bands(conn) is None
+
+
+# ── conditioning tighten-rate limiter ───────────────────────────────────────
+
+
+def test_conditioning_forbid_legs_tighten_is_rate_limited(conn, seed) -> None:
+    """A fit that WANTS to drop forbid_legs by a full point may only move it
+    down by _COND_TIGHTEN_MAX_STEP from the previously stored value — breaking
+    the gate-suppresses-legs -> less data -> tighter-fit spiral."""
+    from shc.training.self_learning import _COND_TIGHTEN_MAX_STEP
+
+    _seed_dense_acwr_history(conn, seed)
+    assert persist_acwr_bands(conn) is True
+    natural = conn.execute(
+        "SELECT value FROM personal_acwr_bands "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+    ).fetchone()[0]
+
+    # Simulate a much higher PRIOR fit (as if an earlier, looser era was fitted).
+    inflated_prior = natural + 1.0
+    conn.execute(
+        "UPDATE personal_acwr_bands SET value = ? "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'",
+        [inflated_prior],
+    )
+
+    # Re-fit on the SAME (unchanged) underlying data — the natural fit is still
+    # `natural`, a full 1.0 below the (simulated) prior stored value.
+    assert persist_acwr_bands(conn) is True
+    clamped = conn.execute(
+        "SELECT value FROM personal_acwr_bands "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+    ).fetchone()[0]
+
+    assert clamped == pytest.approx(inflated_prior - _COND_TIGHTEN_MAX_STEP), (
+        f"expected exactly one max-step tighten from {inflated_prior}, got {clamped} "
+        f"(natural fit was {natural})"
+    )
+    assert clamped > natural, "the clamp must prevent jumping straight to the natural value"
+
+
+def test_conditioning_forbid_legs_tighten_never_crosses_hard_floor(conn, seed) -> None:
+    from shc.metrics import COND_ACWR_FORBID_LEGS
+    from shc.training.self_learning import _COND_TIGHTEN_FLOOR_FACTOR
+
+    _seed_dense_acwr_history(conn, seed)
+    hard_floor = COND_ACWR_FORBID_LEGS * _COND_TIGHTEN_FLOOR_FACTOR
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks) "
+        "VALUES ('conditioning', 'forbid_legs', ?, 20)",
+        [hard_floor + 0.01],
+    )
+
+    assert persist_acwr_bands(conn) is True
+    value = conn.execute(
+        "SELECT value FROM personal_acwr_bands "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+    ).fetchone()[0]
+    assert value >= hard_floor
+
+
+def test_conditioning_forbid_legs_loosening_is_unclamped(conn, seed) -> None:
+    """Loosening (moving UP) is not rate-limited — only tightening is."""
+    _seed_dense_acwr_history(conn, seed)
+    assert persist_acwr_bands(conn) is True
+    natural = conn.execute(
+        "SELECT value FROM personal_acwr_bands "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+    ).fetchone()[0]
+
+    # Simulate a much LOWER prior fit — the natural value is a big loosening move.
+    conn.execute(
+        "UPDATE personal_acwr_bands SET value = ? "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'",
+        [natural - 1.0],
+    )
+    assert persist_acwr_bands(conn) is True
+    value = conn.execute(
+        "SELECT value FROM personal_acwr_bands "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+    ).fetchone()[0]
+    assert value == pytest.approx(natural)
+
+
+# ── acwr_fit_data_changed_since_last_fit ────────────────────────────────────
+
+
+def test_data_changed_guard_true_with_no_prior_fit(conn) -> None:
+    from shc.training.self_learning import acwr_fit_data_changed_since_last_fit
+
+    assert acwr_fit_data_changed_since_last_fit(conn) is True
+
+
+def test_data_changed_guard_false_when_nothing_new(conn) -> None:
+    from shc.training.self_learning import acwr_fit_data_changed_since_last_fit
+
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.8, 20, now())"
+    )
+    assert acwr_fit_data_changed_since_last_fit(conn) is False
+
+
+def test_data_changed_guard_true_after_new_workout(conn, seed) -> None:
+    from shc.training.self_learning import acwr_fit_data_changed_since_last_fit
+
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.8, 20, now())"
+    )
+    # seed.workout logs at midnight of the given day — use tomorrow so its
+    # timestamp is unambiguously after the fitted_at captured just above (`now()`
+    # is today's current wall-clock time, later than today's midnight).
+    seed.workout(date.today() + timedelta(days=1), "Bench Press (Barbell)", [(100.0, 8)])
+    assert acwr_fit_data_changed_since_last_fit(conn) is True
 
 
 # ── fit_sleep_bands ───────────────────────────────────────────────────────────
