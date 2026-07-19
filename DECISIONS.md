@@ -196,3 +196,13 @@ Resolved 2026-07-12 (Rob-confirmed):
 **Consequences.** Unknown data can no longer authorize HIGH work, stale sleep cannot suppress a current day, and every validator/persistence/UI consumer sees the same deload flag. Regression coverage lives in `test_compute_daily_state.py` and `test_autoregulation.py`.
 
 ---
+
+## 2026-07-18 — A crashed lab runner is ERROR, never a verdict
+
+**Context.** `_run_rhr_trend_hrv_drop` raised on every cycle (`dict()` over 3-tuple rows). `lab.run_all` caught the exception and recorded it as `inconclusive`, so `/api/workout/context` rendered "[INCONCLUSIVE] … runner error: … (n=0)" — a broken runner reading as a legitimate null result. Because `selflab.suggest_experiments` selects `WHERE verdict IN ('inconclusive','insufficient')`, the crash was also being nominated as an n-of-1 study candidate.
+
+**Decision.** Caught runner exceptions get a distinct `error` verdict, not `inconclusive`. It sorts first in the context section, renders without the stats suffix (`(n=0)` implies a test that ran and found nothing), and carries the exception type. `lab_findings.verdict` stays an unconstrained VARCHAR.
+
+**Why.** "Fail visibly, not silently" (CLAUDE.md). An exception means the hypothesis was never tested — that is categorically different from tested-and-null, and only the latter is evidence. Blending them lets a bug silently shrink the evidence base while looking like a finding.
+
+**Consequences.** Verdict strings are a coupling surface: `suggest_experiments`, the `lab_findings_section` sort/tag maps, and `_apply_fdr` all branch on them. Adding a verdict value silently changes experiment candidacy — check those three call sites. `error` findings are excluded from FDR (p_value is None) and from experiment promotion. Guardrail tests in `backend/tests/test_lab_runner_errors.py`, including a parametrized check that no registered runner raises on a cold database.
