@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-19 — Resistance ACWR bands retired; only conditioning is personalized
+
+**Context.** `self_learning.fit_acwr_bands` fitted personal percentiles for all four ACWR thresholds (resistance REST/LOW/MOD + conditioning forbid_legs), persisted them, and every status surface (mesocycle context block, `/api/training/self-learning/status`) reported them as "personal (fitted)". But `metrics._gates` applied the three resistance bands `floor_only` (`max(personal, population)`) — and a percentile of Rob's own load distribution is, by construction, always at or below the population thresholds it's fitted from a noise-dominated N=1 baseline against. `max()` therefore always resolved to population. The resistance fit was real math, real persistence, real status reporting — and could provably never once change the gate.
+
+**Decision.** `fit_acwr_bands`/`persist_acwr_bands` no longer fit or write resistance bands at all; `persist_acwr_bands` deletes any legacy resistance rows on its next run. `read_acwr_bands` returns a dict whenever `COND_ACWR_FORBID_LEGS` is present (resistance keys tolerated if a pre-remediation table still has them, but no longer required). `metrics._gates` reads `RES_ACWR_REST/LOW/MOD` as the plain population constants — no personalization branch. Status surfaces now say "resistance: population (by design)" instead of implying an active personal fit.
+
+**Why.** Computing, persisting, and advertising a number that provably cannot affect a decision is worse than not computing it — it reads as personalization that isn't there, and it was the kind of finding brutal audits exist to catch (see `ENGINE_INVARIANTS.md` invariant 6). Conditioning stays fitted because it does NOT apply `floor_only` symmetrically — it can tighten below population once well-sampled (`_ACWR_TIGHTEN_MIN_WEEKS`), so a personal conditioning fit is a real, load-bearing signal.
+
+**Consequences.** `_RES_PERCENTILES` removed. `fit_acwr_bands` returns `{"conditioning": {...}}` only (was `{"resistance": {...}, "conditioning": {...}}`). New end-to-end invariant test (`test_resistance_acwr_personal_bands_never_reach_the_gate`) writes absurdly tight resistance values directly into `personal_acwr_bands` and asserts `_gates` still reads population — the coverage gap the audit found (invariant 6 previously only unit-tested `_apply_band` in isolation).
+
+---
+
 ## 2026-07-17 — Muscle-group gate is overridable, explicitly and audited
 
 **Context.** The `/api/workout/plan` gate blocks exercises whose muscle group is in `forbid_muscle_groups` (a recovery window — e.g. push/pull trained yesterday need 2 days). Unlike `max_intensity`, this had NO override path: even a deliberate, well-reasoned light train-through (Rob wanting a light upper-body pump the day before a pickleball tournament, to spare his legs) was hard-rejected, and the intensity `override_reason` explicitly does not touch it. For a single-user tool meant to serve the athlete, that was too rigid — the engine should let Rob make an informed choice, not forbid it outright.

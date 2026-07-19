@@ -381,13 +381,41 @@ async def get_self_learning_status() -> dict[str, Any]:
         ).fetchone()
         rpe_pct = round(rpe_row[0] / rpe_row[1] * 100, 1) if rpe_row and rpe_row[1] else 0
 
+        cond_meta_row = conn.execute(
+            "SELECT fitted_at, sample_weeks FROM personal_acwr_bands "
+            "WHERE arm = 'conditioning' AND threshold_name = 'forbid_legs'"
+        ).fetchone()
         return {
             "acwr_bands": {
+                # Top-level fields are conditioning-only in practice — resistance
+                # is never fitted (floor_only downstream, see
+                # self_learning.fit_acwr_bands' docstring), so personal_bands
+                # only ever contains COND_ACWR_FORBID_LEGS.
                 "source": "personal" if personal_bands else "population",
                 "active": personal_bands or population_bands,
                 "population": population_bands,
                 "fitted_at": str(acwr_meta_row[0]) if acwr_meta_row and acwr_meta_row[0] else None,
                 "sample_weeks": acwr_meta_row[1] if acwr_meta_row else None,
+                # Explicit per-arm breakdown so resistance's status isn't just
+                # inferred from active == population — it's never fitted, by
+                # design, because it's floor_only against the population
+                # injury ceiling and a personal fit can never move the gate.
+                "resistance": {
+                    "source": "population (by design)",
+                    "reason": (
+                        "REST/LOW/MOD are absolute injury-spike ceilings applied "
+                        "floor_only — a personal fit sits below the population "
+                        "threshold by construction and can never tighten or "
+                        "loosen the gate, so it is not fitted"
+                    ),
+                },
+                "conditioning": {
+                    "source": "personal (fitted)" if cond_meta_row else "population",
+                    "fitted_at": (
+                        str(cond_meta_row[0]) if cond_meta_row and cond_meta_row[0] else None
+                    ),
+                    "sample_weeks": cond_meta_row[1] if cond_meta_row else None,
+                },
                 "rpe_adjusted": False,
                 "rpe_adjusted_blocked": (
                     f"RPE logged on only {rpe_pct}% of sets — "

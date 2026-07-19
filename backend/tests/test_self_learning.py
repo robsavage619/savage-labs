@@ -242,12 +242,47 @@ def test_persist_and_read_acwr_bands_roundtrip(conn) -> None:
 
 
 def test_read_acwr_bands_partial_returns_none(conn) -> None:
-    """If only some thresholds are stored (e.g. partial migration), return None."""
+    """A table with only resistance rows (e.g. a pre-remediation table
+    persist_acwr_bands hasn't cleaned yet) and no conditioning row returns
+    None — resistance alone is never usable."""
     conn.execute(
         "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks)"
         " VALUES ('resistance', 'rest', 2.0, 10)"
     )
     assert read_acwr_bands(conn) is None
+
+
+def test_read_acwr_bands_conditioning_only_is_sufficient(conn) -> None:
+    """As of the 2026-07 remediation, resistance is never fitted — a table
+    holding ONLY the conditioning row (the normal post-remediation state) must
+    still return a usable dict, not None."""
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks)"
+        " VALUES ('conditioning', 'forbid_legs', 1.72, 40)"
+    )
+    bands = read_acwr_bands(conn)
+    assert bands is not None
+    assert bands == {"COND_ACWR_FORBID_LEGS": pytest.approx(1.72)}
+
+
+def test_persist_acwr_bands_deletes_legacy_resistance_rows(conn, seed) -> None:
+    """A pre-remediation table with resistance rows gets those rows deleted on
+    the next persist_acwr_bands run, so a stale "personal (fitted)" resistance
+    value can't keep showing up in status surfaces no code path reads it from."""
+    for name, value in (("rest", 1.9), ("low", 1.6), ("mod", 1.3)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 50, now())",
+            [name, value],
+        )
+    _seed_dense_acwr_history(conn, seed)
+
+    persist_acwr_bands(conn)
+
+    remaining = conn.execute(
+        "SELECT COUNT(*) FROM personal_acwr_bands WHERE arm = 'resistance'"
+    ).fetchone()[0]
+    assert remaining == 0
 
 
 # ── conditioning tighten-rate limiter ───────────────────────────────────────

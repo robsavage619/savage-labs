@@ -287,10 +287,9 @@ def persist_volume_landmarks(
 # Minimum weeks with non-null ACWR before fitting (otherwise distribution is too noisy).
 _ACWR_MIN_WEEKS = 12
 
-# Percentiles used for the resistance arm gate thresholds.
-# "rest" = top ~10% of Rob's load distribution; "low" = top ~20%; "mod" = top ~35%.
-_RES_PERCENTILES = {"rest": 0.90, "low": 0.80, "mod": 0.65}
-# "forbid_legs" for conditioning = top ~20%.
+# "forbid_legs" for conditioning = top ~20%. Resistance is not fitted — see
+# fit_acwr_bands' docstring: its bands are floor_only downstream, so a personal
+# fit can never move the gate.
 _COND_PERCENTILES = {"forbid_legs": 0.80}
 
 
@@ -398,21 +397,24 @@ def fit_acwr_bands(
     conn: duckdb.DuckDBPyConnection,
     min_weeks: int = _ACWR_MIN_WEEKS,
 ) -> dict[str, dict[str, float]] | None:
-    """Fit personal ACWR gate thresholds from historical weekly load ratios.
+    """Fit the personal conditioning ACWR gate threshold from historical weekly
+    load ratios.
 
-    Returns ``{"resistance": {rest, low, mod}, "conditioning": {forbid_legs}}``
-    or None if either arm has insufficient history.
+    Resistance (rest/low/mod) is deliberately NOT fitted here. Those three
+    bands are applied `floor_only` downstream (metrics._gates) — a personal
+    fit sits BELOW the population injury-ceiling by construction (Rob's own
+    percentiles are always <= the population thresholds they're compared
+    against), so `max(personal, population)` provably always resolves to
+    population. Fitting and persisting them was pure ceremony: real numbers,
+    reported as "personal (fitted)", that could never once change the gate.
+    Conditioning is the one arm that can actually tighten (see
+    _COND_TIGHTEN_MAX_STEP), so it's the only one worth fitting.
+
+    Returns ``{"conditioning": {forbid_legs}}`` or None if conditioning has
+    insufficient history.
     """
-    res_ratios = _historical_weekly_acwr(conn, "hevy_tonnes")
     cond_ratios = _historical_weekly_acwr(conn, "whoop_strain")
 
-    if len(res_ratios) < min_weeks:
-        log.warning(
-            "fit_acwr_bands: only %d weeks of resistance ACWR history (need %d) — skip",
-            len(res_ratios),
-            min_weeks,
-        )
-        return None
     if len(cond_ratios) < min_weeks:
         log.warning(
             "fit_acwr_bands: only %d weeks of conditioning ACWR history (need %d) — skip",
@@ -421,20 +423,14 @@ def fit_acwr_bands(
         )
         return None
 
-    res_bands = {k: round(_percentile(res_ratios, p), 2) for k, p in _RES_PERCENTILES.items()}
     cond_bands = {k: round(_percentile(cond_ratios, p), 2) for k, p in _COND_PERCENTILES.items()}
 
     log.info(
-        "fit_acwr_bands: resistance (n=%d) rest=%.2f low=%.2f mod=%.2f; "
-        "conditioning (n=%d) forbid_legs=%.2f",
-        len(res_ratios),
-        res_bands["rest"],
-        res_bands["low"],
-        res_bands["mod"],
+        "fit_acwr_bands: conditioning (n=%d) forbid_legs=%.2f",
         len(cond_ratios),
         cond_bands["forbid_legs"],
     )
-    return {"resistance": res_bands, "conditioning": cond_bands}
+    return {"conditioning": cond_bands}
 
 
 # Max downward move (tightening) of the personal conditioning forbid_legs band
@@ -452,17 +448,24 @@ def persist_acwr_bands(
     conn: duckdb.DuckDBPyConnection,
     min_weeks: int = _ACWR_MIN_WEEKS,
 ) -> bool:
-    """Fit and persist personal ACWR bands to the personal_acwr_bands table.
+    """Fit and persist the personal conditioning ACWR band.
 
-    Returns True if bands were stored, False if insufficient data.
+    Resistance is not fitted or persisted (see fit_acwr_bands' docstring —
+    it's floor_only downstream and can never move the gate). Any resistance
+    rows a pre-remediation run left behind are deleted here so the table can't
+    keep showing a stale "personal (fitted)" resistance value that no code
+    path reads anymore.
+
+    Returns True if the conditioning band was stored, False if insufficient data.
     """
     from shc.metrics import COND_ACWR_FORBID_LEGS
+
+    conn.execute("DELETE FROM personal_acwr_bands WHERE arm = 'resistance'")
 
     bands = fit_acwr_bands(conn, min_weeks=min_weeks)
     if bands is None:
         return False
 
-    res_n = len(_historical_weekly_acwr(conn, "hevy_tonnes"))
     cond_n = len(_historical_weekly_acwr(conn, "whoop_strain"))
 
     prior_forbid = conn.execute(
@@ -489,9 +492,6 @@ def persist_acwr_bands(
     bands["conditioning"]["forbid_legs"] = new_forbid
 
     rows = [
-        ("resistance", "rest", bands["resistance"]["rest"], res_n),
-        ("resistance", "low", bands["resistance"]["low"], res_n),
-        ("resistance", "mod", bands["resistance"]["mod"], res_n),
         ("conditioning", "forbid_legs", new_forbid, cond_n),
     ]
     for arm, name, value, n in rows:
@@ -543,9 +543,14 @@ def acwr_fit_data_changed_since_last_fit(conn: duckdb.DuckDBPyConnection) -> boo
 def read_acwr_bands(conn: duckdb.DuckDBPyConnection) -> dict[str, float] | None:
     """Read fitted ACWR bands from the DB.
 
-    Returns a flat dict with keys matching the metrics.py constant names
-    (RES_ACWR_REST, RES_ACWR_LOW, RES_ACWR_MOD, COND_ACWR_FORBID_LEGS) or None
-    if the table is empty (caller uses population defaults).
+    Returns a flat dict with keys matching the metrics.py constant names, or
+    None if nothing usable is stored (caller uses population defaults).
+
+    Resistance is no longer fitted (see fit_acwr_bands' docstring), so only
+    COND_ACWR_FORBID_LEGS is ever expected here going forward — but the
+    resistance mapping is kept so a table left over from before this
+    remediation (persist_acwr_bands now deletes those rows on its next run)
+    doesn't crash a caller mid-migration.
     """
     rows = conn.execute("SELECT arm, threshold_name, value FROM personal_acwr_bands").fetchall()
     if not rows:
@@ -562,7 +567,7 @@ def read_acwr_bands(conn: duckdb.DuckDBPyConnection) -> dict[str, float] | None:
         key = mapping.get((arm, name))
         if key:
             result[key] = float(value)
-    return result if len(result) == 4 else None
+    return result if "COND_ACWR_FORBID_LEGS" in result else None
 
 
 # ── Sleep-architecture band fitting ───────────────────────────────────────────

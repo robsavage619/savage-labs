@@ -667,7 +667,14 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     try:
         from shc.training.self_learning import read_acwr_bands
 
-        acwr_src = "personal (fitted)" if read_acwr_bands(conn) else "population defaults"
+        # Resistance is never fitted (floor_only downstream — a personal fit
+        # can't move the gate, see self_learning.fit_acwr_bands); only
+        # conditioning forbid_legs is ever "personal (fitted)".
+        acwr_src = (
+            "conditioning personal (fitted) · resistance population (by design)"
+            if read_acwr_bands(conn)
+            else "population defaults"
+        )
     except Exception:
         acwr_src = "unknown"
 

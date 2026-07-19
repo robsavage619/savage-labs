@@ -1401,50 +1401,24 @@ def _gates(
     g = AutoRegGates()
     reasons: list[str] = []
 
-    # Load personal ACWR bands if available; fall back to population constants.
+    # Resistance ACWR (REST/LOW/MOD) is deliberately NEVER personalized — those
+    # three bands are absolute injury-spike ceilings (Gabbett), not homeostats.
+    # Fitted as percentiles of Rob's own load they sit BELOW the population
+    # thresholds by construction and would gate ordinary progressive overload
+    # as if it were a fatigue spike — the ACWR-as-anti-progression trap, which
+    # is actively hostile to a hypertrophy goal. Applying them `floor_only`
+    # (`max(personal, population)`) meant a personal fit could provably never
+    # move the gate — real numbers, computed and reported as "personal
+    # (fitted)", that changed nothing. self_learning.fit_acwr_bands no longer
+    # fits them at all; these three always read the population constant.
     res_rest = RES_ACWR_REST
     res_low = RES_ACWR_LOW
     res_mod = RES_ACWR_MOD
-    if conn is not None:
-        try:
-            from shc.training.self_learning import read_acwr_bands
-
-            personal = read_acwr_bands(conn)
-            if personal:
-                # Personal bands LOOSEN the population defaults freely, but may
-                # only TIGHTEN below them once the fit rests on enough weeks to
-                # describe Rob's current training era rather than the low-volume
-                # history that drags percentiles down (the ACWR trap: an
-                # unfloored thin-sample band gates ordinary accumulation as a
-                # "fatigue spike", suppressing volume → lowering chronic load →
-                # worsening next week's ratio). _ACWR_TIGHTEN_MIN_WEEKS is set
-                # above the fitter's own minimum so the bar to tighten is
-                # strictly stricter than the bar to merely fit. Gating is
-                # per-arm on each arm's own sample_weeks.
-                #
-                # All three resistance bands (REST/LOW/MOD) are absolute
-                # injury-spike ceilings (Gabbett), not homeostats. Fitted as
-                # percentiles of Rob's own load they sit BELOW the population
-                # thresholds and gate ordinary progressive overload as if it were
-                # a fatigue spike — the ACWR-as-anti-progression trap, which is
-                # actively hostile to a hypertrophy goal. So every resistance band
-                # is floor_only: it may only LOOSEN above population (earn more
-                # rope), never tighten below it. Resistance ACWR on Rob's N=1
-                # noise-dominated chronic baseline is not injury-validated;
-                # letting his thin-data history tighten the hardest gate below 2.0
-                # turned ordinary accumulation into a "fatigue spike" and grounded
-                # good days. Conditioning keeps sample-gated personalization
-                # (field-sport evidence is stronger) and may still tighten once
-                # well-fit — handled by personalized_cond_thresholds() below, the
-                # single place that computes it (autoregulation._decide's graded
-                # hold reads the same call so the two thresholds can't diverge).
-                res_rest = _apply_band(personal["RES_ACWR_REST"], RES_ACWR_REST, floor_only=True)
-                res_low = _apply_band(personal["RES_ACWR_LOW"], RES_ACWR_LOW, floor_only=True)
-                res_mod = _apply_band(personal["RES_ACWR_MOD"], RES_ACWR_MOD, floor_only=True)
-        except Exception as exc:
-            import logging as _log
-
-            _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
+    # Conditioning keeps sample-gated personalization (field-sport evidence is
+    # stronger) and may still tighten once well-fit — personalized_cond_
+    # thresholds() is the single place that computes it (autoregulation.
+    # _decide's graded hold reads the same call so the two thresholds can't
+    # diverge).
     _cond_hold_legs, cond_forbid_legs = personalized_cond_thresholds(conn)
 
     # Load personal sleep-architecture bands if available; fall back to

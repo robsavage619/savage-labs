@@ -306,15 +306,49 @@ def test_load_cap_monotonic_and_high_allows_top_sets() -> None:
 
 
 # ── INVARIANT 6: a personal band that CAPS progression may only loosen the
-# population default, never tighten below it. This is the anti-progression-trap
-# guard: Rob's thin, noise-dominated history must never make a growth gate
-# stricter than the population floor.
+# population default, never tighten below it — and resistance ACWR (fitted
+# floor_only against a population injury ceiling) is NOT fitted at all as of
+# the 2026-07 remediation, because a percentile of Rob's own N=1 load sits
+# below the population threshold BY CONSTRUCTION, so floor_only provably could
+# never once move the gate. This is the anti-progression-trap guard: Rob's
+# thin, noise-dominated history must never make a growth gate stricter than
+# the population floor — and if a band can only ever be floored, computing and
+# advertising it as "personal (fitted)" is theater, not personalization.
 
 
 @pytest.mark.parametrize("personal", [0.5, 1.0, 1.5, 1.8, 2.0, 2.5])
 def test_floor_only_band_never_tightens_below_population(personal) -> None:
     population = 2.0
     assert _apply_band(personal, population, floor_only=True) >= population
+
+
+def test_resistance_acwr_personal_bands_never_reach_the_gate(conn) -> None:
+    """End-to-end coverage the audit found missing: invariant 6 was previously
+    tested only in isolation (`_apply_band`). Absurdly tight resistance values
+    written directly into personal_acwr_bands must not move `_gates`' actual
+    thresholds — resistance is no longer fitted at all, so even a legacy or
+    hand-inserted row must be ignored."""
+    for name, value in (("rest", 0.5), ("low", 0.4), ("mod", 0.3)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 200, now())",
+            [name, value],
+        )
+    rec, sleep, load, chk, readiness = (
+        RecoveryMetrics(),
+        SleepMetrics(),
+        TrainingLoadMetrics(),
+        CheckinMetrics(),
+        ReadinessSnapshot(tier="green"),
+    )
+    # 1.4 is safely below EVERY population threshold (mod 1.5/low 1.8/rest 2.0)
+    # but breaches all three hand-inserted "personal" ones (0.5/0.4/0.3) — a
+    # clean discriminator: only a leaked resistance personalization caps this.
+    load.resistance_acwr = 1.4
+    g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
+    assert g.max_intensity == "high", (
+        f"a hand-inserted absurdly-tight resistance band reached the gate: {g.reasons}"
+    )
 
 
 # ── INVARIANT 7 (BEHAVIORAL / END-TO-END): full mesocycle simulations. Where the
