@@ -257,6 +257,7 @@ class DataFreshness:
     sleep_age_days: int | None = None
     hevy_age_days: int | None = None
     cardio_age_days: int | None = None
+    whoop_stale: bool = False
     gaps: list[str] = field(default_factory=list)
 
 
@@ -1315,6 +1316,21 @@ def _illness_gate_corroborated(rec: RecoveryMetrics) -> bool:
     return not recovery_affirmatively_green
 
 
+def _whoop_stale(rec: RecoveryMetrics, today: date) -> bool:
+    """WHOOP recovery hasn't synced in >2 days — HRV/skin-temp/SpO2-derived caps go blind.
+
+    Single source of truth so the safety gate and any downstream consumer (e.g. the
+    volume controller's conditioning-interference hold) can never disagree about
+    whether recovery data is stale.
+    """
+    return rec.score_date is not None and (today - date.fromisoformat(rec.score_date)).days > 2
+
+
+def _sleep_stale(sleep: SleepMetrics, today: date) -> bool:
+    """Sleep table hasn't synced in >2 days — sleep-architecture/RR-derived caps go blind."""
+    return sleep.last_date is not None and (today - date.fromisoformat(sleep.last_date)).days > 2
+
+
 def _gates(
     rec: RecoveryMetrics,
     sleep: SleepMetrics,
@@ -1405,14 +1421,10 @@ def _gates(
     # Freshness guard: WHOOP recovery data older than 2 days is stale — the HRV/
     # skin-temp/SpO₂ values reflect a past night, not tonight's recovery.  Firing
     # safety caps on stale data locks Rob into "low" indefinitely after a sync outage.
-    # Same 48h window the conditioning gate uses (see below).
-    whoop_stale = (
-        rec.score_date is not None and (date.today() - date.fromisoformat(rec.score_date)).days > 2
-    )
-    sleep_stale = (
-        sleep.last_date is not None
-        and (date.today() - date.fromisoformat(sleep.last_date)).days > 2
-    )
+    # Same 48h window the conditioning gate uses (see below). Uses the same helper
+    # `_freshness()` uses for `DataFreshness.whoop_stale` — one flag, never two.
+    whoop_stale = _whoop_stale(rec, date.today())
+    sleep_stale = _sleep_stale(sleep, date.today())
 
     # Hard rest gates.
     if whoop_stale:
@@ -1454,8 +1466,11 @@ def _gates(
 
     # Respiratory-rate sentinel — Bourdillon et al. RR baseline drift is a 4-day
     # leading indicator for viral illness. +1 bpm above 28d baseline = high
-    # specificity early warning; +0.5 bpm = elevated suspicion.
-    if rec.respiratory_rate_delta is not None:
+    # specificity early warning; +0.5 bpm = elevated suspicion. respiratory_rate_delta
+    # is sourced from the `sleep` table (not WHOOP recovery), so it's gated on
+    # sleep_stale — same guard pattern as the sleep-architecture flags below —
+    # rather than firing on a night that may be days old.
+    if not sleep_stale and rec.respiratory_rate_delta is not None:
         # Same allergy confound as skin temp: nasal congestion + sleep-disordered
         # breathing raise the sleeping RR without infection. Only cap when an
         # independent signal corroborates; otherwise surface it as a watch note.
@@ -1834,10 +1849,18 @@ def _freshness(
     if cardio_last and cardio_last[0]:
         f.cardio_age_days = (today - cardio_last[0]).days
 
+    f.whoop_stale = _whoop_stale(rec, today)
+
     if f.whoop_age_days is not None and f.whoop_age_days > 2:
         f.gaps.append(f"WHOOP {f.whoop_age_days}d stale — reduce reliance on recovery score")
     if f.sleep_age_days is not None and f.sleep_age_days > 2:
         f.gaps.append(f"Sleep {f.sleep_age_days}d stale")
+    if f.hevy_age_days is not None and f.hevy_age_days > 2:
+        f.gaps.append(
+            f"Hevy {f.hevy_age_days}d stale — resistance ACWR/e1RM trends running blind"
+        )
+    if f.cardio_age_days is not None and f.cardio_age_days > 2:
+        f.gaps.append(f"Cardio {f.cardio_age_days}d stale — conditioning load may be incomplete")
     return f
 
 

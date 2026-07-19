@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import pytest
 
 from shc.ai.workout_planner import load_cap_pct
@@ -191,6 +193,30 @@ def test_resp_rate_alone_does_not_cap_on_green_recovery() -> None:
     rec.hrv_sigma = -0.3
     g = _gates(rec, sleep, load, chk, readiness, None)
     assert g.max_intensity == "high"
+
+
+def test_resp_rate_does_not_cap_when_sleep_stale() -> None:
+    # respiratory_rate_delta is sourced from the `sleep` table, not WHOOP recovery —
+    # a stale sleep sync must blind the sentinel the same way stale WHOOP blinds
+    # the HRV/skin-temp/SpO2 caps. hrv_sigma=-1.2 corroborates (< -1.0) without
+    # itself tripping the direct HRV cap (< -1.5), isolating the RR guard.
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec.respiratory_rate_delta = 1.5
+    rec.hrv_sigma = -1.2
+    sleep.last_date = (date.today() - timedelta(days=5)).isoformat()
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "high"
+    assert not any("Resp rate" in r for r in g.reasons)
+
+
+def test_resp_rate_caps_when_sleep_fresh() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec.respiratory_rate_delta = 1.5
+    rec.hrv_sigma = -1.2
+    sleep.last_date = date.today().isoformat()
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.max_intensity == "moderate"
+    assert any("Resp rate" in r for r in g.reasons)
 
 
 def test_illness_flag_forces_rest() -> None:
