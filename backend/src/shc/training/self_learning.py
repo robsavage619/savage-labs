@@ -709,6 +709,53 @@ def regrade_stalled_with_tonnage_blend(conn: duckdb.DuckDBPyConnection) -> int:
 # floor stability to 0.0; everything below scales linearly toward 1.0.
 _SIGNAL_CV_REF = 0.50
 
+# An OLS line burns 2 degrees of freedom, so its residual scatter is only a
+# trustworthy noise estimate once at least this many are left (n - 2 >= 3, i.e.
+# n >= 5). Below that, 3-4 coincidentally-linear points (trivial with integer
+# 1-5 perf scores — "3, 4, 5" fits a line with zero residual) read as PERFECT
+# stability by pure chance, not genuine signal quality. Capping stability at the
+# same 0.5 neutral prior the <3-point case already uses closes that gap (the
+# audit found a muscle with exactly 3 scored weeks could reach stability=1.0 and,
+# combined with the old size_factor step, land at confidence == _CONFIDENCE_FULL
+# — full +2/wk ADD authority on three data points).
+_STABILITY_MIN_RESIDUAL_DOF = 3
+
+# (scored_weeks, size_factor) anchors for a monotone piecewise-linear ramp — the
+# continuous replacement for the old step function, which jumped straight from
+# 0.30 (n<10) to 0.50 (n=10): a muscle scored on the last day of one bucket vs
+# the first day of the next got a confidence discontinuity for one more week of
+# data. Anchored so size_factor(10) == 0.30 == _CONFIDENCE_FULL: a muscle needs
+# BOTH >=10 scored weeks AND perfect stability to earn full ADD authority — the
+# n=3 case above could reach 0.30 at n=9 under the old buckets. 30/60/120/300
+# preserve the old right-edge values so the "well-tracked muscle" calibration
+# story in autoregulation.py's _CONFIDENCE_FULL/_LARGE_ADD_CONFIDENCE_BAR
+# comments stays accurate. Biological noise caps stability well under 1.0 in
+# practice, so 0.90 at n>=600 is asymptotic, not a real per-muscle ceiling.
+_SIZE_FACTOR_ANCHORS: tuple[tuple[int, float], ...] = (
+    (0, 0.0),
+    (6, 0.20),
+    (10, 0.30),
+    (30, 0.50),
+    (60, 0.65),
+    (120, 0.75),
+    (300, 0.85),
+    (600, 0.90),
+)
+
+
+def _signal_size_factor(n: int) -> float:
+    """Confidence weight from sample size — see :data:`_SIZE_FACTOR_ANCHORS`."""
+    anchors = _SIZE_FACTOR_ANCHORS
+    if n <= anchors[0][0]:
+        return anchors[0][1]
+    if n >= anchors[-1][0]:
+        return anchors[-1][1]
+    for (x0, y0), (x1, y1) in zip(anchors, anchors[1:], strict=False):
+        if x0 <= n <= x1:
+            frac = (n - x0) / (x1 - x0)
+            return y0 + frac * (y1 - y0)
+    return anchors[-1][1]  # unreachable given the bounds checks above
+
 
 def compute_muscle_signal_quality(
     conn: duckdb.DuckDBPyConnection,
@@ -781,27 +828,21 @@ def compute_muscle_signal_quality(
         residuals = [p - (intercept + slope * i) for i, p in enumerate(perfs)]
         cv = pstdev(residuals) / mu if mu > 0 else _SIGNAL_CV_REF
         stability = max(0.0, 1.0 - min(1.0, cv / _SIGNAL_CV_REF))
+        # An OLS fit burns 2 degrees of freedom; below _STABILITY_MIN_RESIDUAL_DOF
+        # residual dof the scatter estimate isn't trustworthy — a handful of
+        # coincidentally-linear points (trivial with integer 1-5 perf scores)
+        # would otherwise read as PERFECT stability by chance. Cap at the same
+        # neutral 0.5 the <3-point branch uses until there's enough dof to trust it.
+        if n_p - 2 < _STABILITY_MIN_RESIDUAL_DOF:
+            stability = min(stability, 0.5)
     else:
         # <3 points: two always fit a line perfectly (residual 0 → false certainty),
         # so there's no basis to judge noise yet. Neutral prior.
         cv = 0.0
         stability = 0.5
 
-    # Confidence from sample size — asymptotic approach to 0.95.
-    # < 10 weeks: 0.30  |  10–29: 0.50  |  30–59: 0.65  |  60–119: 0.75
-    # 120–299: 0.85  |  300+: 0.90  (biological noise caps ~0.90)
-    if n < 10:
-        size_factor = 0.30
-    elif n < 30:
-        size_factor = 0.50
-    elif n < 60:
-        size_factor = 0.65
-    elif n < 120:
-        size_factor = 0.75
-    elif n < 300:
-        size_factor = 0.85
-    else:
-        size_factor = 0.90
+    # Confidence from sample size — see _SIZE_FACTOR_ANCHORS for the curve.
+    size_factor = _signal_size_factor(n)
 
     confidence = round(size_factor * stability, 2)
 

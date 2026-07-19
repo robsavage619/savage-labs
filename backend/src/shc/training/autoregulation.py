@@ -71,13 +71,18 @@ EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes", "traps"})
 EMPHASIS_PROMOTE_FACTOR = 1.05
 
 # Confidence floor at/above which an ADD gets full authority; below it the add is
-# scaled by confidence/_CONFIDENCE_FULL. CALIBRATION (fixed 2026-06-27): confidence
-# is size_factor × signal_stability, and perf-score noise caps stability ~0.4, so
-# even a muscle with 300+ scored weeks tops out near 0.34 — it can NEVER reach the
-# old 0.5. Set on that real achievable range so a well-tracked muscle earns full
-# add authority instead of being permanently throttled (the cause of every plan
-# collapsing to 1 set/muscle). MEV is separately floored below so this only governs
-# the ramp ABOVE minimum effective volume.
+# scaled by confidence/_CONFIDENCE_FULL. CALIBRATION (fixed 2026-06-27, re-verified
+# 2026-07 remediation): confidence is size_factor × signal_stability, and perf-score
+# noise caps stability well under 1.0 in practice, so most muscles never reach a
+# clean 1.0 stability even with hundreds of scored weeks. size_factor's anchors
+# (self_learning._SIZE_FACTOR_ANCHORS) are set so size_factor(10 weeks) == 0.30 —
+# a muscle needs BOTH >=10 scored weeks AND near-perfect stability to earn full add
+# authority; below 10 weeks size_factor stays under 0.30 regardless of stability, so
+# a thin sample can't reach full authority even if its handful of points happen to
+# fall on a perfect line (self_learning._STABILITY_MIN_RESIDUAL_DOF is the second
+# belt: below 5 points, stability itself is capped at a neutral 0.5). MEV is
+# separately floored below so this only governs the ramp ABOVE minimum effective
+# volume.
 _CONFIDENCE_FULL = 0.30
 
 # A large ADD (more than one set) requires at least this confidence. Set below the

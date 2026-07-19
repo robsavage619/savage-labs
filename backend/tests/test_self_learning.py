@@ -394,7 +394,11 @@ def test_signal_quality_stable_signal_gives_high_stability(conn) -> None:
     result = compute_muscle_signal_quality(conn, "biceps")
     assert result["signal_stability"] >= 0.9, "perfectly stable signal should score high"
     assert result["scored_weeks"] == 35
-    assert result["confidence"] >= 0.55  # 35 weeks → size_factor=0.65, stability≥0.9 → conf≥0.58
+    # size_factor is now a continuous ramp (not a step function) between the
+    # n=30/0.50 and n=60/0.65 anchors; at n=35 that's ~0.525, so confidence with
+    # stability=1.0 lands ~0.53 — well above a thin-data muscle, below the
+    # n=60+ plateau.
+    assert 0.45 <= result["confidence"] <= 0.60
 
 
 def test_signal_quality_noisy_signal_gives_low_stability(conn) -> None:

@@ -28,8 +28,12 @@ from shc.metrics import (
     _gates,
     muscle_group,
 )
-from shc.training.autoregulation import _decide, weekly_prescription
-from shc.training.self_learning import _historical_weekly_acwr
+from shc.training.autoregulation import _CONFIDENCE_FULL, _decide, weekly_prescription
+from shc.training.self_learning import (
+    _historical_weekly_acwr,
+    _signal_size_factor,
+    compute_muscle_signal_quality,
+)
 
 # ── INVARIANT 1: the ACWR band-fitter measures on the SAME window the live gate
 # scores against. A drift here silently biases every personalized ACWR band
@@ -541,3 +545,95 @@ def test_unaliased_exact_match_still_credits_region_volume(conn, seed) -> None:
     regions = weekly_region_volume(conn, week_start)
 
     assert regions.get("triceps", {}).get("lateral_head", 0.0) > 0
+
+
+# ── INVARIANT 10: confidence CANNOT saturate on thin data. A handful of
+# coincidentally-linear perf-score weeks (trivial with an integer 1-5 scale —
+# "3, 4, 5" fits a line with zero residual) must not read as PERFECT signal
+# stability. The audit found exactly this: 3 scored weeks could reach
+# confidence == _CONFIDENCE_FULL, granting a speculative muscle the same
+# +2/week ADD authority as one with hundreds of clean weeks. Teeth: remove the
+# residual-dof cap or revert size_factor to the old step function and the first
+# test below fails (confidence reaches/exceeds _CONFIDENCE_FULL at n=3).
+
+
+def _seed_perf_series(conn, exercise: str, primary_muscle: str, perfs: list[int]) -> None:
+    conn.execute(
+        "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) "
+        "VALUES (?, ?, 'primary', 1.0) ON CONFLICT DO NOTHING",
+        [exercise, primary_muscle],
+    )
+    base = date.today() - timedelta(weeks=52)
+    for i, p in enumerate(perfs):
+        ws = base + timedelta(weeks=i)
+        conn.execute(
+            "INSERT INTO exercise_weekly_e1rm "
+            "(exercise, week_start, e1rm_kg, work_sets, perf_score, trend, computed_at) "
+            "VALUES (?, ?, 100.0, 4, ?, NULL, now())",
+            [exercise, ws, p],
+        )
+
+
+def test_confidence_cannot_saturate_on_three_collinear_weeks(conn) -> None:
+    """3 perfectly-linear weeks (3, 4, 5) must NOT reach _CONFIDENCE_FULL."""
+    _seed_perf_series(conn, "Preacher Curl (Barbell)", "biceps", [3, 4, 5])
+    sq = compute_muscle_signal_quality(conn, "biceps")
+    assert sq["scored_weeks"] == 3
+    assert sq["confidence"] < _CONFIDENCE_FULL, (
+        f"3-week muscle reached confidence {sq['confidence']} >= "
+        f"_CONFIDENCE_FULL ({_CONFIDENCE_FULL}) — full ADD authority on 3 data points"
+    )
+
+    # End-to-end: a SPECULATIVE add (perf below the progressing floor, so the
+    # confidence shrink is the only thing standing between the muscle and a
+    # full +2/week ramp) must be throttled below the unshrunk delta.
+    unshrunk = _decide(
+        "biceps",
+        current=8,
+        mev=6,
+        mav=12,
+        mrv=18,
+        perf=3,  # stalled, not progressing — the +1 floor does not apply
+        soreness=0.0,
+        conditioning_acwr=None,
+        confidence=1.0,
+        scored_weeks=999,
+        accuracy=None,
+    )
+    throttled = _decide(
+        "biceps",
+        current=8,
+        mev=6,
+        mav=12,
+        mrv=18,
+        perf=3,
+        soreness=0.0,
+        conditioning_acwr=None,
+        confidence=sq["confidence"],
+        scored_weeks=sq["scored_weeks"],
+        accuracy=None,
+    )
+    if unshrunk.action == "add":
+        assert throttled.target_sets <= unshrunk.target_sets, (
+            f"thin-data confidence ({sq['confidence']}) failed to throttle the add: "
+            f"throttled={throttled.target_sets} unshrunk={unshrunk.target_sets}"
+        )
+
+
+def test_signal_size_factor_is_monotone_and_smooth() -> None:
+    """No step discontinuity in size_factor between adjacent scored-week counts —
+    the old buckets jumped e.g. 0.30 -> 0.50 from n=9 to n=10 in one step."""
+    prev = _signal_size_factor(0)
+    for n in range(1, 700):
+        cur = _signal_size_factor(n)
+        assert cur >= prev - 1e-9, f"size_factor decreased at n={n}: {prev} -> {cur}"
+        assert cur - prev < 0.05, f"size_factor jumped {prev} -> {cur} at n={n}"
+        prev = cur
+    assert _signal_size_factor(700) == _signal_size_factor(10_000) == 0.90
+
+
+@pytest.mark.parametrize("n", range(0, 10))
+def test_signal_size_factor_below_ten_weeks_cannot_reach_confidence_full(n: int) -> None:
+    """Even PERFECT stability (1.0) must not reach _CONFIDENCE_FULL below the
+    10-scored-week anchor — the n=3 case above is the concrete instance."""
+    assert _signal_size_factor(n) * 1.0 < _CONFIDENCE_FULL
