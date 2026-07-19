@@ -1437,6 +1437,7 @@ def weekly_prescription(
         """
         SELECT DISTINCT exercise FROM workout_sets_dedup
         WHERE started_at::DATE >= ? AND weight_kg > 0 AND reps > 0
+          AND source = 'hevy' AND is_warmup = FALSE
         """,
         [(this_week - timedelta(days=14)).isoformat()],
     ).fetchall()

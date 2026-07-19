@@ -22,6 +22,7 @@ from datetime import date, timedelta
 import duckdb
 
 from shc.training.exercise_classifier import backfill_exercise_map
+from shc.training.load_mechanics import per_hand_sql
 from shc.training.self_learning import fit_all
 
 log = logging.getLogger(__name__)
@@ -222,7 +223,13 @@ def weekly_e1rm(
 # change. See the sports-science panel review (C1).
 _EPLEY_REP_CAP = 12
 # Best estimated 1RM for a set, reps capped so high-rep sets don't inflate it.
-_CAPPED_E1RM = f"weight_kg * (1 + LEAST(reps, {_EPLEY_REP_CAP}) / 30.0)"
+# weight_kg is per-hand-normalized via per_hand_sql (the identity except the
+# verified _LOGGED_AS_COMBINED handful) — the same choke point e1rm_by_exercise
+# (the load-ceiling path) routes through, so a dumbbell lift logged as a combined
+# total doesn't read 2x its real per-hand value in the progression trend.
+_PER_HAND_WEIGHT = per_hand_sql("weight_kg", "exercise")
+_CAPPED_E1RM = f"({_PER_HAND_WEIGHT}) * (1 + LEAST(reps, {_EPLEY_REP_CAP}) / 30.0)"
+_CAPPED_TONNAGE = f"({_PER_HAND_WEIGHT}) * reps"
 
 
 # A true weekly-e1RM series moves gradually — even aggressive strength gain is a
@@ -297,6 +304,57 @@ def _recommendation(score: int) -> str:
     return "reduce load or swap exercise"
 
 
+def _score_series(
+    e1rms: list[float], tonnages: list[float | None]
+) -> tuple[int, str] | None:
+    """Score a (oldest→newest) e1RM series — the single scoring core shared by
+    the live path (:func:`score_exercise`) and the historical backfill
+    (:func:`backfill_perf_scores`), so the same (exercise, week) can never get a
+    different call depending on which path happened to write it (the audit found
+    the backfill using a fixed 7-week window with no contamination guard and only
+    half the tonnage blend, while live scoring used a dynamic window + both
+    branches — silently different calls for the same data).
+
+    Uses the OLS slope over a dynamic window (advanced lifters gain strength
+    slowly; a 6-week window is too noisy below 0.5%/week, so more history widens
+    it), strips load-logging artifacts before fitting (see
+    :func:`_drop_contaminated_e1rm`), and corroborates against the tonnage trend
+    over the same window so a rep-range/periodization shift isn't misread as
+    strength loss. Returns ``(perf_score, trend)`` or ``None`` if too few clean
+    weeks remain in the window.
+    """
+    n = len(e1rms)
+    if n < 3:
+        return None
+    window = 12 if n >= 12 else (9 if n >= 8 else 6)
+    series = e1rms[-window:]
+    clean = _drop_contaminated_e1rm(series)
+    if len(clean) < 3:
+        return None
+    pct_per_week = _trend_pct_per_week(clean)
+    perf_score, trend = _score_from_trend(pct_per_week)
+
+    # Estimated-1RM is rep-range-dependent: shifting from a low-rep strength block
+    # into a higher-rep hypertrophy block drops the Epley e1RM even as the muscle
+    # does MORE total work. So an e1RM decline is only real regression when weekly
+    # volume-load (tonnage) fell too. Corroborate every call against the tonnage
+    # trend over the same window — the primary progress signal for a hypertrophy
+    # goal is volume-load, not a rep-capped 1RM proxy.
+    tonnage_series = [t for t in tonnages[-window:] if t is not None]
+    tonnage_pct = _trend_pct_per_week(tonnage_series) if len(tonnage_series) >= 3 else None
+    if tonnage_pct is not None:
+        if perf_score == 3 and tonnage_pct >= 0.5:
+            # Flat e1RM + rising volume-load = hypertrophy progress, not a stall.
+            perf_score, trend = 4, "progressing"
+        elif perf_score <= 2 and tonnage_pct >= -0.5:
+            # e1RM "regressing" but volume-load holding or rising: this is a
+            # rep-range / periodization shift, NOT strength loss. Reclassify so it
+            # cannot falsely trip the fatigue deload. Genuine regression (both
+            # e1RM AND tonnage falling) is left untouched.
+            perf_score, trend = (4, "progressing") if tonnage_pct >= 0.5 else (3, "stalled")
+    return perf_score, trend
+
+
 def score_exercise(
     conn: duckdb.DuckDBPyConnection,
     exercise: str,
@@ -317,45 +375,16 @@ def score_exercise(
     increasing volume from being misread as "stalled" (Phase 3 audit finding).
     """
     this_week = as_of if as_of is not None else _iso_week_start(date.today())
-    # Fetch up to 14 weeks; thresholds below are calibrated to this cap.
+    # Fetch up to 14 weeks; _score_series' window thresholds are calibrated to
+    # this cap.
     history = weekly_e1rm(conn, exercise, n_weeks=14, before=this_week)
     if len(history) < 3:
         return None
 
-    # Dynamic OLS window: advanced lifters gain strength slowly; a 6-week
-    # window produces too much noise for exercises progressing <0.5%/week.
-    # Longer window reduces false "stalled" calls for experienced athletes.
-    n = len(history)
-    window = 12 if n >= 12 else (9 if n >= 8 else 6)
-    series = [h.e1rm_kg for h in history[-window:]]
-    # Strip load-logging artifacts (per-hand vs combined-stack, unit drift) before
-    # fitting the trend — one contaminated point otherwise reads a healthy muscle as
-    # regressing and falsely trips the fatigue deload. If too few trustworthy weeks
-    # remain, the trend is unknowable → return None rather than a spurious call.
-    clean = _drop_contaminated_e1rm(series)
-    if len(clean) < 3:
+    result = _score_series([h.e1rm_kg for h in history], [h.tonnage_kg for h in history])
+    if result is None:
         return None
-    pct_per_week = _trend_pct_per_week(clean)
-    perf_score, trend = _score_from_trend(pct_per_week)
-
-    # Estimated-1RM is rep-range-dependent: shifting from a low-rep strength block
-    # into a higher-rep hypertrophy block drops the Epley e1RM even as the muscle
-    # does MORE total work. So an e1RM decline is only real regression when weekly
-    # volume-load (tonnage) fell too. Corroborate every call against the tonnage
-    # trend over the same window — the primary progress signal for a hypertrophy
-    # goal is volume-load, not a rep-capped 1RM proxy.
-    tonnage_series = [h.tonnage_kg for h in history[-window:] if h.tonnage_kg is not None]
-    tonnage_pct = _trend_pct_per_week(tonnage_series) if len(tonnage_series) >= 3 else None
-    if tonnage_pct is not None:
-        if perf_score == 3 and tonnage_pct >= 0.5:
-            # Flat e1RM + rising volume-load = hypertrophy progress, not a stall.
-            perf_score, trend = 4, "progressing"
-        elif perf_score <= 2 and tonnage_pct >= -0.5:
-            # e1RM "regressing" but volume-load holding or rising: this is a
-            # rep-range / periodization shift, NOT strength loss. Reclassify so it
-            # cannot falsely trip the fatigue deload. Genuine regression (both
-            # e1RM AND tonnage falling) is left untouched.
-            perf_score, trend = (4, "progressing") if tonnage_pct >= 0.5 else (3, "stalled")
+    perf_score, trend = result
 
     latest = history[-1]
     return ProgressionScore(
@@ -414,19 +443,13 @@ def backfill_perf_scores(conn: duckdb.DuckDBPyConnection) -> None:
             if scored[i] is not None:
                 continue  # already scored — preserve
 
-            prior_e1rms = e1rms[max(0, i - 6) : i]
-            if len(prior_e1rms) < 3:
+            # Same 14-week cap weekly_e1rm() fetches for live scoring; _score_series
+            # picks the dynamic 6/9/12 window from within it, so a historical row
+            # scores identically to how it would have scored live that week.
+            result = _score_series(e1rms[max(0, i - 14) : i], tonnages[max(0, i - 14) : i])
+            if result is None:
                 continue
-
-            pct = _trend_pct_per_week(prior_e1rms)
-            ps, trend = _score_from_trend(pct)
-
-            # Tonnage blend
-            if ps == 3:
-                prior_t = [t for t in tonnages[max(0, i - 6) : i] if t is not None]
-                if len(prior_t) >= 3 and _trend_pct_per_week(prior_t) >= 0.5:
-                    ps = 4
-                    trend = "progressing"
+            ps, trend = result
 
             conn.execute(
                 """
@@ -457,10 +480,11 @@ def backfill_weekly_e1rm(conn: duckdb.DuckDBPyConnection) -> None:
                date_trunc('week', started_at)::DATE AS week_start,
                MAX({_CAPPED_E1RM})                  AS e1rm_kg,
                COUNT(*)                             AS work_sets,
-               SUM(weight_kg * reps)                AS weekly_tonnage_kg,
+               SUM({_CAPPED_TONNAGE})                AS weekly_tonnage_kg,
                NULL, NULL, now()
         FROM workout_sets_dedup
         WHERE weight_kg > 0 AND reps > 0
+          AND source = 'hevy' AND is_warmup = FALSE
         GROUP BY exercise, date_trunc('week', started_at)::DATE
         ON CONFLICT (exercise, week_start) DO UPDATE SET
             e1rm_kg          = excluded.e1rm_kg,
@@ -494,6 +518,7 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
             FROM workout_sets_dedup
             WHERE started_at::DATE >= ? AND started_at::DATE < ?
               AND weight_kg > 0 AND reps > 0
+              AND source = 'hevy' AND is_warmup = FALSE
             """,
             [this_week, this_week + timedelta(days=7)],
         ).fetchall()
@@ -504,11 +529,12 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
         # weekly series the trend is built from accumulates one row per week.
         row = conn.execute(
             f"""
-            SELECT MAX({_CAPPED_E1RM}), COUNT(*), SUM(weight_kg * reps)
+            SELECT MAX({_CAPPED_E1RM}), COUNT(*), SUM({_CAPPED_TONNAGE})
             FROM workout_sets_dedup
             WHERE exercise = ?
               AND started_at::DATE >= ? AND started_at::DATE < ?
               AND weight_kg > 0 AND reps > 0
+              AND source = 'hevy' AND is_warmup = FALSE
             """,
             [ex, this_week, this_week + timedelta(days=7)],
         ).fetchone()
@@ -612,6 +638,7 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
             SELECT DISTINCT exercise
             FROM workout_sets_dedup
             WHERE started_at::DATE >= ? AND weight_kg > 0 AND reps > 0
+              AND source = 'hevy' AND is_warmup = FALSE
             ORDER BY exercise
             """,
             [this_week - timedelta(days=14)],

@@ -132,6 +132,22 @@ def per_hand_kg(name: str, logged_kg: float) -> float:
     return logged_kg
 
 
+def per_hand_sql(column: str = "weight_kg", exercise_col: str = "exercise") -> str:
+    """SQL expression form of :func:`per_hand_kg` — the identity except for the
+    verified :data:`_LOGGED_AS_COMBINED` handful, which halve.
+
+    Every progression/trend query that aggregates in SQL (rather than reading
+    rows back into Python and calling :func:`per_hand_kg`) routes through this
+    so the same single choke point governs both paths — a query that skips it
+    silently mixes per-hand and combined-total units into one e1RM/tonnage series.
+    """
+    names = ", ".join(f"'{n}'" for n in sorted(_LOGGED_AS_COMBINED))
+    return (
+        f"CASE WHEN lower(trim({exercise_col})) IN ({names}) "
+        f"THEN {column} / 2.0 ELSE {column} END"
+    )
+
+
 def load_unit_label(name: str) -> str:
     """``'each hand'`` for per-hand lifts, ``''`` for bilateral single-implement lifts."""
     return "each hand" if is_per_hand(name) else ""

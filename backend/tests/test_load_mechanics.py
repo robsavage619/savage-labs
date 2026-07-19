@@ -10,6 +10,7 @@ from shc.training.load_mechanics import (
     is_per_hand,
     load_unit_label,
     per_hand_kg,
+    per_hand_sql,
 )
 
 
@@ -102,3 +103,26 @@ def test_ceiling_ignores_bilateral_lifts() -> None:
 def test_ceiling_tolerates_missing_weight() -> None:
     assert exceeds_per_hand_max("Hammer Curl (Dumbbell)", None) is False
     assert MAX_PER_HAND_LB == 105.0
+
+
+# ── per_hand_sql parity with per_hand_kg ────────────────────────────────────
+# Any SQL-side aggregation (the progression e1RM/tonnage pipeline) must halve
+# exactly the same names the Python-side ceiling/e1RM path halves, or the two
+# paths silently disagree on unit for the same lift.
+
+
+@pytest.mark.parametrize(
+    "name,logged_kg",
+    [
+        ("Romanian Deadlift (Dumbbell)", 68.0),  # the one _LOGGED_AS_COMBINED member
+        ("romanian deadlift (dumbbell)", 68.0),  # case-insensitivity
+        ("Single Leg Romanian Deadlift (Dumbbell)", 13.6),  # control: NOT combined
+        ("Hammer Curl (Dumbbell)", 15.9),  # control: per-hand as logged
+        ("Bench Press (Barbell)", 100.0),  # control: bilateral
+    ],
+)
+def test_per_hand_sql_matches_per_hand_kg(conn, name: str, logged_kg: float) -> None:
+    expected = per_hand_kg(name, logged_kg)
+    expr = per_hand_sql("$w", "$n")
+    got = conn.execute(f"SELECT {expr}", {"w": logged_kg, "n": name}).fetchone()[0]
+    assert got == pytest.approx(expected)
