@@ -365,6 +365,76 @@ def test_data_changed_guard_true_after_new_workout(conn, seed) -> None:
     assert acwr_fit_data_changed_since_last_fit(conn) is True
 
 
+# ── _historical_weekly_acwr: deload/illness week exclusion ─────────────────
+
+
+def test_deload_week_excluded_from_acwr_fit_sample(conn, seed) -> None:
+    from shc.training.self_learning import _historical_weekly_acwr
+
+    _seed_dense_acwr_history(conn, seed, weeks=20)
+    before = _historical_weekly_acwr(conn, "hevy_tonnes")
+
+    # Flag one week (well inside the history, away from the edges so its
+    # ratio is unambiguously present in `before`) as a systemic deload week —
+    # a real deload prescription logs 'deload' for every targeted muscle, so a
+    # single row is a faithful stand-in for "this whole week was a deload".
+    weeks_present = sorted(
+        {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT date_trunc('week', date)::DATE FROM v_daily_load"
+            ).fetchall()
+        }
+    )
+    target_week = weeks_present[len(weeks_present) // 2]
+    conn.execute(
+        "INSERT INTO muscle_prescription_log (week_start, muscle, action, target_sets) "
+        "VALUES (?, 'chest', 'deload', 8)",
+        [target_week],
+    )
+
+    after = _historical_weekly_acwr(conn, "hevy_tonnes")
+    assert len(after) == len(before) - 1, (
+        f"expected exactly one week excluded, before={len(before)} after={len(after)}"
+    )
+
+
+def test_illness_week_excluded_from_acwr_fit_sample(conn, seed) -> None:
+    from shc.training.self_learning import _historical_weekly_acwr
+
+    _seed_dense_acwr_history(conn, seed, weeks=20)
+    before = _historical_weekly_acwr(conn, "whoop_strain")
+
+    weeks_present = sorted(
+        {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT date_trunc('week', date)::DATE FROM v_daily_load"
+            ).fetchall()
+        }
+    )
+    target_week = weeks_present[len(weeks_present) // 2]
+    conn.execute(
+        "INSERT INTO daily_checkin (date, illness_flag, created_at) VALUES (?, TRUE, now())",
+        [target_week + timedelta(days=2)],
+    )
+
+    after = _historical_weekly_acwr(conn, "whoop_strain")
+    assert len(after) == len(before) - 1, (
+        f"expected exactly one week excluded, before={len(before)} after={len(after)}"
+    )
+
+
+def test_no_deload_or_illness_leaves_fit_sample_unchanged(conn, seed) -> None:
+    """Sanity check: the exclusion doesn't fire on clean data."""
+    from shc.training.self_learning import _historical_weekly_acwr
+
+    _seed_dense_acwr_history(conn, seed, weeks=20)
+    r1 = _historical_weekly_acwr(conn, "hevy_tonnes")
+    r2 = _historical_weekly_acwr(conn, "hevy_tonnes")
+    assert r1 == r2
+
+
 # ── fit_sleep_bands ───────────────────────────────────────────────────────────
 
 

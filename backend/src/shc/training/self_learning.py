@@ -320,7 +320,19 @@ def _historical_weekly_acwr(
     fewer than that many nonzero-load days is excluded from the fitted sample —
     the live gate treats that ratio as unscoreable (too thin to trust, see
     metrics._arm_acwr), so a fitted percentile band must not be built partly
-    from ratios the gate itself would never produce.
+    from ratios the gate itself would never produce. This is about the WINDOW
+    the fitter measures on, not sample admissibility — see the deload/illness
+    exclusion below for the latter.
+
+    Deload weeks (muscle_prescription_log has an 'deload' action logged for
+    that week — every targeted muscle gets one on a systemic deload, so ANY
+    row is a reliable week-level signal) and illness-flagged days are excluded
+    from the SAMPLE: a deload/illness week's ratio reflects a deliberate or
+    forced reduction, not the natural fatigue variation the percentile bands
+    are meant to describe. Left in, they contaminate the conditioning
+    forbid_legs distribution — the one band that can actually tighten the gate
+    (fit_acwr_bands/_gates; resistance stays floor-only). The ratio FORMULA
+    itself is unchanged; this only narrows which weeks contribute a data point.
 
     Lookback is capped at 104 weeks (same horizon as the volume-landmark
     fitter). Unbounded history pulled in ~7 years of pre-platform low-volume
@@ -352,6 +364,15 @@ def _historical_weekly_acwr(
                AND d.date < w.ws
                AND d.{column} > 0) AS chronic_days
         FROM weeks w
+        WHERE NOT EXISTS (
+            SELECT 1 FROM muscle_prescription_log l
+            WHERE l.week_start = w.ws AND l.action = 'deload'
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM daily_checkin c
+            WHERE c.date >= w.ws AND c.date < w.ws + INTERVAL 7 DAYS
+              AND c.illness_flag = TRUE
+        )
         """
     ).fetchall()
     return [
