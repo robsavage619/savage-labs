@@ -35,6 +35,16 @@ class PreregisterIn(BaseModel):
     min_per_arm: int = 6
     washout_hours: int = 0
     notes: str | None = None
+    # Optional, all-or-nothing (validated in selflab.preregister): declares
+    # which concrete decision variable a CONFIRMED verdict may move, and by
+    # how much at most — see selflab.preregister's docstring for the closed
+    # vocabulary and a worked example. Omit all five to stay prompt-only
+    # (the legacy behavior).
+    actuation_target_kind: str | None = None
+    actuation_target_key: str | None = None
+    actuation_direction: str | None = None
+    actuation_magnitude_pct: float | None = None
+    actuation_cap_pct: float | None = None
 
 
 class LogDayIn(BaseModel):
@@ -85,20 +95,28 @@ async def preregister_experiment(body: PreregisterIn) -> dict:
         ).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail=f"experiment {body.slug!r} already exists")
-        exp_id = selflab.preregister(
-            conn,
-            slug=body.slug,
-            hypothesis=body.hypothesis,
-            manipulated=body.manipulated,
-            condition_a=body.condition_a,
-            condition_b=body.condition_b,
-            outcome_metric=body.outcome_metric,
-            outcome_direction=body.outcome_direction,
-            min_per_arm=body.min_per_arm,
-            min_effect=body.min_effect,
-            washout_hours=body.washout_hours,
-            notes=body.notes,
-        )
+        try:
+            exp_id = selflab.preregister(
+                conn,
+                slug=body.slug,
+                hypothesis=body.hypothesis,
+                manipulated=body.manipulated,
+                condition_a=body.condition_a,
+                condition_b=body.condition_b,
+                outcome_metric=body.outcome_metric,
+                outcome_direction=body.outcome_direction,
+                min_per_arm=body.min_per_arm,
+                min_effect=body.min_effect,
+                washout_hours=body.washout_hours,
+                notes=body.notes,
+                actuation_target_kind=body.actuation_target_kind,
+                actuation_target_key=body.actuation_target_key,
+                actuation_direction=body.actuation_direction,
+                actuation_magnitude_pct=body.actuation_magnitude_pct,
+                actuation_cap_pct=body.actuation_cap_pct,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"id": exp_id, "slug": body.slug}
 
 

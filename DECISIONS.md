@@ -6,6 +6,20 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-19 — CONFIRMED n-of-1 priors now actuate volume targets; gate_loosen schema shipped, NOT wired
+
+**Context.** A CONFIRMED selflab experiment (real, causal, self-tested evidence — see `selflab.py`'s permutation test + bootstrap CI) previously reached only the LLM prompt as prose (`workout_planner.py`'s "CONFIRMED PERSONAL EXPERIMENTS" section). No deterministic decision ever changed as a result — an LLM could ignore it, misread it, or apply it inconsistently. The original remediation plan called for a two-target actuation system: `volume_target` (scale a muscle's weekly set target) and `gate_loosen` (loosen a safety gate, never tighten, never past the population ceiling).
+
+**Decision.** Shipped `volume_target` fully: migration 0074 adds a closed-vocabulary actuation declaration to `experiments`/`experiment_prior`, set at PREREGISTRATION time (before any data is seen, so the target can't be picked to fit a result). `preregister()` validates it (all-or-nothing, known target_kind/direction, magnitude ≤ cap). A CONFIRMED verdict's actuation is copied onto `experiment_prior` by `_emit_prior`; `weekly_prescription` reads active `volume_target` priors via `selflab.read_active_volume_target_actuations` and scales the affected muscle's FINAL target, clamped to `[MEV, MRV]` — the same non-negotiable floor/ceiling every other branch of `_decide` respects. Retraction (a study that stops confirming already sets `active=FALSE`) removes the actuation the same way it removes the prose guidance.
+
+`gate_loosen`'s SCHEMA shipped (the column exists, `preregister` accepts and validates it, `ACTUATION_TARGET_KINDS` includes it) but consumption was NOT wired into `metrics._gates` in this pass. Wiring it safely would mean picking a specific gate to attach it to without contradicting the 2026-07-19 decision to retire resistance-ACWR personalization (a percentile fit is categorically different from a pre-bounded causal prior, but the two mechanisms sitting side-by-side on the same gates needs more design time than this pass had) — and without a concrete gate target already in scope, forcing one in risked a fragile, under-verified safety-gate change.
+
+**Why.** `volume_target` had a concrete, well-specified, low-risk application point (a set-count multiplier, already bounded by MEV/MRV clamps that exist independent of this feature). `gate_loosen` touches actual safety thresholds and deserved its own focused design pass rather than being squeezed in at the end of an already-large remediation. Shipping the schema now means a future pass can wire consumption without another migration.
+
+**Consequences.** `selflab.Experiment` gained 5 actuation fields (all `None` for legacy/prose-only priors — no behavior change for existing priors). `POST /experiments` accepts the 5 new optional fields, all-or-nothing, 422 on validation failure. Coverage in `test_prior_actuation.py`: preregistration validation, a full preregister→confirm→actuate loop with an exact expected-value assertion, retraction stops actuation, and MEV/MRV clamps hold. `gate_loosen` is inert — declaring it does nothing yet — until a follow-up wires a specific `_gates` consumer.
+
+---
+
 ## 2026-07-19 — Two low-priority ACWR/deload-fitting gaps accepted, not fixed
 
 **Context.** The 2026-07 remediation pass found two smaller data-quality gaps in the self-learning fitters while fixing the higher-severity ones: (1) `self_learning._historical_weekly_acwr` samples one ratio per Monday-anchored ISO week, while the live gate (`metrics._arm_acwr`) computes a rolling ratio ending TODAY on any day of the week — a mid-week load spike is never sampled at the phase the fitter would see it. (2) `_regressing_precursor_count` (feeds `calibrate_deload_trigger`) counts muscles at perf≤2 in the week before a deload — the SAME threshold `deload_check` itself fires on, so the "learned" deload trigger is mildly fit to reproduce the signal that generated its own training events.

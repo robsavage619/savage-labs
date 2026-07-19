@@ -1362,6 +1362,13 @@ def weekly_prescription(
     from shc.metrics import personalized_cond_thresholds
 
     leg_hold_threshold, _cond_forbid_legs = personalized_cond_thresholds(conn)
+    try:
+        from shc.selflab import read_active_volume_target_actuations
+
+        prior_multipliers = read_active_volume_target_actuations(conn)
+    except Exception as exc:  # noqa: BLE001 — prior actuation optional
+        log.debug("prior volume-target actuations unavailable: %s", exc)
+        prior_multipliers = {}
     data_gaps: list[str] = []
     if conditioning_blind:
         data_gaps.append(
@@ -1455,6 +1462,24 @@ def weekly_prescription(
             rx.reason = (
                 rx.reason + " [held: protein below target — substrate needed to convert stimulus]"
             )
+        # Deterministic actuation of a CONFIRMED n-of-1 prior (see
+        # selflab.read_active_volume_target_actuations): scales this week's
+        # FINAL target, clamped to [MEV, MRV] so a prior can adjust the ramp
+        # but never push a muscle below its productive floor or above its
+        # tested ceiling — the same non-negotiable bounds every other branch
+        # of this function respects.
+        prior_mult = prior_multipliers.get(r.muscle)
+        if prior_mult is not None and r.mev is not None and r.mrv is not None:
+            adjusted = round(rx.target_sets * prior_mult)
+            adjusted = max(r.mev, min(r.mrv, adjusted))
+            if adjusted != rx.target_sets:
+                rx.reason = (
+                    rx.reason
+                    + f" [confirmed prior: {rx.target_sets}→{adjusted} sets "
+                    f"({prior_mult - 1.0:+.0%})]"
+                )
+                rx.delta += adjusted - rx.target_sets
+                rx.target_sets = adjusted
         muscle_rx.append(rx)
 
     # Emphasis first, then the muscles being grown, then the rest.

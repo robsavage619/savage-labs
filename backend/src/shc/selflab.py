@@ -36,6 +36,11 @@ log = logging.getLogger(__name__)
 _BOOTSTRAP_N = 2000
 
 
+#: Closed vocabulary for prior actuation targets — see migration 0074.
+ACTUATION_TARGET_KINDS = frozenset({"volume_target", "gate_loosen"})
+ACTUATION_DIRECTIONS = frozenset({"+", "-"})
+
+
 @dataclass
 class Experiment:
     id: str
@@ -52,6 +57,13 @@ class Experiment:
     washout_hours: int
     started_on: date
     status: str
+    # Actuation declaration (all None for a prose-only/legacy prior) — see
+    # migration 0074 and preregister()'s docstring.
+    actuation_target_kind: str | None = None
+    actuation_target_key: str | None = None
+    actuation_direction: str | None = None
+    actuation_magnitude_pct: float | None = None
+    actuation_cap_pct: float | None = None
 
 
 # ── Pre-registration ─────────────────────────────────────────────────────────
@@ -73,6 +85,11 @@ def preregister(
     started_on: date | None = None,
     planned_end: date | None = None,
     notes: str | None = None,
+    actuation_target_kind: str | None = None,
+    actuation_target_key: str | None = None,
+    actuation_direction: str | None = None,
+    actuation_magnitude_pct: float | None = None,
+    actuation_cap_pct: float | None = None,
 ) -> str:
     """Register a study before any data is collected. Returns the experiment id.
 
@@ -84,8 +101,26 @@ def preregister(
     wrong isn't a test of anything — state the smallest effect worth acting on
     before looking at data, not after.
 
+    The ``actuation_*`` params declare — BEFORE any data is collected — which
+    concrete decision variable a CONFIRMED verdict may move, and by how much
+    at most. All five are optional but ALL-OR-NOTHING: a study with no
+    actuation declared stays prompt-only (the legacy behavior); a study that
+    declares one must declare all five. See migration 0074 for the target
+    vocabulary and `training.self_learning.read_active_prior_actuations` /
+    `autoregulation.weekly_prescription` for how a CONFIRMED result is applied.
+
+    Worked example: an experiment on pre-lift caffeine's effect on bench e1RM
+    might declare ``actuation_target_kind="volume_target"``,
+    ``actuation_target_key="chest"``, ``actuation_direction="+"``,
+    ``actuation_magnitude_pct=10``, ``actuation_cap_pct=10`` — if CONFIRMED,
+    chest's weekly set target scales by 1.10 (clamped to MRV) while the prior
+    stays active.
+
     Raises:
-        ValueError: if ``min_effect`` is not strictly positive.
+        ValueError: if ``min_effect`` is not strictly positive, or the
+            actuation fields are partially declared / use an unrecognized
+            target_kind or direction / have a non-positive magnitude or cap /
+            declare a magnitude exceeding the cap.
     """
     if min_effect <= 0:
         raise ValueError(
@@ -93,19 +128,50 @@ def preregister(
             "min_effect=0 can never be REFUTED and trivially CONFIRMS; state the "
             "smallest effect worth acting on before collecting data."
         )
+    actuation_fields = (
+        actuation_target_kind, actuation_target_key, actuation_direction,
+        actuation_magnitude_pct, actuation_cap_pct,
+    )
+    n_declared = sum(f is not None for f in actuation_fields)
+    if 0 < n_declared < len(actuation_fields):
+        raise ValueError(
+            "actuation fields are all-or-nothing: declare target_kind, target_key, "
+            "direction, magnitude_pct, AND cap_pct together, or none of them"
+        )
+    if n_declared == len(actuation_fields):
+        if actuation_target_kind not in ACTUATION_TARGET_KINDS:
+            raise ValueError(
+                f"actuation_target_kind must be one of {sorted(ACTUATION_TARGET_KINDS)}, "
+                f"got {actuation_target_kind!r}"
+            )
+        if actuation_direction not in ACTUATION_DIRECTIONS:
+            raise ValueError(
+                f"actuation_direction must be one of {sorted(ACTUATION_DIRECTIONS)}, "
+                f"got {actuation_direction!r}"
+            )
+        if actuation_magnitude_pct <= 0 or actuation_cap_pct <= 0:  # type: ignore[operator]
+            raise ValueError("actuation_magnitude_pct and actuation_cap_pct must be > 0")
+        if actuation_magnitude_pct > actuation_cap_pct:  # type: ignore[operator]
+            raise ValueError(
+                f"actuation_magnitude_pct ({actuation_magnitude_pct}) must not exceed "
+                f"actuation_cap_pct ({actuation_cap_pct})"
+            )
     started = started_on or date.today()
     conn.execute(
         """
         INSERT INTO experiments
             (slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
              outcome_direction, min_per_arm, min_effect, washout_hours, started_on,
-             planned_end, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             planned_end, notes, actuation_target_kind, actuation_target_key,
+             actuation_direction, actuation_magnitude_pct, actuation_cap_pct)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
             outcome_direction, min_per_arm, min_effect, washout_hours, started.isoformat(),
             planned_end.isoformat() if planned_end else None, notes,
+            actuation_target_kind, actuation_target_key, actuation_direction,
+            actuation_magnitude_pct, actuation_cap_pct,
         ],
     )
     row = conn.execute("SELECT id FROM experiments WHERE slug = ?", [slug]).fetchone()
@@ -116,7 +182,9 @@ def preregister(
 def load(conn: duckdb.DuckDBPyConnection, exp_id: str) -> Experiment | None:
     row = conn.execute(
         "SELECT id, slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric, "
-        "outcome_direction, design, min_per_arm, min_effect, washout_hours, started_on, status "
+        "outcome_direction, design, min_per_arm, min_effect, washout_hours, started_on, status, "
+        "actuation_target_kind, actuation_target_key, actuation_direction, "
+        "actuation_magnitude_pct, actuation_cap_pct "
         "FROM experiments WHERE id = ? OR slug = ?",
         [exp_id, exp_id],
     ).fetchone()
@@ -128,6 +196,10 @@ def load(conn: duckdb.DuckDBPyConnection, exp_id: str) -> Experiment | None:
         condition_b=row[5], outcome_metric=row[6], outcome_direction=row[7], design=row[8],
         min_per_arm=int(row[9]), min_effect=float(row[10]), washout_hours=int(row[11]),
         started_on=started, status=row[13],
+        actuation_target_kind=row[14], actuation_target_key=row[15],
+        actuation_direction=row[16],
+        actuation_magnitude_pct=float(row[17]) if row[17] is not None else None,
+        actuation_cap_pct=float(row[18]) if row[18] is not None else None,
     )
 
 
@@ -472,20 +544,35 @@ def _emit_prior(
     mean_a: float,
 ) -> None:
     """Write the governed personal prior a CONFIRMED experiment justifies. Stored
-    as a percent-of-baseline effect so the engine can apply it scale-free."""
+    as a percent-of-baseline effect so the engine can apply it scale-free.
+
+    Copies the experiment's preregistered actuation declaration (if any) onto
+    the prior row, so a decision-time consumer (autoregulation._decide) reads
+    one self-contained table — no join back to `experiments` needed, and
+    retracting the prior (active=FALSE, see the caller) removes the actuation
+    the same way it removes the prose guidance.
+    """
     pct = round(effect / mean_a * 100.0, 2) if mean_a else effect
     metric_short = exp.outcome_metric.split(":", 1)[0]
     conn.execute(
         """
         INSERT INTO experiment_prior
-            (experiment_id, prior_key, effect, effect_ci_low, effect_ci_high, outcome_metric, active)
-        VALUES (?, ?, ?, ?, ?, ?, TRUE)
+            (experiment_id, prior_key, effect, effect_ci_low, effect_ci_high, outcome_metric,
+             active, target_kind, target_key, direction, magnitude_pct, cap_pct)
+        VALUES (?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?)
         ON CONFLICT (experiment_id) DO UPDATE SET
             prior_key = excluded.prior_key, effect = excluded.effect,
             effect_ci_low = excluded.effect_ci_low, effect_ci_high = excluded.effect_ci_high,
-            outcome_metric = excluded.outcome_metric, active = TRUE, created_at = now()
+            outcome_metric = excluded.outcome_metric, active = TRUE, created_at = now(),
+            target_kind = excluded.target_kind, target_key = excluded.target_key,
+            direction = excluded.direction, magnitude_pct = excluded.magnitude_pct,
+            cap_pct = excluded.cap_pct
         """,
-        [exp.id, f"{exp.manipulated}.{metric_short}_pct", pct, ci_low, ci_high, exp.outcome_metric],
+        [
+            exp.id, f"{exp.manipulated}.{metric_short}_pct", pct, ci_low, ci_high,
+            exp.outcome_metric, exp.actuation_target_kind, exp.actuation_target_key,
+            exp.actuation_direction, exp.actuation_magnitude_pct, exp.actuation_cap_pct,
+        ],
     )
     log.info("experiment %s CONFIRMED → prior %s.%s_pct = %+g%%", exp.slug, exp.manipulated,
              metric_short, pct)
@@ -684,3 +771,32 @@ def active_priors(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def read_active_volume_target_actuations(conn: duckdb.DuckDBPyConnection) -> dict[str, float]:
+    """Active CONFIRMED priors declaring ``target_kind='volume_target'``, as a
+    ``{muscle: multiplier}`` map — the deterministic actuation path
+    `autoregulation.weekly_prescription` applies to each muscle's final target.
+
+    A multiplier is ``1 + direction*magnitude_pct/100``, clamped to
+    ``1 ± cap_pct/100`` (the cap is declared at preregistration — see
+    `preregister`'s docstring — and is independent of the measured effect
+    size, so a large observed effect can't blow past the bound Rob agreed to
+    before seeing data). If more than one active prior targets the same
+    muscle, their multipliers COMPOSE multiplicatively (each is still
+    individually capped).
+    """
+    rows = conn.execute(
+        """
+        SELECT target_key, direction, magnitude_pct, cap_pct
+        FROM experiment_prior
+        WHERE active = TRUE AND target_kind = 'volume_target' AND target_key IS NOT NULL
+        """
+    ).fetchall()
+    out: dict[str, float] = {}
+    for target_key, direction, magnitude_pct, cap_pct in rows:
+        magnitude_pct = min(float(magnitude_pct), float(cap_pct))
+        sign = 1.0 if direction == "+" else -1.0
+        multiplier = 1.0 + sign * magnitude_pct / 100.0
+        out[target_key] = out.get(target_key, 1.0) * multiplier
+    return out
