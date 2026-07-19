@@ -255,6 +255,32 @@ def test_muscle_group_override_only_loosens_listed_groups() -> None:
         )
 
 
+def test_hip_thrust_allowed_under_pull_forbid() -> None:
+    """Hip Thrust is a fixed-back bridge, not a spinal hip-hinge — metrics._HINGE
+    already excludes it (routes to legs/glutes, same as Glute Bridge). It must
+    NOT be blocked when the pull gate forbids hinge patterns."""
+    p = _plan(intensity="moderate", exercises=[_ex("Hip Thrust", None, "8")])
+    assert validate_plan(p, state=FORBID_PULL_STATE, e1rm_ceilings=CEIL) is True
+
+
+def test_rdl_still_rejected_under_pull_forbid() -> None:
+    """Sanity check: removing Hip Thrust from the hinge list must not weaken
+    the guard for genuine hip-hinge patterns. RDL classifies as the 'pull'
+    group itself, so overriding that group is what isolates the
+    hinge-specific check (the same setup test_muscle_group_override_does_not_
+    unlock_hip_hinge below uses) — without an override RDL is caught earlier
+    by the plain group-forbid check, which proves nothing about the hinge list."""
+    p = _plan(intensity="moderate", exercises=[_ex("Romanian Deadlift (Dumbbell)", None, "8")])
+    with pytest.raises(GateViolation, match="hinge"):
+        validate_plan(
+            p,
+            state=FORBID_PULL_STATE,
+            e1rm_ceilings=CEIL,
+            override_reason="want some posterior work",
+            override_muscle_groups=["pull"],
+        )
+
+
 def test_muscle_group_override_does_not_unlock_hip_hinge() -> None:
     """The hinge guard (#19) is an injury-pattern constraint, not a recovery
     window — overriding the pull group must NOT let a hinge through."""
@@ -359,6 +385,26 @@ def test_rep_range_allows_in_band(conn) -> None:
     state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
     plan = _plan(intensity="moderate", exercises=[_ex("Incline Curl (Dumbbell)", 30, "12")])
     validate_plan(plan, state=state, conn=conn)  # in-band → no rep violation
+
+
+def test_rep_range_high_end_of_prescribed_range_rejected(conn) -> None:
+    """Incline Curl's window is 10-20 (+3 tolerance -> 23). A "20-25" prescription
+    has an in-band LOW end (20) but its HIGH end (25) overshoots — must be caught
+    on the range's high end, not just its first/low number."""
+    state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
+    plan = _plan(intensity="moderate", exercises=[_ex("Incline Curl (Dumbbell)", 30, "20-25")])
+    with pytest.raises(GateViolation, match="evidence-based"):
+        validate_plan(plan, state=state, conn=conn)
+
+
+def test_load_ceiling_checked_against_high_end_of_rep_range() -> None:
+    """A "10-12" prescription at 62lb passes the ceiling at 10 reps but breaches
+    it at 12 (Face Pull e1RM 48kg, low-day ceiling ~82.5lb e1RM) — the ceiling
+    must be evaluated at the range's high end (the heaviest-implied demand the
+    athlete may actually execute), not just the range's first number."""
+    p = _plan(exercises=[_ex("Face Pull", 62, "10-12")])
+    with pytest.raises(GateViolation, match="max attempt"):
+        validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL)
 
 
 def test_clinical_cap_db_error_fails_visible_not_silent() -> None:

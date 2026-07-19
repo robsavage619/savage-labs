@@ -901,6 +901,14 @@ _RELATIVE_CLINICAL_CAP = 12
 # agent reconciled hinge → 'pull', but a forbidden *group* check alone can't
 # express "the pull gate forbids hinge specifically"; pattern-level matching
 # below is the deterministic backstop.
+#
+# "hip thrust" deliberately excluded: it's a fixed-back bridge, not a spinal
+# hip-hinge — metrics._HINGE already excludes it (routes to legs/glutes) and
+# treats it the same as Glute Bridge, which was never in this list. The two
+# taxonomies previously disagreed (hip thrust blocked here, allowed there),
+# so it was rejected on every pull-gated day for no biomechanical reason —
+# it doesn't load the posterior chain the way an RDL/deadlift does, and it's
+# a key glute-emphasis movement.
 _HINGE_PATTERNS = (
     "deadlift",
     "rdl",
@@ -908,7 +916,6 @@ _HINGE_PATTERNS = (
     "romanian",
     "good morning",
     "hip hinge",
-    "hip thrust",
 )
 
 
@@ -1080,14 +1087,22 @@ def _validate_citations(plan: dict[str, Any], allowed: set[str]) -> None:
         )
 
 
-def _first_int(value: Any) -> int | None:
-    """Parse the leading integer from a reps field ('10-12', '10 each side')."""
+def _rep_bounds(value: Any) -> tuple[int, int] | None:
+    """Parse (low, high) from a reps field ('10-12' -> (10, 12), '10' -> (10, 10)).
+
+    A single value collapses to (n, n) so both bounds are always well-defined —
+    every rep-range validator wants a HIGH end (worst-case load demand) and a
+    LOW end (heaviest-implied prescription), and using `_first_int` for both
+    directions silently validated only the low end of a range: a "10-12"
+    prescription checked demand at 10 reps even though the athlete may execute
+    12, under-estimating Epley demand at the top of its own range.
+    """
     if isinstance(value, int):
-        return value
+        return value, value
     if isinstance(value, str):
-        m = re.search(r"\d+", value)
-        if m:
-            return int(m.group())
+        nums = [int(n) for n in re.findall(r"\d+", value)]
+        if nums:
+            return min(nums), max(nums)
     return None
 
 
@@ -1502,7 +1517,8 @@ def validate_plan(
                     name = ex.get("name", "")
                     e1rm_kg = e1rm_ceilings.get(name)
                     w_lbs = ex.get("weight_lbs")
-                    reps = _first_int(ex.get("reps"))
+                    bounds = _rep_bounds(ex.get("reps"))
+                    reps = bounds[1] if bounds else None  # HIGH end — worst-case demand
                     if not e1rm_kg:
                         # No e1RM on record → the ceiling can't be enforced for this
                         # lift. Skipping SILENTLY on a capped (deload/low/moderate)
@@ -1528,7 +1544,10 @@ def validate_plan(
                     # re-halve here — the units already match.
                     # Cap demand reps at 12 to match the e1RM history formula
                     # (LEAST(reps,12)); without this a 15-rep set prescribed at the
-                    # same load as the logged 15-rep best exceeds the ceiling.
+                    # same load as the logged 15-rep best exceeds the ceiling. `reps`
+                    # is the HIGH end of the prescribed range (e.g. "10-12" -> 12) —
+                    # the ceiling must hold at the heaviest-implied rep count the
+                    # athlete may actually execute, not just the low end of the range.
                     demand_kg = (w_lbs / 2.20462) * (1 + min(reps, 12) / 30)
                     ceiling_kg = e1rm_kg * cap
                     # 3% tolerance for rounding/load-increment realities.
@@ -1592,18 +1611,28 @@ def validate_plan(
                 for block in blocks:
                     for ex in block.get("exercises", []):
                         band = _sci_reps.get(ex.get("name", ""))
-                        reps = _first_int(ex.get("reps"))
-                        if not band or not reps:
+                        bounds = _rep_bounds(ex.get("reps"))
+                        if not band or not bounds:
                             continue
+                        p_lo, p_hi = bounds
                         lo, hi = band
                         # ±2 low / +3 high tolerance for set-to-set and rounding.
-                        if reps < lo - 2 or reps > hi + 3:
-                            direction = "too heavy/low" if reps < lo else "too light/high"
-                            raise GateViolation(
-                                f"{ex.get('name')!r} prescribed {reps} reps, outside its "
-                                f"evidence-based {lo}–{hi} window ({direction}). Match the rep "
-                                "range the exercise is selected for, or pick a better-fit movement."
-                            )
+                        # Check BOTH ends of the prescribed range against the
+                        # evidence window — using only the range's low end (the
+                        # old `_first_int` behavior) missed a high end that
+                        # overshoots the window on its own, e.g. "10-12" against
+                        # an 8-10 window.
+                        if p_lo < lo - 2:
+                            reps, direction = p_lo, "too heavy/low"
+                        elif p_hi > hi + 3:
+                            reps, direction = p_hi, "too light/high"
+                        else:
+                            continue
+                        raise GateViolation(
+                            f"{ex.get('name')!r} prescribed {reps} reps, outside its "
+                            f"evidence-based {lo}–{hi} window ({direction}). Match the rep "
+                            "range the exercise is selected for, or pick a better-fit movement."
+                        )
 
             # #18 + #22 reuse the weekly engine prescription.
             rx = prescription
