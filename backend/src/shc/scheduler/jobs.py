@@ -68,6 +68,9 @@ async def _recompute_adherence() -> None:
         )
         rec = plan.get("recommendation", {})
         target_rpe = float(rec.get("target_rpe", 0) or 0) or None
+        # Order by sets_done, NOT started_at: WHOOP mirrors every Hevy lift as its own
+        # workout row a second or two later, with zero sets. Picking the latest workout
+        # therefore selected the WHOOP shadow and scored every session 0% complete.
         actual = conn.execute(
             """
             SELECT
@@ -78,7 +81,7 @@ async def _recompute_adherence() -> None:
             LEFT JOIN workout_sets ws ON ws.workout_id = w.id
             WHERE w.started_at::DATE = $d
             GROUP BY w.id
-            ORDER BY MAX(w.started_at) DESC LIMIT 1
+            ORDER BY sets_done DESC, MAX(w.started_at) DESC LIMIT 1
             """,
             {"d": yesterday},
         ).fetchone()

@@ -125,6 +125,26 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     # higher reps demands a SUPRAMAXIMAL e1RM (a fake "deload"). Target load must
     # be derived from e1RM × today's intensity cap, not from the raw max weight.
     e1rm_by_ex = e1rm_by_exercise(conn, today)
+    # Logging semantics for a given exercise name have drifted across the years:
+    # Hammer Curl (Dumbbell) sat at a 110-140 lb median through 2025 but logs
+    # 35-50 lb per hand in 2026 — same name, different implement/unit convention.
+    # The all-time ratcheting max therefore advertises a load from a defunct
+    # regime. Show a max drawn from the same 90d window the e1RM is fitted on so
+    # the displayed number and the ceiling agree on what era they describe.
+    recent_max_by_ex = dict(
+        conn.execute(
+            """
+            SELECT ws.exercise, MAX(ws.weight_kg)
+            FROM workout_sets ws
+            JOIN workouts w ON w.id = ws.workout_id
+            WHERE ws.is_warmup = FALSE
+              AND ws.weight_kg IS NOT NULL
+              AND w.started_at::DATE >= $since
+            GROUP BY ws.exercise
+            """,
+            {"since": (today - timedelta(days=90)).isoformat()},
+        ).fetchall()
+    )
     top_exercises = conn.execute(
         """
         SELECT ws.exercise, COUNT(*) AS sets, MAX(ws.weight_kg) AS max_kg,
@@ -405,10 +425,15 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     ww_limit = 40
     lines.append(
         f"\n## WORKING WEIGHTS ({len(ww_rows)} exercises on record) — "
-        f"all-time max · e1RM · today's ceiling ({cap_pct}% @8 reps). "
-        "Dumbbell / cable-crossover loads are shown PER HAND."
+        f"recent max (90d) · e1RM · today's ceiling ({cap_pct}% @8 reps). "
+        "Dumbbell / cable-crossover loads are shown PER HAND. A lift with no set "
+        "in 90d falls back to its all-time max and is flagged — that number may "
+        "predate a logging or implement change, so set load by feel instead."
     )
-    for ex, wkg, src in ww_rows[:ww_limit]:
+    for ex, all_time_kg, src in ww_rows[:ww_limit]:
+        recent_kg = recent_max_by_ex.get(ex)
+        wkg = recent_kg if recent_kg else all_time_kg
+        stale_sfx = "" if recent_kg else " ⚠ no set in 90d — historic max"
         # Hevy logs per-hand, so the stored weight already IS the per-hand load
         # (per_hand_kg is the identity) and matches the per-hand e1RM unit — the
         # two can be compared directly. For pair lifts the physical whole-body
@@ -427,7 +452,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         else:
             weight_note = " · e1RM n/a — set load by feel to RPE on first set"
         lines.append(
-            f"- {ex}: {lbs} lbs{unit_sfx}{total_sfx} ({ph_kg:.1f} kg) [{src}]{weight_note}"
+            f"- {ex}: {lbs} lbs{unit_sfx}{total_sfx} ({ph_kg:.1f} kg) [{src}]{stale_sfx}{weight_note}"
         )
     if len(ww_rows) > ww_limit:
         lines.append(
