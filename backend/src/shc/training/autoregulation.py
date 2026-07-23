@@ -502,14 +502,18 @@ def _decide(
         desired = cur + ramp_step
         tag = " + emphasis" if emphasized else ""
         reason = f"progressing (perf {perf}/5){tag} → add toward MRV"
-    elif perf == 3 and rpe_headroom:
+    elif perf == 3 and rpe_headroom and not emphasized:
         # Stalled AND the athlete has been running sustained under-target RPE
         # (rpe_drift_signed_mean <= -0.75, see _rpe_headroom): more sets is
         # the WRONG remedy when there's real effort left in the tank — a flat
-        # e1RM with headroom means load, not volume, is the lever. Hold sets
-        # and ask for more load toward the ceiling instead of adding a set.
+        # e1RM with headroom means load, not volume, is the lever. Hold sets.
+        # Exception: emphasis muscles (bring-ups Rob has explicitly flagged)
+        # keep their +2 ramp regardless — the whole point of emphasis is to
+        # push the lagging muscle harder even when other signals say hold.
+        # rpe_headroom is session-level (cross-muscle average), so letting it
+        # suppress an emphasis muscle's dedicated ramp is the wrong trade.
         desired = cur
-        reason = "stalled e1RM with RPE headroom → raise load toward ceiling, hold sets"
+        reason = "stalled e1RM with RPE headroom → raise load, hold sets"
         rpe_headroom_applied = True
     elif perf == 3:
         # Stalled: emphasized muscles break the stall at +2 (the whole point of

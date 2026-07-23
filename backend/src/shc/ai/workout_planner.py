@@ -187,7 +187,14 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             if isinstance(decoded, dict):
                 prior_plan = decoded
                 prior_plan["_date"] = str(prior_plan_row[0])
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as _exc:
+            import logging as _log
+
+            _log.getLogger(__name__).warning(
+                "prior-day plan JSON decode failed for date %s — closed-loop context dropped: %s",
+                prior_plan_row[0],
+                _exc,
+            )
             prior_plan = None
     adherence_row = conn.execute(
         "SELECT plan_date, completion_pct, avg_rpe_actual, avg_rpe_target "
@@ -252,11 +259,13 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     effort_lo, effort_hi = EFFORT_RPE_BAND.get(gates["max_intensity"], (7, 8))
     lines.append(
         "- The WORKING WEIGHTS list below shows each lift's e1RM and today's "
-        "load ceiling at 8 reps. Use the ceiling as your upper bound; pick reps "
-        f"and load so working sets land at **RPE {effort_lo}-{effort_hi}** "
-        f"(today's {gates['max_intensity'].upper()}-day target — hypertrophy "
-        "training is mostly 0-2 RIR; don't default to a comfortable mid-range "
-        "RPE that never approaches the ceiling)."
+        "load ceiling at 8 reps. The ceiling is the HARD upper bound — never "
+        f"exceed it. Working sets should land at **RPE {effort_lo}-{effort_hi}** "
+        f"(today's {gates['max_intensity'].upper()}-day target). "
+        "RPE 8 = 2 RIR = ~87% of your best single at those reps; RPE 9 = 1 RIR. "
+        "Do NOT default to a conservative RPE 6-7 — that leaves hypertrophy stimulus "
+        "on the table. Prescribe enough weight to actually reach the target RPE at "
+        "your chosen rep count."
     )
     lines.append(
         "- **PER-HAND LOADS**: for dumbbell and cable-crossover lifts, every "
@@ -1355,7 +1364,14 @@ def _planned_primary_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str
                     "SELECT primary_muscle FROM exercise_muscle_map WHERE exercise_name = ?",
                     [name],
                 ).fetchone()
-            except Exception:
+            except Exception as _exc:
+                import logging as _log
+
+                _log.getLogger(__name__).warning(
+                    "exercise_muscle_map lookup failed for %r — excluded from primary-set caps: %s",
+                    name,
+                    _exc,
+                )
                 continue
             if row:
                 primary = row[0]
@@ -1574,8 +1590,12 @@ def validate_plan(
             # lower_back individually now that rest is tracked per-muscle. This
             # is a genuine injury-pattern constraint, never overridable (#19's
             # existing contract) — it does not consult `overridden`.
+            # lower_back maps to "core" in MUSCLE_TO_GROUP and is explicitly
+            # excluded from forbid_muscles (core never rest-gates). It cannot
+            # appear here; keeping it in the set would be dead code and
+            # misleading documentation.
             hinge_blocked = "pull" in forbid or bool(
-                {"hamstrings", "glutes", "lower_back"} & forbid_muscles
+                {"hamstrings", "glutes"} & forbid_muscles
             )
             for block in blocks:
                 for ex in block.get("exercises", []):
@@ -1721,13 +1741,19 @@ def validate_plan(
                     rpe_t = ex.get("rpe_target")
                     w_lbs = ex.get("weight_lbs")
                     bounds = _rep_bounds(ex.get("reps"))
-                    reps = bounds[1] if bounds else None
+                    # Use the LOW end of the rep range: at fewer reps the same
+                    # weight is harder (closer to failure), so this gives the
+                    # most conservative (highest) implied weight. A prescription
+                    # calibrated to the low end of its rep range is valid at any
+                    # count in that range; calibrating to the HIGH end (as the
+                    # original check did) underestimates implied_kg for wide
+                    # ranges and rejects loads that are perfectly appropriate.
+                    reps = bounds[0] if bounds else None
                     if not e1rm_kg or not w_lbs or not reps or rpe_t is None:
                         continue
                     # RIR-adjusted Epley: e1RM = weight × (1 + (reps + RIR)/30),
-                    # RIR = 10 − RPE. Solve for the weight that RPE/rep combo
-                    # implies against the exercise's known e1RM, same rep cap
-                    # (12) as the ceiling check above for consistency.
+                    # RIR = 10 − RPE. Solve for the weight this RPE/rep combo
+                    # implies against the exercise's known e1RM.
                     rir = 10 - rpe_t
                     implied_kg = e1rm_kg / (1 + (min(reps, 12) + rir) / 30)
                     prescribed_kg = w_lbs / 2.20462
@@ -1785,7 +1811,13 @@ def validate_plan(
                         "FROM exercise_science GROUP BY exercise_name"
                     ).fetchall()
                 }
-            except Exception:  # noqa: BLE001 — evidence layer optional
+            except Exception as _exc:  # noqa: BLE001 — evidence layer optional
+                import logging as _log
+
+                _log.getLogger(__name__).warning(
+                    "exercise_science rep-range query failed — rep-window validator disabled: %s",
+                    _exc,
+                )
                 _sci_reps = {}
             if _sci_reps:
                 for block in blocks:

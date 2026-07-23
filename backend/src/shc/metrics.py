@@ -1038,12 +1038,18 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
     # DECISIONS.md 2026-07-23). Joins `exercise_muscle` directly (role =
     # 'primary') rather than the `exercise_muscle_map` view, which collapses
     # multiple primary rows for one exercise down to a single MAX() pick.
+    # Filters mirror weekly_muscle_volume's credited-set definition so dose
+    # counts and volume credits agree on what constitutes a "real" set.
     muscle_day_rows = conn.execute(
         """
         SELECT day_d AS day, em.muscle, COUNT(*) AS n_sets, AVG(ws.rpe) AS avg_rpe
         FROM workout_sets_dedup ws
         JOIN exercise_muscle em ON em.exercise_name = ws.exercise AND em.role = 'primary'
-        WHERE ws.is_warmup = FALSE AND day_d >= $since
+        WHERE ws.is_warmup = FALSE
+          AND day_d >= $since
+          AND ws.weight_kg > 0
+          AND ws.reps BETWEEN 5 AND 30
+          AND (ws.rpe IS NULL OR ws.rpe >= 6.0)
         GROUP BY day_d, em.muscle
         """,
         {"since": (today - timedelta(days=28)).isoformat()},
@@ -1349,7 +1355,10 @@ def _acwr_band_sample_weeks(conn) -> tuple[int, int]:
         rows = conn.execute(
             "SELECT arm, MAX(sample_weeks) FROM personal_acwr_bands GROUP BY arm"
         ).fetchall()
-    except Exception:
+    except Exception as exc:
+        import logging as _log
+
+        _log.getLogger(__name__).debug("personal_acwr_bands sample_weeks query failed: %s", exc)
         return 0, 0
     by_arm = {str(arm): int(n) for arm, n in rows if n is not None}
     return by_arm.get("resistance", 0), by_arm.get("conditioning", 0)
@@ -1393,9 +1402,26 @@ def personalized_cond_thresholds(conn) -> tuple[float, float]:
             import logging as _log
 
             _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
-    hold = max(forbid - (COND_ACWR_FORBID_LEGS - COND_ACWR_HOLD_LEGS), COND_ACWR_HOLD_LEGS)
+    gap = COND_ACWR_FORBID_LEGS - COND_ACWR_HOLD_LEGS
+    hold = max(forbid - gap, COND_ACWR_HOLD_LEGS)
     if hold >= forbid:
-        hold = forbid - 0.05
+        # This fires when forbid ≤ COND_ACWR_HOLD_LEGS — the population floor
+        # has squeezed hold up to or above forbid. If forbid is above the floor
+        # we can keep hold at the floor (≤ is fine, just no nudge needed); if
+        # forbid is AT OR BELOW the floor, we must drop inside forbid to preserve
+        # the hold < forbid invariant — the population floor can't apply here.
+        if forbid >= COND_ACWR_HOLD_LEGS:
+            # forbid is at the population floor — keep hold at the floor.
+            # The graded band collapses to zero width; that's the correct
+            # outcome when the personal fit equals the population threshold
+            # (the equality nudge in the original code silently dropped hold
+            # one tick below the floor, violating the documented guarantee).
+            hold = COND_ACWR_HOLD_LEGS
+        else:
+            # forbid fitted BELOW the population floor — preserve hold < forbid
+            # over the floor invariant; the floor can't apply when forbid itself
+            # is below it.
+            hold = forbid - 0.05
     return hold, forbid
 
 
