@@ -428,6 +428,9 @@ export interface DailyStateReadiness {
 export interface DailyStateGates {
   max_intensity: "high" | "moderate" | "low" | "rest";
   forbid_muscle_groups: string[];
+  // Fine-grained rest gate (2026-07-23): a muscle individually rest-gated,
+  // independent of whether its whole push/pull/legs group is locked.
+  forbid_muscles: string[];
   deload_required: boolean;
   deload_reason: string | null;
   hr_zone_shift_bpm: number;

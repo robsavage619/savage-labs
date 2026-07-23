@@ -314,6 +314,108 @@ def test_muscle_group_override_does_not_unlock_hip_hinge() -> None:
         )
 
 
+# ── per-muscle rest gate (2026-07-23 remediation) ────────────────────────────
+
+FORBID_CHEST_STATE = {
+    "gates": {
+        "max_intensity": "moderate",
+        "deload_required": False,
+        "forbid_muscle_groups": [],
+        "forbid_muscles": ["chest"],
+        "reasons": ["chest 1d ago (5 sets) — needs ≥2d rest (last session avg RPE 8.0)"],
+    }
+}
+FORBID_HAMSTRINGS_STATE = {
+    "gates": {
+        "max_intensity": "moderate",
+        "deload_required": False,
+        "forbid_muscle_groups": [],
+        "forbid_muscles": ["hamstrings"],
+        "reasons": ["hamstrings 1d ago (5 sets) — needs ≥2d rest"],
+    }
+}
+
+
+def test_muscle_rest_gate_rejects_directly_targeted_exercise(conn) -> None:
+    """A muscle individually rest-gated blocks an exercise that primaries it,
+    even though the coarse forbid_muscle_groups list is empty."""
+    p = _plan(intensity="low", exercises=[_ex("Bench Press (Barbell)", None, "8")])
+    with pytest.raises(GateViolation, match="rest-gated"):
+        validate_plan(p, state=FORBID_CHEST_STATE, e1rm_ceilings=CEIL, conn=conn)
+
+
+def test_muscle_rest_gate_allows_untouched_muscle(conn) -> None:
+    """A different exercise whose primary muscle is NOT rest-gated still
+    passes — this is the point of per-muscle over group-level locking."""
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 50, "14")])
+    assert validate_plan(p, state=FORBID_CHEST_STATE, e1rm_ceilings=CEIL, conn=conn) is True
+
+
+def test_muscle_rest_gate_self_skips_without_conn() -> None:
+    """Matches the #18/#21/#22 contract: without a live conn the per-muscle
+    check can't look up primary muscles, so it self-skips rather than erroring."""
+    p = _plan(intensity="low", exercises=[_ex("Bench Press (Barbell)", None, "8")])
+    assert validate_plan(p, state=FORBID_CHEST_STATE, e1rm_ceilings=CEIL) is True
+
+
+def test_muscle_rest_gate_blocks_hinge_via_individual_muscle() -> None:
+    """The hinge guard must trigger from a per-muscle forbid on the posterior
+    chain (hamstrings), not just from the coarse 'pull' group. Deliberately
+    omits `conn` so the direct-target check (which WOULD also catch this,
+    since RDL's primary muscle is hamstrings) self-skips — isolating that the
+    hinge guard alone, reading state's forbid_muscles, blocks it. Mirrors
+    test_rdl_still_rejected_under_pull_forbid's isolation technique."""
+    p = _plan(intensity="moderate", exercises=[_ex("Romanian Deadlift (Dumbbell)", None, "8")])
+    with pytest.raises(GateViolation, match="hinge"):
+        validate_plan(p, state=FORBID_HAMSTRINGS_STATE, e1rm_ceilings=CEIL)
+
+
+def test_muscle_override_unlocks_only_the_named_muscle(conn) -> None:
+    """override_muscle_groups may name a fine-grained muscle directly."""
+    p = _plan(intensity="low", exercises=[_ex("Bench Press (Barbell)", None, "8")])
+    assert (
+        validate_plan(
+            p,
+            state=FORBID_CHEST_STATE,
+            e1rm_ceilings=CEIL,
+            conn=conn,
+            override_reason="deliberate light chest, feels great",
+            override_muscle_groups=["chest"],
+        )
+        is True
+    )
+
+
+def test_muscle_override_does_not_unlock_hip_hinge() -> None:
+    """The hinge guard stays non-overridable even via a muscle-level override."""
+    p = _plan(intensity="moderate", exercises=[_ex("Romanian Deadlift (Dumbbell)", None, "8")])
+    with pytest.raises(GateViolation, match="hinge"):
+        validate_plan(
+            p,
+            state=FORBID_HAMSTRINGS_STATE,
+            e1rm_ceilings=CEIL,
+            override_reason="want some posterior work",
+            override_muscle_groups=["hamstrings"],
+        )
+
+
+def test_group_override_also_unlocks_member_muscles(conn) -> None:
+    """Overriding the coarse 'push' group must also clear a per-muscle forbid
+    on any push-mapped muscle (chest) in one line, without naming it."""
+    p = _plan(intensity="low", exercises=[_ex("Bench Press (Barbell)", None, "8")])
+    assert (
+        validate_plan(
+            p,
+            state=FORBID_CHEST_STATE,
+            e1rm_ceilings=CEIL,
+            conn=conn,
+            override_reason="deliberate light push work",
+            override_muscle_groups=["push"],
+        )
+        is True
+    )
+
+
 def test_override_reason_unused_when_plan_already_within_gate() -> None:
     """A reason present on a plan that's already within the true gate changes
     nothing — validate_plan just passes, same as with no reason at all."""

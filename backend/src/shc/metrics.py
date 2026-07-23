@@ -80,6 +80,13 @@ COND_ACWR_FORBID_LEGS = 1.8
 # 0.3; personalized_cond_thresholds() preserves this gap when forbid is fitted.
 COND_ACWR_HOLD_LEGS = 1.5
 
+# Minimum primary-credited non-warmup sets on a single day before a muscle's
+# rest clock resets (2026-07-23 remediation). Below this, the touch is
+# incidental (a compound's secondary spillover, a 2-set finisher) and must
+# not lock the muscle out the way the old group-level gate did — see
+# DECISIONS.md and ENGINE_INVARIANTS.md invariant 4 addendum.
+MEANINGFUL_DOSE_SETS = 4
+
 # Minimum days of actual (nonzero) load inside the 21-day chronic window before
 # an arm's ACWR ratio is trusted. chronic is deliberately averaged over the full
 # 21-day window length, not just days with data (a real rest week SHOULD read
@@ -204,6 +211,13 @@ class TrainingLoadMetrics:
     last_rpe_legs: float | None = None
     last_rpe_push: float | None = None
     last_rpe_pull: float | None = None
+    # Per-muscle rest tracking (2026-07-23 remediation) — replaces the
+    # group-level days_since_{legs,push,pull} as the REST GATE's input (those
+    # group fields are kept for display/balance purposes only). Keyed by the
+    # 17-muscle taxonomy; {"days_since": int, "last_rpe": float | None,
+    # "last_dose_sets": int} for any muscle with a day at or above
+    # MEANINGFUL_DOSE_SETS in the last 28 days.
+    muscle_recovery: dict[str, dict[str, Any]] = field(default_factory=dict)
     push_pull_ratio_28d: float | None = None
     push_sets_28d: int = 0
     pull_sets_28d: int = 0
@@ -271,6 +285,14 @@ class AutoRegGates:
 
     max_intensity: Intensity = "high"
     forbid_muscle_groups: list[str] = field(default_factory=list)  # e.g. ["legs"] if rested < 48h
+    # Per-muscle rest gate (2026-07-23 remediation) — additive to
+    # forbid_muscle_groups, not a replacement. A muscle appears here when its
+    # own rest clock (metrics.MEANINGFUL_DOSE_SETS-gated) hasn't cleared;
+    # forbid_muscle_groups is derived from this ONLY when every muscle in a
+    # group is locked (see _gates). Group-scoped signals that are genuinely
+    # about the group (conditioning-ACWR legs forbid, same-day pickleball,
+    # soreness) still write forbid_muscle_groups directly.
+    forbid_muscles: list[str] = field(default_factory=list)
     deload_required: bool = False
     deload_reason: str | None = None
     hr_zone_shift_bpm: int = 0  # subtract from prescribed HR zones (propranolol days)
@@ -1008,6 +1030,38 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             ]
             if rpes:
                 setattr(m, f"last_rpe_{g}", round(sum(rpes) / len(rpes), 1))
+
+    # Per-muscle rest tracking. A muscle's clock only resets on a day with a
+    # MEANINGFUL dose (>= MEANINGFUL_DOSE_SETS primary-credited sets) — a
+    # distributed full-upper session (2-4 sets/muscle) must not lock every
+    # muscle it touches the way the old group-level gate did (see
+    # DECISIONS.md 2026-07-23). Joins `exercise_muscle` directly (role =
+    # 'primary') rather than the `exercise_muscle_map` view, which collapses
+    # multiple primary rows for one exercise down to a single MAX() pick.
+    muscle_day_rows = conn.execute(
+        """
+        SELECT day_d AS day, em.muscle, COUNT(*) AS n_sets, AVG(ws.rpe) AS avg_rpe
+        FROM workout_sets_dedup ws
+        JOIN exercise_muscle em ON em.exercise_name = ws.exercise AND em.role = 'primary'
+        WHERE ws.is_warmup = FALSE AND day_d >= $since
+        GROUP BY day_d, em.muscle
+        """,
+        {"since": (today - timedelta(days=28)).isoformat()},
+    ).fetchall()
+    best_dose_day: dict[str, tuple[date, int, float | None]] = {}
+    for day, muscle, n_sets, avg_rpe in muscle_day_rows:
+        if n_sets < MEANINGFUL_DOSE_SETS:
+            continue
+        prior = best_dose_day.get(muscle)
+        if prior is None or day > prior[0]:
+            best_dose_day[muscle] = (day, int(n_sets), float(avg_rpe) if avg_rpe is not None else None)
+    for muscle, (day, n_sets, avg_rpe) in best_dose_day.items():
+        m.muscle_recovery[muscle] = {
+            "days_since": (today - day).days,
+            "last_rpe": round(avg_rpe, 1) if avg_rpe is not None else None,
+            "last_dose_sets": n_sets,
+        }
+
     m.push_sets_28d = bal["push"]
     m.pull_sets_28d = bal["pull"]
     m.legs_sets_28d = bal["legs"]
@@ -1677,15 +1731,22 @@ def _gates(
         g.max_intensity = "low"
         reasons.append("Readiness red — cap intensity LOW")
 
-    # Muscle-group recovery. Base: compound legs ≥3d (72h); push/pull ≥2d (48h)
-    # — calibrated to a near-failure session. A submaximal session (avg RPE
-    # ≤ 6.5, i.e. 3+ RIR) recovers ~24h faster, and a flat calendar gate after
-    # easy sessions caps frequency below what the over-40 hypertrophy evidence
-    # prescribes (maintain or increase frequency, not reduce it).
-    for grp in ("legs", "push", "pull"):
-        rest = getattr(load, f"days_since_{grp}")
-        last_rpe = getattr(load, f"last_rpe_{grp}")
-        if grp == "legs":
+    # Per-muscle recovery (2026-07-23 remediation — replaces the group-level
+    # rest gate). Base: compound legs ≥3d (72h); push/pull-mapped muscles
+    # ≥2d (48h) — calibrated to a near-failure session. A submaximal session
+    # (avg RPE ≤ 6.5, i.e. 3+ RIR) recovers ~24h faster. Only muscles in
+    # MUSCLE_TO_GROUP (push/pull/legs) are rest-gated at all — core (abs,
+    # lower_back) and forearms were never group-gated and stay that way; this
+    # widens granularity, it doesn't newly restrict muscles that were free
+    # before. Scoped to muscles that actually reached a MEANINGFUL_DOSE_SETS
+    # day (metrics.muscle_recovery) — a distributed full-upper session no
+    # longer locks every muscle it touched at 2-4 sets each.
+    for muscle, dose in load.muscle_recovery.items():
+        if MUSCLE_TO_GROUP.get(muscle) not in ("push", "pull", "legs"):
+            continue  # core (abs, lower_back) and forearms stay ungated, as before
+        rest = dose.get("days_since")
+        last_rpe = dose.get("last_rpe")
+        if MUSCLE_TO_GROUP[muscle] == "legs":
             # Frequency is the over-40 hypertrophy lever (vault: raise it, don't
             # cut it). Default legs to 48h; only a genuine near-failure session
             # (avg RPE ≥ 9) earns the full 72h. Per-muscle soreness (below) does
@@ -1697,10 +1758,25 @@ def _gates(
             if last_rpe is not None and last_rpe <= 6.5:
                 threshold -= 1
         if rest is not None and rest < threshold:
-            if grp not in g.forbid_muscle_groups:
-                g.forbid_muscle_groups.append(grp)
+            if muscle not in g.forbid_muscles:
+                g.forbid_muscles.append(muscle)
             rpe_note = f" (last session avg RPE {last_rpe:.1f})" if last_rpe else ""
-            reasons.append(f"{grp.title()} {rest}d ago — needs ≥{threshold}d rest{rpe_note}")
+            reasons.append(
+                f"{muscle} {rest}d ago ({dose.get('last_dose_sets')} sets) — "
+                f"needs ≥{threshold}d rest{rpe_note}"
+            )
+
+    # Derive a group forbid ONLY when every muscle mapped to that group is
+    # individually locked — the partial case (e.g. chest locked, triceps
+    # free) is exactly what per-muscle tracking is meant to unlock. Other
+    # legitimately group-scoped signals (conditioning-ACWR legs forbid,
+    # same-day pickleball, soreness — below) still write forbid_muscle_groups
+    # directly and are unaffected by this derivation.
+    for grp in ("push", "pull", "legs"):
+        grp_muscles = [mu for mu, gg in MUSCLE_TO_GROUP.items() if gg == grp]
+        all_locked = grp_muscles and all(mu in g.forbid_muscles for mu in grp_muscles)
+        if all_locked and grp not in g.forbid_muscle_groups:
+            g.forbid_muscle_groups.append(grp)
 
     # Same-day pickleball forbids leg lifting; from the next day on it does
     # not — court time is conditioning stimulus, not heavy eccentric load, and

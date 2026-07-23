@@ -100,6 +100,50 @@ def test_legs_clock_tracks_lifts_only(conn, seed, today: date) -> None:
     assert m.days_since_pickleball == 6
 
 
+def test_muscle_recovery_locks_a_hard_focused_dose(conn, seed, today: date) -> None:
+    """A single exercise delivering >= MEANINGFUL_DOSE_SETS primary sets to one
+    muscle at a hard RPE resets that muscle's clock."""
+    seed.workout(
+        ago(today, 1),
+        "Bench Press (Barbell)",
+        [(80, 8)] * 5,
+        rpe=8.0,
+    )
+    m = _training_load(conn, today)
+    assert "chest" in m.muscle_recovery
+    assert m.muscle_recovery["chest"]["days_since"] == 1
+    assert m.muscle_recovery["chest"]["last_rpe"] == 8.0
+    assert m.muscle_recovery["chest"]["last_dose_sets"] == 5
+
+
+def test_distributed_full_upper_session_locks_no_muscle(conn, seed, today: date) -> None:
+    """The collapse-to-glutes regression: a full-upper session spreads 3 sets
+    across six different primary muscles — none reach MEANINGFUL_DOSE_SETS,
+    so muscle_recovery must be empty (nothing locks the next day)."""
+    exercises = [
+        "Bench Press (Barbell)",  # chest
+        "Bent Over Row (Barbell)",  # lats
+        "Hammerstrength Shoulder Press",  # front_delts (verified below)
+        "Lateral Raise (Dumbbell)",  # side_delts
+        "Triceps Rope Pushdown",  # triceps
+        "Hammer Curl (Dumbbell)",  # biceps
+    ]
+    for ex in exercises:
+        seed.workout(ago(today, 1), ex, [(40, 10)] * 3, rpe=7.0)
+    m = _training_load(conn, today)
+    assert m.muscle_recovery == {}
+
+
+def test_sub_threshold_dose_does_not_reset_the_clock(conn, seed, today: date) -> None:
+    """A 3-set touch (below MEANINGFUL_DOSE_SETS) must not reset the clock —
+    only the earlier, real 5-set dose counts."""
+    seed.workout(ago(today, 4), "Bench Press (Barbell)", [(80, 8)] * 5, rpe=8.0)
+    seed.workout(ago(today, 1), "Bench Press (Barbell)", [(80, 8)] * 3, rpe=8.0)
+    m = _training_load(conn, today)
+    assert m.muscle_recovery["chest"]["days_since"] == 4
+    assert m.muscle_recovery["chest"]["last_dose_sets"] == 5
+
+
 def test_arm_acwr_resistance_and_conditioning_are_independent(conn, seed, today: date) -> None:
     """Resistance (Hevy tonnes, idx 3) and conditioning (WHOOP strain, idx 2) are
     independent ACWR streams — a spike in one must not move the other."""

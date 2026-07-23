@@ -23,7 +23,7 @@ from shc.ai.workout_planner import (
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, get_write_conn, write_ctx
 from shc.lab import _welch_t as _lab_welch
-from shc.metrics import compute_daily_state
+from shc.metrics import MUSCLE_TO_GROUP, compute_daily_state
 from shc.metrics import muscle_group as _mg
 
 router = APIRouter(tags=["dashboard"])
@@ -2832,6 +2832,36 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
             for ex in block.get("exercises", [])
         }
         mg_overridden = sorted(forbid_set & requested_groups & trained_groups)
+
+        # Muscle-level override audit (2026-07-23 remediation): mirrors the
+        # group audit above at fine-grained resolution — a listed muscle (or a
+        # listed group expanded to its members) only counts as "overridden" if
+        # it was BOTH individually rest-gated AND actually trained (primary)
+        # in the plan. Requires the still-open conn to resolve exercise →
+        # primary muscle; done here rather than after conn.close() below.
+        forbid_muscles_set = set(gates.get("forbid_muscles", []))
+        requested_muscles = set(requested_groups)
+        for grp in ("push", "pull", "legs"):
+            if grp in requested_groups:
+                requested_muscles |= {mu for mu, gg in MUSCLE_TO_GROUP.items() if gg == grp}
+        trained_muscles: set[str] = set()
+        for block in body.plan.get("blocks", []):
+            for ex in block.get("exercises", []):
+                name = ex.get("name", "")
+                if not name:
+                    continue
+                try:
+                    trained_muscles.update(
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT muscle FROM exercise_muscle WHERE exercise_name = ? "
+                            "AND role = 'primary'",
+                            [name],
+                        ).fetchall()
+                    )
+                except Exception as exc:
+                    log.debug("muscle-override audit lookup failed for %r: %s", name, exc)
+        muscle_overridden = sorted(forbid_muscles_set & requested_muscles & trained_muscles)
     except GateViolation as exc:
         raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
@@ -2839,13 +2869,15 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
     finally:
         conn.close()
 
-    if override_used or mg_overridden:
+    if override_used or mg_overridden or muscle_overridden:
         import json
         import uuid
 
         bypassed = {"gate_reasons": gates.get("reasons", [])}
         if mg_overridden:
             bypassed["muscle_groups_overridden"] = mg_overridden
+        if muscle_overridden:
+            bypassed["muscles_overridden"] = muscle_overridden
         async with write_ctx() as wconn:
             wconn.execute(
                 "INSERT INTO gate_overrides (id, plan_date, requested_intensity, "
@@ -2860,11 +2892,13 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
                 ],
             )
         log.warning(
-            "gate override exercised on %s — intensity=%s (gate=%s) muscle_groups=%s — %s",
+            "gate override exercised on %s — intensity=%s (gate=%s) muscle_groups=%s "
+            "muscles=%s — %s",
             plan_date.isoformat(),
             req_intensity if override_used else "—",
             true_max,
             mg_overridden or "—",
+            muscle_overridden or "—",
             body.override_reason,
         )
 

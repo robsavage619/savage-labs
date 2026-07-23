@@ -21,13 +21,14 @@ from datetime import date, timedelta
 from typing import Any
 
 from shc.db.schema import get_read_conn, write_ctx
-from shc.metrics import _training_load as _training_load_metrics
 from shc.metrics import (
+    MUSCLE_TO_GROUP,
     compute_daily_state,
     muscle_group,
     polarized_zone_distribution,
     vo2max_series,
 )
+from shc.metrics import _training_load as _training_load_metrics
 
 log = logging.getLogger(__name__)
 
@@ -221,6 +222,8 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     lines.append(f"- Max intensity: **{gates['max_intensity'].upper()}**")
     if gates["forbid_muscle_groups"]:
         lines.append(f"- Forbidden muscle groups: {', '.join(gates['forbid_muscle_groups'])}")
+    if gates.get("forbid_muscles"):
+        lines.append(f"- Forbidden muscles: {', '.join(gates['forbid_muscles'])}")
     if gates["deload_required"]:
         lines.append(f"- DELOAD WEEK REQUIRED — {gates['deload_reason']}")
     if gates["hr_zone_shift_bpm"]:
@@ -766,6 +769,8 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     )
     if gates["forbid_muscle_groups"]:
         lines.append(f"- Forbidden muscle groups: {', '.join(gates['forbid_muscle_groups'])}")
+    if gates.get("forbid_muscles"):
+        lines.append(f"- Forbidden muscles: {', '.join(gates['forbid_muscles'])}")
     if gates["deload_required"]:
         lines.append(
             f"- DELOAD REQUIRED — ≤moderate intensity, target RPE ≤7 ({gates['deload_reason']})"
@@ -1246,6 +1251,28 @@ def _clinical_volume_cap(conn: Any) -> tuple[int | None, str | None]:
     return None, None
 
 
+def _all_primary_muscles(conn: Any, name: str) -> list[str]:
+    """All primary muscles for an exercise, read directly from `exercise_muscle`.
+
+    Deliberately does NOT go through `exercise_muscle_map` — that view collapses
+    multiple primary-role rows for one exercise down to a single `MAX()` pick
+    (see migration 0066). No exercise has more than one primary role today
+    (verified against the live catalog), but the per-muscle rest gate checks
+    every primary row rather than assuming that stays true.
+    """
+    try:
+        return [
+            r[0]
+            for r in conn.execute(
+                "SELECT muscle FROM exercise_muscle WHERE exercise_name = ? AND role = 'primary'",
+                [name],
+            ).fetchall()
+        ]
+    except Exception as exc:
+        log.debug("primary-muscle lookup failed for %r: %s", name, exc)
+        return []
+
+
 def _planned_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]:
     """Credited working sets per fine-grained muscle for the planned session (#22).
 
@@ -1375,6 +1402,19 @@ def validate_plan(
     window) stays active, as do deload and clinical guards. Caller logs it for
     audit alongside the intensity override.
 
+    `state["gates"]` may also carry `forbid_muscles` (2026-07-23 remediation) — a
+    fine-grained list of individually rest-gated muscles, additive to
+    `forbid_muscle_groups`. A muscle appears there when ITS OWN rest clock hasn't
+    cleared, independent of whether the whole push/pull/legs group it belongs to
+    is locked; `forbid_muscle_groups` is derived from it only when every muscle in
+    a group is locked. Checking it requires `conn` (to resolve an exercise's
+    primary muscle via `exercise_muscle`); it self-skips like #18/#21/#22 when
+    `conn` is None. `override_muscle_groups` entries may name either a coarse
+    group or an individual muscle — a group entry clears every muscle mapped to
+    it. The hip-hinge guard (#19) is carried by EITHER the "pull" group or a
+    rest-gated hamstrings/glutes/lower_back, and is not overridable through
+    either path.
+
     The session-budget cap (#17 — working-set count + estimated duration) and the
     pull-gate hinge block (#19) run from `state` alone and need no `conn`.
 
@@ -1456,14 +1496,34 @@ def validate_plan(
                 + f". Reasons: {'; '.join(gates.get('reasons', [])) or 'see DailyState.gates'}"
             )
         forbid = set(gates.get("forbid_muscle_groups", []))
+        forbid_muscles = set(gates.get("forbid_muscles", []))
+        # override_muscle_groups may name either a coarse group ("push") or a
+        # fine-grained muscle ("chest") — a group entry also clears every
+        # muscle mapped to it, so overriding "push" unlocks chest/front_delts/
+        # side_delts/triceps in one line rather than requiring all four named.
         overridden = set(override_muscle_groups or [])
+        overridden_muscles = set(overridden)
+        for grp in ("push", "pull", "legs"):
+            if grp in overridden:
+                overridden_muscles |= {mu for mu, gg in MUSCLE_TO_GROUP.items() if gg == grp}
         if overridden and not (override_reason and override_reason.strip()):
             raise ValueError(
                 "override_muscle_groups requires a non-empty override_reason — "
                 "training through a recovery gate must be a recorded, justified choice."
             )
-        if forbid:
-            pull_forbidden = "pull" in forbid
+        if forbid or forbid_muscles:
+            # #19: the pull gate (or a rest-gated posterior-chain muscle) forbids
+            # ALL hip-hinge patterns, not just upper-body pull. muscle_group()
+            # already routes most hinges to 'pull', but a hinge that classifies
+            # elsewhere (e.g. a thrust the taxonomy reads as legs) must still be
+            # blocked whenever the posterior chain is rest-gated — whether that
+            # gate is carried by the "pull" group or by hamstrings/glutes/
+            # lower_back individually now that rest is tracked per-muscle. This
+            # is a genuine injury-pattern constraint, never overridable (#19's
+            # existing contract) — it does not consult `overridden`.
+            hinge_blocked = "pull" in forbid or bool(
+                {"hamstrings", "glutes", "lower_back"} & forbid_muscles
+            )
             for block in blocks:
                 for ex in block.get("exercises", []):
                     name = ex.get("name", "")
@@ -1473,17 +1533,24 @@ def validate_plan(
                             f"Exercise {name!r} targets {g}, which is "
                             f"forbidden today (gate: {sorted(forbid)})."
                         )
-                    # #19: the pull gate forbids ALL hip-hinge patterns, not just
-                    # upper-body pull. muscle_group() already routes most hinges to
-                    # 'pull', but a hinge that classifies elsewhere (e.g. a thrust
-                    # the taxonomy reads as legs) must still be blocked when the
-                    # pull gate is active — a legs day under a pull gate is
-                    # quad-dominant + glute isolation only, no hip hinge.
-                    if pull_forbidden and _is_hinge(name):
+                    if forbid_muscles and conn is not None:
+                        hit = (
+                            set(_all_primary_muscles(conn, name))
+                            & forbid_muscles
+                        ) - overridden_muscles
+                        if hit:
+                            raise GateViolation(
+                                f"Exercise {name!r} directly targets "
+                                f"{sorted(hit)}, which "
+                                f"{'is' if len(hit) == 1 else 'are'} rest-gated today: "
+                                f"{'; '.join(gates.get('reasons', [])) or 'see DailyState.gates'}"
+                            )
+                    if hinge_blocked and _is_hinge(name):
                         raise GateViolation(
                             f"Exercise {name!r} is a hip-hinge pattern, forbidden "
-                            "today because the pull gate is active (pull gate forbids "
-                            "all hinge: deadlift / RDL / good morning / hip thrust)."
+                            "today because the posterior chain is rest-gated (pull group "
+                            "or hamstrings/glutes/lower_back individually) — hip hinges "
+                            "(deadlift / RDL / good morning / hip thrust) stay blocked."
                         )
         if gates.get("deload_required"):
             # Deload weeks must use moderate-or-lower intensity AND target_rpe <= 7.

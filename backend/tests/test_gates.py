@@ -277,46 +277,123 @@ def test_acwr_in_safe_band_leaves_high() -> None:
     assert g.max_intensity == "high"
 
 
-def test_recent_leg_training_forbids_legs() -> None:
+# ── Per-muscle rest gate (2026-07-23 remediation) ────────────────────────────
+# Replaces the old group-level days_since_{legs,push,pull}/last_rpe_{grp}
+# gate. Group-level fields still exist on TrainingLoadMetrics for display, but
+# the gate now reads TrainingLoadMetrics.muscle_recovery — a dict keyed by
+# muscle name (the 17-muscle taxonomy), populated only for muscles that
+# reached a MEANINGFUL_DOSE_SETS day within the lookback window.
+
+
+def _dose(days_since: int, last_rpe: float | None, sets: int = 4) -> dict:
+    return {"days_since": days_since, "last_rpe": last_rpe, "last_dose_sets": sets}
+
+
+def test_recent_hard_muscle_dose_forbids_muscle() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.days_since_legs = 1  # < 2-day threshold for legs
+    load.muscle_recovery["chest"] = _dose(1, 8.5)
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert "legs" in g.forbid_muscle_groups
+    assert "chest" in g.forbid_muscles
 
 
-# ── RPE-scaled rest gates + pickleball clock + ACWR band floor ───────────────
-
-
-def test_easy_pull_session_needs_only_one_day() -> None:
+def test_easy_dose_needs_only_one_day() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.days_since_pull = 1
-    load.last_rpe_pull = 6.0  # submaximal — threshold drops 2d → 1d
+    load.muscle_recovery["chest"] = _dose(1, 6.0)  # submaximal — threshold drops 2d → 1d
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert "pull" not in g.forbid_muscle_groups
-
-
-def test_hard_pull_session_keeps_48h_gate() -> None:
-    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.days_since_pull = 1
-    load.last_rpe_pull = 8.5
-    g = _gates(rec, sleep, load, chk, readiness, None)
-    assert "pull" in g.forbid_muscle_groups
+    assert "chest" not in g.forbid_muscles
 
 
 def test_unknown_rpe_keeps_conservative_gate() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.days_since_pull = 1
-    load.last_rpe_pull = None
+    load.muscle_recovery["chest"] = _dose(1, None)
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert "pull" in g.forbid_muscle_groups
+    assert "chest" in g.forbid_muscles
 
 
-def test_easy_legs_session_needs_two_days() -> None:
+def test_leg_muscle_near_failure_needs_72h() -> None:
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
-    load.days_since_legs = 2
-    load.last_rpe_legs = 6.0  # 3d → 2d
+    load.muscle_recovery["quads"] = _dose(2, 9.0)
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert "legs" not in g.forbid_muscle_groups
+    assert "quads" in g.forbid_muscles
+
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.muscle_recovery["quads"] = _dose(3, 9.0)
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "quads" not in g.forbid_muscles
+
+
+def test_leg_muscle_moderate_rpe_needs_only_48h() -> None:
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.muscle_recovery["quads"] = _dose(2, 7.0)  # < 9.0 — 48h, not 72h
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "quads" not in g.forbid_muscles
+
+
+def test_all_group_muscles_forbidden_derives_group() -> None:
+    """Only when EVERY push-mapped muscle is individually locked does the
+    engine derive the legacy group-level forbid — the case where an old-style
+    focused, near-failure session actually did touch everything hard."""
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    for muscle in ("chest", "front_delts", "side_delts", "triceps"):
+        load.muscle_recovery[muscle] = _dose(1, 8.0)
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "push" in g.forbid_muscle_groups
+    assert set(g.forbid_muscles) == {"chest", "front_delts", "side_delts", "triceps"}
+
+
+def test_partial_group_lock_does_not_forbid_group() -> None:
+    """A distributed full-upper session (2-4 sets/muscle) locks the muscles it
+    actually dosed hard, but must NOT lock the whole push group when some
+    push muscles are free — this is the exact collapse-to-glutes regression."""
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.muscle_recovery["chest"] = _dose(1, 8.0)
+    # triceps untouched (not in muscle_recovery) — still fully rested
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "chest" in g.forbid_muscles
+    assert "push" not in g.forbid_muscle_groups
+
+
+def test_distributed_full_upper_session_locks_nothing() -> None:
+    """The collapse regression, end to end: a full-upper day spreads 2-4 sets
+    across many muscles — none reach MEANINGFUL_DOSE_SETS as a locked dose at
+    a hard RPE from a SINGLE exercise's set count, so nothing should forbid.
+    (Sessions below the dose bar never enter muscle_recovery at all — this
+    test documents the contract by simply not seeding any doses.)"""
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert g.forbid_muscles == []
+    assert not any(grp in g.forbid_muscle_groups for grp in ("push", "pull", "legs"))
+
+
+def test_muscle_recovery_does_not_corrupt_rec_for_later_soreness_check() -> None:
+    """Regression: the per-muscle rest loop iterates `load.muscle_recovery`
+    into a local variable — an earlier draft named it `rec`, shadowing the
+    RecoveryMetrics parameter also called `rec` for the rest of `_gates`. The
+    soreness-corroboration branch (further down in `_gates`) reads
+    `rec.hrv_sigma`, which crashed with AttributeError whenever
+    muscle_recovery was non-empty AND muscle_soreness was reported. Exercise
+    both simultaneously so the corrupted-`rec` bug can't come back silently."""
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec.hrv_sigma = -0.2
+    load.muscle_recovery["chest"] = _dose(1, 8.0)
+    chk.muscle_soreness = {"chest": 3}
+    g = _gates(rec, sleep, load, chk, readiness, None)  # must not raise
+    assert "chest" in g.forbid_muscles
+
+
+def test_core_and_forearms_are_never_rest_gated() -> None:
+    """abs/lower_back/forearms are not in MUSCLE_TO_GROUP and must never be
+    rest-gated even with a hard recent dose — they were never group-gated
+    before this change and this change must not newly restrict them."""
+    rec, sleep, load, chk, readiness = _baseline_gate_inputs()
+    load.muscle_recovery["abs"] = _dose(0, 9.0)
+    load.muscle_recovery["forearms"] = _dose(0, 9.0)
+    g = _gates(rec, sleep, load, chk, readiness, None)
+    assert "abs" not in g.forbid_muscles
+    assert "forearms" not in g.forbid_muscles
+
+
+# ── Pickleball clock + ACWR band floor ───────────────────────────────────────
 
 
 def test_same_day_pickleball_forbids_legs() -> None:

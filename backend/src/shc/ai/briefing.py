@@ -594,6 +594,8 @@ def build_daily_context(conn) -> str:
             lines.append(
                 f"Forbidden muscle groups today: {', '.join(gates['forbid_muscle_groups'])}"
             )
+        if gates.get("forbid_muscles"):
+            lines.append(f"Forbidden muscles today: {', '.join(gates['forbid_muscles'])}")
         if gates["deload_required"]:
             lines.append(f"DELOAD WEEK REQUIRED: {gates['deload_reason']}")
         if gates["hr_zone_shift_bpm"]:
