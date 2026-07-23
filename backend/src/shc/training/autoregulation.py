@@ -121,6 +121,11 @@ class MusclePrescription:
     landmark_source: str = "population"  # 'population' | 'personal' | 'personal_floored'
     confidence: float = 0.0  # 0–1; how much to trust this call
     scored_weeks: int = 0  # raw sample size behind the confidence estimate
+    # True when a stalled call (perf==3) was redirected to a load-not-volume
+    # remedy because the athlete has been running sustained under-target RPE
+    # (2026-07-23 remediation — see _rpe_headroom). Machine-readable so the
+    # planner can act on it directly rather than parsing `reason` text.
+    rpe_headroom: bool = False
 
 
 @dataclass
@@ -391,6 +396,7 @@ def _decide(
     confidence: float = 0.0,
     scored_weeks: int = 0,
     accuracy: float | None = None,
+    rpe_headroom: bool = False,
     # Default matches the population metrics.COND_ACWR_HOLD_LEGS; real callers
     # (weekly_prescription) pass the possibly-personalized value from
     # metrics.personalized_cond_thresholds() so this and the hard FORBID gate in
@@ -412,6 +418,14 @@ def _decide(
     historically-mis-prescribed muscle has its add shrunk toward zero, and a
     large (>1 set) add is suppressed unless confidence clears
     :data:`_LARGE_ADD_CONFIDENCE_BAR`. Cuts are never shrunk (safety asymmetry).
+
+    ``rpe_headroom`` (2026-07-23 remediation, see :func:`_rpe_headroom`) is a
+    session-level signal — the athlete has been running sustained under-target
+    RPE — that changes the STALLED (``perf == 3``) remedy: a flat e1RM with
+    real effort headroom means the ceiling, not the volume, is the lever, so
+    the tree holds sets and asks for more load instead of adding a set. It
+    does not touch any other branch — progressing/regressing/under-recovered
+    calls are unaffected.
     """
 
     # Append landmark source to reason for auditing — tells the planner (and Rob)
@@ -458,6 +472,7 @@ def _decide(
         and conditioning_acwr > leg_hold_threshold
     )
 
+    rpe_headroom_applied = False
     if perf is not None and perf <= 2:
         # Regressing — target MEV. If already below MEV, ramp up to it
         # (more productive minimum volume is the remedy); if above, cut toward it.
@@ -487,6 +502,15 @@ def _decide(
         desired = cur + ramp_step
         tag = " + emphasis" if emphasized else ""
         reason = f"progressing (perf {perf}/5){tag} → add toward MRV"
+    elif perf == 3 and rpe_headroom:
+        # Stalled AND the athlete has been running sustained under-target RPE
+        # (rpe_drift_signed_mean <= -0.75, see _rpe_headroom): more sets is
+        # the WRONG remedy when there's real effort left in the tank — a flat
+        # e1RM with headroom means load, not volume, is the lever. Hold sets
+        # and ask for more load toward the ceiling instead of adding a set.
+        desired = cur
+        reason = "stalled e1RM with RPE headroom → raise load toward ceiling, hold sets"
+        rpe_headroom_applied = True
     elif perf == 3:
         # Stalled: emphasized muscles break the stall at +2 (the whole point of
         # flagging a bring-up is to push it harder than a maintenance muscle).
@@ -623,6 +647,7 @@ def _decide(
         landmark_source=landmark_source,
         confidence=round(confidence, 2),
         scored_weeks=scored_weeks,
+        rpe_headroom=rpe_headroom_applied,
     )
 
 
@@ -1222,9 +1247,7 @@ def trainable_today(
         if m.muscle in forbid_muscles:
             days = recovery.get(m.muscle, {}).get("days_since")
             status = "rest_gated"
-            detail = (
-                f"rest-gated — {days}d since last dose" if days is not None else "rest-gated"
-            )
+            detail = f"rest-gated — {days}d since last dose" if days is not None else "rest-gated"
         elif group in forbid_groups:
             status = "group_gated"
             detail = f"{group} group forbidden today"
@@ -1341,6 +1364,34 @@ def _rpe_drift_factor(
     # Over-RPE: athlete consistently working harder than prescribed — dampen the volume add.
     raw = 1.0 - min(signed_mean / 3.0, 0.5)
     return max(0.5, raw)
+
+
+def _rpe_headroom(conn: duckdb.DuckDBPyConnection, min_magnitude: float = 0.75) -> bool:
+    """True when the athlete has been running SUSTAINED under-target RPE.
+
+    2026-07-23 remediation: `_rpe_drift_factor` reads the same underlying
+    signal (`rpe_drift_signed_mean`, a 14-day mean of avg_rpe_actual minus
+    avg_rpe_target) but is deliberately one-way — it dampens volume on
+    over-RPE and is a no-op on under-RPE, because "you worked easier than
+    target" should never by itself justify LESS volume. But it was also a
+    dead end: the signal had no OTHER consumer, so an athlete running
+    consistently under target RPE (plenty of headroom) got no response from
+    the engine at all. This is the missing other half — a session-level
+    boolean `_decide` uses to redirect the STALLED remedy from "add a set"
+    to "raise the load" when a flat e1RM comes with real effort left in the
+    tank. It does not touch volume itself (that stays `_rpe_drift_factor`'s
+    job, unchanged) — this only changes what kind of ADVICE a stall gets.
+
+    Threshold (0.75) is intentionally looser than the damper's 0.8 floor
+    (min_magnitude) — surfacing headroom sooner is low-risk (it only changes
+    a text recommendation to lift more, never a hard gate), whereas damping
+    volume on a false positive has a real cost, so the damper stays more
+    conservative.
+    """
+    from shc.ai.quality import rpe_drift_signed_mean
+
+    signed_mean = rpe_drift_signed_mean(conn)
+    return signed_mean is not None and signed_mean <= -min_magnitude
 
 
 def _weekly_deload_context(
@@ -1469,6 +1520,12 @@ def weekly_prescription(
     # working harder than target (persistent over-RPE). On propranolol days
     # RPE is the only unbiased signal, so restore full authority (factor = 1.0).
     rpe_factor = 1.0 if propranolol_day else _rpe_drift_factor(conn)
+    # RPE headroom: the OTHER half of the same signal — sustained under-target
+    # RPE redirects a stalled muscle's remedy toward load, not volume (see
+    # _rpe_headroom). Computed unconditionally (not gated by propranolol_day):
+    # it reads plan_adherence's logged-vs-target RPE directly, unaffected by
+    # HR suppression.
+    rpe_headroom = _rpe_headroom(conn)
 
     # Signal quality from materialized cache (avoids per-request DB aggregation).
     from shc.training.self_learning import read_signal_quality_cache
@@ -1526,6 +1583,7 @@ def weekly_prescription(
             confidence=float(sq.get("confidence", 0.0)),
             scored_weeks=int(sq.get("scored_weeks", 0)),
             accuracy=accuracy,
+            rpe_headroom=rpe_headroom,
             leg_hold_threshold=leg_hold_threshold,
         )
         # If protein is inadequate, cap "add" actions at "hold" for non-emphasis muscles.
@@ -1546,8 +1604,7 @@ def weekly_prescription(
             adjusted = max(r.mev, min(r.mrv, adjusted))
             if adjusted != rx.target_sets:
                 rx.reason = (
-                    rx.reason
-                    + f" [confirmed prior: {rx.target_sets}→{adjusted} sets "
+                    rx.reason + f" [confirmed prior: {rx.target_sets}→{adjusted} sets "
                     f"({prior_mult - 1.0:+.0%})]"
                 )
                 rx.delta += adjusted - rx.target_sets
@@ -1738,7 +1795,9 @@ def prescription_context_block(
             available = [t for t in today_rx if t["status"] == "available"]
             held = [t for t in today_rx if t["status"] == "held"]
             gated = [t for t in today_rx if t["status"] in ("rest_gated", "group_gated")]
-            lines.append("\n## TRAINABLE TODAY (daily projection — the split above is the weekly skeleton)")
+            lines.append(
+                "\n## TRAINABLE TODAY (daily projection — the split above is the weekly skeleton)"
+            )
             if available:
                 lines.append(
                     "- **Available**: "

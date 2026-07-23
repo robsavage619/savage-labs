@@ -9,6 +9,7 @@ from shc.training.autoregulation import (
     _decide,
     _protein_gate,
     _resolve_emphasis,
+    _rpe_headroom,
     _session_split,
     deload_check,
     evidence_menu,
@@ -24,7 +25,7 @@ from shc.training.volume import MuscleVolume
 # Landmarks used across cases: chest 10/16/22, biceps 8/14/20, quads 8/14/20.
 
 
-def _d(muscle, current, perf, soreness=0.0, cond=None, mev=10, mav=16, mrv=22):
+def _d(muscle, current, perf, soreness=0.0, cond=None, mev=10, mav=16, mrv=22, rpe_headroom=False):
     # These cases exercise the RP set-progression tree in isolation. The #1/#10
     # confidence/accuracy gate is a separate layer that shrinks adds toward zero
     # when there is no signal (confidence=0, scored_weeks=0 → factor 0.0); pass a
@@ -48,6 +49,7 @@ def _d(muscle, current, perf, soreness=0.0, cond=None, mev=10, mav=16, mrv=22):
         emphasis=muscle in EMPHASIS_MUSCLES,
         confidence=0.6,
         scored_weeks=4,
+        rpe_headroom=rpe_headroom,
     )
 
 
@@ -78,6 +80,85 @@ def test_at_mrv_holds():
     rx = _d("chest", current=22, perf=5)
     assert rx.action == "hold"
     assert rx.target_sets == 22
+
+
+def test_stalled_without_headroom_still_ramps():
+    """Baseline (unchanged behavior): a stalled muscle with no RPE-headroom
+    signal ramps a set, exactly as before this remediation."""
+    rx = _d("chest", current=12, perf=3, rpe_headroom=False)
+    assert rx.action == "add"
+    assert rx.delta == 1
+    assert rx.rpe_headroom is False
+    assert "raise load" not in rx.reason
+
+
+def test_stalled_with_headroom_holds_sets_and_asks_for_load():
+    """Stalled + sustained under-target RPE: the remedy is load, not volume —
+    hold sets (no add) and say so, with the machine-readable flag set."""
+    rx = _d("chest", current=12, perf=3, rpe_headroom=True)
+    assert rx.action == "hold"
+    assert rx.target_sets == 12
+    assert rx.delta == 0
+    assert rx.rpe_headroom is True
+    assert "raise load" in rx.reason
+
+
+def test_headroom_flag_does_not_affect_progressing_muscle():
+    """Invariant 2 (a measurably progressing muscle is never frozen) must
+    survive untouched — rpe_headroom only redirects the STALLED (perf==3)
+    branch, not perf>=4."""
+    rx = _d("chest", current=12, perf=5, rpe_headroom=True)
+    assert rx.action == "add"
+    assert rx.delta == 1
+    assert rx.rpe_headroom is False
+
+
+def test_headroom_flag_does_not_affect_regressing_muscle():
+    rx = _d("chest", current=18, perf=2, rpe_headroom=True)
+    assert rx.action == "cut"
+    assert rx.rpe_headroom is False
+
+
+# ── _rpe_headroom ─────────────────────────────────────────────────────────────
+
+
+def _seed_adherence(conn, days_ago_to_diff: dict[int, tuple[float, float]]) -> None:
+    """Insert plan_adherence rows: {days_ago: (avg_rpe_actual, avg_rpe_target)}."""
+    today = date.today()
+    for days_ago, (actual, target) in days_ago_to_diff.items():
+        d = today - timedelta(days=days_ago)
+        conn.execute(
+            "INSERT INTO plan_adherence (date, plan_date, avg_rpe_actual, avg_rpe_target) "
+            "VALUES (?, ?, ?, ?)",
+            [d, d, actual, target],
+        )
+
+
+def test_rpe_headroom_true_when_sustained_under_target(conn) -> None:
+    rows = {i: (6.0, 8.0) for i in range(1, 8)}  # -2.0 diff, 7 sessions
+    _seed_adherence(conn, rows)
+    assert _rpe_headroom(conn) is True
+
+
+def test_rpe_headroom_false_when_on_target(conn) -> None:
+    rows = {i: (7.5, 8.0) for i in range(1, 8)}  # -0.5 diff — below the 0.75 bar
+    _seed_adherence(conn, rows)
+    assert _rpe_headroom(conn) is False
+
+
+def test_rpe_headroom_false_with_insufficient_sessions(conn) -> None:
+    rows = {i: (6.0, 8.0) for i in range(1, 4)}  # only 3 sessions — needs >= 5
+    _seed_adherence(conn, rows)
+    assert _rpe_headroom(conn) is False
+
+
+def test_rpe_headroom_false_when_over_rpe(conn) -> None:
+    """Over-RPE (working harder than target, positive diff) is the OTHER
+    direction that _rpe_drift_factor already handles — it must not also
+    read as headroom."""
+    rows = {i: (9.0, 7.0) for i in range(1, 8)}  # +2.0 diff, 7 sessions
+    _seed_adherence(conn, rows)
+    assert _rpe_headroom(conn) is False
 
 
 def test_leg_interference_holds_volume():
