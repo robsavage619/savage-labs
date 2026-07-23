@@ -347,6 +347,16 @@ def _historical_weekly_acwr(
     gate needs); the SAMPLING GRID does not fully cover the live gate's
     domain. Not restructured here — accepted as a lower-priority gap.
     """
+    return [ratio for _, ratio in _historical_weekly_acwr_rows(conn, column)]
+
+
+def _historical_weekly_acwr_rows(conn: duckdb.DuckDBPyConnection, column: str) -> list[tuple]:
+    """``(week_start, ratio)`` pairs behind :func:`_historical_weekly_acwr`.
+
+    Split out so the outcome-support check (:func:`_acwr_outcome_supported`) can
+    look up what actually followed each admissible week without re-deriving the
+    sample from a second, potentially-diverging query.
+    """
     from shc.metrics import _ACWR_MIN_CHRONIC_DAYS
 
     rows = conn.execute(
@@ -358,6 +368,7 @@ def _historical_weekly_acwr(
             ORDER BY ws
         )
         SELECT
+            w.ws,
             (SELECT COALESCE(SUM(d.{column}), 0)
              FROM v_daily_load d
              WHERE d.date >= w.ws
@@ -384,9 +395,9 @@ def _historical_weekly_acwr(
         """
     ).fetchall()
     return [
-        float(r[0]) / float(r[1])
+        (r[0], float(r[1]) / float(r[2]))
         for r in rows
-        if r[1] and float(r[1]) > 0 and r[2] and int(r[2]) >= _ACWR_MIN_CHRONIC_DAYS
+        if r[2] and float(r[2]) > 0 and r[3] and int(r[3]) >= _ACWR_MIN_CHRONIC_DAYS
     ]
 
 
@@ -400,6 +411,97 @@ def _percentile(values: list[float], p: float) -> float:
     hi = min(lo + 1, len(s) - 1)
     frac = idx - lo
     return s[lo] + frac * (s[hi] - s[lo])
+
+
+# A P80 percentile fit is a pure sample statistic — it tightens toward WHATEVER
+# ratio Rob's busiest 20% of weeks happen to sit at, with zero reference to
+# whether those weeks actually preceded worse outcomes. Verified against the
+# live DB (2026-07-23): the fitted forbid_legs=1.53 is just the hard floor
+# (COND_ACWR_FORBID_LEGS * _COND_TIGHTEN_FLOOR_FACTOR); the raw percentile
+# wants 1.21. Comparing next-week recovery/perf for weeks above vs below each
+# candidate showed NO adverse signal — recovery and perf were, if anything,
+# slightly BETTER after high-conditioning weeks. A tighten with no supporting
+# evidence is a circularity ("busy weeks are dangerous because they're busy"),
+# not a personalization — see DECISIONS.md 2026-07-23 (Phase C).
+_OUTCOME_MIN_HIGH_WEEKS = 5
+_OUTCOME_RECOVERY_MARGIN = 3.0
+_OUTCOME_PERF_MARGIN = 0.15
+
+
+def _week_outcome(conn: duckdb.DuckDBPyConnection, week_start: object) -> tuple:
+    """Next-week ``(mean_recovery_score, mean_perf_score)`` following ``week_start``.
+
+    Either element is None when that signal has no data for the outcome week —
+    callers must treat missing outcomes as unobservable, not as a favorable or
+    unfavorable data point (same convention as :func:`_regressing_precursor_count`).
+    """
+    from datetime import timedelta
+
+    outcome_start = week_start + timedelta(days=7)  # type: ignore[operator]
+    outcome_end = week_start + timedelta(days=14)  # type: ignore[operator]
+    rec = conn.execute(
+        "SELECT AVG(score) FROM recovery WHERE date >= ? AND date < ?",
+        [outcome_start.isoformat(), outcome_end.isoformat()],
+    ).fetchone()
+    perf = conn.execute(
+        "SELECT AVG(perf_score) FROM exercise_weekly_e1rm "
+        "WHERE week_start = ? AND perf_score IS NOT NULL",
+        [outcome_start.isoformat()],
+    ).fetchone()
+    rec_val = float(rec[0]) if rec and rec[0] is not None else None
+    perf_val = float(perf[0]) if perf and perf[0] is not None else None
+    return rec_val, perf_val
+
+
+def _acwr_outcome_supported(conn: duckdb.DuckDBPyConnection, candidate: float) -> dict[str, object]:
+    """Does the data actually support tightening conditioning forbid to ``candidate``?
+
+    Splits :func:`_historical_weekly_acwr_rows`' admissible weeks into above/below
+    ``candidate`` and compares each side's NEXT-week recovery score and perf score.
+    Tightening is supported only when BOTH signals agree the high side is worse —
+    a single noisy metric on n-of-1 data isn't enough to shackle training on.
+
+    Returns ``{supported, n_above, recovery_delta, perf_delta}`` — deltas are
+    ``mean(above) - mean(below)``, so a negative value means the high-ACWR side
+    reads worse (lower recovery / lower perf), which is the direction that would
+    justify a tighter forbid. ``None`` deltas mean too little outcome data to judge.
+    """
+    from statistics import mean
+
+    rows = _historical_weekly_acwr_rows(conn, "whoop_strain")
+    above_weeks = [ws for ws, ratio in rows if ratio > candidate]
+    below_weeks = [ws for ws, ratio in rows if ratio <= candidate]
+
+    above_outcomes = [_week_outcome(conn, ws) for ws in above_weeks]
+    below_outcomes = [_week_outcome(conn, ws) for ws in below_weeks]
+
+    above_rec = [o[0] for o in above_outcomes if o[0] is not None]
+    below_rec = [o[0] for o in below_outcomes if o[0] is not None]
+    above_perf = [o[1] for o in above_outcomes if o[1] is not None]
+    below_perf = [o[1] for o in below_outcomes if o[1] is not None]
+
+    if (
+        len(above_rec) < _OUTCOME_MIN_HIGH_WEEKS
+        or len(above_perf) < _OUTCOME_MIN_HIGH_WEEKS
+        or not below_rec
+        or not below_perf
+    ):
+        return {
+            "supported": False,
+            "n_above": len(above_weeks),
+            "recovery_delta": None,
+            "perf_delta": None,
+        }
+
+    recovery_delta = round(mean(above_rec) - mean(below_rec), 2)
+    perf_delta = round(mean(above_perf) - mean(below_perf), 2)
+    supported = recovery_delta <= -_OUTCOME_RECOVERY_MARGIN and perf_delta <= -_OUTCOME_PERF_MARGIN
+    return {
+        "supported": supported,
+        "n_above": len(above_rec),
+        "recovery_delta": recovery_delta,
+        "perf_delta": perf_delta,
+    }
 
 
 def fit_acwr_bands(
@@ -465,6 +567,14 @@ def persist_acwr_bands(
     keep showing a stale "personal (fitted)" resistance value that no code
     path reads anymore.
 
+    Before any tighten-clamp logic runs, a fit that wants to tighten BELOW the
+    population threshold must clear :func:`_acwr_outcome_supported` — a raw P80
+    percentile has no idea whether high-conditioning weeks actually precede
+    worse outcomes (see that function's docstring; verified against live data
+    they currently do not). Unsupported tightens fall back to the population
+    threshold instead of persisting an evidence-free shackle. Loosening (fit
+    landing above population) is unaffected — it never needed a floor.
+
     Returns True if the conditioning band was stored, False if insufficient data.
     """
     from shc.metrics import COND_ACWR_FORBID_LEGS
@@ -474,6 +584,23 @@ def persist_acwr_bands(
     bands = fit_acwr_bands(conn, min_weeks=min_weeks)
     if bands is None:
         return False
+
+    candidate = bands["conditioning"]["forbid_legs"]
+    if candidate < COND_ACWR_FORBID_LEGS:
+        support = _acwr_outcome_supported(conn, candidate)
+        if not support["supported"]:
+            log.info(
+                "persist_acwr_bands: fit wants forbid_legs=%.2f but outcomes don't "
+                "support tightening (n_above=%d, recovery_delta=%s, perf_delta=%s) — "
+                "keeping population %.2f",
+                candidate,
+                support["n_above"],
+                support["recovery_delta"],
+                support["perf_delta"],
+                COND_ACWR_FORBID_LEGS,
+            )
+            candidate = COND_ACWR_FORBID_LEGS
+        bands["conditioning"]["forbid_legs"] = candidate
 
     cond_n = len(_historical_weekly_acwr(conn, "whoop_strain"))
 
@@ -1341,6 +1468,12 @@ def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict
         perf_W+1 ≥ 3 (cleared the regression band). Staying at the same
         regressing level (nxt == cur ≤ 2) is *not* the intended outcome and now
         scores incorrect — that is the inflation this fix removes.
+
+    Deload weeks are excluded from the series (same predicate _muscle_confidence
+    uses) — a deload's depressed perf is deliberate, not a training failure, and
+    counting it as a "cut"/"hold" outcome pair falsely penalizes or credits the
+    prior week's call. This is the only honest guard against a single-user fit
+    silently degrading (see snapshot_accuracy), so it must not be self-poisoned.
     """
     muscles = [
         r[0]
@@ -1354,10 +1487,14 @@ def _retroactive_accuracy_all(conn: duckdb.DuckDBPyConnection) -> dict[str, dict
             FROM exercise_weekly_e1rm e
             JOIN exercise_muscle_map m ON e.exercise = m.exercise_name
             WHERE m.primary_muscle = ? AND e.perf_score IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM muscle_prescription_log l
+                  WHERE l.week_start = e.week_start AND l.muscle = ? AND l.action = 'deload'
+              )
             GROUP BY e.week_start
             ORDER BY e.week_start
             """,
-            [muscle],
+            [muscle, muscle],
         ).fetchall()
 
         if len(rows) < 4:

@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
+import shc.training.self_learning as sl
 from shc.training.self_learning import (
     _percentile,
     _retroactive_accuracy_all,
@@ -365,6 +366,136 @@ def test_conditioning_forbid_legs_loosening_is_unclamped(conn, seed) -> None:
         "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
     ).fetchone()[0]
     assert value == pytest.approx(natural)
+
+
+# ── outcome-gated conditioning tighten (2026-07-23 Phase C) ────────────────
+
+
+def _seed_recovery_score(conn, day: date, score: float) -> None:
+    conn.execute(
+        "INSERT INTO recovery (id, source, date, score, content_hash) VALUES (?, 'whoop', ?, ?, ?)",
+        [str(uuid.uuid4()), day.isoformat(), score, str(uuid.uuid4())],
+    )
+
+
+def test_acwr_outcome_supported_true_when_both_signals_worse(conn, monkeypatch) -> None:
+    """Both next-week recovery AND perf must read worse after high-ACWR weeks
+    for a tighten to be supported — that's the evidence bar a P80 percentile
+    alone never clears."""
+    base = _monday(date.today()) - timedelta(weeks=30)
+    above_weeks = [base + timedelta(weeks=i) for i in range(6)]
+    below_weeks = [base + timedelta(weeks=i) for i in range(10, 12)]
+    monkeypatch.setattr(
+        sl,
+        "_historical_weekly_acwr_rows",
+        lambda conn, column: [(w, 2.0) for w in above_weeks] + [(w, 1.0) for w in below_weeks],
+    )
+    for w in above_weeks:
+        _seed_recovery_score(conn, w + timedelta(days=8), 50.0)
+        _seed_e1rm(conn, "Curl", w + timedelta(weeks=1), 40.0, 5, perf=2)
+    for w in below_weeks:
+        _seed_recovery_score(conn, w + timedelta(days=8), 70.0)
+        _seed_e1rm(conn, "Curl", w + timedelta(weeks=1), 40.0, 5, perf=4)
+
+    result = sl._acwr_outcome_supported(conn, 1.5)
+    assert result["supported"] is True
+    assert result["recovery_delta"] < -sl._OUTCOME_RECOVERY_MARGIN
+    assert result["perf_delta"] < -sl._OUTCOME_PERF_MARGIN
+
+
+def test_acwr_outcome_supported_false_with_too_few_high_weeks(conn, monkeypatch) -> None:
+    """Fewer than _OUTCOME_MIN_HIGH_WEEKS observable high-ACWR weeks — even with
+    a clean adverse signal on those few — isn't enough evidence on n-of-1 data."""
+    base = _monday(date.today()) - timedelta(weeks=30)
+    above_weeks = [base + timedelta(weeks=i) for i in range(3)]  # below the min of 5
+    below_weeks = [base + timedelta(weeks=i) for i in range(10, 12)]
+    monkeypatch.setattr(
+        sl,
+        "_historical_weekly_acwr_rows",
+        lambda conn, column: [(w, 2.0) for w in above_weeks] + [(w, 1.0) for w in below_weeks],
+    )
+    for w in above_weeks:
+        _seed_recovery_score(conn, w + timedelta(days=8), 40.0)
+    for w in below_weeks:
+        _seed_recovery_score(conn, w + timedelta(days=8), 70.0)
+
+    result = sl._acwr_outcome_supported(conn, 1.5)
+    assert result["supported"] is False
+    assert result["recovery_delta"] is None
+
+
+def test_acwr_outcome_supported_false_when_signals_disagree(conn, monkeypatch) -> None:
+    """Real live-data finding: recovery reads worse but perf does NOT — both
+    signals must agree, so a single noisy metric can't shackle training."""
+    base = _monday(date.today()) - timedelta(weeks=30)
+    above_weeks = [base + timedelta(weeks=i) for i in range(6)]
+    below_weeks = [base + timedelta(weeks=i) for i in range(10, 12)]
+    monkeypatch.setattr(
+        sl,
+        "_historical_weekly_acwr_rows",
+        lambda conn, column: [(w, 2.0) for w in above_weeks] + [(w, 1.0) for w in below_weeks],
+    )
+    for w in above_weeks:
+        _seed_recovery_score(conn, w + timedelta(days=8), 50.0)
+        _seed_e1rm(conn, "Curl", w + timedelta(weeks=1), 40.0, 5, perf=4)  # perf UNCHANGED
+    for w in below_weeks:
+        _seed_recovery_score(conn, w + timedelta(days=8), 70.0)
+        _seed_e1rm(conn, "Curl", w + timedelta(weeks=1), 40.0, 5, perf=4)
+
+    result = sl._acwr_outcome_supported(conn, 1.5)
+    assert result["supported"] is False
+
+
+def test_persist_acwr_bands_unsupported_tighten_falls_back_to_population(conn, seed) -> None:
+    """The live-data finding this fix exists for: a percentile fit with no
+    seeded recovery/perf outcomes has zero evidence behind a tighten, so the
+    population threshold is kept instead of an evidence-free shackle."""
+    from shc.metrics import COND_ACWR_FORBID_LEGS
+
+    _seed_dense_acwr_history(conn, seed)  # constant strain -> fit wants to tighten
+    assert persist_acwr_bands(conn) is True
+    value = conn.execute(
+        "SELECT value FROM personal_acwr_bands "
+        "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+    ).fetchone()[0]
+    assert value == pytest.approx(COND_ACWR_FORBID_LEGS)
+
+
+def test_persist_acwr_bands_supported_tighten_still_goes_through_clamp(conn, seed) -> None:
+    """When outcomes DO support a tighten, the existing rate-limit/floor clamp
+    pipeline must still run unchanged — the outcome gate only decides WHETHER
+    to attempt a tighten, not how far it may move."""
+    from shc.training.self_learning import _COND_TIGHTEN_MAX_STEP
+
+    _seed_dense_acwr_history(conn, seed)
+    monkeypatch_result = {
+        "supported": True,
+        "n_above": 10,
+        "recovery_delta": -10.0,
+        "perf_delta": -1.0,
+    }
+    orig = sl._acwr_outcome_supported
+    sl._acwr_outcome_supported = lambda conn, candidate: monkeypatch_result
+    try:
+        assert persist_acwr_bands(conn) is True
+        natural = conn.execute(
+            "SELECT value FROM personal_acwr_bands "
+            "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+        ).fetchone()[0]
+        inflated_prior = natural + 1.0
+        conn.execute(
+            "UPDATE personal_acwr_bands SET value = ? "
+            "WHERE arm='conditioning' AND threshold_name='forbid_legs'",
+            [inflated_prior],
+        )
+        assert persist_acwr_bands(conn) is True
+        clamped = conn.execute(
+            "SELECT value FROM personal_acwr_bands "
+            "WHERE arm='conditioning' AND threshold_name='forbid_legs'"
+        ).fetchone()[0]
+        assert clamped == pytest.approx(inflated_prior - _COND_TIGHTEN_MAX_STEP)
+    finally:
+        sl._acwr_outcome_supported = orig
 
 
 # ── acwr_fit_data_changed_since_last_fit ────────────────────────────────────
@@ -736,6 +867,32 @@ def test_retroactive_accuracy_all_with_stable_data(conn) -> None:
     result = _retroactive_accuracy_all(conn)
     assert "biceps" in result
     assert result["biceps"]["accuracy"] >= 0.7  # progressing signal stays progressing
+
+
+def test_retroactive_accuracy_excludes_deload_weeks(conn) -> None:
+    """A deload week's depressed perf must not be scored as a missed cut/hold —
+    the drop is deliberate, not a training failure (see _muscle_confidence's
+    identical exclusion)."""
+    _seed_muscle_map(conn, "Curl", "biceps")
+    base = _monday(date.today()) - timedelta(weeks=20)
+    weeks = [base + timedelta(weeks=i) for i in range(10)]
+    for w in weeks:
+        _seed_e1rm(conn, "Curl", w, 40.0, 5, perf=4)
+    # Deload week in the middle: perf craters by design, not by a failed call.
+    deload_week = weeks[5]
+    _seed_e1rm(conn, "Curl", deload_week, 40.0, 5, perf=1)
+    conn.execute(
+        "INSERT INTO muscle_prescription_log (week_start, muscle, action, target_sets) "
+        "VALUES (?, 'biceps', 'deload', 4)",
+        [deload_week],
+    )
+
+    result = _retroactive_accuracy_all(conn)
+    # Every pair touching the deload week is dropped: 10 weeks -> 9 possible
+    # pairs, minus the 2 pairs (in, out) that touch the excluded week -> 7.
+    assert result["biceps"]["n"] == 7
+    # The remaining pairs are all stable perf=4 -> perf=4, "add" call sustained.
+    assert result["biceps"]["accuracy"] == 1.0
 
 
 def test_prescription_accuracy_overall_in_range(conn) -> None:

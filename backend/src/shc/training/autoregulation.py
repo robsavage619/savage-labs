@@ -979,7 +979,8 @@ def evidence_menu(
                 "SELECT exercise FROM exercise_preferences WHERE status = 'no'"
             ).fetchall()
         }
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("exercise_preferences unavailable — 'no' list not applied: %s", exc)
         avoid = set()
     # This week's per-head trained volume steers selection toward the neglected
     # head; degrade to recency/quality-only if the region ledger is unavailable.

@@ -759,15 +759,16 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
         "SELECT hrv, hrv_28d_avg, hrv_28d_sd, hrv_28d_n "
         "FROM v_hrv_baseline_28d ORDER BY date DESC LIMIT 1"
     ).fetchone()
+    # `>` not `>=`: today - 28d inclusive spans 29 calendar days (today-28..today).
     rhr_rows = conn.execute(
-        "SELECT date, rhr FROM recovery WHERE date >= $s AND rhr IS NOT NULL ORDER BY date",
+        "SELECT date, rhr FROM recovery WHERE date > $s AND rhr IS NOT NULL ORDER BY date",
         {"s": (today - timedelta(days=28)).isoformat()},
     ).fetchall()
     # Skin-temp baseline + its N — a 2-night baseline must not fire the illness
     # gate, so callers require BASELINE_MIN_N valid nights (panel review M13).
     skin_baseline = conn.execute(
         "SELECT AVG(skin_temp), COUNT(skin_temp) FROM recovery WHERE skin_temp IS NOT NULL "
-        "AND date >= $since",
+        "AND date > $since",
         {"since": (today - timedelta(days=28)).isoformat()},
     ).fetchone()
 
@@ -813,12 +814,13 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
     # rise above baseline is an early-warning illness sentinel ~4 days out.
     # Clamp to physiologically plausible adult sleep RR (8–30 bpm) so legacy
     # data corruption doesn't poison the baseline.
+    # `>` not `>=`: today - 28d inclusive spans 29 calendar days (today-28..today).
     rr_rows = conn.execute(
         "SELECT respiratory_rate FROM sleep "
         "WHERE COALESCE(is_nap, FALSE) = FALSE "
         "  AND respiratory_rate IS NOT NULL "
         "  AND respiratory_rate BETWEEN 8 AND 30 "
-        "  AND night_date >= $s "
+        "  AND night_date > $s "
         "ORDER BY night_date",
         {"s": (today - timedelta(days=28)).isoformat()},
     ).fetchall()

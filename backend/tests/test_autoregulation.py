@@ -379,6 +379,17 @@ def test_uncurated_muscle_falls_back(conn):
     assert "totally_made_up_muscle" not in evidence_menu(conn, ["totally_made_up_muscle"])
 
 
+def test_avoid_list_failure_logs_warning_not_silent(conn, caplog):
+    # A failed exercise_preferences lookup must not silently resurface exercises
+    # Rob marked 'no' — it should fail visibly (log a warning), not just degrade.
+    conn.execute("DROP TABLE exercise_preferences")
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        evidence_menu(conn, ["biceps"])
+    assert any("exercise_preferences unavailable" in r.message for r in caplog.records)
+
+
 def test_muscle_science_report_assembles_and_is_honest(conn):
     # The build-up surface: cited brief + grounded exercises + targets, plus an
     # HONEST data-coverage read (no logged history → population default, not faked
