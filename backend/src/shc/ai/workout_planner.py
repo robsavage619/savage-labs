@@ -249,10 +249,14 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "ceiling. Holding the all-time working weight and just adding reps is a "
         "MAX ATTEMPT, not a deload — drop the weight instead."
     )
+    effort_lo, effort_hi = EFFORT_RPE_BAND.get(gates["max_intensity"], (7, 8))
     lines.append(
         "- The WORKING WEIGHTS list below shows each lift's e1RM and today's "
         "load ceiling at 8 reps. Use the ceiling as your upper bound; pick reps "
-        "to land at the prescribed RPE."
+        f"and load so working sets land at **RPE {effort_lo}-{effort_hi}** "
+        f"(today's {gates['max_intensity'].upper()}-day target — hypertrophy "
+        "training is mostly 0-2 RIR; don't default to a comfortable mid-range "
+        "RPE that never approaches the ceiling)."
     )
     lines.append(
         "- **PER-HAND LOADS**: for dumbbell and cable-crossover lifts, every "
@@ -898,6 +902,21 @@ MAX_SESSION_MIN = 75
 # gate reasons about, from most to least restrictive.
 INTENSITY_ORDER = ("rest", "low", "moderate", "high")
 
+# Effort-tier RPE bands (2026-07-23 remediation): logged RPE has sat at a
+# median of 7.0 for two months because nothing in the engine ever told the
+# planner what effort a working set should land at — the vault's 0-2 RIR
+# hypertrophy standard (RPE 8-9) existed only as research prose, never as a
+# number the LLM was instructed to hit. Mirrors load_cap_pct's tier structure:
+# working sets on a HIGH day should sit at 8-9, tapering down with intensity.
+# Deload/rest days keep their own existing ≤7 ceiling (below) rather than a
+# band — a deload's whole point is capping effort, not targeting a range.
+EFFORT_RPE_BAND: dict[str, tuple[int, int]] = {
+    "high": (8, 9),
+    "moderate": (7, 8),
+    "low": (6, 7),
+    "rest": (6, 7),
+}
+
 # Working-set ceiling for a relative clinical contraindication (#21): acute
 # illness / significant anemia warrant a reduced session, not a hard stop.
 _RELATIVE_CLINICAL_CAP = 12
@@ -1415,6 +1434,21 @@ def validate_plan(
     rest-gated hamstrings/glutes/lower_back, and is not overridable through
     either path.
 
+    `recommendation.target_rpe` is REQUIRED whenever `state` is supplied and
+    the plan is not a rest-intensity or deload day (2026-07-23 remediation) —
+    a plan omitting it raises `ValueError`. Deload days keep their own,
+    separately-tested derive-from-per-exercise-`rpe_target` fallback instead
+    of this general requirement.
+
+    On a HIGH-intensity, non-deload day, each exercise's `weight_lbs` × `reps`
+    must also cohere with its own `rpe_target` (RIR-adjusted Epley, ±7.5%
+    tolerance) whenever `e1rm_ceilings` has that exercise — deliberately
+    scoped to HIGH days only, since a capped (low/moderate) day's ceiling is a
+    discount off a near-max-effort reference while any real RPE 6+ target
+    implies MORE than that discount allows at any rep count; the two scales
+    only agree once the ceiling itself approaches true e1RM (a HIGH day).
+    Exercises missing an e1RM or their own `rpe_target` self-skip.
+
     The session-budget cap (#17 — working-set count + estimated duration) and the
     pull-gate hinge block (#19) run from `state` alone and need no `conn`.
 
@@ -1495,6 +1529,25 @@ def validate_plan(
                 + (f" (override to {effective_max!r} insufficient)" if override_reason else "")
                 + f". Reasons: {'; '.join(gates.get('reasons', [])) or 'see DailyState.gates'}"
             )
+
+        # A session-level target_rpe is required on every non-rest, non-deload
+        # plan (2026-07-23 remediation). Deload days keep their OWN existing
+        # derive-from-per-exercise-rpe_target fallback below (a deliberately
+        # tested, narrower mechanism) rather than being forced through this
+        # general requirement. Without this, `recommendation.target_rpe` was
+        # routinely omitted — the "target RPE ?" context line — which also
+        # starved `plan_adherence.avg_rpe_target` and left `_rpe_drift_factor`
+        # permanently inert for lack of paired rows.
+        if (
+            rec["intensity"] != "rest"
+            and not gates.get("deload_required")
+            and rec.get("target_rpe") is None
+        ):
+            raise ValueError(
+                "recommendation.target_rpe is required — every non-rest plan must "
+                "declare an explicit session target effort (see EFFORT_RPE_BAND) so "
+                "adherence tracking and the RPE feedback loop have data to act on."
+            )
         forbid = set(gates.get("forbid_muscle_groups", []))
         forbid_muscles = set(gates.get("forbid_muscles", []))
         # override_muscle_groups may name either a coarse group ("push") or a
@@ -1535,8 +1588,7 @@ def validate_plan(
                         )
                     if forbid_muscles and conn is not None:
                         hit = (
-                            set(_all_primary_muscles(conn, name))
-                            & forbid_muscles
+                            set(_all_primary_muscles(conn, name)) & forbid_muscles
                         ) - overridden_muscles
                         if hit:
                             raise GateViolation(
@@ -1629,6 +1681,64 @@ def validate_plan(
                             f"{demand_e1rm}lb, over today's {load_cap_pct(gates)}% "
                             f"ceiling of {ceil_e1rm}lb. Drop the weight — this is a "
                             "max attempt, not a deload."
+                        )
+
+        # Load–RPE coherence (2026-07-23 remediation): the ceiling check above
+        # bounds load from ABOVE; nothing bounded it against the DECLARED
+        # effort, so an exercise's `rpe_target` was decorative — a plan could
+        # label a set "RPE 8" while the weight×reps combo was really an
+        # RPE 6 (3-4 RIR) load, and nothing caught the mismatch. This is the
+        # other half of "make RPE dictate things": logged RPE sat at a
+        # median of 7.0 for two months partly because prescribed load was
+        # never checked against its own stated target.
+        #
+        # Scoped to HIGH-intensity days only — this is deliberate, not an
+        # incidental narrowing. `load_cap_pct` expresses each day's ceiling as
+        # a fraction of a MAX-EFFORT-implied e1RM (no RIR term), while this
+        # check's RIR-adjusted Epley expresses a genuinely submaximal target
+        # (RPE 6-9) against the athlete's TRUE e1RM. For any capped day (low
+        # ~78%, moderate ~90%), those two scales are structurally
+        # incompatible: even the softest realistic RPE target (6, 4 RIR)
+        # implies MORE weight than a low/moderate cap allows at any rep
+        # count, because the cap is a discount off a near-failure (RIR≈0)
+        # reference, not off a submaximal one — so enforcing coherence there
+        # would make it mathematically impossible to ever satisfy both
+        # checks at once. On a HIGH day (cap ≥100%) that tension resolves:
+        # the ceiling roughly tracks the true e1RM, so an honest RPE 8-9
+        # effort naturally clears it. High days are also exactly where the
+        # under-effort problem this check exists for actually shows up —
+        # a low/moderate/rest day is legitimately supposed to be lighter.
+        _COHERENCE_TOLERANCE = 0.075
+        if (
+            e1rm_ceilings
+            and gates.get("max_intensity") == "high"
+            and not gates.get("deload_required")
+        ):
+            for block in blocks:
+                for ex in block.get("exercises", []):
+                    name = ex.get("name", "")
+                    e1rm_kg = e1rm_ceilings.get(name)
+                    rpe_t = ex.get("rpe_target")
+                    w_lbs = ex.get("weight_lbs")
+                    bounds = _rep_bounds(ex.get("reps"))
+                    reps = bounds[1] if bounds else None
+                    if not e1rm_kg or not w_lbs or not reps or rpe_t is None:
+                        continue
+                    # RIR-adjusted Epley: e1RM = weight × (1 + (reps + RIR)/30),
+                    # RIR = 10 − RPE. Solve for the weight that RPE/rep combo
+                    # implies against the exercise's known e1RM, same rep cap
+                    # (12) as the ceiling check above for consistency.
+                    rir = 10 - rpe_t
+                    implied_kg = e1rm_kg / (1 + (min(reps, 12) + rir) / 30)
+                    prescribed_kg = w_lbs / 2.20462
+                    if abs(prescribed_kg - implied_kg) > implied_kg * _COHERENCE_TOLERANCE:
+                        implied_lbs = round(implied_kg * 2.20462, 1)
+                        raise GateViolation(
+                            f"{name!r} prescribed {w_lbs}lb×{reps} at target RPE {rpe_t} is "
+                            f"incoherent — that RPE at {reps} reps implies ~{implied_lbs}lb "
+                            f"per today's e1RM, not {w_lbs}lb "
+                            f"(>{_COHERENCE_TOLERANCE:.1%} off). Adjust the weight to match "
+                            "the declared effort, or adjust rpe_target to match the weight."
                         )
 
         # ── Data-backed checks (#18, #21, #22) — require a live connection ────

@@ -15,7 +15,7 @@ from shc.ai.workout_planner import (
 _UNSET = object()
 
 
-def _plan(intensity="low", target_rpe=_UNSET, exercises=None):
+def _plan(intensity="low", target_rpe=7, exercises=None):
     rec: dict = {
         "intensity": intensity,
         "focus": "test",
@@ -124,11 +124,13 @@ def test_accepts_load_under_ceiling() -> None:
 
 
 def test_high_day_allows_progressive_overload() -> None:
-    """A new-peak attempt on a high day must pass (cap > 100%)."""
+    """A new-peak attempt on a high day must pass (cap > 100%). rpe_target=10:
+    a genuine new-PR attempt against a stale e1RM is a true max effort, which
+    RPE 9 (1 RIR) under-states — coherence needs the honest RPE 10 label."""
     p = _plan(
         intensity="high",
         target_rpe=9,
-        exercises=[_ex("Bench Press (Barbell)", 95, "6", rpe_target=9, rest_seconds=240)],
+        exercises=[_ex("Bench Press (Barbell)", 95, "6", rpe_target=10, rest_seconds=240)],
     )
     assert validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL) is True
 
@@ -431,20 +433,101 @@ def test_deload_requires_low_rpe() -> None:
         validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)
 
 
+# ── Load–RPE coherence (2026-07-23 remediation, HIGH days only) ─────────────
+# Bench Press e1RM = 49kg (~108lb). At reps=8, RIR-adjusted Epley: RPE8 (2
+# RIR) implies ~81.0lb; RPE6 (4 RIR) implies ~85.4lb-ish downward... the
+# exact figures aren't the point — 50lb is far under BOTH, comfortably
+# outside the 7.5% tolerance for a labeled RPE8 set.
+
+
+def test_coherent_high_rpe_set_passes() -> None:
+    p = _plan(
+        intensity="high",
+        exercises=[_ex("Bench Press (Barbell)", 81, "8", rpe_target=8, rest_seconds=180)],
+    )
+    assert validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL) is True
+
+
+def test_rpe_label_incoherent_with_light_load_rejected() -> None:
+    """A light load (50lb against a 108lb e1RM) labeled RPE 8 is nowhere near
+    2 RIR — the coherence check must catch the mismatch, not just accept the
+    label at face value."""
+    p = _plan(
+        intensity="high",
+        exercises=[_ex("Bench Press (Barbell)", 50, "8", rpe_target=8, rest_seconds=180)],
+    )
+    with pytest.raises(GateViolation, match="incoherent"):
+        validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL)
+
+
+def test_coherence_not_enforced_on_moderate_day() -> None:
+    """The check is deliberately HIGH-day-only (see the code comment): a low
+    load at a low RPE is exactly right on a moderate/low day, so the same
+    light Bench Press set that fails on a HIGH day must pass here."""
+    p = _plan(
+        intensity="low",
+        exercises=[_ex("Bench Press (Barbell)", 50, "8", rpe_target=8, rest_seconds=180)],
+    )
+    state = {
+        "gates": {
+            "max_intensity": "moderate",
+            "deload_required": False,
+            "forbid_muscle_groups": [],
+            "reasons": [],
+        }
+    }
+    assert validate_plan(p, state=state, e1rm_ceilings=CEIL) is True
+
+
+def test_coherence_skips_exercise_missing_rpe_target() -> None:
+    """An exercise with no rpe_target of its own can't be checked for
+    coherence — it self-skips rather than erroring."""
+    ex = _ex("Bench Press (Barbell)", 50, "8", rest_seconds=180)
+    del ex["rpe_target"]
+    p = _plan(intensity="high", exercises=[ex])
+    assert validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL) is True
+
+
 # ── target_rpe absent from recommendation (bug: defaulted to 10, tripped deload gate) ──
 
 
 def test_deload_passes_when_target_rpe_absent_and_exercise_rpEs_low() -> None:
-    """Recommendation omits target_rpe; gate must derive from exercise rpe_targets (≤7)."""
-    p = _plan(intensity="low", exercises=[_ex("Face Pull", 30, "12", rpe_target=2)])
+    """Recommendation omits target_rpe; gate must derive from exercise rpe_targets (≤7).
+    Deload days are exempt from the general target_rpe-required check (below) —
+    they keep this narrower, already-tested derivation fallback instead."""
+    p = _plan(intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 30, "12", rpe_target=2)])
     assert validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL) is True
 
 
 def test_deload_rejects_when_target_rpe_absent_and_exercise_rpes_high() -> None:
     """Recommendation omits target_rpe; derived max from exercise rpe_targets (>7) must reject."""
-    p = _plan(intensity="low", exercises=[_ex("Face Pull", 30, "12", rpe_target=9)])
+    p = _plan(intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 30, "12", rpe_target=9)])
     with pytest.raises(GateViolation, match="RPE"):
         validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)
+
+
+# ── target_rpe required on every non-rest, non-deload plan ───────────────────
+
+
+def test_target_rpe_required_on_normal_day() -> None:
+    p = _plan(intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 40, "8")])
+    with pytest.raises(ValueError, match="target_rpe"):
+        validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL)
+
+
+def test_target_rpe_not_required_on_rest_day() -> None:
+    """A rest-day recommendation (intensity='rest') is exempt, matching #17's
+    session-budget exemption — there's no session to declare an effort for."""
+    p = _plan(
+        intensity="rest", target_rpe=_UNSET, exercises=[_ex("Walking", None, "10 min")]
+    )
+    assert validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL) is True
+
+
+def test_target_rpe_not_required_without_state() -> None:
+    """Schema-only validation (no state) doesn't enforce gate-level requirements."""
+    p = _plan(intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 40, "8")])
+    assert validate_plan(p) is True
 
 
 # --- #21 deterministic clinical contraindication cap -------------------------
