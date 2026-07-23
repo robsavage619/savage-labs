@@ -487,11 +487,14 @@ def test_weekly_prescription_reuses_passed_in_daily_state(conn, seed, monkeypatc
     assert calls["n"] == 1, "weekly_prescription recomputed daily_state despite receiving one"
 
 
-def test_weekly_prescription_uses_personalized_leg_hold(conn, seed) -> None:
-    """A well-sampled, tightened personal conditioning band must actually reach
-    `_decide` — 1.45 sits BELOW the population hold (1.5, no interference) but
-    ABOVE a tightened personal hold of 1.4 (interference active). Only the
-    personalized path can make quads hold in this exact window."""
+def test_weekly_prescription_uses_personalized_leg_hold_loosening(conn, seed) -> None:
+    """A well-sampled personal conditioning band that LOOSENS forbid must
+    actually reach `_decide` via the derived hold — hold is floor-only
+    against population (metrics.COND_ACWR_HOLD_LEGS = 1.5), so a fitted
+    forbid of 2.0 derives hold 1.7. At cond 1.6 (below the personalized
+    hold, above population) quads must NOT hold; at 1.75 (above the
+    personalized hold) quads must hold. Only the personalized path explains
+    the 1.6 case — population hold alone would have held it."""
     for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
         conn.execute(
             "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
@@ -500,22 +503,59 @@ def test_weekly_prescription_uses_personalized_leg_hold(conn, seed) -> None:
         )
     conn.execute(
         "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
-        "VALUES ('conditioning', 'forbid_legs', 1.7, 30, now())"
+        "VALUES ('conditioning', 'forbid_legs', 2.0, 30, now())"
+    )
+    today = date.today()
+    seed.workout(today - timedelta(weeks=1), "Squat (Barbell)", [(60.0, 8)] * 4)
+
+    def _quads_reason(cond_acwr: float) -> str:
+        fake_state = {
+            "freshness": {"whoop_stale": False},
+            "training_load": {"conditioning_acwr": cond_acwr},
+        }
+        rx = weekly_prescription(conn, daily_state=fake_state)
+        quads = next((m for m in rx.muscles if m.muscle == "quads"), None)
+        assert quads is not None
+        return quads.reason
+
+    assert "court/cardio load high" not in _quads_reason(1.6), (
+        "quads held at cond 1.6 under a loosened personal hold of 1.7 — the "
+        "personalization did not reach _decide (population hold 1.5 would "
+        "wrongly hold this too)"
+    )
+    assert "court/cardio load high" in _quads_reason(1.75)
+
+
+def test_weekly_prescription_leg_hold_never_tighter_than_population(conn, seed) -> None:
+    """Even a well-sampled fit that TIGHTENS forbid close to population must
+    not drag the derived hold below metrics.COND_ACWR_HOLD_LEGS (1.5) — a
+    live scenario: forbid fitted to 1.53 previously derived hold 1.23,
+    freezing quads on ordinary conditioning loads. At cond 1.4 (below the
+    floored hold) quads must NOT hold."""
+    for name, value in (("rest", 1.96), ("low", 1.48), ("mod", 1.2)):
+        conn.execute(
+            "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+            "VALUES ('resistance', ?, ?, 50, now())",
+            [name, value],
+        )
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.53, 37, now())"
     )
     today = date.today()
     seed.workout(today - timedelta(weeks=1), "Squat (Barbell)", [(60.0, 8)] * 4)
 
     fake_state = {
         "freshness": {"whoop_stale": False},
-        "training_load": {"conditioning_acwr": 1.45},
+        "training_load": {"conditioning_acwr": 1.4},
     }
     rx = weekly_prescription(conn, daily_state=fake_state)
 
     quads = next((m for m in rx.muscles if m.muscle == "quads"), None)
     assert quads is not None
-    assert "court/cardio load high" in quads.reason, (
-        f"quads did not hold under the personalized (tightened) leg-interference "
-        f"threshold: {quads.reason}"
+    assert "court/cardio load high" not in quads.reason, (
+        f"quads held at cond 1.4 under a tightened-forbid fit (1.53) — the "
+        f"derived hold was not floored at population 1.5: {quads.reason}"
     )
 
 

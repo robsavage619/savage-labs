@@ -1306,13 +1306,22 @@ def personalized_cond_thresholds(conn) -> tuple[float, float]:
     (hard forbid) and `autoregulation._decide` (graded hold) must agree on.
 
     ``forbid`` is personalized exactly as `_gates` does: sample-gated tighten,
-    unrestricted loosen (see `_apply_band`). ``hold`` is derived from the
-    EFFECTIVE forbid (population or personalized) so `hold < forbid` always
-    holds by construction — the two constants were previously independent
-    (`COND_ACWR_HOLD_LEGS` hardcoded in autoregulation.py, `forbid` fitted here),
-    so a tightened personal forbid could cross below the hold, making the
-    graded hold dead code in that regime. Callers must pass a live ``conn``;
-    ``None`` returns the population thresholds unchanged.
+    unrestricted loosen (see `_apply_band`) — it is the injury bound, and a
+    well-sampled fit is allowed to tighten it below population.
+
+    ``hold`` is derived from the EFFECTIVE forbid (population or personalized)
+    preserving the population 0.3 gap, then FLOORED at ``COND_ACWR_HOLD_LEGS``
+    — mirroring invariant 6's floor-only philosophy for the resistance arm.
+    A tightened forbid is an injury-bound decision; the graded hold is a
+    volume-programming decision, and letting the same tightened fit silently
+    drag both meant an athlete carrying real pickleball volume could see leg
+    training held on ~40% of days from a fit that moved the hold to ~1.23 —
+    an anti-progression trap in hold form (see DECISIONS.md). The hold may
+    still LOOSEN below population when forbid loosens; it just never goes
+    below the population floor. If a legitimate tightened forbid would fall
+    at or below the floor, hold is nudged just inside it so the graded band
+    stays non-empty. Callers must pass a live ``conn``; ``None`` returns the
+    population thresholds unchanged.
     """
     forbid = COND_ACWR_FORBID_LEGS
     if conn is not None:
@@ -1330,7 +1339,9 @@ def personalized_cond_thresholds(conn) -> tuple[float, float]:
             import logging as _log
 
             _log.getLogger(__name__).debug("personal ACWR bands unavailable: %s", exc)
-    hold = forbid - (COND_ACWR_FORBID_LEGS - COND_ACWR_HOLD_LEGS)
+    hold = max(forbid - (COND_ACWR_FORBID_LEGS - COND_ACWR_HOLD_LEGS), COND_ACWR_HOLD_LEGS)
+    if hold >= forbid:
+        hold = forbid - 0.05
     return hold, forbid
 
 

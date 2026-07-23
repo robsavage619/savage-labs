@@ -421,12 +421,44 @@ def _seed_all_acwr_bands(conn, *, cond_forbid: float, cond_weeks: int) -> None:
 
 def test_personalized_cond_thresholds_tightens_when_well_sampled(conn) -> None:
     """A well-sampled (>= _ACWR_TIGHTEN_MIN_WEEKS) fit may tighten forbid below
-    population, and hold moves down WITH it, preserving the 0.3 gap."""
+    population; hold moves down WITH it but is FLOORED at COND_ACWR_HOLD_LEGS
+    — the derived hold is a volume-programming decision and may only loosen
+    below population, never tighten (mirrors invariant 6)."""
     _seed_all_acwr_bands(conn, cond_forbid=1.7, cond_weeks=30)
     hold, forbid = personalized_cond_thresholds(conn)
     assert forbid == pytest.approx(1.7)
-    assert hold == pytest.approx(1.4)
+    assert hold == pytest.approx(COND_ACWR_HOLD_LEGS)
     assert hold < forbid
+
+
+def test_personalized_cond_thresholds_hold_never_tightens_below_population(conn) -> None:
+    """A fitted forbid close to population (e.g. 1.53, matching Rob's live fit)
+    would derive an unfloored hold of 1.23 — well below population 1.5. The
+    floor must keep hold at 1.5 even though forbid tightens."""
+    _seed_all_acwr_bands(conn, cond_forbid=1.53, cond_weeks=37)
+    hold, forbid = personalized_cond_thresholds(conn)
+    assert forbid == pytest.approx(1.53)
+    assert hold == pytest.approx(COND_ACWR_HOLD_LEGS)
+
+
+def test_personalized_cond_thresholds_hold_stays_inside_a_tight_forbid(conn) -> None:
+    """If a well-sampled fit tightens forbid to AT or BELOW the population
+    hold floor, the floor can't just equal or exceed forbid (hold must stay
+    < forbid) — nudge hold just inside it instead."""
+    _seed_all_acwr_bands(conn, cond_forbid=1.45, cond_weeks=40)
+    hold, forbid = personalized_cond_thresholds(conn)
+    assert forbid == pytest.approx(1.45)
+    assert hold < forbid
+    assert hold == pytest.approx(1.4)
+
+
+def test_personalized_cond_thresholds_hold_still_loosens_with_forbid(conn) -> None:
+    """The floor doesn't prevent hold from loosening when forbid loosens —
+    only tightening below population is blocked."""
+    _seed_all_acwr_bands(conn, cond_forbid=2.0, cond_weeks=30)
+    hold, forbid = personalized_cond_thresholds(conn)
+    assert forbid == pytest.approx(2.0)
+    assert hold == pytest.approx(1.7)
 
 
 def test_personalized_cond_thresholds_floored_when_thin_sample(conn) -> None:
