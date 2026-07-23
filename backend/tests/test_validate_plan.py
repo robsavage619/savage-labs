@@ -151,9 +151,7 @@ def test_unverified_ceiling_surfaces_a_validation_note_on_a_capped_day() -> None
     not just in the log, so Rob sees it, not just an operator reading logs."""
     p = _plan(exercises=[_ex("Brand New Lift", 500, "8")])
     assert validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL) is True
-    assert any("UNVERIFIED" in n for n in p.get("validation_notes", [])), p.get(
-        "validation_notes"
-    )
+    assert any("UNVERIFIED" in n for n in p.get("validation_notes", [])), p.get("validation_notes")
 
 
 def test_unverified_ceiling_silent_on_a_high_day() -> None:
@@ -495,13 +493,17 @@ def test_deload_passes_when_target_rpe_absent_and_exercise_rpEs_low() -> None:
     """Recommendation omits target_rpe; gate must derive from exercise rpe_targets (≤7).
     Deload days are exempt from the general target_rpe-required check (below) —
     they keep this narrower, already-tested derivation fallback instead."""
-    p = _plan(intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 30, "12", rpe_target=2)])
+    p = _plan(
+        intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 30, "12", rpe_target=2)]
+    )
     assert validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL) is True
 
 
 def test_deload_rejects_when_target_rpe_absent_and_exercise_rpes_high() -> None:
     """Recommendation omits target_rpe; derived max from exercise rpe_targets (>7) must reject."""
-    p = _plan(intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 30, "12", rpe_target=9)])
+    p = _plan(
+        intensity="low", target_rpe=_UNSET, exercises=[_ex("Face Pull", 30, "12", rpe_target=9)]
+    )
     with pytest.raises(GateViolation, match="RPE"):
         validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)
 
@@ -518,9 +520,7 @@ def test_target_rpe_required_on_normal_day() -> None:
 def test_target_rpe_not_required_on_rest_day() -> None:
     """A rest-day recommendation (intensity='rest') is exempt, matching #17's
     session-budget exemption — there's no session to declare an effort for."""
-    p = _plan(
-        intensity="rest", target_rpe=_UNSET, exercises=[_ex("Walking", None, "10 min")]
-    )
+    p = _plan(intensity="rest", target_rpe=_UNSET, exercises=[_ex("Walking", None, "10 min")])
     assert validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL) is True
 
 
