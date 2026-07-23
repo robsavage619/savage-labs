@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import duckdb
 import pytest
 
@@ -491,6 +493,57 @@ def test_clinical_cap_clear_when_healthy() -> None:
     cap, reason = _clinical_volume_cap(_clinical_conn(labs=[("Hemoglobin", 14.2, 17.5)]))
     assert cap is None
     assert reason is None
+
+
+# ── #18 off-split guard vs. trainable-today (2026-07-23 remediation) ────────
+
+
+def test_abs_on_gated_day_passes_off_split_check(conn) -> None:
+    """Regression pin (verify-only — no code change expected): #18's
+    off-split guard is WEEK-scoped (the union of muscles across every session
+    in the split), not day-scoped. abs has a positive weekly target and is
+    genuinely placed somewhere in the split by _session_split — training it
+    on a day when push/pull are gated must NOT trip the off-split guard, even
+    though abs sits on an "Upper" day-label. This is exactly the muscle the
+    trainable-today projection (autoregulation.trainable_today) surfaces on a
+    gated day; #18 must not then rebottle it."""
+    from shc.training.autoregulation import MusclePrescription, Prescription
+
+    rx = Prescription(
+        week_start=date.today(),
+        mesocycle_id="test",
+        muscles=[
+            MusclePrescription(
+                muscle="abs",
+                current_sets=0.0,
+                target_sets=6,
+                delta=6,
+                action="add",
+                reason="test",
+            ),
+        ],
+        session_split=[
+            {
+                "session": "Upper-A",
+                "weekday": "Tue",
+                "region": "upper",
+                "cap": 10,
+                "credited_muscle_sets": 6,
+                "muscles": [{"muscle": "abs", "sets": 6, "over_cap": False}],
+            }
+        ],
+    )
+    state = {
+        "gates": {
+            "max_intensity": "moderate",
+            "deload_required": False,
+            "forbid_muscle_groups": ["push", "pull"],
+            "forbid_muscles": [],
+            "reasons": ["Push/pull rest-gated"],
+        }
+    }
+    p = _plan(intensity="moderate", exercises=[_ex("Crunch (Machine)", 40, "15")])
+    assert validate_plan(p, state=state, conn=conn, prescription=rx) is True
 
 
 def test_rep_range_enforced_rejects_out_of_band(conn) -> None:

@@ -1173,6 +1173,78 @@ def _session_split(
     return out
 
 
+def trainable_today(
+    muscle_rx: list[MusclePrescription],
+    gates: dict,
+    muscle_recovery: dict[str, dict] | None = None,
+) -> list[dict]:
+    """Daily projection of the weekly prescription onto today's live gates.
+
+    :data:`WEEKLY_SPLIT` allocates volume across a FIXED Tue–Fri skeleton — a
+    muscle sits on whichever day-label the split assigned it, regardless of
+    whether today's actual gates allow training it. On 2026-07-23 this made a
+    genuinely trainable ~15-set day (abs, lower_back, forearms all had
+    positive weekly targets and none of them were gated) render as
+    "glutes ×1", because the only muscle with volume on THAT day's fixed
+    label was glutes — core/forearms sat on the wrong label and never
+    surfaced. This recomputes what's actually available RIGHT NOW: every
+    muscle with a positive weekly target, classified against today's live
+    per-muscle/group gates instead of the static skeleton. It does not
+    replace the weekly split (still the mesocycle-level skeleton); it is the
+    daily lens on top of it.
+
+    Classification (first match wins):
+      * ``rest_gated`` — the muscle itself is in ``gates["forbid_muscles"]``.
+      * ``group_gated`` — the muscle's push/pull/legs group is in
+        ``gates["forbid_muscle_groups"]`` (conditioning-ACWR legs forbid,
+        same-day pickleball, soreness — genuinely group-scoped signals).
+      * ``held`` — the weekly controller's action is ``"hold"`` (e.g. the
+        conditioning leg-interference hold, an MRV ceiling, a protein-gate
+        cap): trainable at its CURRENT volume, just not where to add sets.
+      * ``available`` — clear to train toward this week's target.
+
+    Muscles outside :data:`shc.metrics.MUSCLE_TO_GROUP`'s push/pull/legs
+    membership (core: abs, lower_back; forearms) can never be rest_gated or
+    group_gated — mirrors the per-muscle rest gate's scope (metrics._gates) —
+    so they fall straight to held/available, which is the exact fix for the
+    2026-07-23 incident.
+    """
+    from shc.metrics import MUSCLE_TO_GROUP
+
+    forbid_muscles = set(gates.get("forbid_muscles", []))
+    forbid_groups = set(gates.get("forbid_muscle_groups", []))
+    recovery = muscle_recovery or {}
+    out: list[dict] = []
+    for m in muscle_rx:
+        if m.target_sets <= 0:
+            continue
+        group = MUSCLE_TO_GROUP.get(m.muscle)
+        if m.muscle in forbid_muscles:
+            days = recovery.get(m.muscle, {}).get("days_since")
+            status = "rest_gated"
+            detail = (
+                f"rest-gated — {days}d since last dose" if days is not None else "rest-gated"
+            )
+        elif group in forbid_groups:
+            status = "group_gated"
+            detail = f"{group} group forbidden today"
+        elif m.action == "hold":
+            status = "held"
+            detail = m.reason
+        else:
+            status = "available"
+            detail = None
+        out.append(
+            {
+                "muscle": m.muscle,
+                "target_sets": m.target_sets,
+                "status": status,
+                "detail": detail,
+            }
+        )
+    return out
+
+
 def _protein_target_g(conn: duckdb.DuckDBPyConnection) -> int:
     """Protein target in grams: 1g per lb of bodyweight (RP/sports-science standard).
 
@@ -1652,6 +1724,36 @@ def prescription_context_block(
                 f"- **{sess['session']} ({day})** "
                 f"[{credited} credited muscle-sets; compounds overlap]: {entries}"
             )
+
+    # Trainable-today: the daily lens on top of the weekly skeleton above —
+    # what's actually available RIGHT NOW given today's live gates, so a
+    # gated day never silently reads as emptier than it really is (the
+    # 2026-07-23 "glutes-only" incident: abs/lower_back/forearms had positive
+    # targets and were legally trainable but sat on the wrong day-label).
+    if daily_state is not None:
+        gates = daily_state.get("gates", {}) or {}
+        muscle_recovery = (daily_state.get("training_load") or {}).get("muscle_recovery") or {}
+        today_rx = trainable_today(rx.muscles, gates, muscle_recovery)
+        if today_rx:
+            available = [t for t in today_rx if t["status"] == "available"]
+            held = [t for t in today_rx if t["status"] == "held"]
+            gated = [t for t in today_rx if t["status"] in ("rest_gated", "group_gated")]
+            lines.append("\n## TRAINABLE TODAY (daily projection — the split above is the weekly skeleton)")
+            if available:
+                lines.append(
+                    "- **Available**: "
+                    + ", ".join(f"{t['muscle']} (target {t['target_sets']})" for t in available)
+                )
+            if held:
+                lines.append(
+                    "- **Held** (trainable at current volume, don't add): "
+                    + ", ".join(f"{t['muscle']} (target {t['target_sets']})" for t in held)
+                )
+            if gated:
+                lines.append(
+                    "- **Gated today**: "
+                    + "; ".join(f"{t['muscle']} — {t['detail']}" for t in gated)
+                )
 
     # Protein gate.
     pg = rx.protein_gate

@@ -15,6 +15,7 @@ from shc.training.autoregulation import (
     load_emphasis,
     load_muscle_development,
     muscle_science_report,
+    trainable_today,
     weekly_prescription,
 )
 from shc.training.mesocycle import _iso_week_start
@@ -616,6 +617,76 @@ def test_session_split_zero_target_excluded() -> None:
     split = _session_split(rx)
     for sess in split:
         assert not any(e["muscle"] == "abs" for e in sess["muscles"])
+
+
+# ── trainable_today (2026-07-23 remediation) ─────────────────────────────────
+# The daily projection of the weekly split onto today's live gates — the fix
+# for the "glutes-only" collapse where abs/lower_back/forearms had positive
+# targets, were legally trainable, but sat on a session-split day-label that
+# didn't surface them.
+
+
+def test_trainable_today_abs_and_forearms_surface_under_push_pull_gate() -> None:
+    """abs/lower_back/forearms are outside MUSCLE_TO_GROUP's push/pull/legs
+    membership — a push+pull forbid must not touch them."""
+    rx = [
+        _make_rx("chest", 10),  # push
+        _make_rx("lats", 10),  # pull
+        _make_rx("abs", 6),
+        _make_rx("forearms", 4),
+    ]
+    gates = {"forbid_muscle_groups": ["push", "pull"], "forbid_muscles": []}
+    today = trainable_today(rx, gates)
+    by_muscle = {t["muscle"]: t for t in today}
+    assert by_muscle["chest"]["status"] == "group_gated"
+    assert by_muscle["lats"]["status"] == "group_gated"
+    assert by_muscle["abs"]["status"] == "available"
+    assert by_muscle["forearms"]["status"] == "available"
+
+
+def test_trainable_today_quads_group_gated_under_legs_forbid() -> None:
+    rx = [_make_rx("quads", 8)]
+    gates = {"forbid_muscle_groups": ["legs"], "forbid_muscles": []}
+    today = trainable_today(rx, gates)
+    assert today[0]["status"] == "group_gated"
+    assert "legs" in today[0]["detail"]
+
+
+def test_trainable_today_rest_gated_muscle_takes_priority_over_group() -> None:
+    """A muscle individually rest-gated is rest_gated even if its group also
+    happens to be forbidden — rest_gated is checked first (more specific)."""
+    rx = [_make_rx("chest", 10)]
+    gates = {"forbid_muscle_groups": ["push"], "forbid_muscles": ["chest"]}
+    recovery = {"chest": {"days_since": 1, "last_rpe": 8.0, "last_dose_sets": 5}}
+    today = trainable_today(rx, gates, recovery)
+    assert today[0]["status"] == "rest_gated"
+    assert "1d" in today[0]["detail"]
+
+
+def test_trainable_today_held_is_not_available() -> None:
+    """A HOLD action (e.g. the leg-interference hold, MRV ceiling, protein
+    gate) is trainable at current volume but must not read as 'available' —
+    the point is to distinguish 'don't add' from 'clear to add'."""
+    rx = [_make_rx("quads", 6, action="hold")]
+    gates = {"forbid_muscle_groups": [], "forbid_muscles": []}
+    today = trainable_today(rx, gates)
+    assert today[0]["status"] == "held"
+    assert today[0]["status"] != "available"
+
+
+def test_trainable_today_zero_target_never_surfaces() -> None:
+    rx = [_make_rx("calves", 0)]
+    gates = {"forbid_muscle_groups": [], "forbid_muscles": []}
+    today = trainable_today(rx, gates)
+    assert today == []
+
+
+def test_trainable_today_clear_muscle_is_available() -> None:
+    rx = [_make_rx("biceps", 12)]
+    gates = {"forbid_muscle_groups": [], "forbid_muscles": []}
+    today = trainable_today(rx, gates)
+    assert today[0]["status"] == "available"
+    assert today[0]["detail"] is None
 
 
 # ── _protein_gate ─────────────────────────────────────────────────────────────
