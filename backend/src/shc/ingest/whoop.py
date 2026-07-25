@@ -538,125 +538,198 @@ def _duration_min(start: str | None, end: str | None) -> int | None:
 # ── Workouts ─────────────────────────────────────────────────────────────────
 
 
+def _workout_kind(r: dict) -> str:
+    return _SPORT_NAMES.get(r.get("sport_id", -1), f"sport_{r.get('sport_id', -1)}")
+
+
+def _workout_row(r: dict) -> dict:
+    """Build the `workouts` table row from a raw WHOOP workout record."""
+    score = r.get("score") or {}
+    zones = score.get("zone_durations") or {}
+    kcal_kj = score.get("kilojoule")
+    kind = _workout_kind(r)
+    return {
+        "id": f"whoop_w_{r['id']}",
+        "source": "whoop",
+        "started_at": r.get("start"),
+        "ended_at": r.get("end"),
+        "kind": kind,
+        "sport_id": r.get("sport_id", -1),
+        "sport_name": kind,
+        "strain": score.get("strain"),
+        "avg_hr": score.get("average_heart_rate"),
+        "max_hr": score.get("max_heart_rate"),
+        "kcal": round(kcal_kj / 4.184, 1) if kcal_kj else None,
+        "percent_recorded": score.get("percent_recorded"),
+        "distance_meter": score.get("distance_meter"),
+        "altitude_gain_meter": score.get("altitude_gain_meter"),
+        "altitude_change_meter": score.get("altitude_change_meter"),
+        "zone_zero_min": _ms_to_min(zones.get("zone_zero_milli")),
+        "zone_one_min": _ms_to_min(zones.get("zone_one_milli")),
+        "zone_two_min": _ms_to_min(zones.get("zone_two_milli")),
+        "zone_three_min": _ms_to_min(zones.get("zone_three_milli")),
+        "zone_four_min": _ms_to_min(zones.get("zone_four_milli")),
+        "zone_five_min": _ms_to_min(zones.get("zone_five_milli")),
+        "notes": None,
+        "content_hash": _hash(r),
+    }
+
+
+def _cardio_row(r: dict) -> dict:
+    """Build the mirrored `cardio_sessions` row from a raw WHOOP workout record."""
+    score = r.get("score") or {}
+    zones = score.get("zone_durations") or {}
+    # Pre-compute a zone distribution JSON so cardio reports can render it.
+    zone_dist = {
+        "z0": _ms_to_min(zones.get("zone_zero_milli")),
+        "z1": _ms_to_min(zones.get("zone_one_milli")),
+        "z2": _ms_to_min(zones.get("zone_two_milli")),
+        "z3": _ms_to_min(zones.get("zone_three_milli")),
+        "z4": _ms_to_min(zones.get("zone_four_milli")),
+        "z5": _ms_to_min(zones.get("zone_five_milli")),
+    }
+    return {
+        "id": f"whoop_w_{r['id']}",
+        "date": _utc_to_local_date(r.get("start") or "", r.get("timezone_offset")),
+        "modality": _workout_kind(r),
+        "duration_min": _duration_min(r.get("start"), r.get("end")),
+        "avg_hr": score.get("average_heart_rate"),
+        "zones": str(zone_dist) if any(v for v in zone_dist.values()) else None,
+        "content_hash": _hash(r),
+    }
+
+
+# A workout's ts window can't be SHORTER than the HR-zone durations it contains —
+# WHOOP derives the zone minutes from that same window. It only goes short when
+# the timestamps and the zone columns came from different versions of the record
+# (an in-progress activity polled mid-session, then the completed one). Checked
+# one-sided for the same reason as sleep: a window running longer than the zone
+# total is normal (12 of 785 synced WHOOP workouts, up to 14.7 min over, from
+# gaps WHOOP doesn't assign to a zone), while a short one is impossible. Over the
+# live table this fires on exactly the 2 known mixed-version rows — both
+# pickleball, understated by 112.4 and 95.5 min — and nothing else; the worst
+# legitimate shortfall on record is under 0.5 min.
+_WORKOUT_WINDOW_TOLERANCE_MIN = 2.0
+
+
+def _workout_window_mismatch(row: dict) -> str | None:
+    """Return a description when a row's ts window is shorter than its zone totals."""
+    zone_keys = (
+        "zone_zero_min",
+        "zone_one_min",
+        "zone_two_min",
+        "zone_three_min",
+        "zone_four_min",
+        "zone_five_min",
+    )
+    if all(row[k] is None for k in zone_keys):
+        return None
+    zone_sum = sum(row[k] or 0 for k in zone_keys)
+    t0 = _parse_ts(row["started_at"])
+    t1 = _parse_ts(row["ended_at"])
+    if t0 is None or t1 is None:
+        return None
+    elapsed = (t1 - t0).total_seconds() / 60
+    shortfall = zone_sum - elapsed
+    if shortfall <= _WORKOUT_WINDOW_TOLERANCE_MIN:
+        return None
+    return (
+        f"workout {row['id']} ({row['kind']}): ts window {elapsed:.1f} min but "
+        f"HR zones report {zone_sum:.1f} min (short by {shortfall:.1f})"
+    )
+
+
+_WORKOUT_UPSERT_SQL = """
+INSERT INTO workouts (id, source, started_at, ended_at, kind, sport_id, sport_name,
+                      strain, avg_hr, max_hr, kcal,
+                      percent_recorded, distance_meter,
+                      altitude_gain_meter, altitude_change_meter,
+                      zone_zero_min, zone_one_min, zone_two_min,
+                      zone_three_min, zone_four_min, zone_five_min,
+                      notes, content_hash)
+VALUES ($id, $source, $started_at, $ended_at, $kind, $sport_id, $sport_name,
+        $strain, $avg_hr, $max_hr, $kcal,
+        $percent_recorded, $distance_meter,
+        $altitude_gain_meter, $altitude_change_meter,
+        $zone_zero_min, $zone_one_min, $zone_two_min,
+        $zone_three_min, $zone_four_min, $zone_five_min,
+        $notes, $content_hash)
+ON CONFLICT (id) DO UPDATE SET
+    -- Timestamps MUST be updated alongside the zone durations: WHOOP sends an
+    -- in-progress record for an activity still running and a completed one later,
+    -- and a row carrying one version's ended_at with another's zone columns
+    -- understates the session by hours. /cardio/recent derives duration_min from
+    -- ended_at - started_at, so the panel showed a 129-minute pickleball session
+    -- as 16.5 minutes.
+    started_at = EXCLUDED.started_at,
+    ended_at = EXCLUDED.ended_at,
+    kind = EXCLUDED.kind,
+    sport_id = EXCLUDED.sport_id,
+    sport_name = EXCLUDED.sport_name,
+    strain = EXCLUDED.strain,
+    avg_hr = EXCLUDED.avg_hr, max_hr = EXCLUDED.max_hr,
+    kcal = EXCLUDED.kcal,
+    percent_recorded = EXCLUDED.percent_recorded,
+    distance_meter = EXCLUDED.distance_meter,
+    altitude_gain_meter = EXCLUDED.altitude_gain_meter,
+    altitude_change_meter = EXCLUDED.altitude_change_meter,
+    zone_zero_min = EXCLUDED.zone_zero_min,
+    zone_one_min = EXCLUDED.zone_one_min,
+    zone_two_min = EXCLUDED.zone_two_min,
+    zone_three_min = EXCLUDED.zone_three_min,
+    zone_four_min = EXCLUDED.zone_four_min,
+    zone_five_min = EXCLUDED.zone_five_min,
+    content_hash = EXCLUDED.content_hash
+"""
+
+_CARDIO_UPSERT_SQL = """
+INSERT INTO cardio_sessions
+    (id, date, modality, duration_min, avg_hr, rpe,
+     zone_distribution_json, content_hash)
+VALUES ($id, $date, $modality, $duration_min, $avg_hr,
+        NULL, $zones, $content_hash)
+ON CONFLICT (id) DO UPDATE SET
+    -- `date` belongs here for the same reason: it is derived from the record's
+    -- start, and cardio_min_28d / cardio_age_days window on it.
+    date        = EXCLUDED.date,
+    modality    = EXCLUDED.modality,
+    duration_min = EXCLUDED.duration_min,
+    avg_hr      = EXCLUDED.avg_hr,
+    zone_distribution_json = EXCLUDED.zone_distribution_json,
+    content_hash = EXCLUDED.content_hash
+WHERE EXCLUDED.content_hash != cardio_sessions.content_hash
+"""
+
+
 async def sync_workout() -> int:
     """Fetch WHOOP workout activities and upsert into the workouts and cardio_sessions tables."""
     records = await _paginate("/v2/activity/workout")
     skipped_no_score = 0
+    mismatches: list[str] = []
     async with write_ctx() as conn:
         for r in records:
             _require(r, "id", "start", "score", kind="workout")
-            score = r.get("score") or {}
-            if not score:
+            if not (r.get("score") or {}):
                 skipped_no_score += 1
                 continue
-            sport_id = r.get("sport_id", -1)
-            kind = _SPORT_NAMES.get(sport_id, f"sport_{sport_id}")
-            kcal_kj = score.get("kilojoule")
-            kcal = round(kcal_kj / 4.184, 1) if kcal_kj else None
-            zones = score.get("zone_durations") or {}
-            wid = f"whoop_w_{r['id']}"
-            chash = _hash(r)
-            row = {
-                "id": wid,
-                "source": "whoop",
-                "started_at": r.get("start"),
-                "ended_at": r.get("end"),
-                "kind": kind,
-                "sport_id": sport_id,
-                "sport_name": kind,
-                "strain": score.get("strain"),
-                "avg_hr": score.get("average_heart_rate"),
-                "max_hr": score.get("max_heart_rate"),
-                "kcal": kcal,
-                "percent_recorded": score.get("percent_recorded"),
-                "distance_meter": score.get("distance_meter"),
-                "altitude_gain_meter": score.get("altitude_gain_meter"),
-                "altitude_change_meter": score.get("altitude_change_meter"),
-                "zone_zero_min": _ms_to_min(zones.get("zone_zero_milli")),
-                "zone_one_min": _ms_to_min(zones.get("zone_one_milli")),
-                "zone_two_min": _ms_to_min(zones.get("zone_two_milli")),
-                "zone_three_min": _ms_to_min(zones.get("zone_three_milli")),
-                "zone_four_min": _ms_to_min(zones.get("zone_four_milli")),
-                "zone_five_min": _ms_to_min(zones.get("zone_five_milli")),
-                "notes": None,
-                "content_hash": chash,
-            }
-            conn.execute(
-                """
-                INSERT INTO workouts (id, source, started_at, ended_at, kind, sport_id, sport_name,
-                                      strain, avg_hr, max_hr, kcal,
-                                      percent_recorded, distance_meter,
-                                      altitude_gain_meter, altitude_change_meter,
-                                      zone_zero_min, zone_one_min, zone_two_min,
-                                      zone_three_min, zone_four_min, zone_five_min,
-                                      notes, content_hash)
-                VALUES ($id, $source, $started_at, $ended_at, $kind, $sport_id, $sport_name,
-                        $strain, $avg_hr, $max_hr, $kcal,
-                        $percent_recorded, $distance_meter,
-                        $altitude_gain_meter, $altitude_change_meter,
-                        $zone_zero_min, $zone_one_min, $zone_two_min,
-                        $zone_three_min, $zone_four_min, $zone_five_min,
-                        $notes, $content_hash)
-                ON CONFLICT (id) DO UPDATE SET
-                    kind = EXCLUDED.kind,
-                    sport_id = EXCLUDED.sport_id,
-                    sport_name = EXCLUDED.sport_name,
-                    strain = EXCLUDED.strain,
-                    avg_hr = EXCLUDED.avg_hr, max_hr = EXCLUDED.max_hr,
-                    kcal = EXCLUDED.kcal,
-                    percent_recorded = EXCLUDED.percent_recorded,
-                    distance_meter = EXCLUDED.distance_meter,
-                    altitude_gain_meter = EXCLUDED.altitude_gain_meter,
-                    altitude_change_meter = EXCLUDED.altitude_change_meter,
-                    zone_zero_min = EXCLUDED.zone_zero_min,
-                    zone_one_min = EXCLUDED.zone_one_min,
-                    zone_two_min = EXCLUDED.zone_two_min,
-                    zone_three_min = EXCLUDED.zone_three_min,
-                    zone_four_min = EXCLUDED.zone_four_min,
-                    zone_five_min = EXCLUDED.zone_five_min,
-                    content_hash = EXCLUDED.content_hash
-                """,
-                row,
-            )
+            row = _workout_row(r)
+            mismatch = _workout_window_mismatch(row)
+            if mismatch:
+                mismatches.append(mismatch)
+            conn.execute(_WORKOUT_UPSERT_SQL, row)
             # Mirror into cardio_sessions so cardio_age_days / cardio_min_28d stay fresh.
             # Skip strength (tracked by Hevy) and auto-detected non-sport kinds.
+            kind = row["kind"]
             if kind not in _STRENGTH_KINDS and kind not in _EXCLUDED_KINDS:
-                # Pre-compute a zone distribution JSON so cardio reports can render it.
-                zone_dist = {
-                    "z0": _ms_to_min(zones.get("zone_zero_milli")),
-                    "z1": _ms_to_min(zones.get("zone_one_milli")),
-                    "z2": _ms_to_min(zones.get("zone_two_milli")),
-                    "z3": _ms_to_min(zones.get("zone_three_milli")),
-                    "z4": _ms_to_min(zones.get("zone_four_milli")),
-                    "z5": _ms_to_min(zones.get("zone_five_milli")),
-                }
-                conn.execute(
-                    """
-                    INSERT INTO cardio_sessions
-                        (id, date, modality, duration_min, avg_hr, rpe,
-                         zone_distribution_json, content_hash)
-                    VALUES ($id, $date, $modality, $duration_min, $avg_hr,
-                            NULL, $zones, $content_hash)
-                    ON CONFLICT (id) DO UPDATE SET
-                        modality    = EXCLUDED.modality,
-                        duration_min = EXCLUDED.duration_min,
-                        avg_hr      = EXCLUDED.avg_hr,
-                        zone_distribution_json = EXCLUDED.zone_distribution_json,
-                        content_hash = EXCLUDED.content_hash
-                    WHERE EXCLUDED.content_hash != cardio_sessions.content_hash
-                    """,
-                    {
-                        "id": wid,
-                        "date": _utc_to_local_date(r.get("start") or "", r.get("timezone_offset")),
-                        "modality": kind,
-                        "duration_min": _duration_min(r.get("start"), r.get("end")),
-                        "avg_hr": score.get("average_heart_rate"),
-                        "zones": str(zone_dist) if any(v for v in zone_dist.values()) else None,
-                        "content_hash": chash,
-                    },
-                )
+                conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(r))
     if skipped_no_score:
         log.warning("WHOOP workout: %d records skipped (no score yet)", skipped_no_score)
+    if mismatches:
+        log.error(
+            "WHOOP workout: %d record(s) with inconsistent ts window vs HR-zone durations — %s",
+            len(mismatches),
+            "; ".join(mismatches[:5]),
+        )
     log.info("synced %d WHOOP workout records", len(records) - skipped_no_score)
     return len(records) - skipped_no_score
 
