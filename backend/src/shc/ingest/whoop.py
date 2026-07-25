@@ -689,9 +689,13 @@ INSERT INTO cardio_sessions
 VALUES ($id, $date, $modality, $duration_min, $avg_hr,
         NULL, $zones, $content_hash)
 ON CONFLICT (id) DO UPDATE SET
-    -- `date` belongs here for the same reason: it is derived from the record's
-    -- start, and cardio_min_28d / cardio_age_days window on it.
-    date        = EXCLUDED.date,
+    -- `date` is deliberately NOT refreshed, for the same reason as sleep.night_date
+    -- (e7930b9 + migration 0075). It routes through _utc_to_local_date, whose meaning
+    -- changed with the 2026-07-19 timezone fix: 59 of 389 stored rows hold a UTC
+    -- truncation of `start` — a day AHEAD of the local date for any evening session —
+    -- so refreshing the column would not correct stale values, it would re-date 15%
+    -- of the table by a day and shift what cardio_min_28d counts in each window.
+    -- Which convention wins is the same open question DECISIONS.md carries for sleep.
     modality    = EXCLUDED.modality,
     duration_min = EXCLUDED.duration_min,
     avg_hr      = EXCLUDED.avg_hr,

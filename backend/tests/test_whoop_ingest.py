@@ -341,18 +341,20 @@ def test_workouts_and_cardio_sessions_agree_on_duration(
     assert abs(_stored_duration_min(conn) - cardio_min) < 2.0
 
 
-def test_cardio_session_date_is_refreshed_on_conflict(
+def test_cardio_upsert_never_re_dates_a_stored_session(
     conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """`date` was missing from the cardio_sessions UPDATE SET. It windows
-    cardio_min_28d, so a stale one silently mis-buckets a session's minutes."""
+    """`date` stays at whatever the row was first written with — the same call
+    e7930b9 made for sleep.night_date. It routes through _utc_to_local_date, whose
+    meaning changed on 2026-07-19: 59 of 389 stored rows hold a UTC truncation of
+    `start`, a day ahead of the local date for evening sessions. Refreshing it
+    re-dates them rather than correcting them, and cardio_min_28d windows on it."""
     conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(W_PARTIAL))
-    assert str(_one(conn, "SELECT date FROM cardio_sessions")[0]) == "2026-05-01"
+    conn.execute("UPDATE cardio_sessions SET date = DATE '2026-05-02'")  # old convention
 
-    # A corrected start pushes the session onto the previous local day.
-    moved = dict(W_COMPLETED, start="2026-05-01T05:30:00.000Z")  # 22:30 -07:00 on 04-30
-    conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(moved))
-    assert str(_one(conn, "SELECT date FROM cardio_sessions")[0]) == "2026-04-30"
+    conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(W_COMPLETED))
+    assert str(_one(conn, "SELECT date FROM cardio_sessions")[0]) == "2026-05-02"
+    assert _one(conn, "SELECT duration_min FROM cardio_sessions")[0] == 129  # still updates
 
 
 def test_workout_window_guard_is_quiet_on_self_consistent_records() -> None:
