@@ -190,7 +190,7 @@ async def _get(path: str, params: dict | None = None) -> dict:
     raise RuntimeError(f"WHOOP _get exhausted retries on {path}")
 
 
-_HASH_SCHEMA_VERSION = "v3"  # bump when ingestion adds/changes parsed fields
+_HASH_SCHEMA_VERSION = "v4"  # bump when ingestion adds/changes parsed fields
 
 
 def _hash(data: dict) -> str:
@@ -201,6 +201,16 @@ def _hash(data: dict) -> str:
 def _ms_to_min(ms: int | None) -> float | None:
     """Convert a WHOOP `*_milli` field to minutes (rounded)."""
     return round(ms / 60_000, 1) if ms else (0.0 if ms == 0 else None)
+
+
+def _parse_ts(ts: str | None) -> datetime | None:
+    """Parse a WHOOP ISO-8601 timestamp, or None if missing/malformed."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _require(record: dict, *keys: str, kind: str) -> None:
@@ -285,108 +295,158 @@ async def sync_recovery() -> int:
 # ── Sleep ────────────────────────────────────────────────────────────────────
 
 
+def _sleep_row(r: dict) -> dict:
+    """Build the `sleep` table row from a raw WHOOP sleep record."""
+    score = r.get("score") or {}
+    ss = score.get("stage_summary") or {}
+    needed = score.get("sleep_needed") or {}
+
+    need_baseline = _ms_to_min(needed.get("baseline_milli"))
+    need_debt = _ms_to_min(needed.get("need_from_sleep_debt_milli"))
+    need_strain = _ms_to_min(needed.get("need_from_recent_strain_milli"))
+    need_nap = _ms_to_min(needed.get("need_from_recent_nap_milli"))
+    # Total need = baseline + debt + strain - nap_credit (nap reduces need).
+    total_need = None
+    parts = [need_baseline, need_debt, need_strain]
+    if any(p is not None for p in parts):
+        total_need = round(sum(p or 0 for p in parts) - (need_nap or 0), 1)
+
+    return {
+        "id": str(r["id"]),
+        "source": "whoop",
+        "night_date": _utc_to_local_date(r.get("start", ""), r.get("timezone_offset")),
+        "ts_in": r.get("start"),
+        "ts_out": r.get("end"),
+        "stages_json": str(ss),
+        # Sleep endpoint does NOT return spo2_percentage — that's on
+        # the recovery endpoint. Leave NULL here; it's joined later.
+        "spo2_avg": None,
+        "respiratory_rate": score.get("respiratory_rate"),
+        "hrv": None,  # HRV is on recovery, not sleep
+        "is_nap": bool(r.get("nap")),
+        "sleep_performance_pct": score.get("sleep_performance_percentage"),
+        "sleep_efficiency_pct": score.get("sleep_efficiency_percentage"),
+        "sleep_consistency_pct": score.get("sleep_consistency_percentage"),
+        "disturbance_count": ss.get("disturbance_count"),
+        "sleep_cycle_count": ss.get("sleep_cycle_count"),
+        "sleep_needed_min": total_need,
+        "sleep_need_baseline_min": need_baseline,
+        "sleep_need_debt_min": need_debt,
+        "sleep_need_strain_min": need_strain,
+        "sleep_need_nap_min": need_nap,
+        "sws_min": _ms_to_min(ss.get("total_slow_wave_sleep_time_milli")),
+        "rem_min": _ms_to_min(ss.get("total_rem_sleep_time_milli")),
+        "light_min": _ms_to_min(ss.get("total_light_sleep_time_milli")),
+        "awake_min": _ms_to_min(ss.get("total_awake_time_milli")),
+        "in_bed_min": _ms_to_min(ss.get("total_in_bed_time_milli")),
+        "no_data_min": _ms_to_min(ss.get("total_no_data_time_milli")),
+        "content_hash": _hash(r),
+    }
+
+
+# The ts window can't be SHORTER than the in-bed time it contains — that only
+# happens when the timestamps and the durations came from different versions of
+# the record (WHOOP sends an early partial record for a night in progress, then a
+# completed one). Checked one-sided on purpose: a window that runs longer than
+# total_in_bed_time is normal in the history and not a defect. total_in_bed
+# already includes no-data time, so it is not added here. Across 968 synced
+# nights this fires on exactly the 9 known mixed-version rows (shortfall 45+ min)
+# and nothing else — the worst legitimate shortfall on record is 0.05 min.
+_SLEEP_WINDOW_TOLERANCE_MIN = 2.0
+
+
+def _sleep_window_mismatch(row: dict) -> str | None:
+    """Return a description when a row's ts window is shorter than its durations."""
+    if row["in_bed_min"] is None:
+        return None
+    t0 = _parse_ts(row["ts_in"])
+    t1 = _parse_ts(row["ts_out"])
+    if t0 is None or t1 is None:
+        return None
+    elapsed = (t1 - t0).total_seconds() / 60
+    shortfall = row["in_bed_min"] - elapsed
+    if shortfall <= _SLEEP_WINDOW_TOLERANCE_MIN:
+        return None
+    return (
+        f"sleep {row['id']} (night {row['night_date']}): ts window {elapsed:.1f} min "
+        f"but stages report {row['in_bed_min']:.1f} min in bed (short by {shortfall:.1f})"
+    )
+
+
+_SLEEP_UPSERT_SQL = """
+INSERT INTO sleep (id, source, night_date, ts_in, ts_out, stages_json,
+                   spo2_avg, respiratory_rate, hrv,
+                   is_nap, sleep_performance_pct, sleep_efficiency_pct,
+                   sleep_consistency_pct, disturbance_count, sleep_cycle_count,
+                   sleep_needed_min, sleep_need_baseline_min,
+                   sleep_need_debt_min, sleep_need_strain_min, sleep_need_nap_min,
+                   sws_min, rem_min, light_min, awake_min,
+                   in_bed_min, no_data_min,
+                   content_hash)
+VALUES ($id, $source, $night_date, $ts_in, $ts_out, $stages_json,
+        $spo2_avg, $respiratory_rate, $hrv,
+        $is_nap, $sleep_performance_pct, $sleep_efficiency_pct,
+        $sleep_consistency_pct, $disturbance_count, $sleep_cycle_count,
+        $sleep_needed_min, $sleep_need_baseline_min,
+        $sleep_need_debt_min, $sleep_need_strain_min, $sleep_need_nap_min,
+        $sws_min, $rem_min, $light_min, $awake_min,
+        $in_bed_min, $no_data_min,
+        $content_hash)
+ON CONFLICT (id) DO UPDATE SET
+    -- Timestamps MUST be updated alongside the durations: WHOOP sends an early
+    -- partial record for a night in progress and a completed one later, and a row
+    -- carrying one version's ts_out with another's stage columns understates the
+    -- night by hours (last_hours is derived from ts_out - ts_in).
+    night_date = EXCLUDED.night_date,
+    ts_in = EXCLUDED.ts_in,
+    ts_out = EXCLUDED.ts_out,
+    stages_json = EXCLUDED.stages_json,
+    respiratory_rate = EXCLUDED.respiratory_rate,
+    is_nap = EXCLUDED.is_nap,
+    sleep_performance_pct = EXCLUDED.sleep_performance_pct,
+    sleep_efficiency_pct = EXCLUDED.sleep_efficiency_pct,
+    sleep_consistency_pct = EXCLUDED.sleep_consistency_pct,
+    disturbance_count = EXCLUDED.disturbance_count,
+    sleep_cycle_count = EXCLUDED.sleep_cycle_count,
+    sleep_needed_min = EXCLUDED.sleep_needed_min,
+    sleep_need_baseline_min = EXCLUDED.sleep_need_baseline_min,
+    sleep_need_debt_min = EXCLUDED.sleep_need_debt_min,
+    sleep_need_strain_min = EXCLUDED.sleep_need_strain_min,
+    sleep_need_nap_min = EXCLUDED.sleep_need_nap_min,
+    sws_min = EXCLUDED.sws_min,
+    rem_min = EXCLUDED.rem_min,
+    light_min = EXCLUDED.light_min,
+    awake_min = EXCLUDED.awake_min,
+    in_bed_min = EXCLUDED.in_bed_min,
+    no_data_min = EXCLUDED.no_data_min,
+    content_hash = EXCLUDED.content_hash
+WHERE EXCLUDED.content_hash != sleep.content_hash
+"""
+
+
 async def sync_sleep() -> int:
     records = await _paginate("/v2/activity/sleep")
     skipped_no_score = 0
+    mismatches: list[str] = []
     async with write_ctx() as conn:
         for r in records:
             _require(r, "id", "start", "end", "score", kind="sleep")
-            score = r.get("score") or {}
-            if not score:
+            if not (r.get("score") or {}):
                 skipped_no_score += 1
                 continue
-            ss = score.get("stage_summary") or {}
-            needed = score.get("sleep_needed") or {}
-            external_id = str(r["id"])
-
-            need_baseline = _ms_to_min(needed.get("baseline_milli"))
-            need_debt = _ms_to_min(needed.get("need_from_sleep_debt_milli"))
-            need_strain = _ms_to_min(needed.get("need_from_recent_strain_milli"))
-            need_nap = _ms_to_min(needed.get("need_from_recent_nap_milli"))
-            # Total need = baseline + debt + strain - nap_credit (nap reduces need).
-            total_need = None
-            parts = [need_baseline, need_debt, need_strain]
-            if any(p is not None for p in parts):
-                total_need = round(sum(p or 0 for p in parts) - (need_nap or 0), 1)
-
-            row = {
-                "id": external_id,
-                "source": "whoop",
-                "night_date": _utc_to_local_date(r.get("start", ""), r.get("timezone_offset")),
-                "ts_in": r.get("start"),
-                "ts_out": r.get("end"),
-                "stages_json": str(ss),
-                # Sleep endpoint does NOT return spo2_percentage — that's on
-                # the recovery endpoint. Leave NULL here; it's joined later.
-                "spo2_avg": None,
-                "respiratory_rate": score.get("respiratory_rate"),
-                "hrv": None,  # HRV is on recovery, not sleep
-                "is_nap": bool(r.get("nap")),
-                "sleep_performance_pct": score.get("sleep_performance_percentage"),
-                "sleep_efficiency_pct": score.get("sleep_efficiency_percentage"),
-                "sleep_consistency_pct": score.get("sleep_consistency_percentage"),
-                "disturbance_count": ss.get("disturbance_count"),
-                "sleep_cycle_count": ss.get("sleep_cycle_count"),
-                "sleep_needed_min": total_need,
-                "sleep_need_baseline_min": need_baseline,
-                "sleep_need_debt_min": need_debt,
-                "sleep_need_strain_min": need_strain,
-                "sleep_need_nap_min": need_nap,
-                "sws_min": _ms_to_min(ss.get("total_slow_wave_sleep_time_milli")),
-                "rem_min": _ms_to_min(ss.get("total_rem_sleep_time_milli")),
-                "light_min": _ms_to_min(ss.get("total_light_sleep_time_milli")),
-                "awake_min": _ms_to_min(ss.get("total_awake_time_milli")),
-                "in_bed_min": _ms_to_min(ss.get("total_in_bed_time_milli")),
-                "no_data_min": _ms_to_min(ss.get("total_no_data_time_milli")),
-                "content_hash": _hash(r),
-            }
-            conn.execute(
-                """
-                INSERT INTO sleep (id, source, night_date, ts_in, ts_out, stages_json,
-                                   spo2_avg, respiratory_rate, hrv,
-                                   is_nap, sleep_performance_pct, sleep_efficiency_pct,
-                                   sleep_consistency_pct, disturbance_count, sleep_cycle_count,
-                                   sleep_needed_min, sleep_need_baseline_min,
-                                   sleep_need_debt_min, sleep_need_strain_min, sleep_need_nap_min,
-                                   sws_min, rem_min, light_min, awake_min,
-                                   in_bed_min, no_data_min,
-                                   content_hash)
-                VALUES ($id, $source, $night_date, $ts_in, $ts_out, $stages_json,
-                        $spo2_avg, $respiratory_rate, $hrv,
-                        $is_nap, $sleep_performance_pct, $sleep_efficiency_pct,
-                        $sleep_consistency_pct, $disturbance_count, $sleep_cycle_count,
-                        $sleep_needed_min, $sleep_need_baseline_min,
-                        $sleep_need_debt_min, $sleep_need_strain_min, $sleep_need_nap_min,
-                        $sws_min, $rem_min, $light_min, $awake_min,
-                        $in_bed_min, $no_data_min,
-                        $content_hash)
-                ON CONFLICT (id) DO UPDATE SET
-                    stages_json = EXCLUDED.stages_json,
-                    respiratory_rate = EXCLUDED.respiratory_rate,
-                    is_nap = EXCLUDED.is_nap,
-                    sleep_performance_pct = EXCLUDED.sleep_performance_pct,
-                    sleep_efficiency_pct = EXCLUDED.sleep_efficiency_pct,
-                    sleep_consistency_pct = EXCLUDED.sleep_consistency_pct,
-                    disturbance_count = EXCLUDED.disturbance_count,
-                    sleep_cycle_count = EXCLUDED.sleep_cycle_count,
-                    sleep_needed_min = EXCLUDED.sleep_needed_min,
-                    sleep_need_baseline_min = EXCLUDED.sleep_need_baseline_min,
-                    sleep_need_debt_min = EXCLUDED.sleep_need_debt_min,
-                    sleep_need_strain_min = EXCLUDED.sleep_need_strain_min,
-                    sleep_need_nap_min = EXCLUDED.sleep_need_nap_min,
-                    sws_min = EXCLUDED.sws_min,
-                    rem_min = EXCLUDED.rem_min,
-                    light_min = EXCLUDED.light_min,
-                    awake_min = EXCLUDED.awake_min,
-                    in_bed_min = EXCLUDED.in_bed_min,
-                    no_data_min = EXCLUDED.no_data_min,
-                    content_hash = EXCLUDED.content_hash
-                WHERE EXCLUDED.content_hash != sleep.content_hash
-                """,
-                row,
-            )
+            row = _sleep_row(r)
+            mismatch = _sleep_window_mismatch(row)
+            if mismatch:
+                mismatches.append(mismatch)
+            conn.execute(_SLEEP_UPSERT_SQL, row)
     if skipped_no_score:
         log.warning("WHOOP sleep: %d records skipped (no score yet)", skipped_no_score)
+    if mismatches:
+        log.error(
+            "WHOOP sleep: %d record(s) with inconsistent ts window vs stage durations — %s",
+            len(mismatches),
+            "; ".join(mismatches[:5]),
+        )
     log.info("synced %d WHOOP sleep records", len(records) - skipped_no_score)
     return len(records) - skipped_no_score
 
