@@ -645,8 +645,53 @@ def persist_acwr_bands(
     return True
 
 
+# Hashes the column values each fit actually consumes, not the rows' arrival
+# times. A max-timestamp comparison answers "is there data newer than the fit",
+# which misses a correction to existing rows entirely — see migration 0076.
+_FIT_INPUT_FINGERPRINT_SQL = """
+SELECT md5(
+    COALESCE((SELECT string_agg(
+        id || '|' || night_date || '|' || COALESCE(epoch(ts_out - ts_in), 0)
+           || '|' || COALESCE(disturbance_count, 0) || '|' || COALESCE(sleep_cycle_count, 0),
+        ';' ORDER BY id) FROM sleep), '')
+    || COALESCE((SELECT string_agg(
+        id || '|' || started_at || '|' || COALESCE(ended_at::VARCHAR, ''),
+        ';' ORDER BY id) FROM workouts), '')
+    || COALESCE((SELECT string_agg(
+        id || '|' || COALESCE(weight_kg, 0) || '|' || COALESCE(reps, 0)
+           || '|' || COALESCE(is_warmup::VARCHAR, ''),
+        ';' ORDER BY id) FROM workout_sets), '')
+    || COALESCE((SELECT string_agg(
+        id || '|' || date || '|' || COALESCE(duration_min, 0),
+        ';' ORDER BY id) FROM cardio_sessions), '')
+)
+"""
+
+_FIT_NAME = "fit_all"
+
+
+def fit_input_fingerprint(conn: duckdb.DuckDBPyConnection) -> str:
+    """Content hash of every column the self-learning fits read."""
+    row = conn.execute(_FIT_INPUT_FINGERPRINT_SQL).fetchone()
+    return str(row[0]) if row and row[0] is not None else ""
+
+
+def record_fit_inputs(conn: duckdb.DuckDBPyConnection) -> None:
+    """Stamp the current input fingerprint as what the latest fit was built on."""
+    conn.execute(
+        """
+        INSERT INTO fit_input_state (fit_name, fingerprint, updated_at)
+        VALUES (?, ?, now())
+        ON CONFLICT (fit_name) DO UPDATE SET
+            fingerprint = excluded.fingerprint,
+            updated_at  = now()
+        """,
+        [_FIT_NAME, fit_input_fingerprint(conn)],
+    )
+
+
 def acwr_fit_data_changed_since_last_fit(conn: duckdb.DuckDBPyConnection) -> bool:
-    """Whether any workout/sleep/cardio data is newer than the last ACWR fit.
+    """Whether the data the fits read differs from what the last fit was built on.
 
     Re-fitting deterministic percentile bands on an UNCHANGED dataset produces
     the same parameters — a logged "re-fit triggered" that is actually a no-op.
@@ -656,24 +701,25 @@ def acwr_fit_data_changed_since_last_fit(conn: duckdb.DuckDBPyConnection) -> boo
     self-correction (and feeds the conditioning-tighten spiral risk
     _COND_TIGHTEN_MAX_STEP exists to bound). No prior fit at all counts as
     "changed" — there's nothing to skip re-fitting.
+
+    Compares a content fingerprint rather than MAX(started_at)/MAX(night_date)
+    against MAX(fitted_at), which only ever detected data that ARRIVED after the
+    fit. A repair to already-stored rows advances no timestamp, so the old guard
+    reported "nothing new" over values the fit had never seen — exactly what
+    happened when nine nights of sleep were corrected on 2026-07-25. A fit
+    predating fit_input_state has no recorded fingerprint and re-fits once,
+    since there is no evidence its inputs are current.
     """
     last_fit = conn.execute("SELECT MAX(fitted_at) FROM personal_acwr_bands").fetchone()
     if not last_fit or last_fit[0] is None:
         return True
-    fitted_at = last_fit[0]
 
-    latest_data = conn.execute(
-        """
-        SELECT GREATEST(
-            COALESCE((SELECT MAX(started_at) FROM workouts), TIMESTAMP '1970-01-01'),
-            COALESCE((SELECT MAX(night_date)::TIMESTAMP FROM sleep), TIMESTAMP '1970-01-01'),
-            COALESCE((SELECT MAX(date)::TIMESTAMP FROM cardio_sessions), TIMESTAMP '1970-01-01')
-        )
-        """
+    stored = conn.execute(
+        "SELECT fingerprint FROM fit_input_state WHERE fit_name = ?", [_FIT_NAME]
     ).fetchone()
-    if not latest_data or latest_data[0] is None:
-        return False
-    return bool(latest_data[0] > fitted_at)
+    if not stored or not stored[0]:
+        return True
+    return fit_input_fingerprint(conn) != stored[0]
 
 
 def read_acwr_bands(conn: duckdb.DuckDBPyConnection) -> dict[str, float] | None:
@@ -866,6 +912,9 @@ def fit_all(conn: duckdb.DuckDBPyConnection, meso_id: str) -> None:
     bands_stored = persist_acwr_bands(conn)
     sleep_bands_stored = persist_sleep_bands(conn)
     deload_cal = calibrate_deload_trigger(conn)
+    # Stamp what these parameters were built on, so a later correction to the
+    # inputs is detectable as a change rather than as "nothing new".
+    record_fit_inputs(conn)
     log.info(
         "fit_all: %d personal volume landmarks, ACWR bands %s, sleep bands %s, deload threshold %s",
         landmarks_stored,

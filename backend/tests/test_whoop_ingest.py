@@ -225,3 +225,14 @@ def test_window_guard_tolerates_missing_timestamps() -> None:
     row = _sleep_row(COMPLETED)
     row["ts_out"] = None
     assert _sleep_window_mismatch(row) is None
+
+
+def test_sync_all_surfaces_sleep_anomalies_without_faking_a_failure() -> None:
+    """Mismatches ride back on the sync result, not only the log — and the key
+    they land under must not read as a failed endpoint. `failed_endpoints` scans
+    for negative NUMBERS, so a list value has to be ignored by it."""
+    from shc.api.routers.report import failed_endpoints
+
+    detail = {"sleep": 968, "sleep_anomalies": ["sleep abc (night 2026-07-24): short by 246.5"]}
+    assert failed_endpoints(detail) == []
+    assert failed_endpoints({**detail, "workout": -1}) == ["workout"]

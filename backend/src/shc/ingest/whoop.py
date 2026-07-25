@@ -277,6 +277,13 @@ async def sync_recovery() -> int:
                 VALUES ($id, $source, $date, $score, $hrv, $rhr, $skin_temp, $spo2,
                         $user_calibrating, $sleep_id, $content_hash)
                 ON CONFLICT (id) DO UPDATE SET
+                    -- `date` is deliberately frozen, like sleep.night_date: it is
+                    -- derived through _utc_to_local_date, whose meaning changed on
+                    -- 2026-07-19, so refreshing it would re-date history rather than
+                    -- correct it. Worse, it can't even be audited offline — recovery's
+                    -- source `created_at` is never persisted, so there is no way to
+                    -- diff stored vs recomputed without re-fetching every payload.
+                    -- Don't add it without that evidence. See DECISIONS.md 2026-07-25.
                     score = EXCLUDED.score, hrv = EXCLUDED.hrv, rhr = EXCLUDED.rhr,
                     skin_temp = EXCLUDED.skin_temp, spo2 = EXCLUDED.spo2,
                     user_calibrating = EXCLUDED.user_calibrating,
@@ -431,7 +438,13 @@ WHERE EXCLUDED.content_hash != sleep.content_hash
 """
 
 
-async def sync_sleep() -> int:
+async def sync_sleep() -> tuple[int, list[str]]:
+    """Sync sleep records. Returns (count, window-mismatch descriptions).
+
+    The mismatches ride back on the return value rather than living only in the
+    log — a log line is not somewhere anomalies get noticed. Hevy does the same
+    with `quarantined`.
+    """
     records = await _paginate("/v2/activity/sleep")
     skipped_no_score = 0
     mismatches: list[str] = []
@@ -455,7 +468,7 @@ async def sync_sleep() -> int:
             "; ".join(mismatches[:5]),
         )
     log.info("synced %d WHOOP sleep records", len(records) - skipped_no_score)
-    return len(records) - skipped_no_score
+    return len(records) - skipped_no_score, mismatches
 
 
 # Strength modalities already tracked by Hevy — skip mirroring to cardio_sessions.
@@ -706,6 +719,11 @@ async def sync_cycle() -> int:
                         $avg_hr, $max_hr, $percent_recorded,
                         $start_ts, $end_ts, $content_hash)
                 ON CONFLICT (id) DO UPDATE SET
+                    -- `date` is deliberately frozen — same reason as sleep.night_date.
+                    -- start_ts/end_ts are raw passthroughs and safe to refresh, but
+                    -- `date` runs through _utc_to_local_date: measured against the live
+                    -- table on 2026-07-25, refreshing it would move 715 of 900 rows one
+                    -- day earlier. That's a convention swap, not a repair.
                     score_state = EXCLUDED.score_state,
                     strain = EXCLUDED.strain, kilojoule = EXCLUDED.kilojoule,
                     avg_hr = EXCLUDED.avg_hr, max_hr = EXCLUDED.max_hr,
@@ -799,15 +817,20 @@ async def sync_user_profile() -> int:
 # ── Orchestration ────────────────────────────────────────────────────────────
 
 
-async def sync_all() -> dict[str, int]:
+async def sync_all() -> dict[str, Any]:
     """Full sync — called by APScheduler 2x/day.
 
     Only sets needs_reauth on WHOOPAuthError. Transient failures (429, network
     errors, schema drift) are logged but do not trigger the reauth banner.
     Per-endpoint failures are isolated so a single bad endpoint doesn't kill
     the whole sync.
+
+    Endpoint values are record counts (negative means that endpoint failed — see
+    `report.failed_endpoints`). An endpoint that also detects anomalies returns
+    them alongside its count and they surface under `<name>_anomalies`, which
+    `failed_endpoints` ignores because it only inspects numeric values.
     """
-    results: dict[str, int] = {}
+    results: dict[str, Any] = {}
     endpoints: list[tuple[str, Any]] = [
         ("recovery", sync_recovery),
         ("sleep", sync_sleep),
@@ -821,7 +844,13 @@ async def sync_all() -> dict[str, int]:
 
     for name, fn in endpoints:
         try:
-            results[name] = await fn()
+            outcome = await fn()
+            if isinstance(outcome, tuple):
+                results[name], anomalies = outcome
+                if anomalies:
+                    results[f"{name}_anomalies"] = anomalies
+            else:
+                results[name] = outcome
         except WHOOPAuthError as e:
             auth_failure = e
             results[name] = -1

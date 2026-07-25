@@ -508,12 +508,18 @@ def test_data_changed_guard_true_with_no_prior_fit(conn) -> None:
 
 
 def test_data_changed_guard_false_when_nothing_new(conn) -> None:
-    from shc.training.self_learning import acwr_fit_data_changed_since_last_fit
+    from shc.training.self_learning import (
+        acwr_fit_data_changed_since_last_fit,
+        record_fit_inputs,
+    )
 
     conn.execute(
         "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
         "VALUES ('conditioning', 'forbid_legs', 1.8, 20, now())"
     )
+    # A real fit stamps what it read (fit_all calls this); without that stamp the
+    # guard can't prove the inputs are unchanged and re-fits.
+    record_fit_inputs(conn)
     assert acwr_fit_data_changed_since_last_fit(conn) is False
 
 
@@ -1108,3 +1114,61 @@ def test_snapshot_accuracy_is_idempotent_per_week(conn) -> None:
     snapshot_accuracy(conn)
     snapshot_accuracy(conn)  # same ISO week → upsert, not a second row
     assert len(read_accuracy_history(conn)) == 1
+
+
+# ── fit-input fingerprint: corrections count as changes ──────────────────────
+
+
+def _seed_fit_marker(conn) -> None:
+    conn.execute(
+        "INSERT INTO personal_acwr_bands (arm, threshold_name, value, sample_weeks, fitted_at) "
+        "VALUES ('conditioning', 'forbid_legs', 1.8, 20, now())"
+    )
+
+
+def test_data_changed_guard_true_when_a_prior_fit_has_no_fingerprint(conn) -> None:
+    """A fit that predates fit_input_state can't be shown to be current, so it
+    re-fits once rather than trusting parameters of unknown provenance."""
+    from shc.training.self_learning import acwr_fit_data_changed_since_last_fit
+
+    _seed_fit_marker(conn)
+    assert acwr_fit_data_changed_since_last_fit(conn) is True
+
+
+def test_data_changed_guard_detects_a_correction_to_existing_rows(conn) -> None:
+    """The regression: repairing a stored row advances no max timestamp. The old
+    guard compared MAX(night_date) against MAX(fitted_at) and reported "nothing
+    new" over nine sleep rows whose durations had just been corrected, so the
+    bands kept serving parameters fitted on values that no longer existed."""
+    from shc.training.self_learning import (
+        acwr_fit_data_changed_since_last_fit,
+        record_fit_inputs,
+    )
+
+    conn.execute(
+        "INSERT INTO sleep (id, source, night_date, ts_in, ts_out, in_bed_min, content_hash) "
+        "VALUES ('s1', 'whoop', DATE '2026-07-24', "
+        "        TIMESTAMPTZ '2026-07-24 22:26:37-07', TIMESTAMPTZ '2026-07-25 04:35:38-07', "
+        "        615.5, 'h1')"
+    )
+    _seed_fit_marker(conn)
+    record_fit_inputs(conn)
+    assert acwr_fit_data_changed_since_last_fit(conn) is False
+
+    # Exactly the 2026-07-25 repair: ts_out corrected, night_date untouched, no
+    # new row, no advanced max date.
+    conn.execute("UPDATE sleep SET ts_out = TIMESTAMPTZ '2026-07-25 08:41:00-07' WHERE id = 's1'")
+    assert acwr_fit_data_changed_since_last_fit(conn) is True
+
+
+def test_fit_all_records_the_fingerprint_it_fitted_on(conn, seed) -> None:
+    from shc.training.mesocycle import ensure_active_mesocycle
+    from shc.training.self_learning import acwr_fit_data_changed_since_last_fit, fit_all
+
+    seed.workout(date.today(), "Bench Press (Barbell)", [(100.0, 8)])
+    _seed_fit_marker(conn)
+    fit_all(conn, ensure_active_mesocycle(conn).id)
+    assert acwr_fit_data_changed_since_last_fit(conn) is False
+
+    seed.workout(date.today(), "Squat (Barbell)", [(140.0, 5)])
+    assert acwr_fit_data_changed_since_last_fit(conn) is True
