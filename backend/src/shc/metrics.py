@@ -1486,14 +1486,31 @@ def _illness_gate_corroborated(rec: RecoveryMetrics) -> bool:
     return not recovery_affirmatively_green
 
 
-def _whoop_stale(rec: RecoveryMetrics, today: date) -> bool:
+def _last_recovery_date(conn, today: date) -> str | None:
+    """Newest recovery row actually persisted in the DB, ignoring future dates.
+
+    Freshness must reflect what landed in the table, not what a sync attempt
+    claimed — a partially-failed sync that returns `ok` cannot be allowed to
+    imply the data is current. Future-dated rows are excluded so a timezone
+    roll-forward can never mask a missing row by producing a negative age.
+    """
+    row = conn.execute(
+        "SELECT MAX(date) FROM recovery WHERE date <= $today", {"today": today.isoformat()}
+    ).fetchone()
+    return row[0].isoformat() if row and row[0] else None
+
+
+def _whoop_stale(rec: RecoveryMetrics, today: date, last_recovery_date: str | None = None) -> bool:
     """WHOOP recovery hasn't synced in >2 days — HRV/skin-temp/SpO2-derived caps go blind.
 
     Single source of truth so the safety gate and any downstream consumer (e.g. the
     volume controller's conditioning-interference hold) can never disagree about
-    whether recovery data is stale.
+    whether recovery data is stale. `last_recovery_date` is the DB-derived max
+    (see `_last_recovery_date`) and wins over the selected row's `score_date`
+    whenever the caller has a connection.
     """
-    return rec.score_date is not None and (today - date.fromisoformat(rec.score_date)).days > 2
+    last = last_recovery_date or rec.score_date
+    return last is not None and (today - date.fromisoformat(last)).days > 2
 
 
 def _sleep_stale(sleep: SleepMetrics, today: date) -> bool:
@@ -1565,7 +1582,8 @@ def _gates(
     # safety caps on stale data locks Rob into "low" indefinitely after a sync outage.
     # Same 48h window the conditioning gate uses (see below). Uses the same helper
     # `_freshness()` uses for `DataFreshness.whoop_stale` — one flag, never two.
-    whoop_stale = _whoop_stale(rec, date.today())
+    whoop_last = _last_recovery_date(conn, date.today()) if conn is not None else None
+    whoop_stale = _whoop_stale(rec, date.today(), whoop_last)
     sleep_stale = _sleep_stale(sleep, date.today())
 
     # Hard rest gates.
@@ -2020,9 +2038,16 @@ def _freshness(
     conn, today: date, rec: RecoveryMetrics, sleep: SleepMetrics, load: TrainingLoadMetrics
 ) -> DataFreshness:
     f = DataFreshness()
-    if rec.score_date:
-        f.whoop_age_days = (today - date.fromisoformat(rec.score_date)).days
-    sleep_last = conn.execute("SELECT MAX(night_date) FROM sleep").fetchone()
+    # Ages come from the DB, never from the in-flight sync result or the row
+    # `_recovery()` happened to select: a sync that reports success while an
+    # endpoint failed must not be able to report the data as current.
+    whoop_last = _last_recovery_date(conn, today)
+    if whoop_last:
+        f.whoop_age_days = (today - date.fromisoformat(whoop_last)).days
+    sleep_last = conn.execute(
+        "SELECT MAX(night_date) FROM sleep WHERE night_date <= $today",
+        {"today": today.isoformat()},
+    ).fetchone()
     if sleep_last and sleep_last[0]:
         f.sleep_age_days = (today - sleep_last[0]).days
     if load.last_session_date:
@@ -2031,7 +2056,7 @@ def _freshness(
     if cardio_last and cardio_last[0]:
         f.cardio_age_days = (today - cardio_last[0]).days
 
-    f.whoop_stale = _whoop_stale(rec, today)
+    f.whoop_stale = _whoop_stale(rec, today, whoop_last)
 
     if f.whoop_age_days is not None and f.whoop_age_days > 2:
         f.gaps.append(f"WHOOP {f.whoop_age_days}d stale — reduce reliance on recovery score")

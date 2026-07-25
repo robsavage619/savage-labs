@@ -28,25 +28,64 @@ log = logging.getLogger(__name__)
 _VALID_CALLS = {"Push", "Train", "Maintain", "Easy", "Rest"}
 
 
+def failed_endpoints(detail: object) -> list[str]:
+    """Endpoint names a source reported as failed via a negative record count.
+
+    `whoop.sync_all` isolates per-endpoint failures and marks them `-1` rather
+    than raising, so a source can hand back a detail map that looks like a
+    success. Any negative count means that endpoint wrote nothing — the source
+    is a partial failure, never `ok`.
+    """
+    if not isinstance(detail, dict):
+        return []
+    return sorted(k for k, v in detail.items() if isinstance(v, int | float) and v < 0)
+
+
 @router.post("/sync/all", dependencies=[Depends(require_admin_key)])
 async def sync_all() -> dict:
     """Force a fresh pull from every connected source before reporting.
 
     Runs the same WHOOP / Hevy / DUPR syncs the scheduler does, on demand. Each
     source is isolated — one failing (auth, network) never blocks the others; the
-    per-source outcome is returned so failures are visible, not silent. Apple
-    Health ingests automatically via the file watcher, so it isn't pulled here.
+    per-source outcome is returned so failures are visible, not silent. A source
+    that completes with some endpoints failed reports `ok: false` plus
+    `partial: true` and `failed_endpoints`. Apple Health ingests automatically
+    via the file watcher, so it isn't pulled here.
     """
     sources = (("whoop", whoop.sync_all), ("hevy", hevy.sync_workouts), ("dupr", dupr.sync_rating))
     results: dict[str, dict] = {}
+    partial: list[str] = []
     for name, fn in sources:
         try:
-            results[name] = {"ok": True, "detail": await fn()}
+            detail = await fn()
         except Exception as exc:  # isolate per source — surface, don't abort
             log.warning("sync %s failed: %s", name, exc)
             results[name] = {"ok": False, "error": str(exc)}
+            continue
+        failed = failed_endpoints(detail)
+        if failed:
+            log.error("sync %s partial — endpoints failed: %s", name, failed)
+            partial.append(name)
+            results[name] = {
+                "ok": False,
+                "partial": True,
+                "failed_endpoints": failed,
+                "error": f"{name} endpoints failed: {', '.join(failed)}",
+                "detail": detail,
+            }
+        else:
+            results[name] = {"ok": True, "detail": detail}
+
+    # Freshness is read back out of the DB after the syncs, so it describes what
+    # actually persisted rather than what was attempted.
     freshness = compute_daily_state(get_read_conn()).get("freshness", {})
+    for name in partial:
+        endpoints = ", ".join(results[name]["failed_endpoints"])
+        freshness.setdefault("gaps", []).append(
+            f"{name} sync PARTIAL — endpoints failed: {endpoints} (data below may be incomplete)"
+        )
     return {"results": results, "freshness": freshness}
+
 
 _PROMPT = """\
 Generate Rob's COMPLETE daily report in one pass. This is the SINGLE report and must
@@ -55,7 +94,9 @@ health-story, workout, and analytics dashboard. Be thorough and analytical, neve
 
 ## Sync first, then pull ALL of these
 1. POST http://127.0.0.1:8000/api/sync/all — refresh WHOOP / Hevy / DUPR. Note any
-   source returning `ok: false`.
+   source returning `ok: false` — including `partial: true` (some endpoints failed;
+   see `failed_endpoints`). A partial sync means the numbers below may be stale:
+   re-run the sync before trusting them, and say so if they stay partial.
 2. GET http://127.0.0.1:8000/api/daily/brief — DailyState (full metric set below),
    recent training, AND the curated vault research notes. Single source of numbers.
 3. GET http://127.0.0.1:8000/api/workout/context — TIMING-AWARE workout plan (if Rob
@@ -258,7 +299,10 @@ async def submit_daily_report(body: DailyReportSubmission) -> dict:
         )
     log.info(
         "daily report stored — mode=%s call=%s sections=%d sources=%d",
-        body.mode, body.training_call, len(body.sections), len(body.sources),
+        body.mode,
+        body.training_call,
+        len(body.sections),
+        len(body.sources),
     )
     return {"status": "ok"}
 
@@ -266,11 +310,15 @@ async def submit_daily_report(body: DailyReportSubmission) -> dict:
 @router.get("/daily/report")
 async def latest_daily_report() -> dict:
     """Return the most recent unified daily report."""
-    row = get_read_conn().execute(
-        "SELECT report_date, generated_at, model, training_call, readiness_headline, "
-        "sections, sources, mode "
-        "FROM ai_daily_report ORDER BY report_date DESC LIMIT 1"
-    ).fetchone()
+    row = (
+        get_read_conn()
+        .execute(
+            "SELECT report_date, generated_at, model, training_call, readiness_headline, "
+            "sections, sources, mode "
+            "FROM ai_daily_report ORDER BY report_date DESC LIMIT 1"
+        )
+        .fetchone()
+    )
     if not row:
         return {"report": None}
     return {
