@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-25 — Staleness checks compare content, not arrival time
+
+**Context.** `acwr_fit_data_changed_since_last_fit` guarded the nightly re-fit by comparing `MAX(workouts.started_at)` / `MAX(sleep.night_date)` / `MAX(cardio_sessions.date)` against `MAX(personal_acwr_bands.fitted_at)`. That answers "is there data newer than the fit", which is not the question the guard exists to ask. When nine nights of sleep had their `ts_out` repaired earlier the same day, no max timestamp moved: `personal_sleep_bands` and `personal_acwr_bands`, fitted at 04:14 that morning against the broken durations, reported "nothing new" and would have kept serving those parameters until a night newer than the fit timestamp arrived — roughly two days later.
+
+**Decision.** The guard compares a content fingerprint (`fit_input_state`, migration 0076) — an md5 over the actual column values each fit consumes, across `sleep`, `workouts`, `workout_sets`, and `cardio_sessions`. `fit_all` stamps the fingerprint it fitted on. A fit with no recorded fingerprint counts as changed and re-fits once, since there is no evidence its inputs are current.
+
+**Why.** This is the same shape as the `content_hash` trap in the entry below: both assume the newest row is the only thing that can differ, so both are blind to a correction. Timestamps answer "what arrived"; only content answers "what changed". Anywhere the codebase decides whether derived state is current, prefer the latter — a max-date comparison silently treats repaired data as already-consumed. Fingerprinting the *values the fit reads* rather than `content_hash` is deliberate: a migration that repairs rows directly (0075 did) never touches `content_hash`, so a payload-hash fingerprint would have the same blind spot one level up.
+
+**Consequences.** The guard now over-triggers slightly — any change to any fit input re-fits everything, including fits that don't read the changed table. That is the safe direction and the fit is cheap. `test_data_changed_guard_false_when_nothing_new` was updated to record a fingerprint first, which is what a real fit does; three new tests cover the missing-fingerprint case, a correction to an existing row, and `fit_all` stamping what it read. Forced re-fit on the live DB moved `sample_nights` 177 → 178 and left the band values unchanged (disturbance p80 13.0, cycle p20 3.0, `forbid_legs` 1.8) — the percentiles were robust to the nine corrected nights, but they are now demonstrably built on correct data rather than coincidentally right.
+
+---
+
 ## 2026-07-25 — night_date is frozen at write time; onset-vs-wake is OPEN
 
 **Context.** The fix in the entry below added `night_date` to `sync_sleep`'s UPDATE SET on the reasoning that it derives from `ts_in` and would otherwise go stale. It does derive from `ts_in` — but the stored values and the current computation come from different generations of the ingest. Rows written before the 2026-07-19 timezone fix got `night_date` from a UTC truncation of `start`, which for a late-evening local bedtime rolls forward to the **wake** date; `_utc_to_local_date(start, offset)` returns the **onset** date. Because `night_date` had never been in the UPDATE SET, the old convention sat frozen in the table until one sync flipped 682 of 1058 rows a day earlier — 921 wake-dated / 228 onset-dated became 324 / 908. `sleep.night_date = recovery.date`, a live join in `dashboard.py` and `lab.py`, fell from 60/60 to 59/60 matches over the last 60 days.
