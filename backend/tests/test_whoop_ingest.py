@@ -17,11 +17,16 @@ from __future__ import annotations
 import duckdb
 
 from shc.ingest.whoop import (
+    _CARDIO_UPSERT_SQL,
     _SLEEP_UPSERT_SQL,
+    _WORKOUT_UPSERT_SQL,
+    _cardio_row,
     _parse_offset,
     _sleep_row,
     _sleep_window_mismatch,
     _utc_to_local_date,
+    _workout_row,
+    _workout_window_mismatch,
 )
 
 
@@ -236,3 +241,160 @@ def test_sync_all_surfaces_sleep_anomalies_without_faking_a_failure() -> None:
     detail = {"sleep": 968, "sleep_anomalies": ["sleep abc (night 2026-07-24): short by 246.5"]}
     assert failed_endpoints(detail) == []
     assert failed_endpoints({**detail, "workout": -1}) == ["workout"]
+
+
+# ── Partial → completed workout record (2026-07-25 regression) ───────────────
+
+# Rob's pickleball session on 2026-05-01, as it landed in the live DB: a 16.5-min
+# ts window carrying 128.9 min of HR-zone durations. The workouts upsert refreshed
+# the zone columns but not started_at/ended_at, so the in-progress record's window
+# survived. cardio_sessions.duration_min updated correctly to 129 — which is how
+# the two tables ended up disagreeing by nearly two hours about the same session.
+_WORKOUT_START = "2026-05-01T23:00:00.010Z"  # 16:00:00 -07:00 on 2026-05-01
+
+
+def _workout(end: str, *, z0: int, z1: int, z2: int, z3: int, z4: int, z5: int) -> dict:
+    return {
+        "id": "2b3a822c-bba1-4de1-81b7-65dbf9e241e0",
+        "start": _WORKOUT_START,
+        "end": end,
+        "timezone_offset": "-07:00",
+        "sport_id": 65,  # pickleball
+        "score": {
+            "strain": 17.084349,
+            "average_heart_rate": 128,
+            "max_heart_rate": 166,
+            "kilojoule": 5706.5,
+            "percent_recorded": 100.0,
+            "zone_durations": {
+                "zone_zero_milli": z0,
+                "zone_one_milli": z1,
+                "zone_two_milli": z2,
+                "zone_three_milli": z3,
+                "zone_four_milli": z4,
+                "zone_five_milli": z5,
+            },
+        },
+    }
+
+
+# Polled 16.5 min in, while Rob was still on court. Zones consistent with that.
+W_PARTIAL = _workout(
+    "2026-05-01T23:16:29.010Z",
+    z0=180_000,
+    z1=300_000,
+    z2=240_000,
+    z3=240_000,
+    z4=30_000,
+    z5=0,
+)
+
+# The completed session: 128.9 min of zone time across a 128.9-min window.
+W_COMPLETED = _workout(
+    "2026-05-02T01:08:54.010Z",
+    z0=1_176_000,
+    z1=1_266_000,
+    z2=1_782_000,
+    z3=2_892_000,
+    z4=618_000,
+    z5=0,
+)
+
+
+def _stored_duration_min(conn: duckdb.DuckDBPyConnection) -> float:
+    """The exact expression /cardio/recent derives a session's duration from."""
+    return _one(conn, "SELECT epoch(ended_at - started_at) / 60.0 FROM workouts")[0]
+
+
+def test_completed_workout_overwrites_the_partial_records_timestamps(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """The regression: a completed record must replace started_at/ended_at, not
+    just the zone columns. Leaving them at the partial values showed a 129-minute
+    pickleball session as 16.5 minutes in the Cardio & Sports panel."""
+    conn.execute(_WORKOUT_UPSERT_SQL, _workout_row(W_PARTIAL))
+    assert round(_stored_duration_min(conn), 1) == 16.5  # the truncated window, as polled
+
+    conn.execute(_WORKOUT_UPSERT_SQL, _workout_row(W_COMPLETED))
+    assert round(_stored_duration_min(conn), 1) == 128.9
+
+    row = _one(conn, "SELECT zone_three_min, strain, kind FROM workouts")
+    assert row[0] == 48.2
+    assert round(row[1], 1) == 17.1
+    assert row[2] == "pickleball"
+
+
+def test_workout_upsert_leaves_one_row_and_stays_internally_consistent(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    for record in (W_PARTIAL, W_COMPLETED):
+        conn.execute(_WORKOUT_UPSERT_SQL, _workout_row(record))
+    assert _one(conn, "SELECT count(*) FROM workouts")[0] == 1
+    zone_sum = _one(
+        conn,
+        "SELECT zone_zero_min + zone_one_min + zone_two_min "
+        "+ zone_three_min + zone_four_min + zone_five_min FROM workouts",
+    )[0]
+    assert abs(_stored_duration_min(conn) - zone_sum) < 2.0
+
+
+def test_workouts_and_cardio_sessions_agree_on_duration(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """The two tables are written from the same record and must not drift apart.
+    Before the fix cardio_sessions.duration_min refreshed to 129 while the
+    workouts window stayed at 16.5 — the live DB held exactly that disagreement."""
+    for record in (W_PARTIAL, W_COMPLETED):
+        conn.execute(_WORKOUT_UPSERT_SQL, _workout_row(record))
+        conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(record))
+    cardio_min = _one(conn, "SELECT duration_min FROM cardio_sessions")[0]
+    assert cardio_min == 129
+    assert abs(_stored_duration_min(conn) - cardio_min) < 2.0
+
+
+def test_cardio_upsert_never_re_dates_a_stored_session(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """`date` stays at whatever the row was first written with — the same call
+    e7930b9 made for sleep.night_date. It routes through _utc_to_local_date, whose
+    meaning changed on 2026-07-19: 59 of 389 stored rows hold a UTC truncation of
+    `start`, a day ahead of the local date for evening sessions. Refreshing it
+    re-dates them rather than correcting them, and cardio_min_28d windows on it."""
+    conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(W_PARTIAL))
+    conn.execute("UPDATE cardio_sessions SET date = DATE '2026-05-02'")  # old convention
+
+    conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(W_COMPLETED))
+    assert str(_one(conn, "SELECT date FROM cardio_sessions")[0]) == "2026-05-02"
+    assert _one(conn, "SELECT duration_min FROM cardio_sessions")[0] == 129  # still updates
+
+
+def test_workout_window_guard_is_quiet_on_self_consistent_records() -> None:
+    assert _workout_window_mismatch(_workout_row(W_PARTIAL)) is None
+    assert _workout_window_mismatch(_workout_row(W_COMPLETED)) is None
+
+
+def test_workout_window_guard_flags_the_mixed_version_row() -> None:
+    """The bug's signature: the in-progress record's timestamps carrying the
+    completed record's zone durations — the live 2026-05-01 row exactly."""
+    mixed = _workout_row(W_COMPLETED)
+    mixed["ended_at"] = W_PARTIAL["end"]
+    msg = _workout_window_mismatch(mixed)
+    assert msg is not None
+    assert "16.5" in msg and "128.9" in msg
+
+
+def test_workout_window_guard_is_one_sided() -> None:
+    """A window running LONGER than the zone totals is normal (12 of 785 synced
+    WHOOP workouts) — only a window too short to contain them is impossible."""
+    longer = _workout_row(W_COMPLETED)
+    longer["ended_at"] = "2026-05-02T01:23:54.010Z"  # 15 min past the zone total
+    assert _workout_window_mismatch(longer) is None
+
+
+def test_workout_window_guard_tolerates_missing_data() -> None:
+    no_end = _workout_row(W_COMPLETED)
+    no_end["ended_at"] = None
+    assert _workout_window_mismatch(no_end) is None
+
+    no_zones = _workout_row({**W_COMPLETED, "score": {"strain": 5.0}})
+    assert _workout_window_mismatch(no_zones) is None
