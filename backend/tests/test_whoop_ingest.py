@@ -172,6 +172,20 @@ def test_completed_record_overwrites_the_partial_records_timestamps(
     assert str(row[2]) == "2026-07-24"
 
 
+def test_upsert_never_re_dates_a_stored_night(conn: duckdb.DuckDBPyConnection) -> None:
+    """night_date stays at whatever the row was first written with, even when the
+    record's own start says otherwise. Refreshing it re-dated 682 rows by a day on
+    2026-07-25 (migration 0075 restored them): pre-2026-07-19 rows hold a UTC
+    truncation of `start` — the WAKE date — while _utc_to_local_date returns the
+    ONSET date, and `sleep.night_date = recovery.date` is built on the former."""
+    conn.execute(_SLEEP_UPSERT_SQL, _sleep_row(PARTIAL))
+    conn.execute("UPDATE sleep SET night_date = DATE '2026-07-25'")  # the old convention
+
+    conn.execute(_SLEEP_UPSERT_SQL, _sleep_row(COMPLETED))
+    assert str(_one(conn, "SELECT night_date FROM sleep")[0]) == "2026-07-25"
+    assert round(_stored_hours(conn), 2) == 10.26  # the durations still update
+
+
 def test_upsert_leaves_one_row_and_stays_internally_consistent(
     conn: duckdb.DuckDBPyConnection,
 ) -> None:

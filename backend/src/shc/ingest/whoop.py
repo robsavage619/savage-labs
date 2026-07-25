@@ -397,7 +397,14 @@ ON CONFLICT (id) DO UPDATE SET
     -- partial record for a night in progress and a completed one later, and a row
     -- carrying one version's ts_out with another's stage columns understates the
     -- night by hours (last_hours is derived from ts_out - ts_in).
-    night_date = EXCLUDED.night_date,
+    --
+    -- night_date is deliberately NOT updated. It derives from ts_in, but rows
+    -- written before the 2026-07-19 timezone fix hold a UTC truncation of `start`
+    -- (the WAKE date) while _utc_to_local_date now returns the ONSET date, so
+    -- refreshing it re-dates two years of history by a day and breaks the
+    -- sleep.night_date = recovery.date join. Migration 0075 restored the 682 rows
+    -- one sync moved. Which convention wins is an open question in DECISIONS.md;
+    -- until it's settled, a stored night_date stays put.
     ts_in = EXCLUDED.ts_in,
     ts_out = EXCLUDED.ts_out,
     stages_json = EXCLUDED.stages_json,

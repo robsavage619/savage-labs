@@ -6,6 +6,18 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-25 — night_date is frozen at write time; onset-vs-wake is OPEN
+
+**Context.** The fix in the entry below added `night_date` to `sync_sleep`'s UPDATE SET on the reasoning that it derives from `ts_in` and would otherwise go stale. It does derive from `ts_in` — but the stored values and the current computation come from different generations of the ingest. Rows written before the 2026-07-19 timezone fix got `night_date` from a UTC truncation of `start`, which for a late-evening local bedtime rolls forward to the **wake** date; `_utc_to_local_date(start, offset)` returns the **onset** date. Because `night_date` had never been in the UPDATE SET, the old convention sat frozen in the table until one sync flipped 682 of 1058 rows a day earlier — 921 wake-dated / 228 onset-dated became 324 / 908. `sleep.night_date = recovery.date`, a live join in `dashboard.py` and `lab.py`, fell from 60/60 to 59/60 matches over the last 60 days.
+
+**Decision.** `night_date` is **not** in the UPDATE SET. A stored `night_date` stays at whatever the row was first written with, even when the record's own `start` says otherwise. Migration `0075_restore_sleep_night_date.sql` restores the 682 rows the sync moved, as explicit `(id, date)` pairs read from a pre-sync snapshot rather than a `+ INTERVAL 1 DAY` rule, so a re-run is a no-op and each row's intended value is auditable. `test_upsert_never_re_dates_a_stored_night` pins the behavior.
+
+**Why.** Not because freezing is right — it isn't, in principle; a derived column that never refreshes is the same defect the entry below fixes. It is right *here* because the two candidate values disagree by a day and the joins are built on the older one, so refreshing the column silently re-dates two years of history as a side effect of an unrelated bug fix. Undoing that is a smaller, more reversible action than migrating every consumer.
+
+**OPEN QUESTION — which convention wins.** New rows arrive onset-dated while history stays wake-dated, so the table is deliberately inconsistent and will drift further with every night. Resolving it means picking one and migrating the other, plus auditing every `night_date` consumer: the `recovery.date` joins (`dashboard.py`, `lab.py`), `metrics._sleep`'s 14-day window and last-night selection, `_freshness`'s `sleep_age_days` (onset-dating makes last night read 1 day old where wake-dating reads 0 — that feeds the staleness gate), and `self_learning`'s sleep lookbacks. Not attempted here because it is a data-model decision, not a bug fix. Until it's settled, treat any cross-table `night_date` comparison as suspect for rows older than 2026-07-19.
+
+---
+
 ## 2026-07-25 — An ingest row describes one version of a record, or it describes nothing
 
 **Context.** WHOOP polls a partial record for an event still in progress and republishes the completed one later under the same `id`. `sync_sleep`'s `ON CONFLICT (id) DO UPDATE SET` refreshed every stage/duration column but not `night_date`/`ts_in`/`ts_out`, so a row could hold the partial window alongside the completed durations. `DailyState.sleep.last_hours` is derived from `epoch(ts_out - ts_in)`, so the night of 2026-07-24 read 6.15h against 615.5 min actually in bed — a met sleep need (579 min asleep vs a 554 min need) scored as a 3-hour deficit into the readiness composite. A scan of the live table found this was not isolated: nine nights between 2026-05-06 and 2026-07-24, shortfalls of 45 to 497 minutes, roughly biweekly.
