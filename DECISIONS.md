@@ -276,3 +276,15 @@ Resolved 2026-07-12 (Rob-confirmed):
 **Why.** "Fail visibly, not silently" (CLAUDE.md). An exception means the hypothesis was never tested — that is categorically different from tested-and-null, and only the latter is evidence. Blending them lets a bug silently shrink the evidence base while looking like a finding.
 
 **Consequences.** Verdict strings are a coupling surface: `suggest_experiments`, the `lab_findings_section` sort/tag maps, and `_apply_fdr` all branch on them. Adding a verdict value silently changes experiment candidacy — check those three call sites. `error` findings are excluded from FDR (p_value is None) and from experiment promotion. Guardrail tests in `backend/tests/test_lab_runner_errors.py`, including a parametrized check that no registered runner raises on a cold database.
+
+---
+
+## 2026-07-25 — Freshness describes persisted rows, never a sync attempt
+
+**Context.** `POST /api/sync/all` wrapped each source as `{"ok": True, "detail": await fn()}`. But `whoop.sync_all` isolates per-endpoint failures and marks them `-1` instead of raising, so a sync with a dead endpoint returned `ok: true`. The accompanying `freshness` block derived `whoop_age_days` from `RecoveryMetrics.score_date` — whichever row `_recovery()` happened to select — so it could report `whoop_age_days: 0, whoop_stale: false, gaps: []` over data that was not current. `/api/daily/brief` then served stale recovery as today's: 43 instead of 71, HRV 111.9ms (−0.69σ) instead of 136.6ms (+0.49σ). The false skin-temp delta read as corroborated, fired the illness gate, and capped the day at LOW / 78% e1RM when the correct gate was MODERATE / 90%.
+
+**Decision.** Two rules. (1) A negative value anywhere in a source's per-endpoint `detail` map makes that source `ok: false`, with `partial: true`, `failed_endpoints: [...]`, and an explicit `freshness.gaps` entry — a source is `ok` only when every endpoint landed. (2) Every freshness age is computed from the DB after the sync (`MAX(recovery.date)`, `MAX(sleep.night_date)`), bounded `<= today`, never from the sync result or from a row a caller passed in. `_gates` reads the same DB-derived date as `_freshness`, preserving the existing "one stale flag, never two" invariant.
+
+**Why.** "Fail visibly, not silently" (CLAUDE.md). The two halves are independent and both were needed: fixing only the `ok` flag would still let freshness lie, and fixing only freshness would still let a partial sync look clean. The `<= today` bound matters because WHOOP recovery rows are dated by a UTC→local conversion — a roll-forward yields a negative age, and `age > 2` is then false forever.
+
+**Consequences.** Callers keying off `results[src]["ok"]` now see `false` for partial syncs that previously read as success — that is the intent, and the `_PROMPT` block instructs a re-sync before trusting the numbers. Freshness answers *staleness* only; it cannot detect a row that landed with provisional values, since WHOOP revises recovery scores in place under the same `cycle_id`. Rob's WHOOP app stays the upstream authority. Coverage in `backend/tests/test_sync_all_partial.py`.
