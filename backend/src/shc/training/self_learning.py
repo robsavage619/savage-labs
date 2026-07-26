@@ -664,6 +664,16 @@ SELECT md5(
     || COALESCE((SELECT string_agg(
         id || '|' || date || '|' || COALESCE(duration_min, 0),
         ';' ORDER BY id) FROM cardio_sessions), '')
+    -- The curation layer is an input too: exercise_muscle decides which muscle and
+    -- region a logged set credits, so a curation migration (0077 added 13 rows)
+    -- changes what the fits would read without touching a single workout row. Not
+    -- hashing it would leave the guard blind in exactly the way the max-timestamp
+    -- check was — quietly, with plausible numbers — the first time a fitted
+    -- parameter starts consuming region coverage.
+    || COALESCE((SELECT string_agg(
+        exercise_name || '|' || muscle || '|' || COALESCE(region, '')
+           || '|' || COALESCE(credit, 0) || '|' || COALESCE(length_bias, ''),
+        ';' ORDER BY exercise_name, muscle) FROM exercise_muscle), '')
 )
 """
 

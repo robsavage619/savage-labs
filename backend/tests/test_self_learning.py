@@ -1172,3 +1172,17 @@ def test_fit_all_records_the_fingerprint_it_fitted_on(conn, seed) -> None:
 
     seed.workout(date.today(), "Squat (Barbell)", [(140.0, 5)])
     assert acwr_fit_data_changed_since_last_fit(conn) is True
+
+
+def test_fingerprint_covers_the_curation_layer(conn) -> None:
+    """A curation migration changes what the fits read without touching a workout
+    row. If the fingerprint ignored exercise_muscle, the refit guard would go
+    blind the same way the max-timestamp check did."""
+    from shc.training.self_learning import fit_input_fingerprint
+
+    before = fit_input_fingerprint(conn)
+    conn.execute(
+        "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit, region, citation) "
+        "VALUES ('Newly Curated Move', 'calves', 'primary', 1.0, 'soleus', 'note.md')"
+    )
+    assert fit_input_fingerprint(conn) != before, "curation must register as a change"
