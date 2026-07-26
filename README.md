@@ -4,6 +4,12 @@
 
 <br />
 
+**Lab thinking, consumer sensors, daily action.**
+
+<sub>Wearable physiology, training logs, subjective context, progress photos, sport outcomes, research priors, and deterministic gates — fused into one decision, every morning.</sub>
+
+<br />
+
 <table>
 <tr>
 <td>
@@ -135,6 +141,10 @@ It'd be easy to build a dashboard that shows you your WHOOP score and calls it d
 │                                                                 │
 │  TanStack Query v5  │  Recharts  │  Tailwind v4 (OKLCH)        │
 │  shadcn/ui          │  Motion    │  Orbitron + Geist fonts      │
+│                                                                 │
+│  NOW  /         today's call · session · check-in               │
+│  REVIEW /review momentum · signals · training + body history    │
+│  LAB  /lab      dossier · studies · engine self-assessment      │
 │                                                                 │
 │  Command Briefing  │  Four Pillars  │  Trend Intelligence       │
 │  Workout Planner   │  AI Advisor    │  Clinical Overview        │
@@ -514,28 +524,32 @@ This was the layer that took the platform from "consumer wearable dashboard" to 
 
 The piece I'm most proud of. A **pre-registered hypothesis catalog** runs against my live time-series and emits CONFIRMED / REFUTED / INCONCLUSIVE / INSUFFICIENT verdicts per question — with effect size, n, p-value, and the primary citation. The test type and threshold are fixed in advance, so I can't p-hack.
 
-Six standing hypotheses seeded from the vault:
+The catalogue seeded with six hypotheses from the vault and has grown to 15. Two have been **confirmed** on my own data:
 
-1. **Short sleep depresses next-day HRV** — Welch's t between <6.5h and ≥7.5h nights
-2. **Long sleep lifts next-day HRV** — Welch's t between ≥8h and 6.5-7.5h nights
-3. **Pickleball depresses next-morning HRV** — paired t for session vs no-session days
-4. **Skin-temp +1°F precedes red recovery within 48h** — change-point rate
-5. **High strain elevates next-morning RHR** — Welch's t vs trailing 28d baseline
-6. **Push:pull imbalance correlates with weekly recovery** — Pearson r on |log push:pull|
+| Finding | Effect | n | p |
+|---|---|---|---|
+| ≥8h sleep lifts next-morning HRV | **+14.0ms** vs 6.5–7.5h nights | 62 | 0.018 |
+| A pickleball day depresses next-morning HRV | **−12.3ms** vs rest days | 152 | 0.019 |
+
+Seven are **refuted**, which is the half nobody publishes and the half that actually changes behaviour: yoga does nothing measurable for my HRV (n=203), short sleep doesn't depress it the way the literature predicts (n=95), and stacking 2+ pickleball sessions in 3 days doesn't compound the hit (n=145).
 
 Wired through:
 
 ```
 GET  /api/lab/questions    → catalogue
-GET  /api/lab/findings     → latest verdict per question
-POST /api/lab/run          → re-run all enabled hypotheses + rotate stable questions
+GET  /api/lab/findings     → latest verdict per question, answered and open
+POST /api/lab/run          → run due hypotheses, re-verify answers, rotate stable questions
 ```
 
-The frontend `LabPanel` renders one verdict-coded card per question with the hypothesis text, summary, effect size, n, p-value, test type, and vault citation. Hit "RUN ALL" or wire it to a weekly cron. New hypotheses go into `lab_questions` as a one-row INSERT plus a runner function in `shc/lab.py` — that's the entire surface area for adding new questions.
+The frontend `LabPanel` renders one verdict-coded card per question with the hypothesis text, summary, effect size, n, p-value, test type, and vault citation, grouped into **Answered** and **Under test**. New hypotheses go into `lab_questions` as a one-row INSERT plus a runner function in `shc/lab.py` — that's the entire surface area for adding new questions.
 
-**Automatic rotation.** After each run, `rotate_if_stable()` checks every active question. If a question has produced 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, it's retired and the next queued question (lowest `queued_order`) is promoted automatically. A bank of additional hypotheses covers consecutive training → recovery drop, 3-day pickleball volume → HRV, heavy lift tonnage → next-day HRV, weekly load spike → recovery, full rest days → HRV rebound, self-reported energy ↔ HRV, 7-day rising RHR → HRV drop, and sleep quality ↔ HRV. The system never runs out of questions to test.
+**The lifecycle.** After each run, `rotate_if_stable()` retires any question that has produced 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, and promotes the next queued question. Retirement means *answered*, not *deleted*: a retired question is re-run every 30 days, and if the re-check disagrees with the verdict it retired on, `reverify_retired()` puts it back under test where it must earn retirement again.
 
-> **Match the study to the behaviour.** The yoga → HRV hypothesis was retired in favour of *heavy lift tonnage → next-day HRV*: yoga fired roughly twice a year, so it never gathered enough exposure days to produce a verdict, whereas lifting happens 3–4×/week and the correlation runs well-powered (n≈180). A standing hypothesis is only worth a slot if the exposure actually occurs.
+That last part earns its keep immediately. The pickleball finding was retired CONFIRMED at −12.3ms and then sat frozen while my court volume climbed to 649 min/week; re-tested on the current window it comes back at −4.5ms, p=0.31. The effect decayed and nothing would have noticed.
+
+> **Match the study to the behaviour.** A standing hypothesis is only worth a slot if the exposure keeps occurring. Yoga → HRV did resolve REFUTED (−0.4ms across 43 yoga days), but slowly, and on the current window it has fallen back to INSUFFICIENT because I stopped doing yoga — the question decays faster than it answers. *Heavy lift tonnage → next-day HRV* runs well-powered on the same calendar (n≈190) because lifting happens 3–4×/week.
+
+**Multiplicity, honestly.** Confirmations must survive a Benjamini–Hochberg correction whose family is the **whole catalogue**, not whatever happened to run that cycle — a run-scoped denominator shrinks as questions retire (mine had reached m=3), which makes the correction quietly looser over time and lets an unchanged p-value flip verdict because an unrelated question resolved. What BH here does *not* cover: the catalogue is re-run daily against accumulating data, so these p-values are uncorrected for repeated looks. A confirmation is strong evidence, not proof, and the README should say so rather than the dashboard implying otherwise.
 
 **Verdicts feed the AI.** Every call to `build_daily_context()` or `build_training_context()` injects the current `## YOUR PERSONAL LAB FINDINGS` block. Claude sees which effects have been statistically confirmed or refuted on my data before writing a word — REFUTED findings override population-level assumptions.
 
@@ -654,33 +668,41 @@ A 3,000-word hypertrophy paper becomes a 400-word prescription. Every plan Claud
 
 What I actually look at every day. Built with Next.js 15 + React 19.
 
+**Three surfaces, one per moment of use.** This started as one long page organised by data domain — recovery, sleep, load, strength, cardio, body. That's a schema, not a sequence. I use this at four distinct moments (phone at 6am, phone mid-workout, post-session logging, desktop on Sunday), and each one needs a different 5% of the page. A single 10,500px dashboard served the rarest of them best.
+
+| Route | Question it answers | What's on it |
+|---|---|---|
+| **NOW** `/` | *What am I doing today?* | Today's command, the session (exercises first), the check-in. Phone-first, capped at ~2 screens. |
+| **REVIEW** `/review` | *Am I progressing?* | Momentum vs last week, the three signal pillars, then training and body history as drill-downs. |
+| **LAB** `/lab` | *How much should I trust this thing?* | Subject dossier, n-of-1 studies, the standing research program, engine self-assessment. |
+
 <table>
 <tr>
 <td width="50%">
 
-**⚡ Athlete OS Panel**
+**⚡ Athlete OS Panel** — NOW
 The top card. Fuses today's readiness verdict (engine-gate-aware, not client-side), goal pressure (push:pull ratio, court load), active experiment status, and personal lab findings into four decision cells. One read, one decision.
 
-**🧠 Command Briefing**
+**🧠 Command Briefing** — NOW
 Claude's written assessment of the day — recovery, training intent, and what to watch. Sits below the OS Panel.
 
-**📡 Biometric HUD**
-Always-on header with live WHOOP and Hevy sync status, today's vitals, and data freshness. I want to know if something hasn't synced.
+**📡 Biometric HUD** — all routes
+Persistent header with today's vitals and data freshness. This is the **only** place the composite readiness score is printed — every other panel refers to the verdict by name, and WHOOP's own recovery score is always labelled as WHOOP's. Six near-identical numbers under five different labels is how a system starts looking like it disagrees with itself.
 
-**🫀 Recovery Intelligence**
-WHOOP recovery ring plus a 7-night HRV sparkline with ±1σ bands. Points outside the band are colored — it's easy to spot anomalous nights at a glance.
+**🫀 WHOOP Recovery** — REVIEW
+WHOOP's recovery ring plus a 14-day sparkline with the 34/67 bands drawn in. Points outside the band are colored — easy to spot anomalous nights at a glance.
 
-**😴 Sleep Architecture**
-7-night stacked bar (total / deep / REM), sleep debt accumulator, SpO2 per night. The debt tracker is something I actually use.
+**😴 Sleep Architecture** — REVIEW
+7-night stacked bar (total / deep / REM), sleep debt accumulator, SpO2. Tiles that are single-night rather than 7-night aggregates are marked `1n`, because a wakes count of 14 reads very differently as a week's total than as one bad night.
 
 </td>
 <td width="50%">
 
-**🏋️ Training Load**
+**🏋️ Training Load** — REVIEW
 ACWR trend with the safe-zone band drawn in, weekly volume by muscle group, push:pull ratio. I built this after noticing I was chronically over-pushing and under-pulling.
 
-**🎯 Readiness Composite**
-The score broken down into components, with a visual showing which weight vector is active. Gate reasons in plain English.
+**📈 Momentum** — REVIEW
+Recovery, sleep and session count against the previous 7 days. *What changed since I last looked* is the question a longitudinal tool exists to answer, so it opens the page.
 
 **💬 AI Advisor** `⌘K`
 Claude chat, but it already knows everything before I type anything. Every message includes today's full DailyState, medications, labs, training history, and gate state.
@@ -730,6 +752,10 @@ Six tabs I open when I want to dig into something:
 ### Today's Workout
 
 Generated by Claude with full context injected. Comes back as structured blocks — warm-up, main, accessory — with exercises, sets × reps, weight, RPE, and coaching notes, each citing which vault note justified the choice. I can push it directly to Hevy as a routine with one button.
+
+The card leads with the work — session strip, warm-up, exercises — and collapses the readiness narrative, the rationale, the clinical notes and the vault citations behind *Why this session*. The reasoning is the most interesting part of the system and the least useful thing to scroll past mid-set.
+
+**It knows when it's already been done.** Adherence linking runs in the nightly scheduler, which is too late for a card you're looking at in the evening: a plan written at 09:11 and trained at 09:41 would still present itself as today's action, at loads set *before* the session and therefore lighter than what was actually lifted. `plan_execution_status()` answers it live — a session on the plan's date, started after the plan's `created_at`, carrying at least one working set — and the card re-titles to **Completed**, summarises the logged session, and stops offering the prescription as a target.
 
 ---
 

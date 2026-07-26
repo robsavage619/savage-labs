@@ -4,6 +4,52 @@ All notable changes to this project. Dates are commit dates (Pacific time).
 
 ---
 
+## 2026-07-25 (stale-plan fix, dashboard restructure, research-program lifecycle)
+
+Three passes on things the UI was asserting that weren't true: a completed session still presented as today's action, a readiness number that appeared to disagree with itself, and a research program that could not display a conclusion.
+
+### Today's Plan card stopped prescribing a session you already did
+
+- **A finished session left the plan card actionable, at loads below what was lifted.** Plan→workout adherence linking only ran in the nightly scheduler job (`_recompute_adherence`), so a plan wasn't marked executed until the following morning. Verified live: the 2026-07-25 plan was written at 09:11, the session ran 09:41–10:27 (14 working sets), and at 18:31 the card still prescribed Incline Chest Press at 205 lb against a logged 220×10 — printing its own contradiction as `last 220x10 @ 8.0 · today (-15 lbs)`. Following it would have deloaded for no reason.
+
+  `plan_execution_status()` now answers this live in the read path: a session on the plan's own date, started after the plan's `created_at`, carrying at least one working set. Started-after is what separates "the plan was executed" from "the plan was regenerated after a session"; the working-set floor dodges the WHOOP shadow row (WHOOP mirrors every Hevy lift as a zero-set workout) the same way the nightly job does. Status is re-read outside `_WORKOUT_CACHE` — the executing session lands hours after the plan is cached, so caching the answer reintroduces the bug.
+
+  The card now titles as **Completed** (or **Last Plan** when carried from an earlier date), summarises the logged session, dims the prescription as a record rather than a target, disables the Hevy push, and drops the prescribed-vs-actual delta that produced the phantom deload.
+
+- **The readiness narrative carries its own timestamp.** The plan's `readiness_summary` is a snapshot written when the plan was generated, and it sits a scroll away from the live gauge — 55.6 in the narrative against 65.6 live read as a contradiction rather than as two different times. It now stamps `(as of 9:11 AM)`.
+
+- **Sleep architecture tiles are labelled by window.** The panel was headed "last 7 nights" while its efficiency and wakes tiles are single-night `DailyState` values — a wakes count of 14 (the 2026-07-24 `disturbance_count`; the 7-night sum is 70) read as a week's total. Those two tiles are now marked `1n`.
+
+### Dashboard split into NOW / REVIEW / LAB
+
+The dashboard was organised by data domain — recovery, sleep, load, strength, cardio, body. That's a schema, not a sequence: one 10,579px page served four different moments (morning phone check, mid-workout, post-session logging, weekly desktop review) and served the rarest of them best.
+
+- **Three surfaces, one per moment.** `/` (NOW) is today's call, the session, and the check-in. `/review` opens on what changed vs last week, then the signal pillars, then training and body history as drill-downs. `/lab` is unchanged in content. A shared `AppShell` replaces the header chrome all three routes were duplicating.
+
+- **One readiness number.** A single screen carried 66 (header), 66 (report ring), 66 (rail dial), 71 (recovery pillar), 65.6 (load panel) and 55.6 (plan narrative), all labelled some variant of readiness or recovery. The composite score now has exactly one home — the header HUD, always rounded. The training-load panel reports what the gates *did* rather than reprinting the score unrounded, and WHOOP's own score is labelled "WHOOP recovery" wherever it appears.
+
+- **Chrome cut from four stacked bars to one.** The `ProtocolStrip` ticker is deleted — every number in it was already on screen, and it clipped mid-word at 375px. The product manifesto ("Lab thinking, consumer sensors, daily action" + the NSRL-loop paragraph) is written for a first-time visitor and lives in this repo's README; on a phone it pushed today's command ~1,300px down every morning. Content now starts at 194px on mobile instead of ~550px.
+
+- **The plan card leads with the work.** Session strip → warm-up → exercises, with the readiness narrative, the WHY, clinical notes and vault citations collapsed behind "Why this session". The first lift moved from roughly 5,000px to 1,807px on mobile. Exercise names wrap instead of truncating.
+
+- **Check-in is a step in the daily loop,** not a widget in a right rail. The rail is gone; Momentum — what changed vs last week — now opens REVIEW instead of ending the page.
+
+NOW is 3,467px on desktop and 6,272px on mobile, down from 10,579px.
+
+### Standing research program — answers are now visible, and re-checked
+
+- **The panel could not display a conclusion.** `/api/lab/findings` filtered on `enabled = TRUE`, and `rotate_if_stable` disables a question at exactly the moment it reaches a stable definitive verdict — so the only questions the endpoint could return were the ones the lab had *not* answered. Nine resolved hypotheses were invisible, including both CONFIRMED findings: ≥8h sleep lifts next-morning HRV by +14.0ms (n=62, p=0.018), and a pickleball day depresses it by −12.3ms (n=152, p=0.019). The endpoint now returns answered questions too, tagged `status`/`answered_at`, and the panel leads with **Answered** (confirmed above refuted) over **Under test**.
+
+- **An answered question was frozen forever.** `run_all` only iterated enabled questions, so a confirmed effect stood on whatever the data said the day it stabilised, with nothing re-checking it. Retired questions are now re-run every 30 days (`_REVERIFY_AFTER_DAYS`); if the re-check disagrees with the verdict they retired on, `reverify_retired()` puts them back under test, where they must re-earn retirement through `rotate_if_stable`. A runner crash (`error`) never counts as disagreement — it means the hypothesis wasn't tested.
+
+- **The FDR denominator drifted.** `_apply_fdr` corrected across whatever ran that cycle. As questions retire that shrinks — it had reached m=3 against a docstring claiming ~15 — which makes the correction quietly *looser* the longer the program runs, and lets an unchanged p-value flip verdict because an unrelated sibling retired. It is now the full catalogue, floored at the current run size. The docstring also now states what BH does not cover: the catalogue is re-run daily, so repeated looks at accumulating data are uncorrected.
+
+- **Bank exhaustion is stated, not implied.** All 15 registered hypotheses have been enabled at some point and `_promote_next` has nothing left to promote. The panel now says so instead of falling through to "No hypotheses registered yet."
+
+> **First re-verification result.** Simulated against live data before shipping: `pickleball_next_morning_hrv`, retired CONFIRMED at −12.3ms, re-tests at −4.5ms (p=0.31) on the current window — it no longer holds, and will re-open on the next run. `strain_high_rhr_next` and `yoga_hrv_lift` also disagree with their retirement verdicts. This is the mechanism working: the pickleball finding had been frozen since July while court load climbed to 649 min/week.
+
+---
+
 ## 2026-07-11 (comprehensive audit + fix pass)
 
 A full-codebase read-only audit across six dimensions — gates/ACWR, self-learning, exercise selection, API, ingest, and frontend — followed by a systematic fix pass. Every finding was verified against source before writing any code. 15 items fixed across Tier 1 (data-corrupting), Tier 2 (wrong numbers), and Tier 3 (cleanup).
