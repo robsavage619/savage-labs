@@ -6,6 +6,21 @@ When adding: include **Context**, **Decision**, **Why**, **Consequences**. Skip 
 
 ---
 
+## 2026-07-25 — Exercise rotation: the engine was citing its own evidence backwards
+
+**Context.** Rob raised "the engine keeps picking the same exercises" five times. It was right to distrust it. `_select_grounded` rotated a movement only when its e1RM plateaued, and the docstring justified that as "(Balsalobre; Rauch): fixed selection matches or beats variation for hypertrophy." Both readings are inverted. The vault records **Rauch 2017 as trained lifters choosing exercises per rep range BEATING fixed selection** for upper-body strength and lean mass (`helms-2018-lv4-exercise-selection.md:63`), and **Balsalobre as n=11 over 8 weeks with no significant difference** in quad thickness — a non-significant trend in one muscle carrying a global never-rotate policy. `exercise-selection-hypertrophy.md` prescribes the opposite for a trained lifter: rotate every 4–6 weeks, because hypertrophy is regional (Fonseca: varied routine grew VM/RF where the Smith squat alone did not; Wakahara MRI: different exercises grew different triceps regions) and the repeated bout effect extinguishes EIMD within ~5 sessions of one movement. Measured: Face Pull in 34 of 73 plans, Lateral Raise (Dumbbell) in 26.
+
+**Decision.** Tenure is a rotation trigger alongside plateau — 6 consecutive scored weeks leading a head makes a movement swap-eligible even while progressing. Both triggers actuate only through the existing `_in_band` guard, so rotation can never buy variety by degrading the stimulus. Invariant 9; three tests.
+
+**Why 6 and not 4.** The top of the prescribed window, so a productive lift gets the longest run the evidence supports before an alternative is tried. Plateau still fires earlier when progress actually stalls.
+
+**Compounds.** Helms prescribes stable compounds with rotating isolation. The schema carries no compound/isolation signal — every exercise has exactly one primary muscle row, Squat included — so this is approximated structurally: a heavy compound is usually the only in-band option for its head, so `_in_band` finds no alternative and holds it, while isolation movements sit in pools with peers. Recorded as an approximation, not a faithful implementation.
+
+**What this does NOT fix.** Rotation needs a pool deeper than the slot count and there isn't one — 7 of 17 muscles have ≤4 usable candidates for 4 slots, and 6 muscles carry a single region. Also fixed here: the planning context capped WORKING WEIGHTS at 40 rows ordered by `updated_at DESC`, hiding 212 of 252 exercises and creating a rich-get-richer loop where anything Rob stopped doing became unprogrammable. Raised to 200.
+
+**OPEN — catalog provenance.** 87 of 113 `exercise_science` rows (77%) cite a source that appears nowhere in the vault. Deepening the catalog is the real fix for the repetition Rob sees, but doing it from an agent's recall would compound the problem the citations already have. Curation must run from vault notes, and the existing 87 need verification or re-grounding.
+
+
 ## 2026-07-25 — Staleness checks compare content, not arrival time
 
 **Context.** `acwr_fit_data_changed_since_last_fit` guarded the nightly re-fit by comparing `MAX(workouts.started_at)` / `MAX(sleep.night_date)` / `MAX(cardio_sessions.date)` against `MAX(personal_acwr_bands.fitted_at)`. That answers "is there data newer than the fit", which is not the question the guard exists to ask. When nine nights of sleep had their `ts_out` repaired earlier the same day, no max timestamp moved: `personal_sleep_bands` and `personal_acwr_bands`, fitted at 04:14 that morning against the broken durations, reported "nothing new" and would have kept serving those parameters until a night newer than the fit timestamp arrived — roughly two days later.

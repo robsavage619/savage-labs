@@ -438,7 +438,12 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             f"(showing {history_limit} most recent of {len(workout_rows)})"
         )
 
-    ww_limit = 40
+    # Ordered by updated_at DESC, so a low cap is a recency filter wearing a
+    # size-limit costume: an exercise Rob stops doing sinks below the cut, becomes
+    # invisible to planning, is therefore never programmed, and so never resurfaces.
+    # At 40 this hid 212 of 252 exercises — Leg Extension, Seated Leg Curl, Calf
+    # Press, Front Raise among them — which is a rich-get-richer loop, not a budget.
+    ww_limit = 200
     lines.append(
         f"\n## WORKING WEIGHTS ({len(ww_rows)} exercises on record) — "
         f"recent max (90d) · e1RM · today's ceiling ({cap_pct}% @8 reps). "

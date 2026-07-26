@@ -406,9 +406,19 @@ def test_low_confidence_athlete_still_climbs_to_mrv(conn) -> None:
         )
         sq = compute_muscle_signal_quality(conn, "glutes")
         p = _decide(
-            "glutes", current=cur, mev=mev, mav=mav, mrv=mrv, perf=5, soreness=0.0,
-            conditioning_acwr=None, emphasis=True, emphasis_factor=1.0,
-            confidence=sq["confidence"], scored_weeks=int(sq["scored_weeks"]), accuracy=None,
+            "glutes",
+            current=cur,
+            mev=mev,
+            mav=mav,
+            mrv=mrv,
+            perf=5,
+            soreness=0.0,
+            conditioning_acwr=None,
+            emphasis=True,
+            emphasis_factor=1.0,
+            confidence=sq["confidence"],
+            scored_weeks=int(sq["scored_weeks"]),
+            accuracy=None,
         )
         confs.append(float(sq["confidence"]))
         targets.append(p.target_sets)
@@ -495,7 +505,9 @@ def test_volume_controller_blind_when_whoop_stale(conn, seed) -> None:
     must not rely on that incidental behavior; it must honor the blind flag)."""
     today = date.today()
     for wk in range(3):
-        seed.workout(date.fromordinal(today.toordinal() - wk * 7), "Squat (Barbell)", [(60.0, 8)] * 4)
+        seed.workout(
+            date.fromordinal(today.toordinal() - wk * 7), "Squat (Barbell)", [(60.0, 8)] * 4
+        )
 
     fake_state = {
         "freshness": {"whoop_stale": True},
@@ -539,7 +551,9 @@ def test_weekly_prescription_end_to_end_blind_on_stale_whoop(conn, seed) -> None
     same blind flag `_gates` derives from a genuinely stale `recovery` row."""
     today = date.today()
     for wk in range(3):
-        seed.workout(date.fromordinal(today.toordinal() - wk * 7), "Squat (Barbell)", [(60.0, 8)] * 4)
+        seed.workout(
+            date.fromordinal(today.toordinal() - wk * 7), "Squat (Barbell)", [(60.0, 8)] * 4
+        )
     conn.execute(
         "INSERT INTO recovery (id, source, date, score, hrv, rhr, content_hash) "
         "VALUES (?, 'whoop', ?, 70.0, 60.0, 55, 'h')",
@@ -739,3 +753,37 @@ def test_normal_history_acwr_unaffected_by_min_chronic_days_guard(conn, seed, to
     m = _training_load(conn, today)
     assert m.resistance_acwr is not None
     assert m.resistance_acwr == 1.0  # constant load throughout → exactly 1.0
+
+
+def test_a_movement_never_leads_its_head_forever_when_an_alternative_exists() -> None:
+    """Invariant 9 — rotation has two triggers, not one.
+
+    Selection rotated only on plateau, justified in-code by citing Rauch as
+    evidence that fixed selection beats variation. The vault records Rauch as
+    the opposite finding and prescribes 4-6 week rotation for trained lifters.
+    A progressing lift therefore led its head indefinitely: Face Pull took 34 of
+    73 plans, past the point the repeated bout effect leaves any EIMD stimulus.
+    Tenure is now a swap trigger in its own right — but only ever through the
+    in-band guard, so variety is never bought by degrading the stimulus.
+    """
+    from shc.training.autoregulation import _ROTATE_AFTER_WEEKS, _select_grounded
+
+    def cand(name, length="lengthened", sfr="high"):
+        return (name, "side_delts", "lateral_deltoid", length, 10, 20, sfr, "", "", "")
+
+    lead, peer = cand("Lateral Raise (Cable)"), cand("Lateral Raise (Dumbbell)")
+    progressing = {lead[0]: 0, peer[0]: 0}
+
+    held, _ = _select_grounded([lead, peer], 1, None, progressing, {lead[0]: 0})
+    assert held[0][0] == lead[0], "a fresh productive lift is kept"
+
+    rotated, _ = _select_grounded(
+        [lead, peer], 1, None, progressing, {lead[0]: _ROTATE_AFTER_WEEKS}
+    )
+    assert rotated[0][0] == peer[0], "past the rotation window an in-band peer leads"
+
+    shortened = cand("Upright Row (Barbell)", length="shortened")
+    banded, _ = _select_grounded(
+        [lead, shortened], 1, None, {lead[0]: 0, shortened[0]: 0}, {lead[0]: 999}
+    )
+    assert banded[0][0] == lead[0], "tenure never justifies a shortened-position swap"

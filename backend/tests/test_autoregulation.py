@@ -817,3 +817,57 @@ def test_protein_gate_inadequate_when_below_target(conn) -> None:
     result = _protein_gate(conn)
     assert result["adequate"] is False
     assert "note" in result and result["note"]
+
+
+# ── Rotation: plateau is not the only trigger (2026-07-25) ───────────────────
+
+
+# (exercise, muscle, region, length_bias, rep_low, rep_high, sfr_tier, ...)
+def _cand(name, region, length="lengthened", sfr="high"):
+    return (name, "side_delts", region, length, 10, 20, sfr, "", "", "")
+
+
+def test_a_progressing_lead_still_rotates_after_the_tenure_window() -> None:
+    """The regression this fixes: selection rotated ONLY on plateau, justified by
+    citing Rauch as evidence that fixed selection beats variation. The vault
+    records Rauch as the opposite result, and prescribes a 4-6 week rotation for
+    trained lifters. A lift that is progressing but has led its head for 6+ weeks
+    is now swap-eligible."""
+    from shc.training.autoregulation import _select_grounded
+
+    lead, alt = (
+        _cand("Lateral Raise (Cable)", "lateral_deltoid"),
+        _cand("Lateral Raise (Dumbbell)", "lateral_deltoid"),
+    )
+    ranks = {lead[0]: 0, alt[0]: 0}  # BOTH progressing — no plateau anywhere
+
+    picks, _ = _select_grounded([lead, alt], 1, None, ranks, {lead[0]: 2})
+    assert picks[0][0] == lead[0], "inside the window the productive lift is kept"
+
+    picks, notes = _select_grounded([lead, alt], 1, None, ranks, {lead[0]: 6})
+    assert picks[0][0] == alt[0], "past the window an in-band alternative takes over"
+    assert "6wk" in notes[alt[0]]
+
+
+def test_tenure_rotation_still_respects_the_science_bands() -> None:
+    """Rotation may not buy variety by degrading the stimulus: a lengthened lead
+    never rotates into a shortened option, however long its tenure."""
+    from shc.training.autoregulation import _select_grounded
+
+    lead = _cand("Lateral Raise (Cable)", "lateral_deltoid", length="lengthened")
+    bad = _cand("Upright Row (Barbell)", "lateral_deltoid", length="shortened")
+    picks, notes = _select_grounded([lead, bad], 1, None, {lead[0]: 0, bad[0]: 0}, {lead[0]: 99})
+    assert picks[0][0] == lead[0]
+    assert "no in-band alternative" in notes[lead[0]]
+
+
+def test_a_lone_movement_is_held_not_dropped() -> None:
+    """A head with no peer (the compound case) holds its lead rather than
+    emptying the slot — this is what protects heavy compounds without a
+    compound/isolation flag, which the schema does not carry."""
+    from shc.training.autoregulation import _select_grounded
+
+    lead = _cand("Overhead Press (Barbell)", "lateral_deltoid")
+    picks, notes = _select_grounded([lead], 1, None, {lead[0]: 0}, {lead[0]: 52})
+    assert [p[0] for p in picks] == [lead[0]]
+    assert "no in-band alternative" in notes[lead[0]]

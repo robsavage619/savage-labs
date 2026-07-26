@@ -711,6 +711,13 @@ def _exercise_menu(
 _LENGTH_RANK = {"lengthened": 0, "mid": 1, "shortened": 2}
 _SFR_RANK = {"high": 0, "moderate": 1, "low": 2}
 
+# Consecutive scored weeks a movement may lead its head before it becomes
+# swap-eligible even while progressing. 6 = the top of the 4–6 week rotation
+# window `exercise-selection-hypertrophy.md` prescribes for trained lifters —
+# the conservative end, so a productive lift gets the longest run the evidence
+# supports before an in-band alternative is tried. See _select_grounded key 4b.
+_ROTATE_AFTER_WEEKS = 6
+
 # A progression trend is only a live selection signal if the exercise was trained
 # within this window; older than this, score_exercise is fitting stale weeks and
 # the "progressing/plateaued" read no longer reflects what Rob is doing now.
@@ -757,6 +764,8 @@ def _select_grounded(
     per_muscle: int,
     region_volume: dict[str, float] | None = None,
     progress_rank: Mapping[str, int] | None = None,
+    tenure_weeks: Mapping[str, int] | None = None,
+    rotate_after_weeks: int = _ROTATE_AFTER_WEEKS,
 ) -> tuple[list[tuple], dict[str, str]]:
     """Pick exercises head-first, quality-ranked, and stable — swap only on plateau.
 
@@ -772,11 +781,39 @@ def _select_grounded(
     4. **Progress state** — among otherwise-equal options a lift Rob is actively
        PROGRESSING on is kept (rank 0), an untried option is neutral (1), and a
        PLATEAUED lift (stalled/regressing e1RM trend) is demoted (2) so an
-       equal-quality alternative for that head surfaces. This is the
-       evidence-based rotation trigger — swap on plateau, not on a weekly clock
-       (Balsalobre; Rauch): fixed selection matches or beats variation for
-       hypertrophy, so a movement is only rotated once progress on it stalls.
+       equal-quality alternative for that head surfaces.
        ``progress_rank`` maps ``exercise_name → {0,1,2}``; absent → all neutral.
+
+       Plateau is ONE of two rotation triggers, not the only one. This docstring
+       previously claimed "(Balsalobre; Rauch): fixed selection matches or beats
+       variation for hypertrophy" and rotated on plateau alone. That reading is
+       wrong on both citations. The vault records Rauch 2017 as trained lifters
+       choosing exercises per rep range **beating** fixed selection for
+       upper-body strength and lean mass
+       (``helms-2018-lv4-exercise-selection.md``), and Balsalobre as n=11 over 8
+       weeks finding **no significant difference** in quad thickness — a
+       non-significant trend in one muscle, not a basis for never rotating.
+       ``exercise-selection-hypertrophy.md`` prescribes the opposite for a
+       trained lifter: rotate every 4–6 weeks, because hypertrophy is regional
+       (Fonseca: varied routine grew vastus medialis / rectus femoris where the
+       Smith squat alone did not; Wakahara MRI: different exercises grew
+       different triceps regions) and because the repeated bout effect
+       extinguishes the EIMD stimulus within ~5 sessions of the same movement.
+       The "constrain variety" guidance in that note is scoped to beginners in
+       their first 8–12 weeks.
+
+    4b. **Tenure** — a lift that has led its head for ``rotate_after_weeks``
+       consecutive scored weeks becomes swap-eligible *even while progressing*,
+       via the same in-band machinery as a plateau. ``tenure_weeks`` maps
+       ``exercise_name → completed weeks behind its trend``; absent → no tenure
+       rotation. Compounds are protected structurally rather than by a
+       compound/isolation flag (no such signal exists in the schema — every
+       exercise carries exactly one primary muscle, Squat included): a heavy
+       compound is typically the only in-band option for its head, so
+       ``_in_band`` finds no alternative and the lead is held, while isolation
+       movements sit in pools with genuine peers and do rotate. That approximates
+       Helms' "compounds stable, isolation rotates" without inventing a
+       classifier — it is an approximation, not a faithful implementation of it.
     5. **Name** — deterministic final tiebreaker (storage-order independent).
 
     Because the ordering carries no time term, selection is STABLE week to week
@@ -797,9 +834,14 @@ def _select_grounded(
     """
     rv = region_volume or {}
     pr = progress_rank or {}
+    tw = tenure_weeks or {}
 
     def _region(c) -> str:
         return c[2] or c[1]
+
+    def _stale(c) -> bool:
+        """Swap-eligible: plateaued, or leading its head past the rotation window."""
+        return _progress(c) == 2 or tw.get(c[0], 0) >= rotate_after_weeks
 
     def _deficit(c) -> float:
         # Lower trained volume on this head → sorts earlier (trained first).
@@ -836,17 +878,18 @@ def _select_grounded(
         if region in seen_regions:
             continue
         pick = c
-        if _progress(c) == 2:  # this head's lead has plateaued — try an in-band swap
+        if _stale(c):  # plateaued or past its rotation window — try an in-band swap
+            why = "plateaued" if _progress(c) == 2 else f"led this head {tw.get(c[0], 0)}wk"
             for alt in ordered:
-                if _region(alt) != region or alt is c or _progress(alt) == 2:
+                if _region(alt) != region or alt is c or _stale(alt):
                     continue
                 if _in_band(c, alt):
                     pick = alt
-                    notes[alt[0]] = f"swapped in: replaces plateaued {c[0]}"
-                    notes[c[0]] = "swap candidate: plateaued"
+                    notes[alt[0]] = f"swapped in: replaces {c[0]} ({why})"
+                    notes[c[0]] = f"swap candidate: {why}"
                     break
             else:
-                notes[c[0]] = "held: plateaued, no in-band alternative"
+                notes[c[0]] = f"held: {why}, no in-band alternative"
         picks.append(pick)
         seen_regions.add(region)
     for c in ordered:  # fill remaining slots with next-best (displaced lead resurfaces here)
@@ -1016,10 +1059,15 @@ def evidence_menu(
     all_names = {c[0] for cands in per_muscle_rows.values() for c in cands}
     info = _progress_info(conn, all_names, aliases)
     ranks = {n: v["rank"] for n, v in info.items()}
+    # Weeks behind the trend doubles as tenure: how long this movement has been
+    # the scored lead for its head. Drives the 4–6 week rotation trigger.
+    tenure = {n: int(v.get("weeks") or 0) for n, v in info.items()}
 
     out: dict[str, list[dict]] = {}
     for muscle, cands in per_muscle_rows.items():
-        selected, notes = _select_grounded(cands, per_muscle, region_vol.get(muscle), ranks)
+        selected, notes = _select_grounded(
+            cands, per_muscle, region_vol.get(muscle), ranks, tenure
+        )
         picks: list[dict] = []
         for c in selected:
             pi = info.get(c[0], {})
