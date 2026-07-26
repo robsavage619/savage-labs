@@ -18,14 +18,23 @@ import duckdb
 
 
 def _word(token: str, name: str) -> bool:
-    """Whole-word substring test.
+    """Whole-word substring test, tolerant of a trailing plural.
 
     Exercise classification matches on lowercased substrings, which is fine for
     multi-word tokens ("lat pulldown") but silently wrong for short ones that
-    occur inside longer words. `"chin" in name` matched "ma-chin-e"; use this
-    for any token that could be embedded in an unrelated word.
+    occur inside longer words. Two have bitten:
+
+      * ``"chin" in name`` matched ma-CHIN-e — 7 exercises / 2,155 logged sets
+        classified as chin-ups, including Ab Crunch Machine credited to lats.
+      * ``"row" in name`` matches ROWing Machine (a cardio movement, which would
+        credit lat volume and reset the pull rest gate) and na-RROW Squat, the
+        latter correct today only because the squat branch happens to run first.
+
+    Plurals are accepted because the catalogue mixes them freely ("Cable Rows",
+    "Hammer Curls"); a bare ``\\brow\\b`` would silently stop matching them,
+    which is the same class of failure in the opposite direction.
     """
-    return re.search(rf"\b{re.escape(token)}\b", name) is not None
+    return re.search(rf"\b{re.escape(token)}(s|es)?\b", name) is not None
 
 
 log = logging.getLogger(__name__)
@@ -184,7 +193,11 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
 
     # ── Back ─────────────────────────────────────────────────────────────────
     if (
-        "row" in n
+        # _word, not a bare substring: "row" matches ROWing Machine (cardio —
+        # would credit lat volume and reset the pull rest gate) and na-RROW
+        # Squat, which lands on quads today only because the squat branch runs
+        # earlier. Correct by construction now, not by branch ordering.
+        _word("row", n)
         or "pulldown" in n
         or "pull-up" in n
         or "pullup" in n

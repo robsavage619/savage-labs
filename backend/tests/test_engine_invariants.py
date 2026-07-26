@@ -12,6 +12,7 @@ See ENGINE_INVARIANTS.md for the prose contract.
 
 from __future__ import annotations
 
+import pathlib
 import uuid
 from datetime import date, timedelta
 
@@ -1112,4 +1113,195 @@ def test_a_capped_day_can_still_prescribe_a_stimulating_set() -> None:
     assert RPE_CAP_BY_INTENSITY["high"] == 10.0, (
         "a HIGH day must permit an honest RPE 10 label — capping it lower forbids "
         "the only label a genuine PR attempt can carry (invariant 5)"
+    )
+
+
+def test_no_classifier_token_decides_a_match_by_hiding_inside_a_longer_word() -> None:
+    """Invariant 16: a substring keyword must never be what makes a match.
+
+    This is a bug-FINDING test, not a bug-guarding one. It mines every bare
+    ``"tok" in n`` keyword out of `classify_exercise` and, for every exercise
+    name in the catalogue where that token occurs only INSIDE a longer word,
+    checks whether the classification actually depends on the accidental hit —
+    by obscuring the hidden occurrence and seeing if the answer changes.
+
+    It exists because this class has bitten twice, both times silently and both
+    times found by a human squinting at output rather than by the suite:
+
+      * ``"chin"`` matched ma-CHIN-e — 7 exercises / 2,155 logged sets read as
+        chin-ups. `Ab Crunch Machine` (744 sets) credited lats instead of abs;
+        five overhead presses credited PULLING, which also reset the pull rest
+        gate on a push day.
+      * ``"row"`` matched ROWing Machine, a cardio movement that would have
+        credited lat volume the first time it was logged, and na-RROW Squat,
+        which landed on quads only because the squat branch happens to run
+        first — correct by ordering, not by construction.
+
+    Benign hits (plurals and prefixes of the same concept: "curl" in "Hammer
+    Curls", "tricep" in "Triceps Rope Pushdown") are ignored, because obscuring
+    them changes nothing. Only a token that CHANGES the answer fails.
+    """
+    import re
+
+    from shc.training.exercise_classifier import classify_exercise
+
+    src = (
+        pathlib.Path(__file__).resolve().parents[1] / "src/shc/training/exercise_classifier.py"
+    ).read_text()
+    tokens = {t for t in re.findall(r'"([a-z][a-z0-9]{2,20})" in n', src)}
+
+    # The full catalogue the engine may ever see, not just what is logged today:
+    # a latent collision on an untrained movement is still a live bug the first
+    # time it is logged (exactly Rowing Machine's situation).
+    names = sorted(
+        {
+            "Rowing Machine",
+            "Narrow Squat",
+            "Ab Crunch Machine",
+            "Machine Shoulder Press",
+            "Crunch (Machine)",
+            "Smith Machine Squat",
+            "Overhead Press (Smith Machine)",
+            "Hammerstrength High Row",
+            "Cable Rows",
+            "Meadows Rows (Barbell)",
+            "Skullcrusher (Dumbbell)",
+            "Air Squats",
+            "Crunches",
+            "Chin Up",
+            "Elliptical Trainer",
+            "Treadmill",
+            "Swimming",
+            "Stair Machine (Steps)",
+            "Bent Over Row (Barbell)",
+            "Seated Cable Row - V Grip (Cable)",
+            "Machine Preacher Curl",
+            "Hip Thrust (Machine)",
+            "Leg Extension (Machine)",
+        }
+    )
+
+    # Reviewed compound words where the hidden match is CORRECT: the longer word
+    # contains the concept rather than coincidentally containing the letters.
+    # No heuristic distinguishes "skull" in "skullcrusher" (a triceps movement,
+    # rightly matched) from "chin" in "machine" (unrelated) — so each such pair
+    # is an explicit human decision, and a NEW one failing this test is the
+    # point: it forces that decision instead of shipping silently.
+    REVIEWED_COMPOUNDS = {("skull", "skullcrusher")}
+
+    offenders = []
+    for tok in tokens:
+        for name in names:
+            low = name.lower()
+            if tok not in low or re.search(rf"\b{re.escape(tok)}(s|es)?\b", low):
+                continue  # absent, or a legitimate whole-word/plural match
+            # The token appears ONLY hidden inside a longer word. Obscure it and
+            # see whether the classification depended on that.
+            obscured = re.sub(re.escape(tok), "@" * len(tok), low)
+            if any(tok == t and c in low for t, c in REVIEWED_COMPOUNDS):
+                continue
+            if classify_exercise(low) != classify_exercise(obscured):
+                offenders.append((tok, name, classify_exercise(low)))
+
+    assert not offenders, (
+        "classifier keyword decides a match by hiding inside a longer word:\n"
+        + "\n".join(f"  {t!r} inside {n!r} -> {r}" for t, n, r in offenders)
+        + "\nUse _word() for that token."
+    )
+
+
+def test_no_migration_writes_to_a_view() -> None:
+    """Invariant 17: a migration must target a base table, never a view.
+
+    DuckDB rejects `UPDATE`/`DELETE`/`INSERT` on a view with "Can only update
+    base table" — but only at RUN time, and migrations run at API startup, so
+    the failure mode is the whole app refusing to boot. It has happened twice in
+    one day: 0080 wrote to `exercise_science` (a view over `exercise_muscle`)
+    and took the API down; 0086 documented that lesson in its own header and
+    then did the same thing.
+
+    Worse, DuckDB is not atomic across a multi-statement script, so the
+    statements BEFORE the failure have already committed — leaving the schema
+    half-migrated with the version unrecorded.
+
+    Views are read models. Anything that writes belongs on the table underneath.
+    """
+    import re
+
+    views = {
+        "exercise_science",
+        "v_daily_load",
+        "v_session_load",
+        "exercise_muscle_map",
+        "workout_sets_dedup",
+    }
+    # 0066 is where `exercise_muscle_map` and `exercise_science` became VIEWS over
+    # the unified `exercise_muscle` table. Everything at or below it wrote to what
+    # were then base tables, ran successfully, and can never re-run (the runner
+    # records applied versions). Scoping to 0067+ keeps this a guard on new work
+    # instead of a permanent complaint about settled history.
+    FIRST_VERSION_WITH_VIEWS = 67
+    mig_dir = pathlib.Path(__file__).resolve().parents[1] / "src/shc/db/migrations"
+    offenders = []
+    for path in sorted(mig_dir.glob("*.sql")):
+        if int(path.stem.split("_")[0]) < FIRST_VERSION_WITH_VIEWS:
+            continue
+        body = path.read_text()
+        # Strip comments so a view named in prose doesn't false-positive.
+        body = re.sub(r"--[^\n]*", "", body)
+        for stmt, tbl in re.findall(
+            r"\b(UPDATE|DELETE\s+FROM|INSERT\s+INTO)\s+([A-Za-z_][A-Za-z0-9_]*)",
+            body,
+            re.IGNORECASE,
+        ):
+            if tbl.lower() in views:
+                offenders.append(f"{path.name}: {stmt.split()[0].upper()} {tbl}")
+    assert not offenders, (
+        "migration writes to a VIEW — DuckDB rejects this at startup and the app "
+        "will not boot:\n" + "\n".join(f"  {o}" for o in offenders)
+    )
+
+
+def test_reconciliation_checks_do_not_call_the_code_they_check() -> None:
+    """Invariant 18: a reconciliation check recomputes; it does not re-run.
+
+    `training/reconcile.py` exists because the suite was green through a dozen
+    live calculation defects. It only has that power while its checks derive
+    their expected values INDEPENDENTLY — from raw rows in plain SQL. The moment
+    a check imports the helper it is checking and compares the result to itself,
+    it becomes a tautology that passes forever and hides exactly what it was
+    built to surface.
+
+    `_e1rm_from_raw` is the reference implementation of that discipline: it
+    re-derives RIR-adjusted Epley in SQL rather than calling `e1rm_by_exercise`,
+    which is why it can disagree with it.
+    """
+    import inspect
+
+    from shc.training import reconcile
+
+    raw_src = inspect.getsource(reconcile._e1rm_from_raw)
+    # Strip ONLY the docstring, via ast — it NAMES the helper in prose to explain
+    # why it is not called, and a naive split on triple-quotes also eats the
+    # triple-quoted SQL that is the whole point of the check.
+    import ast
+    import textwrap
+
+    fn = ast.parse(textwrap.dedent(raw_src)).body[0]
+    if ast.get_docstring(fn):
+        fn.body = fn.body[1:]
+    body = ast.unparse(fn)
+    assert "e1rm_by_exercise" not in body, (
+        "the raw e1RM reference now calls the engine helper it exists to check"
+    )
+    assert "SELECT" in body.upper(), "the raw e1RM reference stopped recomputing from rows"
+
+    # Every check must return a Finding, and a broken check must surface as a
+    # FAIL rather than vanish — a silently-skipped check is indistinguishable
+    # from a passing one.
+    assert reconcile.ALL_CHECKS, "no checks registered"
+    src = inspect.getsource(reconcile.run_all)
+    assert "check itself errored" in src, (
+        "run_all no longer reports a check that raised — a check that vanishes "
+        "on error reads as clean"
     )

@@ -17,6 +17,35 @@ def main() -> None:
 
 
 @main.command()
+def reconcile() -> None:
+    """Compare what the engine SAYS against what the raw rows SHOW.
+
+    Independent recomputation from the rawest available data — not a re-run of
+    the engine's own helpers, which would prove nothing. Exists because on
+    2026-07-26 a green 719-test suite sat on top of a dozen live calculation
+    defects; unit tests assert a function does what its author believed, and
+    every one of those defects was a belief that was wrong.
+    """
+    from shc.db.schema import get_read_conn, init_db
+    from shc.training.reconcile import run_all
+
+    init_db()  # the CLI has no app lifespan to open the connection for it
+    conn = get_read_conn()
+    try:
+        findings = run_all(conn)
+    finally:
+        conn.close()
+    for f in findings:
+        click.echo(("  OK   " if f.ok else "  FAIL ") + f"{f.check:<44}{f.detail}")
+        for r in f.rows[:10]:
+            click.echo(f"           - {r}")
+    clean = sum(f.ok for f in findings)
+    click.echo(f"\n{clean}/{len(findings)} checks clean")
+    if clean != len(findings):
+        raise SystemExit(1)
+
+
+@main.command()
 @click.option("--days", default=90, show_default=True, help="Days of demo data to seed")
 def seed(days: int) -> None:
     """Populate DuckDB with synthetic WHOOP+sleep data for UI development."""
@@ -73,8 +102,12 @@ async def _seed(days: int) -> None:
 
 
 @main.command("ingest-fitbod")
-@click.option("--csv", "csv_path", default=None, help="Path to WorkoutExport.csv (auto-detected if omitted)")
-@click.option("--rebuild", is_flag=True, help="Wipe existing Fitbod data and re-ingest from scratch")
+@click.option(
+    "--csv", "csv_path", default=None, help="Path to WorkoutExport.csv (auto-detected if omitted)"
+)
+@click.option(
+    "--rebuild", is_flag=True, help="Wipe existing Fitbod data and re-ingest from scratch"
+)
 def ingest_fitbod(csv_path: str | None, rebuild: bool) -> None:
     """Ingest Fitbod WorkoutExport.csv into workouts + workout_sets + working_weights."""
     from pathlib import Path
@@ -87,8 +120,10 @@ def ingest_fitbod(csv_path: str | None, rebuild: bool) -> None:
     if rebuild:
         click.echo("Rebuild mode: wiping existing Fitbod rows before re-ingest.")
     result = _ingest(path, rebuild=rebuild)
-    click.echo(f"Done: {result['workouts_inserted']} new sessions, {result['sets_inserted']} new sets "
-               f"({result['sessions']} total sessions in CSV, {result['skipped']} skipped)")
+    click.echo(
+        f"Done: {result['workouts_inserted']} new sessions, {result['sets_inserted']} new sets "
+        f"({result['sessions']} total sessions in CSV, {result['skipped']} skipped)"
+    )
 
 
 @main.command("ingest-clinical-profile")

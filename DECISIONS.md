@@ -2,6 +2,35 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-26 — Why the suite was green through a dozen calculation bugs, and what actually catches them
+
+**Context.** Rob, after a day of finding defect after defect: *"It makes me nervous that we have had so many bugs in our calculations, how do we ensure things are clean now?"* The honest starting point is the tally of how they were found:
+
+| found by | count |
+|---|---|
+| Rob asking "are you sure?" | 3 |
+| looking at rendered output (the plan card's "last set" column) | 2 |
+| a manual before/after diff run to verify a claim | 3 |
+| a test written BEFORE the code | 1 |
+| **the existing 719-test suite** | **0** |
+
+**The diagnosis.** This is not a coverage gap, it is a *kind* gap. Unit tests assert that a function does what its author believed; they cannot flag a function whose belief was wrong. Every defect that day was the second kind — e1RM scoring submaximal sets as maximal, load capped as a fraction of 1RM when it should have capped effort, tonnage standing in for fatigue, a keyword matching inside an unrelated word, a prompt still teaching a rule the validator had abandoned. Each was internally consistent and externally wrong, and only comparison against an independent observation catches that. Sorted by shape: **semantic drift** (a value's meaning changed, consumers did not know), **two sources of truth that drifted apart** (6 instances — the largest class, and the one that produced the 175→179→188 sequence when the planner prompt and the validator disagreed), **identity/matching**, and **four bugs I introduced while fixing the others**.
+
+**Decision.** Three things, in increasing order of value.
+
+*Targeted guards* for each dual-definition site found: fitter column vs gate column, progression e1RM vs ceiling e1RM, `EFFORT_RPE_BAND` vs `RPE_CAP_BY_INTENSITY`, preacher-curl variants, citations resolving to real notes.
+
+*Two bug-FINDING tests* (invariants 16, 17) that search rather than assert. The classifier one mines every keyword out of `classify_exercise`, obscures each occurrence hidden inside a longer word, and fails if the classification changes — it immediately found `"row"` matching ROWing Machine, a latent bug on an untrained movement that would have bitten the first time Rob logged a rowing session. The migration one forbids writing to a view, which had taken the API down twice in one day, the second time in a migration whose own header documented the first.
+
+*A reconciliation harness* (`training/reconcile.py`, `GET /api/training/reconcile`, `shc reconcile`) that recomputes six quantities from the rawest available rows and compares them to what the engine says. The load-bearing check is **prescription vs recent reality**: a lift prescribed >5% under a set already completed at the same RPE within 28 days. That single comparison is what three separate defects produced this week, and what a human noticed by accident in the UI.
+
+**What the harness found on its first run.** Six checks, three failing — and critically, **two of the three failures were the check being wrong, not the engine**: a raw e1RM recompute that omitted per-hand normalisation (RDL read 210 vs 105, exactly 2×) and ignored the median/MAD outlier trim (so the comparison had to become one-directional — the engine may only ever trim DOWN). Verifying those before reporting them is the same discipline the harness exists to enforce. The third was real: `Leg Extension` / `Leg Extension (Machine)` and `Seated Leg Curl` / `Seated Leg Curl (Machine)` each carried two contradictory `length_bias` values with 0 logged sets on one side and 557/278 on the other — the Preacher Curl defect twice more. Fixed in 0086. Barbell-vs-dumbbell splits on Overhead Press and Incline Bench Press were reviewed and deliberately LEFT: a dumbbell genuinely travels past where a bar stops, so those load different muscle lengths, and flagging them would train the reader to ignore the check.
+
+**The anti-tautology rule (invariant 18).** A reconciliation check that imports the helper it is checking passes forever and hides what it was built to surface. `_e1rm_from_raw` re-derives RIR-adjusted Epley in SQL rather than calling `e1rm_by_exercise`, which is exactly why it *could* disagree with it. `run_all` also reports a check that raised, because a check that vanishes on error is indistinguishable from a passing one.
+
+**Honest limits.** The harness covers six quantities; the engine computes far more. It is a floor, not a proof. Its real value is that it fails on the class of defect the suite structurally cannot see, and that it is cheap enough to run after every change. **Standing recommendation: run `GET /api/training/reconcile` after any change to a calculation, and treat a FAIL as a prompt to investigate rather than a gate.** 722 tests pass; 6/6 reconciliation checks clean.
+
+
 ## 2026-07-26 — Closing the open items: the prompt was still teaching the old rule
 
 **Context.** Three items were left open after the effort-cap redesign. Two were real; the third turned out to be the root cause of the whole 175→179→188 episode.

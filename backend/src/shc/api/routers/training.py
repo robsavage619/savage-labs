@@ -256,6 +256,36 @@ async def post_advance(req: AdvanceRequest) -> dict[str, Any]:
     }
 
 
+@router.get("/training/reconcile")
+async def reconcile_engine() -> dict:
+    """Compare what the engine SAYS against what the raw rows SHOW.
+
+    Independent recomputation from the rawest available data, deliberately NOT a
+    re-run of the engine's own helpers — a check that calls the function it is
+    checking proves nothing. Exists because a green 719-test suite sat on top of
+    a dozen live calculation defects on 2026-07-26: unit tests assert a function
+    does what its author believed, and each of those was a belief that was wrong.
+
+    Served here rather than only from the CLI because the running API holds an
+    exclusive DuckDB lock, so `shc reconcile` can only run while the app is down.
+    """
+    from shc.training.reconcile import run_all
+
+    conn = get_read_conn()
+    try:
+        findings = run_all(conn)
+    finally:
+        conn.close()
+    return {
+        "clean": sum(f.ok for f in findings),
+        "total": len(findings),
+        "checks": [
+            {"check": f.check, "ok": f.ok, "detail": f.detail, "rows": f.rows[:20]}
+            for f in findings
+        ],
+    }
+
+
 @router.post("/training/scores/recompute", dependencies=[Depends(require_admin_key)])
 async def post_recompute() -> dict[str, Any]:
     """Recompute scores, then act on any engine accuracy degradation.
