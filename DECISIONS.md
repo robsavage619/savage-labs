@@ -2,6 +2,21 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-26 — Four evidence gaps closed by ingesting the literature, not by citing it
+
+**Context.** 0080 left 30 rows marked `UNGROUNDED` because the vault genuinely had nothing to support them, and flagged a real contradiction: `Preacher Curl (Dumbbell)` claimed `shortened` while `(Barbell)` and `(Machine)` claimed `lengthened` for the same movement. `length_bias` is a ranking key in `_select_grounded`, so that disagreement changed which curl got selected depending on which variant the menu happened to surface — a coin-flip dressed as evidence.
+
+**Decision.** Search the literature, summarise the papers into vault notes, THEN cite the notes. Citing a paper directly would have re-created the exact defect 0080 was undoing: 113 rows naming sources nobody could check. Five notes added (`ekstrom-2003-trapezius-serratus-emg`, `zabaleta-korta-2023-regional-hypertrophy-muscle-length`, `kassiano-2024-preacher-incline-curl-regional`, `shimose-2011-wrist-extension-grip-strength`, `cinarli-2025-anti-movement-core-training`), registered in `wiki/index.md`. Migration 0083 grounds the 9 rows those notes actually support. `UNGROUNDED` 30 → 21.
+
+**The preacher curl is lengthened-biased.** Zabaleta-Korta 2023: in a 9-week incline-vs-preacher trial the ONLY region that grew was the distal (70%) site in the preacher group, attributed to the movement "placing the highest amount of strain in the range of motion in which the arm muscles are more elongated." Kassiano 2024 replicated the split at n=63 (incline → proximal, preacher → distal). The dumbbell row was wrong. Recorded qualifier: Attarieh 2025 found NO regional difference when preacher and Bayesian curls were **matched for resistance profile** — so the bias comes from where resistance peaks in the ROM, not from shoulder flexion. That is why classifying by resistance profile is correct here; classifying by shoulder position would argue `shortened`, since shoulder flexion slackens the long head.
+
+**Traps had no vault grounding at all** — `trapezius` appeared once in 804 notes. Ekstrom 2003 (JOSPT, 393 citations, 10 high-intensity exercises, surface EMG) resolves it: the unilateral shrug produces peak UPPER-trapezius activity, and horizontal extension with external rotation — the face-pull pattern — produces peak MIDDLE-trapezius activity. Both the shrug rows and both face-pull rows were already asserting exactly this; they were right and simply uncited. Also grounded: wrist EXTENSOR work (Shimose 2011 — isometric wrist-extension training raised grip force while shifting the flexor/extensor EMG balance) and the Pallof / anti-rotation family (Cinarli 2025 — anti-movement core training improved external p=0.023 and internal p=0.003 oblique activation vs control).
+
+**What was deliberately NOT grounded.** The wrist-FLEXOR row: Shimose is an extensor study and does not support it. `Deadlift (Barbell)` and `Upright Row (Barbell)` for upper traps: Ekstrom tested neither. 21 rows remain marked, which is the marker working as intended — it distinguishes "no evidence found" from "evidence exists and here it is."
+
+**Consequences.** Sources were reached through the Consensus and PubMed MCP servers rather than raw web fetches: `security/egress-allowlist.txt` covers `WebFetch`/`firecrawl`/browser navigation and contains no research publishers, and those dedicated servers are not in its affected-tools list. No allowlist change was made. Every note records that it was summarised from a published abstract, not a full text — a real limitation, since none of these were read end-to-end. Two new guards: `test_preacher_curl_variants_agree_on_length_bias` and `test_every_vault_citation_resolves_to_a_real_note` (the latter skips when the vault is absent), because a citation that looks like a vault note but resolves to nothing is the original failure wearing the fix's clothing. 705 tests pass.
+
+
 ## 2026-07-26 — Catalogue curation, a grow-tier API, and two silent-corruption bugs found on the way
 
 **Context.** Follow-on to the MV-tier entry below. Rob asked whether the engine's *results* had been checked, not just its tests. They had not. Verifying properly found three things, only one of which was the intended change.

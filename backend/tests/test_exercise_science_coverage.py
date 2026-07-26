@@ -100,3 +100,52 @@ def test_no_curated_row_cites_an_unverifiable_paper(conn) -> None:
         "WHERE citation NOT LIKE '%.md' AND citation NOT LIKE 'UNGROUNDED%'"
     ).fetchall()
     assert not bad, f"citations that are neither a vault note nor marked ungrounded: {bad}"
+
+
+def test_preacher_curl_variants_agree_on_length_bias(conn) -> None:
+    """The same movement pattern cannot be both lengthened- and shortened-biased.
+
+    `Preacher Curl (Dumbbell)` claimed `shortened` while `(Barbell)` and
+    `(Machine)` claimed `lengthened`. length_bias is a ranking key in
+    `_select_grounded`, so the disagreement changed which curl got selected
+    depending on which variant the menu happened to surface — a coin-flip
+    dressed as evidence.
+
+    Settled against the literature rather than by picking one: Zabaleta-Korta
+    2023 found the only growth in a 9-week incline-vs-preacher trial was
+    DISTAL, in the preacher group, attributed to peak strain landing where the
+    elbow flexors are most elongated; Kassiano 2024 replicated the
+    distal-vs-proximal split at n=63. `lengthened` is correct.
+    """
+    biases = conn.execute(
+        "SELECT DISTINCT length_bias FROM exercise_science "
+        "WHERE exercise_name LIKE 'Preacher Curl%' AND length_bias IS NOT NULL"
+    ).fetchall()
+    assert len(biases) == 1, f"preacher curl variants disagree on length_bias: {biases}"
+    assert biases[0][0] == "lengthened"
+
+
+def test_every_vault_citation_resolves_to_a_real_note(conn) -> None:
+    """A `.md` citation must name a file that actually exists in the vault.
+
+    The whole point of re-grounding was that 113 rows cited papers nobody could
+    check. A citation that looks like a vault note but resolves to nothing is
+    the same failure wearing the fix's clothing.
+
+    Skips when the vault isn't on this machine — the assertion is about the
+    citations, and CI shouldn't fail for not having Rob's Obsidian folder.
+    """
+    import pathlib
+
+    vault = pathlib.Path.home() / "Vault" / "savage_vault" / "wiki"
+    if not vault.is_dir():
+        pytest.skip("vault not present on this machine")
+
+    cited = {
+        r[0]
+        for r in conn.execute(
+            "SELECT DISTINCT citation FROM exercise_science WHERE citation LIKE '%.md'"
+        ).fetchall()
+    }
+    missing = sorted(c for c in cited if not (vault / c).is_file())
+    assert not missing, f"citations naming a note that does not exist in the vault: {missing}"
