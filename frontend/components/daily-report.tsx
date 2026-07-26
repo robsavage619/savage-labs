@@ -177,7 +177,8 @@ export function DailyReport() {
                 spark={<Spark data={hrv as never} dataKey="hrv" color="var(--sl-accent)" />} />
               <Stat label="RHR" value={rc?.rhr ?? "—"} unit="bpm" delta={rhrDelta} deltaUnit="bpm"
                 tone={rhrDelta != null && rhrDelta <= 0 ? "positive" : "default"} />
-              <Stat label="Recovery" value={rc?.score != null ? Math.round(rc.score) : "—"}
+              {/* WHOOP's score, not the composite in the Ring beside it. */}
+              <Stat label="WHOOP rec." value={rc?.score != null ? Math.round(rc.score) : "—"}
                 spark={<Spark data={rec as never} dataKey="score" color="var(--positive)" />} />
               <Stat label="T:C ratio" value={acwr != null ? acwr.toFixed(2) : "—"}
                 tone={acwr != null && acwr > 1.5 ? "negative" : "default"} />

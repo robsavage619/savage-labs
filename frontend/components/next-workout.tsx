@@ -8,6 +8,7 @@ import { ObsidianMark } from "@/components/obsidian-badge";
 import { CheckIcon, RefreshIcon, ArrowRightIcon, XIcon } from "@/components/ui/icons";
 import type { WorkoutPlan, WorkoutBlock, WarmupItem, PlanExecution } from "@/lib/api";
 import { ProgressionDrawer } from "@/components/progression-drawer";
+import { CollapsibleSection } from "@/components/collapsible-section";
 
 type PushState =
   | { kind: "idle" }
@@ -85,9 +86,9 @@ function CompletedBanner({ ex }: { ex: PlanExecution }) {
   );
 }
 
-// ── Readiness banner ─────────────────────────────────────────────────────────
+// ── Session header ───────────────────────────────────────────────────────────
 
-function ReadinessBanner({ plan }: { plan: WorkoutPlan }) {
+function sessionTier(plan: WorkoutPlan) {
   const base = TIER[plan.readiness_tier] ?? TIER.yellow;
   const intensity = plan.recommendation?.intensity;
   // Green body, low/rest intensity = gates forced a deload despite good recovery.
@@ -96,7 +97,49 @@ function ReadinessBanner({ plan }: { plan: WorkoutPlan }) {
     plan.readiness_tier === "green" && (intensity === "low" || intensity === "rest")
       ? "Active recovery"
       : null;
-  const t = labelOverride ? { ...base, label: labelOverride } : base;
+  return labelOverride ? { ...base, label: labelOverride } : base;
+}
+
+/** The operational facts, one strip: how hard, at what, for how long.
+ *  Everything a set needs; nothing it doesn't. The reasoning moved below the
+ *  exercises — it was pushing the first lift two screens down on a phone. */
+function SessionStrip({ plan }: { plan: WorkoutPlan }) {
+  const t = sessionTier(plan);
+  return (
+    <div
+      className="rounded-[var(--r-md)] px-4 py-3"
+      style={{ background: t.soft, border: `1px solid ${t.border}` }}
+    >
+      <div className="flex items-center gap-2.5 flex-wrap">
+        <span
+          className="w-7 h-7 rounded-full flex items-center justify-center text-[13px] font-bold flex-shrink-0"
+          style={{ background: t.color, color: "oklch(0.1 0 0)" }}
+        >
+          {t.icon}
+        </span>
+        <span className="text-[15px] font-semibold leading-none" style={{ color: t.color }}>
+          {t.label}
+        </span>
+        <div className="flex items-center gap-2.5 text-[11px] text-[var(--text-dim)] tabular-nums w-full sm:w-auto sm:ml-auto">
+          <span>~{plan.recommendation.estimated_duration_min} min</span>
+          <span className="text-[var(--text-faint)]">•</span>
+          <span>RPE {plan.recommendation.target_rpe}</span>
+          <span className="text-[var(--text-faint)]">•</span>
+          <span className="capitalize">{plan.recommendation.intensity}</span>
+        </div>
+      </div>
+      {/* Focus gets its own line — as a flex sibling it collapsed to a ~90px
+          column on a phone and wrapped to nine lines. */}
+      <p className="mt-2 text-[12.5px] text-[var(--text-primary)] leading-snug">
+        {plan.recommendation.focus}
+      </p>
+    </div>
+  );
+}
+
+/** The readiness narrative and the WHY, below the work. */
+function SessionRationale({ plan }: { plan: WorkoutPlan }) {
+  const t = sessionTier(plan);
   const snapshotAt = formatClock(plan.execution?.plan_created_at ?? null);
   return (
     <div
@@ -104,31 +147,7 @@ function ReadinessBanner({ plan }: { plan: WorkoutPlan }) {
       style={{ background: t.soft, border: `1px solid ${t.border}` }}
     >
       <div className="p-5 flex gap-4 items-start">
-        <div
-          className="w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold flex-shrink-0"
-          style={{ background: t.color, color: "oklch(0.1 0 0)", boxShadow: "0 0 0 4px oklch(1 0 0 / 0.04)" }}
-        >
-          {t.icon}
-        </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2 flex-wrap mb-1">
-            <span className="text-[18px] font-semibold leading-none" style={{ color: t.color }}>
-              {t.label}
-            </span>
-            <span
-              className="text-[10px] font-semibold uppercase tracking-[0.18em] px-2 py-0.5 rounded-full"
-              style={{ background: "oklch(1 0 0 / 0.06)", color: "var(--text-primary)", border: "1px solid var(--hairline)" }}
-            >
-              {plan.recommendation.focus}
-            </span>
-          </div>
-          <div className="flex items-center gap-3 text-[11px] text-[var(--text-dim)] tabular-nums mb-3">
-            <span>~{plan.recommendation.estimated_duration_min} min</span>
-            <span className="text-[var(--text-faint)]">•</span>
-            <span>Target RPE {plan.recommendation.target_rpe}</span>
-            <span className="text-[var(--text-faint)]">•</span>
-            <span className="capitalize">{plan.recommendation.intensity} intensity</span>
-          </div>
           <p className="text-[12.5px] text-[var(--text-muted)] leading-relaxed">
             {plan.readiness_summary}
             {/* The narrative is a snapshot taken when the plan was written, and it
@@ -300,7 +319,10 @@ function ExerciseCard({
             <span className="text-[10px] tabular-nums w-5 text-center font-mono text-[var(--text-faint)]">
               {String(index + 1).padStart(2, "0")}
             </span>
-            <h4 className="text-[14px] font-semibold text-[var(--text-primary)] truncate">{ex.name}</h4>
+            {/* Wraps rather than truncates: the exercise name is the thing you
+                match against the machine in front of you, and "Hammerstrength
+                Incline Che…" is not that. */}
+            <h4 className="text-[14px] font-semibold text-[var(--text-primary)] leading-snug">{ex.name}</h4>
           </div>
 
           <div className="ml-7 flex items-baseline gap-3 flex-wrap mb-2">
@@ -658,8 +680,12 @@ export function NextWorkoutPane() {
       {data && (
         <div className="space-y-5">
           {executed && execution && <CompletedBanner ex={execution} />}
+          {/* Work first, reasoning after. Mid-set the useful payload is the load
+              and the rep target; the readiness narrative and the WHY are a
+              before-or-after read, and putting them on top meant scrolling past
+              ~15 lines of prose to reach the first lift on a phone. */}
           <div className="space-y-5" style={executed ? { opacity: 0.7 } : undefined}>
-            <ReadinessBanner plan={data} />
+            <SessionStrip plan={data} />
             <WarmupSection items={data.warmup ?? []} />
             {(data.blocks ?? []).map((block, i) => (
               <ExerciseBlock
@@ -671,10 +697,15 @@ export function NextWorkoutPane() {
               />
             ))}
             <CooldownRow text={data.cooldown ?? ""} />
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <ClinicalCallout notes={toStringArray(data.clinical_notes)} />
-              <VaultInsights insights={toStringArray(data.vault_insights)} />
-            </div>
+            <CollapsibleSection id="why" title="Why this session">
+              <div className="space-y-4">
+                <SessionRationale plan={data} />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <ClinicalCallout notes={toStringArray(data.clinical_notes)} />
+                  <VaultInsights insights={toStringArray(data.vault_insights)} />
+                </div>
+              </div>
+            </CollapsibleSection>
           </div>
         </div>
       )}

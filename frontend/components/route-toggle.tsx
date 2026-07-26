@@ -5,8 +5,12 @@ import { usePathname } from "next/navigation";
 
 export function RouteToggle() {
   const path = usePathname();
+  // Three surfaces, one per moment of use: NOW is the daily driver (readiness +
+  // today's session), REVIEW is the weekly read (trends, volume, PRs, body),
+  // LAB is the system's self-knowledge.
   const items = [
-    { href: "/", label: "Dashboard" },
+    { href: "/", label: "Now" },
+    { href: "/review", label: "Review" },
     { href: "/lab", label: "Lab" },
   ] as const;
 

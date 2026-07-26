@@ -2,17 +2,22 @@
 
 import { useEffect, useState } from "react";
 
-export const SECTIONS = [
+export const NOW_SECTIONS = [
   { id: "today", label: "Today" },
+  { id: "plan", label: "Session" },
+  { id: "checkin", label: "Check-in" },
+] as const;
+
+export const REVIEW_SECTIONS = [
+  { id: "momentum", label: "Momentum" },
   { id: "signals", label: "Signals" },
-  { id: "plan", label: "Plan" },
   { id: "training", label: "Training" },
   { id: "body", label: "Body" },
 ] as const;
 
 type SectionItem = { id: string; label: string };
 
-export function SectionNav({ sections = SECTIONS as readonly SectionItem[] }: { sections?: readonly SectionItem[] } = {}) {
+export function SectionNav({ sections = NOW_SECTIONS as readonly SectionItem[] }: { sections?: readonly SectionItem[] } = {}) {
   const [active, setActive] = useState<string>(sections[0]?.id ?? "");
 
   useEffect(() => {

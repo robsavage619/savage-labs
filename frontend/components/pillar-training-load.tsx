@@ -72,10 +72,15 @@ export function PillarTrainingLoad() {
   const readiness = stateQ.data
     ? (() => {
         const v = reconciledVerdict(stateQ.data);
+        // Never reprint the readiness score here. This panel showed it raw
+        // (65.6) while the header showed it rounded (66) and the WHOOP pillar
+        // showed its own score (71) — three numbers, one apparent quantity.
+        // The score has exactly one home: the header HUD. This says what the
+        // gates DID, which is the part the header can't show.
         const detail = v.gated
-          ? `Engine gate capped verdict · base score ${stateQ.data.readiness.score ?? "—"}/100`
+          ? `Capped by engine gate · ceiling ${stateQ.data.gates.max_intensity}`
           : stateQ.data.readiness.score != null
-            ? `Readiness ${stateQ.data.readiness.score}/100`
+            ? "Matches today's readiness — no gate applied"
             : "Awaiting biometric data";
         return { label: v.label, tone: v.tone, detail };
       })()

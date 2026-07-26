@@ -72,6 +72,9 @@ function RecoveryArc({ score, color }: { score: number | null; color: string }) 
       >
         {score ?? "—"}
       </text>
+      {/* WHOOP's own recovery score, NOT the composite readiness in the header.
+          Labelled bare "RECOVERY" these read as the same quantity disagreeing —
+          on 2026-07-25 the screen carried 71 here and 66 up top. */}
       <text
         x={cx}
         y={cy + 22}
@@ -80,7 +83,7 @@ function RecoveryArc({ score, color }: { score: number | null; color: string }) 
         fill="var(--text-dim)"
         letterSpacing="0.15em"
       >
-        RECOVERY
+        WHOOP RECOVERY
       </text>
     </svg>
   );
@@ -154,7 +157,7 @@ export function PillarRecovery() {
   return (
     <div className="shc-card shc-enter p-5 min-h-[320px] flex flex-col">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>Recovery intelligence</Eyebrow>
+        <Eyebrow>WHOOP recovery</Eyebrow>
         <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">
           {delta >= 0 ? "+" : ""}
           {delta.toFixed(0)} · 14d

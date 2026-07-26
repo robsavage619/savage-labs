@@ -571,7 +571,7 @@ body::after {
 
 .sl-wordmark-savage {
   font-family: var(--font-orbitron);
-  font-size: 26px;
+  font-size: clamp(17px, 4.4vw, 26px);
   font-weight: 900;
   letter-spacing: 0.20em;
   text-transform: uppercase;
@@ -612,7 +612,7 @@ body::after {
 
 .sl-wordmark-labs {
   font-family: var(--font-orbitron);
-  font-size: 26px;
+  font-size: clamp(17px, 4.4vw, 26px);
   font-weight: 900;
   letter-spacing: 0.28em;
   text-transform: uppercase;
