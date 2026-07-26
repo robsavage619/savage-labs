@@ -841,11 +841,21 @@ export const api = {
       p_value: number | null;
       verdict: "confirmed" | "refuted" | "insufficient" | "inconclusive" | null;
       summary: string | null;
+      /** "answered" = retired on a stable definitive verdict; "open" = under test. */
+      status: "answered" | "open";
+      answered_at: string | null;
+      min_n: number | null;
     }[]>("/api/lab/findings"),
   labRun: async () => {
     const r = await fetch(`${BASE}/api/lab/run`, { method: "POST", headers: mutHeaders() });
     if (!r.ok) throw new Error(`labRun ${r.status}`);
-    return r.json() as Promise<{ ran: number; verdicts: Record<string, string>; completed_at: string }>;
+    return r.json() as Promise<{
+      ran: number;
+      verdicts: Record<string, string>;
+      retired: string[];
+      reopened: string[];
+      completed_at: string;
+    }>;
   },
   experiments: () => get<Experiment[]>("/api/experiments"),
   experimentLog: async (

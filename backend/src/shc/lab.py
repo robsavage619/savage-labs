@@ -25,6 +25,12 @@ log = logging.getLogger(__name__)
 # survive Benjamini–Hochberg correction, before it is reported as CONFIRMED.
 _ALPHA = 0.10
 
+# A retired question is answered, not deleted. Re-run it on this cadence so a
+# confirmed effect that stops holding gets caught instead of standing forever on
+# the strength of one stable stretch — the pickleball→HRV finding froze in July
+# and was never re-checked against a 649-min/week court load.
+_REVERIFY_AFTER_DAYS = 30
+
 
 @dataclass
 class LabFinding:
@@ -1117,19 +1123,43 @@ _RUNNERS = {
 }
 
 
-def _apply_fdr(findings: list[LabFinding], alpha: float = _ALPHA) -> None:
+def _catalogue_size(conn) -> int:
+    """Every hypothesis the program has registered, retired or not.
+
+    This is the multiple-comparisons family. It must NOT be "whatever ran this
+    cycle": questions retire as they resolve, so a run-scoped denominator shrinks
+    over time (it had reached m=3 against a docstring claiming ~15), which makes
+    the correction quietly *looser* the longer the program runs — and lets an
+    unchanged p-value flip verdict because some unrelated sibling retired.
+    """
+    row = conn.execute("SELECT COUNT(*) FROM lab_questions").fetchone()
+    return int(row[0]) if row and row[0] else 0
+
+
+def _apply_fdr(
+    findings: list[LabFinding], alpha: float = _ALPHA, family_size: int = 0
+) -> None:
     """Benjamini–Hochberg correction across the whole catalogue, in place.
 
-    The catalogue runs ~15 hypotheses against one noisy dataset every cycle.
-    Without correction, at α=0.10 we'd expect false positives by chance alone.
-    BH controls the false-discovery rate: a finding can only stay CONFIRMED if
-    its p-value clears the step-up critical value p_(k) ≤ (k/m)·α. Confirmed
-    findings that don't survive are downgraded to INCONCLUSIVE so the user isn't
-    told a chance correlation is real.
+    The catalogue tests ~15 hypotheses against one noisy dataset. Without
+    correction, at α=0.10 we'd expect false positives by chance alone. BH
+    controls the false-discovery rate: a finding can only stay CONFIRMED if its
+    p-value clears the step-up critical value p_(k) ≤ (k/m)·α. Confirmed
+    findings that don't survive are downgraded to INCONCLUSIVE — with the effect
+    size and p kept in the summary — so the user isn't told a chance correlation
+    is real.
+
+    ``family_size`` is the honest denominator (see `_catalogue_size`); the number
+    of hypotheses carrying a p-value THIS cycle is only a floor for it.
+
+    Caveat this does not address: the catalogue is re-run daily, so each
+    hypothesis is looked at repeatedly as data accumulates, and retirement on
+    "3 consecutive identical verdicts" is a stopping rule. BH corrects breadth,
+    not repeated looks; treat a confirmation as evidence, not proof.
     """
     indexed = [(i, f.p_value) for i, f in enumerate(findings) if f.p_value is not None]
-    m = len(indexed)
-    if m == 0:
+    m = max(len(indexed), family_size)
+    if not indexed or m == 0:
         return
     ordered = sorted(indexed, key=lambda t: t[1])
     max_k = 0
@@ -1146,12 +1176,74 @@ def _apply_fdr(findings: list[LabFinding], alpha: float = _ALPHA) -> None:
             )
 
 
-def run_all(conn) -> list[LabFinding]:
-    qrows = conn.execute(
-        "SELECT id, title, hypothesis, exposure, outcome, test_type, window_days, "
-        "       min_n, threshold, direction, vault_ref "
-        "FROM lab_questions WHERE enabled = TRUE"
+def _questions_to_run(conn) -> list[tuple]:
+    """Enabled questions, plus retired ones due for re-verification.
+
+    Retirement means "answered", and `run_all` used to skip retired questions
+    forever — so a CONFIRMED effect was frozen at whatever the data said on the
+    day it stabilised, with nothing ever re-checking it.
+    """
+    return conn.execute(
+        """
+        SELECT id, title, hypothesis, exposure, outcome, test_type, window_days,
+               min_n, threshold, direction, vault_ref
+        FROM lab_questions q
+        WHERE q.enabled = TRUE
+           OR (
+                q.retired_at IS NOT NULL
+                AND COALESCE(
+                    (SELECT MAX(f.run_at) FROM lab_findings f WHERE f.question_id = q.id),
+                    TIMESTAMPTZ '1970-01-01'
+                ) < now() - INTERVAL ($days) DAY
+              )
+        """,
+        {"days": _REVERIFY_AFTER_DAYS},
     ).fetchall()
+
+
+def reverify_retired(conn, findings: list[LabFinding]) -> list[str]:
+    """Re-open any retired question whose re-run disagrees with its answer.
+
+    Call AFTER `persist` — the comparison is the newly written finding against
+    the one before it. A re-opened question goes back into the active rotation
+    and must earn retirement again through `rotate_if_stable`, so a single noisy
+    flip costs nothing but attention.
+
+    Returns the ids re-opened.
+    """
+    reopened: list[str] = []
+    retired = {
+        r[0]
+        for r in conn.execute(
+            "SELECT id FROM lab_questions WHERE retired_at IS NOT NULL"
+        ).fetchall()
+    }
+    for f in findings:
+        if f.question_id not in retired or f.verdict == "error":
+            continue
+        prior = conn.execute(
+            """
+            SELECT verdict FROM lab_findings
+            WHERE question_id = $qid ORDER BY run_at DESC LIMIT 1 OFFSET 1
+            """,
+            {"qid": f.question_id},
+        ).fetchone()
+        if prior is None or prior[0] == f.verdict:
+            continue
+        conn.execute(
+            "UPDATE lab_questions SET enabled = TRUE, retired_at = NULL WHERE id = $qid",
+            {"qid": f.question_id},
+        )
+        log.warning(
+            "lab: re-opened %s — re-verification says %s, was retired as %s",
+            f.question_id, f.verdict, prior[0],
+        )
+        reopened.append(f.question_id)
+    return reopened
+
+
+def run_all(conn) -> list[LabFinding]:
+    qrows = _questions_to_run(conn)
     findings: list[LabFinding] = []
     for q in qrows:
         qd = {
@@ -1171,7 +1263,7 @@ def run_all(conn) -> list[LabFinding]:
                 qd["id"], 0, None, "", None, "error",
                 f"runner raised {type(exc).__name__}: {exc} — hypothesis NOT tested.", [],
             ))
-    _apply_fdr(findings)
+    _apply_fdr(findings, family_size=_catalogue_size(conn))
     return findings
 
 

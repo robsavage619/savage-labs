@@ -2341,7 +2341,15 @@ async def lab_questions() -> list[dict]:
 
 @router.get("/lab/findings")
 async def lab_findings_latest() -> list[dict]:
-    """Latest finding per question, joined with question metadata."""
+    """Latest finding per question — answered questions INCLUDED.
+
+    This filtered on ``q.enabled = TRUE``, and `lab.rotate_if_stable` disables a
+    question at exactly the moment it reaches a stable definitive verdict. So the
+    endpoint could only ever return questions the lab had NOT answered: nine
+    resolved hypotheses — including both CONFIRMED findings (≥8h sleep → +14.0ms
+    next-morning HRV, n=62; pickleball → −12.3ms, n=152) — were invisible, and
+    the research panel was structurally incapable of showing a conclusion.
+    """
     conn = get_read_conn()
     try:
         rows = conn.execute(
@@ -2351,11 +2359,12 @@ async def lab_findings_latest() -> list[dict]:
                 FROM lab_findings GROUP BY question_id
             )
             SELECT q.id, q.title, q.hypothesis, q.vault_ref, q.test_type,
-                   f.run_at, f.n, f.effect_size, f.effect_unit, f.p_value, f.verdict, f.summary
+                   f.run_at, f.n, f.effect_size, f.effect_unit, f.p_value, f.verdict,
+                   f.summary, q.retired_at, q.min_n
             FROM lab_questions q
             LEFT JOIN latest l ON l.question_id = q.id
             LEFT JOIN lab_findings f ON f.question_id = q.id AND f.run_at = l.run_at
-            WHERE q.enabled = TRUE
+            WHERE q.enabled = TRUE OR q.retired_at IS NOT NULL
             ORDER BY q.id
             """
         ).fetchall()
@@ -2375,6 +2384,10 @@ async def lab_findings_latest() -> list[dict]:
             "p_value": r[9],
             "verdict": r[10],
             "summary": r[11],
+            # answered = retired on a stable definitive verdict; open = still under test
+            "status": "answered" if r[12] is not None else "open",
+            "answered_at": r[12].isoformat() if r[12] else None,
+            "min_n": r[13],
         }
         for r in rows
     ]
@@ -2388,11 +2401,15 @@ async def lab_run() -> dict:
     async with write_ctx() as conn:
         findings = _lab.run_all(conn)
         _lab.persist(conn, findings)
+        # Re-open before rotate: a re-verified question that changed its answer
+        # goes back under test, and must re-earn retirement from scratch.
+        reopened = _lab.reverify_retired(conn, findings)
         retired = _lab.rotate_if_stable(conn)
     return {
         "ran": len(findings),
         "verdicts": {f.question_id: f.verdict for f in findings},
         "retired": retired,
+        "reopened": reopened,
         "completed_at": date.today().isoformat(),
     }
 
