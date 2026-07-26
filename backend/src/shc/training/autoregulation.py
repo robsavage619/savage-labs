@@ -28,6 +28,7 @@ program the chat assembles the actual session from.
 import json
 import logging
 import math
+import statistics
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -126,6 +127,10 @@ class MusclePrescription:
     # (2026-07-23 remediation — see _rpe_headroom). Machine-readable so the
     # planner can act on it directly rather than parsing `reason` text.
     rpe_headroom: bool = False
+    # 'grow' | 'maintain' (migration 0078). A maintenance muscle is not a growth
+    # target this mesocycle — it holds at MV so the weekly set budget can
+    # concentrate on the grow tier. Explicit intent, never fitted or inferred.
+    tier: str = "grow"
 
 
 @dataclass
@@ -149,6 +154,14 @@ class Prescription:
     # Visible fail-visibly notes for any signal this prescription had to run blind
     # on (e.g. stale WHOOP blinding the conditioning-interference hold below).
     data_gaps: list[str] = field(default_factory=list)
+    # Weekly set-budget feasibility (migration 0078). Before the MV tier existed
+    # the sum of per-muscle targets ran ~1.5x what Rob can actually deliver, so
+    # the demand list was unsatisfiable AND unranked and the planner triaged
+    # silently toward habitual compounds. Surfacing it makes over-prescription a
+    # visible number instead of a hidden judgement call.
+    # {demand_muscle_sets, capacity_muscle_sets, working_sets_needed,
+    #  capacity_working_sets, feasible, credit_ratio}
+    capacity: dict = field(default_factory=dict)
 
 
 # Number of muscles that must independently signal fatigue to trigger a deload.
@@ -397,6 +410,8 @@ def _decide(
     scored_weeks: int = 0,
     accuracy: float | None = None,
     rpe_headroom: bool = False,
+    tier: str = "grow",
+    mv: int = 2,
     # Default matches the population metrics.COND_ACWR_HOLD_LEGS; real callers
     # (weekly_prescription) pass the possibly-personalized value from
     # metrics.personalized_cond_thresholds() so this and the hard FORBID gate in
@@ -426,6 +441,22 @@ def _decide(
     the tree holds sets and asks for more load instead of adding a set. It
     does not touch any other branch — progressing/regressing/under-recovered
     calls are unaffected.
+
+    ``tier`` / ``mv`` (migration 0078) carry the fourth volume landmark. A
+    ``'maintain'`` muscle is not a growth target this mesocycle: it is never
+    ADDED to, and its floor is MV rather than MEV. It is deliberately NOT cut
+    down to MV — compound spillover legitimately leaves several maintenance
+    muscles well above it (a row credits biceps 0.5 + traps 0.5), and stripping
+    productive volume that costs no dedicated budget would be the opposite of
+    the point. The tier only stops the engine *demanding* more.
+
+    Two guards, both deliberate. (1) An ``emphasis`` muscle can never maintain,
+    whatever the tier says — invariant 7 forbids freezing a lagging bring-up
+    below MEV, and demoting it by tier is the same under-train through a
+    different door. (2) Safety branches (regressing, under-recovered, MRV,
+    conditioning interference) are evaluated BEFORE the tier, so maintenance
+    can never override a back-off. Tier removes volume *demand*, never
+    recovery protection.
     """
 
     # Append landmark source to reason for auditing — tells the planner (and Rob)
@@ -472,21 +503,29 @@ def _decide(
         and conditioning_acwr > leg_hold_threshold
     )
 
+    # An emphasis muscle is never a maintenance muscle (invariant 7 in tier
+    # form). `floor` is the productive minimum this muscle is entitled to:
+    # MEV when growing, MV when explicitly held at maintenance.
+    maintaining = tier == "maintain" and not emphasized
+    floor = min(mv, mev) if maintaining else mev
+    floor_label = "MV" if maintaining else "MEV"
+
     rpe_headroom_applied = False
     if perf is not None and perf <= 2:
-        # Regressing — target MEV. If already below MEV, ramp up to it
+        # Regressing — target the productive floor. If already below it, ramp up
         # (more productive minimum volume is the remedy); if above, cut toward it.
-        desired = max(mev, cur - 2)
-        if cur < mev:
+        desired = max(floor, cur - 2)
+        if cur < floor:
             reason = (
-                f"regressing (perf {perf}/5) but below MEV → build to minimum productive volume"
+                f"regressing (perf {perf}/5) but below {floor_label} "
+                f"→ build to minimum productive volume"
             )
         else:
-            reason = f"regressing (perf {perf}/5) → cut toward MEV"
+            reason = f"regressing (perf {perf}/5) → cut toward {floor_label}"
     elif under_recovered:
-        # Below MEV: hold at cur — don't push toward MEV while under-recovered.
-        # At/above MEV: back off one set, floored at MEV.
-        desired = max(min(cur, mev), cur - 1)
+        # Below floor: hold at cur — don't push toward it while under-recovered.
+        # At/above floor: back off one set, floored there.
+        desired = max(min(cur, floor), cur - 1)
         reason = f"under-recovered (soreness {soreness:.1f}/3) → back off a set"
     elif cur >= mrv:
         desired = mrv
@@ -495,6 +534,20 @@ def _decide(
         # Pickleball/cardio IS the leg stimulus this week — hold in place.
         desired = cur
         reason = f"court/cardio load high (cond. ACWR {conditioning_acwr:.2f}) → hold leg volume"
+    elif maintaining:
+        # Not a growth target this mesocycle. Top up only if compound spillover
+        # has left it under MV; otherwise hold exactly where it sits. Never add
+        # above MV, never cut productive spillover back down to it.
+        # Placed AFTER every safety branch so a back-off still wins.
+        if cur < floor:
+            desired = floor
+            reason = f"maintenance tier, below MV → top up to {floor} set/wk to hold size"
+        else:
+            desired = cur
+            reason = (
+                f"maintenance tier — holding at {cur} set/wk "
+                f"(MV {floor}); weekly budget goes to the grow-tier muscles"
+            )
     elif perf is not None and perf >= 4:
         # Emphasis muscles ramp +2; a strong physique nudge (emphasis_factor well
         # above 1) can lift a non-emphasis progressing muscle to +2 too, so the
@@ -590,8 +643,14 @@ def _decide(
     # (under-recovered, court/cardio leg interference) are allowed below MEV; the
     # climb is still rate-limited to +MAX_WEEKLY_ADD/wk by the clamp below, so a
     # starved muscle reaches MEV over a couple of weeks, not in a single jump.
+    # A maintenance-tier muscle's productive floor is MV, not MEV. Without this
+    # the tier would be undone one line later: the MEV floor is unconditional by
+    # design (it exists so a starved muscle re-seeds to minimum effective volume
+    # regardless of confidence), so it would drag every parked muscle straight
+    # back up and the whole budget reallocation would silently no-op.
     hold_below_mev = under_recovered or leg_interference
-    mev_floor = min(tree_target, mev) if hold_below_mev else mev
+    effective_floor = floor
+    mev_floor = min(tree_target, effective_floor) if hold_below_mev else effective_floor
     # An emphasized muscle's productive floor (grow_floor = MEV–MAV midpoint) is
     # non-speculative the same way MEV is: bringing a lagging priority muscle up
     # to a productive baseline is the whole reason emphasis exists, so the
@@ -631,7 +690,7 @@ def _decide(
     target = max(cur - MAX_WEEKLY_CUT, min(add_ceiling, target))
     delta = target - cur
     action = "add" if delta > 0 else "cut" if delta < 0 else "hold"
-    if cur < mev and target == mev and not hold_below_mev:
+    if not maintaining and cur < mev and target == mev and not hold_below_mev:
         reason = "below MEV → initialize at minimum productive volume"
         hedge_note = ""
 
@@ -652,6 +711,10 @@ def _decide(
         confidence=round(confidence, 2),
         scored_weeks=scored_weeks,
         rpe_headroom=rpe_headroom_applied,
+        # The EFFECTIVE tier, not the requested one: an emphasis muscle keeps
+        # growing even if the table says maintain, and the output must say so
+        # rather than mislabel a muscle that is in fact being ramped.
+        tier="maintain" if maintaining else "grow",
     )
 
 
@@ -1065,9 +1128,7 @@ def evidence_menu(
 
     out: dict[str, list[dict]] = {}
     for muscle, cands in per_muscle_rows.items():
-        selected, notes = _select_grounded(
-            cands, per_muscle, region_vol.get(muscle), ranks, tenure
-        )
+        selected, notes = _select_grounded(cands, per_muscle, region_vol.get(muscle), ranks, tenure)
         picks: list[dict] = []
         for c in selected:
             pi = info.get(c[0], {})
@@ -1447,6 +1508,136 @@ def _rpe_headroom(conn: duckdb.DuckDBPyConnection, min_magnitude: float = 0.75) 
     return signed_mean is not None and signed_mean <= -min_magnitude
 
 
+def _muscle_rpe_headroom(
+    conn: duckdb.DuckDBPyConnection,
+    weeks: int = 8,
+    min_weeks: int = 3,
+) -> dict[str, bool]:
+    """Per-muscle "this is getting easier" flag, from the weekly RPE trend.
+
+    Returns ``{muscle: True}`` for muscles whose primary exercises show a
+    meaningfully FALLING average RPE across recent weeks — the same load costing
+    steadily less effort.
+
+    Exists because :func:`_rpe_headroom` is a single cross-muscle number: it
+    reads `plan_adherence`, which stores one actual/target RPE pair per SESSION,
+    so one muscle coasting could unlock the load-not-volume remedy for every
+    muscle in the plan, and one muscle grinding could deny it to all of them.
+    Its own docstring flags this ("rpe_headroom is session-level"). With weekly
+    per-exercise RPE now materialised (migration 0079) the signal can be
+    resolved per muscle, which is the granularity the decision actually needs.
+
+    Deliberately measures the TREND, not distance from target: this asks "is
+    this muscle adapting to its current load", which is a property of the muscle,
+    whereas actual-vs-target is a property of the session prescription and stays
+    with :func:`_rpe_headroom`. The two are complementary, and `_decide` treats
+    either as sufficient.
+
+    Empty dict when the data isn't there — callers fall back to the session
+    signal, i.e. exactly the pre-0079 behaviour.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT m.primary_muscle, e.week_start, AVG(e.weekly_avg_rpe) AS rpe
+            FROM exercise_weekly_e1rm e
+            JOIN exercise_muscle_map m ON m.exercise_name = e.exercise
+            WHERE e.weekly_avg_rpe IS NOT NULL
+              AND COALESCE(e.rpe_set_count, 0) >= 2
+              AND e.week_start >= (CURRENT_DATE - INTERVAL (? || ' weeks'))
+            GROUP BY m.primary_muscle, e.week_start
+            ORDER BY m.primary_muscle, e.week_start
+            """,
+            [str(weeks)],
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — pre-0079 schema → session signal
+        log.debug("per-muscle RPE headroom unavailable: %s", exc)
+        return {}
+
+    by_muscle: dict[str, list[float]] = {}
+    for muscle, _wk, rpe in rows:
+        by_muscle.setdefault(str(muscle), []).append(float(rpe))
+
+    from shc.training.mesocycle import _RPE_MEANINGFUL_SLOPE, _rpe_slope_per_week
+
+    out: dict[str, bool] = {}
+    for muscle, series in by_muscle.items():
+        if len(series) < min_weeks:
+            continue
+        if _rpe_slope_per_week(series) <= -_RPE_MEANINGFUL_SLOPE:
+            out[muscle] = True
+    return out
+
+
+def _weekly_capacity(
+    conn: duckdb.DuckDBPyConnection,
+    targets: list[MusclePrescription],
+    lookback_weeks: int = 10,
+) -> dict:
+    """Is this week's total set demand deliverable in the sessions Rob actually does?
+
+    Measures capacity from logged history rather than assuming it: the median
+    working sets/week over ``lookback_weeks`` completed weeks, and the realised
+    credit ratio (muscle-sets awarded per working set, i.e. 1.0 primary +0.5 per
+    secondary). Demand is the sum of prescribed ``target_sets``.
+
+    Exists because the pre-0078 engine had no notion of a budget at all. With
+    MEV as the floor for all 17 muscles the target summed to ~137 muscle-sets/wk
+    against ~94 deliverable — a demand no session plan could satisfy, handed to
+    the planner with no ranking. Silent triage was the only possible response.
+    Returning ``feasible: False`` makes that visible instead.
+
+    Degrades to an empty dict (no claim) rather than guessing when there isn't
+    enough history to measure — a fabricated budget would be worse than none.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT COUNT(*) AS n_sets
+            FROM workout_sets w
+            JOIN workouts k ON k.id = w.workout_id
+            WHERE k.started_at > CURRENT_DATE - INTERVAL (? || ' weeks')
+              AND COALESCE(w.is_warmup, FALSE) = FALSE
+            GROUP BY date_trunc('week', k.started_at)
+            """,
+            [str(lookback_weeks)],
+        ).fetchall()
+        credit = conn.execute(
+            """
+            SELECT AVG(total_w) FROM (
+                SELECT exercise_name,
+                       SUM(CASE WHEN role = 'primary' THEN 1.0 ELSE 0.5 END) AS total_w
+                FROM exercise_muscle
+                GROUP BY exercise_name
+            )
+            """
+        ).fetchone()
+    except Exception as exc:  # noqa: BLE001 — measurement optional → no claim
+        log.debug("weekly capacity unmeasurable: %s", exc)
+        return {}
+
+    weekly = sorted(int(r[0]) for r in rows)
+    if len(weekly) < 3:
+        return {}
+    capacity_working = float(statistics.median(weekly))
+
+    # Realised credit ratio: muscle-sets awarded per working set. Measured off
+    # the mapping table so it tracks curation rather than a hardcoded guess.
+    ratio = float(credit[0]) if credit and credit[0] else 1.5
+    ratio = max(1.0, min(ratio, 3.0))
+
+    demand = float(sum(t.target_sets for t in targets))
+    needed = demand / ratio if ratio else demand
+    return {
+        "demand_muscle_sets": round(demand, 1),
+        "capacity_muscle_sets": round(capacity_working * ratio, 1),
+        "working_sets_needed": round(needed, 1),
+        "capacity_working_sets": round(capacity_working, 1),
+        "credit_ratio": round(ratio, 2),
+        "feasible": needed <= capacity_working,
+    }
+
+
 def _weekly_deload_context(
     conn: duckdb.DuckDBPyConnection,
 ) -> tuple[
@@ -1579,6 +1770,11 @@ def weekly_prescription(
     # it reads plan_adherence's logged-vs-target RPE directly, unaffected by
     # HR suppression.
     rpe_headroom = _rpe_headroom(conn)
+    # Per-muscle effort trend (0079). Either signal is sufficient: the session
+    # one says "you undershot the prescribed target", the per-muscle one says
+    # "this muscle's load is getting easier". Both point at the same remedy
+    # (raise load before adding sets) from different evidence.
+    muscle_headroom = _muscle_rpe_headroom(conn)
 
     # Signal quality from materialized cache (avoids per-request DB aggregation).
     from shc.training.self_learning import read_signal_quality_cache
@@ -1636,8 +1832,10 @@ def weekly_prescription(
             confidence=float(sq.get("confidence", 0.0)),
             scored_weeks=int(sq.get("scored_weeks", 0)),
             accuracy=accuracy,
-            rpe_headroom=rpe_headroom,
+            rpe_headroom=rpe_headroom or muscle_headroom.get(r.muscle, False),
             leg_hold_threshold=leg_hold_threshold,
+            tier=vt.tier if vt else "grow",
+            mv=vt.mv if vt else 2,
         )
         # If protein is inadequate, cap "add" actions at "hold" for non-emphasis muscles.
         if rx.action == "add" and not rx.emphasis and protein.get("adequate") is False:
@@ -1654,7 +1852,11 @@ def weekly_prescription(
         prior_mult = prior_multipliers.get(r.muscle)
         if prior_mult is not None and r.mev is not None and r.mrv is not None:
             adjusted = round(rx.target_sets * prior_mult)
-            adjusted = max(r.mev, min(r.mrv, adjusted))
+            # Floor at the muscle's OWN productive minimum, not unconditionally at
+            # MEV: a maintenance-tier muscle's floor is MV, and clamping it up to
+            # MEV here would silently re-grow a muscle Rob deliberately parked.
+            prior_floor = min(rx.target_sets, r.mev) if rx.tier == "maintain" else r.mev
+            adjusted = max(prior_floor, min(r.mrv, adjusted))
             if adjusted != rx.target_sets:
                 rx.reason = (
                     rx.reason + f" [confirmed prior: {rx.target_sets}→{adjusted} sets "
@@ -1720,6 +1922,7 @@ def weekly_prescription(
         session_split=_session_split(muscle_rx),
         protein_gate=protein,
         data_gaps=data_gaps,
+        capacity=_weekly_capacity(conn, muscle_rx),
     )
 
 

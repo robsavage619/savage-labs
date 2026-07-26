@@ -871,3 +871,118 @@ def test_a_lone_movement_is_held_not_dropped() -> None:
     picks, notes = _select_grounded([lead], 1, None, {lead[0]: 0}, {lead[0]: 52})
     assert [p[0] for p in picks] == [lead[0]]
     assert "no in-band alternative" in notes[lead[0]]
+
+
+# ── Maintenance tier (migration 0078) ────────────────────────────────────────
+# The engine implemented 3 of the framework's 4 volume landmarks. With MEV as
+# the floor for all 17 muscles the weekly demand summed to ~1.5x what Rob can
+# deliver, so every muscle read "below MEV", every muscle emitted ADD, and the
+# planner had to triage silently. These lock the tier's contract.
+
+_MAINT = {
+    "mav": 16,
+    "mrv": 22,
+    "soreness": 0.0,
+    "conditioning_acwr": None,
+    "confidence": 0.6,
+    "scored_weeks": 4,
+}
+
+
+def test_maintenance_tier_tops_up_only_to_mv_not_mev() -> None:
+    # Below MV: the one add a maintenance muscle gets — to MV, never to MEV.
+    rx = _decide("chest", current=0, mev=10, perf=None, tier="maintain", mv=2, **_MAINT)
+    assert rx.target_sets == 2
+    assert rx.tier == "maintain"
+
+
+def test_maintenance_tier_holds_spillover_instead_of_cutting_to_mv() -> None:
+    # Above MV from compound spillover: hold exactly there. Stripping productive
+    # volume that costs no dedicated budget is the opposite of the point.
+    rx = _decide("chest", current=6, mev=10, perf=None, tier="maintain", mv=2, **_MAINT)
+    assert rx.target_sets == 6
+    assert rx.action == "hold"
+
+
+def test_maintenance_tier_never_adds_to_a_progressing_muscle() -> None:
+    # perf>=4 would normally ramp. A maintenance muscle is not a growth target.
+    rx = _decide("chest", current=6, mev=10, perf=5, tier="maintain", mv=2, **_MAINT)
+    assert rx.delta == 0
+
+
+def test_emphasis_muscle_can_never_be_demoted_to_maintenance() -> None:
+    # Invariant 7 in tier form: demoting a lagging bring-up to MV is the same
+    # silent under-train as freezing it below MEV, through a different door.
+    rx = _decide(
+        "biceps", current=0, mev=10, perf=None, emphasis=True, tier="maintain", mv=2, **_MAINT
+    )
+    assert rx.tier == "grow"
+    assert rx.target_sets > 2
+
+
+def test_maintenance_tier_still_backs_off_when_under_recovered() -> None:
+    # Safety branches are evaluated BEFORE the tier: maintenance removes volume
+    # DEMAND, never recovery protection.
+    args = dict(_MAINT)
+    args["soreness"] = 3.0
+    rx = _decide("chest", current=6, mev=10, perf=None, tier="maintain", mv=2, **args)
+    assert rx.delta <= 0
+
+
+def test_absent_tier_defaults_to_grow_unchanged() -> None:
+    # Backward compatibility: no tier argument must behave exactly as pre-0078,
+    # i.e. climb to MEV. Under-training must never be reachable by absence.
+    rx = _decide("chest", current=0, mev=10, perf=None, **_MAINT)
+    assert rx.tier == "grow"
+    assert rx.target_sets == 10
+
+
+def test_unrecognised_tier_string_grows_rather_than_maintains() -> None:
+    # A typo or a future tier value this build doesn't know must fail toward
+    # MORE training, never less.
+    rx = _decide("chest", current=0, mev=10, perf=None, tier="mainten", mv=2, **_MAINT)
+    assert rx.tier == "grow"
+    assert rx.target_sets == 10
+
+
+def test_per_muscle_rpe_headroom_reads_a_falling_effort_trend() -> None:
+    """A muscle whose load is getting easier is flagged individually.
+
+    `_rpe_headroom` is one cross-muscle number off `plan_adherence` (one RPE
+    pair per SESSION), so one coasting muscle could unlock the load-not-volume
+    remedy for every muscle in the plan. With per-exercise weekly RPE
+    materialised (0079) the signal resolves per muscle.
+    """
+    import duckdb
+
+    from shc.training.autoregulation import _muscle_rpe_headroom
+
+    c = duckdb.connect(":memory:")
+    c.execute(
+        "CREATE TABLE exercise_weekly_e1rm "
+        "(exercise TEXT, week_start DATE, weekly_avg_rpe DOUBLE, rpe_set_count INTEGER)"
+    )
+    c.execute("CREATE TABLE exercise_muscle_map (exercise_name TEXT, primary_muscle TEXT)")
+    c.execute("INSERT INTO exercise_muscle_map VALUES ('Curl', 'biceps'), ('Press', 'chest')")
+
+    base = date.today() - timedelta(weeks=6)
+    for i, (curl, press) in enumerate([(8.5, 7.0), (8.2, 7.1), (8.0, 7.0), (7.7, 7.2), (7.4, 7.1)]):
+        wk = (base + timedelta(weeks=i)).isoformat()
+        c.execute("INSERT INTO exercise_weekly_e1rm VALUES ('Curl', ?, ?, 3)", [wk, curl])
+        c.execute("INSERT INTO exercise_weekly_e1rm VALUES ('Press', ?, ?, 3)", [wk, press])
+
+    hr = _muscle_rpe_headroom(c)
+    assert hr.get("biceps") is True  # steadily easier
+    assert "chest" not in hr  # flat — no headroom claim
+
+
+def test_per_muscle_rpe_headroom_is_empty_without_the_0079_columns() -> None:
+    # Pre-0079 schema must fall back to the session signal, not crash and not
+    # fabricate headroom.
+    import duckdb
+
+    from shc.training.autoregulation import _muscle_rpe_headroom
+
+    c = duckdb.connect(":memory:")
+    c.execute("CREATE TABLE exercise_weekly_e1rm (exercise TEXT, week_start DATE)")
+    assert _muscle_rpe_headroom(c) == {}

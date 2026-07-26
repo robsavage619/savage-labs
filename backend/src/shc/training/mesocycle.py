@@ -40,6 +40,8 @@ class VolumeTarget:
     mav: int
     mrv: int
     source: str = "population"  # 'population' | 'personal' | 'personal_floored'
+    mv: int = 2  # Maintenance Volume — the 4th landmark (migration 0078)
+    tier: str = "grow"  # 'grow' | 'maintain' — explicit intent, never fitted
 
 
 @dataclass
@@ -50,6 +52,11 @@ class WeeklyE1RM:
     perf_score: int | None
     trend: str | None
     tonnage_kg: float | None = None
+    # Mean RPE across this week's WORKING sets (migration 0079). None when Rob
+    # logged no RPE that week — which is most of history, so every consumer must
+    # treat None as "no effort claim", never as zero effort.
+    avg_rpe: float | None = None
+    rpe_set_count: int = 0
 
 
 @dataclass
@@ -154,32 +161,76 @@ def volume_targets(
     default sentinel is mesocycle_id = '' (empty string, NOT NULL — the
     column is NOT NULL DEFAULT ''); a future "fix" toward comparing against
     NULL here would silently zero out every landmark.
+
+    ``mv`` / ``tier`` (migration 0078) are the maintenance landmark and the
+    explicit training intent. Both fail SAFE: a missing column, a NULL, or an
+    unrecognised tier string resolves to ``mv=2`` / ``tier='grow'`` — i.e.
+    exactly the pre-0078 behaviour, where every muscle is a growth target.
+    Under-training must never be reachable by absence of data.
     """
-    rows = conn.execute(
-        """
-        SELECT muscle_group, mev_sets, mav_sets, mrv_sets, mesocycle_id
-        FROM muscle_volume_targets
-        ORDER BY mesocycle_id ASC
-        """
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """
+            SELECT muscle_group, mev_sets, mav_sets, mrv_sets, mesocycle_id,
+                   mv_sets, tier
+            FROM muscle_volume_targets
+            ORDER BY mesocycle_id ASC
+            """
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — pre-0078 schema → grow-for-all
+        log.debug("mv_sets/tier unavailable (pre-0078), defaulting to grow: %s", exc)
+        rows = [
+            (*r, None, None)
+            for r in conn.execute(
+                """
+                SELECT muscle_group, mev_sets, mav_sets, mrv_sets, mesocycle_id
+                FROM muscle_volume_targets
+                ORDER BY mesocycle_id ASC
+                """
+            ).fetchall()
+        ]
+
+    def _tier(raw: object) -> str:
+        # Only the exact string 'maintain' demotes a muscle. Anything else —
+        # NULL, empty, a typo, a future value this build doesn't know — grows.
+        return "maintain" if str(raw) == "maintain" else "grow"
+
+    def _mv(raw: object, mev: int) -> int:
+        try:
+            v = int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 2
+        # MV above MEV is incoherent (maintenance can't exceed the growth
+        # minimum); clamp rather than let a bad row invert the landmarks.
+        return max(0, min(v, mev))
+
     # Build two passes: global defaults first, then personal overrides.
     defaults: dict[str, VolumeTarget] = {}
     personal: dict[str, VolumeTarget] = {}
-    for mg, mev, mav, mrv, mid in rows:
+    for mg, mev, mav, mrv, mid, mv_raw, tier_raw in rows:
+        vt_kwargs = {"mv": _mv(mv_raw, mev), "tier": _tier(tier_raw)}
         if mid == "":
-            defaults[mg] = VolumeTarget(mg, mev, mav, mrv, source="population")
+            defaults[mg] = VolumeTarget(mg, mev, mav, mrv, source="population", **vt_kwargs)
         elif mid == (meso_id or ""):
-            personal[mg] = VolumeTarget(mg, mev, mav, mrv, source="personal")
+            personal[mg] = VolumeTarget(mg, mev, mav, mrv, source="personal", **vt_kwargs)
 
     targets: dict[str, VolumeTarget] = dict(defaults)
     for mg, vt in personal.items():
         pop = defaults.get(mg)
+        # Tier is a training decision, not a fitted landmark: a mesocycle-scoped
+        # row that predates 0078 carries no tier, so inherit the default's
+        # rather than silently promoting the muscle back to 'grow'.
+        tier = vt.tier if vt.tier == "maintain" else (pop.tier if pop else vt.tier)
         # If the fitted MRV is below 50% of the population MRV, flag as
         # undertrained — the fit is measuring habit, not physiology.
         if pop and vt.mrv < pop.mrv * 0.5:
-            targets[mg] = VolumeTarget(mg, pop.mev, pop.mav, pop.mrv, source="personal_floored")
+            targets[mg] = VolumeTarget(
+                mg, pop.mev, pop.mav, pop.mrv, source="personal_floored", mv=pop.mv, tier=tier
+            )
         else:
-            targets[mg] = vt
+            targets[mg] = VolumeTarget(
+                mg, vt.mev, vt.mav, vt.mrv, source="personal", mv=vt.mv, tier=tier
+            )
     return targets
 
 
@@ -197,7 +248,8 @@ def weekly_e1rm(
     if before is not None:
         rows = conn.execute(
             """
-            SELECT week_start, e1rm_kg, work_sets, perf_score, trend, weekly_tonnage_kg
+            SELECT week_start, e1rm_kg, work_sets, perf_score, trend, weekly_tonnage_kg,
+                   weekly_avg_rpe, rpe_set_count
             FROM exercise_weekly_e1rm
             WHERE exercise = ? AND week_start < ?
             ORDER BY week_start DESC
@@ -208,7 +260,8 @@ def weekly_e1rm(
     else:
         rows = conn.execute(
             """
-            SELECT week_start, e1rm_kg, work_sets, perf_score, trend, weekly_tonnage_kg
+            SELECT week_start, e1rm_kg, work_sets, perf_score, trend, weekly_tonnage_kg,
+                   weekly_avg_rpe, rpe_set_count
             FROM exercise_weekly_e1rm
             WHERE exercise = ?
             ORDER BY week_start DESC
@@ -216,7 +269,9 @@ def weekly_e1rm(
             """,
             [exercise, n_weeks],
         ).fetchall()
-    return [WeeklyE1RM(r[0], r[1], r[2], r[3], r[4], r[5]) for r in reversed(rows)]
+    return [
+        WeeklyE1RM(r[0], r[1], r[2], r[3], r[4], r[5], r[6], int(r[7] or 0)) for r in reversed(rows)
+    ]
 
 
 # e1RM scoring is deliberately conservative: a hypertrophy controller must not
@@ -279,6 +334,34 @@ def _trend_pct_per_week(e1rms: list[float]) -> float:
     return slope / mean_y * 100.0
 
 
+def _rpe_slope_per_week(rpes: list[float]) -> float:
+    """OLS slope of a weekly-average-RPE series (oldest→newest), in RPE pts/week.
+
+    Raw points, not a percentage: RPE is an ordinal 1–10 effort scale logged at
+    0.5 resolution, so a percent-of-mean slope would compress the very signal
+    being measured (0.5 RPE is a large change at 6.0 and the same change at 9.0).
+    """
+    n = len(rpes)
+    if n < 2:
+        return 0.0
+    mean_x = (n - 1) / 2.0
+    mean_y = sum(rpes) / n
+    num = sum((i - mean_x) * (y - mean_y) for i, y in enumerate(rpes))
+    den = sum((i - mean_x) ** 2 for i in range(n))
+    return num / den if den else 0.0
+
+
+# A real effort trend against n-of-1 noise. 0.10 RPE/week is ~1 full RPE point
+# across a 10-week window — well above the 0.5-point logging resolution and the
+# session-to-session jitter of a self-reported scale, but sensitive enough to
+# surface a drift long before it shows up in e1RM.
+_RPE_MEANINGFUL_SLOPE = 0.10
+# A week needs this many RPE-logged working sets before its mean is allowed to
+# speak for the week. One set carrying a whole week would let a single hard or
+# easy set flip a muscle's volume decision.
+_RPE_MIN_SETS_PER_WEEK = 2
+
+
 def _score_from_trend(pct_per_week: float) -> tuple[int, str]:
     """Map a multi-week e1RM trend (%/week) to an Israetel 1–5 score + label.
 
@@ -308,7 +391,9 @@ def _recommendation(score: int) -> str:
 
 
 def _score_series(
-    e1rms: list[float], tonnages: list[float | None]
+    e1rms: list[float],
+    tonnages: list[float | None],
+    rpes: list[float | None] | None = None,
 ) -> tuple[int, str] | None:
     """Score a (oldest→newest) e1RM series — the single scoring core shared by
     the live path (:func:`score_exercise`) and the historical backfill
@@ -355,6 +440,40 @@ def _score_series(
             # cannot falsely trip the fatigue deload. Genuine regression (both
             # e1RM AND tonnage falling) is left untouched.
             perf_score, trend = (4, "progressing") if tonnage_pct >= 0.5 else (3, "stalled")
+
+    # ── Effort corroboration (migration 0079) ────────────────────────────────
+    # e1RM and tonnage both measure OUTPUT. RPE measures what that output COST,
+    # and at a flat output the cost trend is the only thing that separates real
+    # adaptation from hidden regression:
+    #
+    #   flat e1RM + FALLING RPE → same load, less effort → adapting  → upgrade
+    #   flat e1RM + RISING  RPE → same load, more cost   → regressing → downgrade
+    #
+    # Both were previously scored 3 ("stalled") and given the same remedy (+1
+    # set), which is right for one of them and actively wrong for the other.
+    #
+    # Scoped deliberately to the flat band only. A rising e1RM is unambiguous
+    # progress whatever it cost, and demoting it on effort would re-create the
+    # anti-progression trap invariant 6 exists to prevent. The downgrade
+    # additionally requires that volume-load is not climbing: more tonnage
+    # SHOULD cost more RPE, and reading that as regression would punish a
+    # working hypertrophy block for working.
+    #
+    # Only the DOWNGRADE lives here. The falling-RPE case (flat e1RM getting
+    # easier) is deliberately NOT scored as progression, because scoring it 4
+    # would route it to `_decide`'s perf>=4 branch and add SETS — silently
+    # overriding the existing `rpe_headroom` branch, which argues the opposite
+    # for exactly this situation and is right: a flat e1RM that keeps getting
+    # easier means the LOAD is too light, and adding volume to a too-light load
+    # is the wrong lever. Falling RPE feeds `_muscle_rpe_headroom` instead, so
+    # the remedy stays "raise load, hold sets" — now decided per muscle rather
+    # than by a cross-muscle session average.
+    if rpes is not None and perf_score == 3:
+        rpe_series = [r for r in rpes[-window:] if r is not None]
+        if len(rpe_series) >= 3:
+            rpe_slope = _rpe_slope_per_week(rpe_series)
+            if rpe_slope >= _RPE_MEANINGFUL_SLOPE and (tonnage_pct is None or tonnage_pct < 0.5):
+                perf_score, trend = 2, "regressing"
     return perf_score, trend
 
 
@@ -384,7 +503,14 @@ def score_exercise(
     if len(history) < 3:
         return None
 
-    result = _score_series([h.e1rm_kg for h in history], [h.tonnage_kg for h in history])
+    # A week's mean RPE only speaks for that week if enough sets carried one;
+    # below the floor it is passed as None ("no effort claim") rather than a
+    # thin average that could flip the call on a single set.
+    result = _score_series(
+        [h.e1rm_kg for h in history],
+        [h.tonnage_kg for h in history],
+        [h.avg_rpe if h.rpe_set_count >= _RPE_MIN_SETS_PER_WEEK else None for h in history],
+    )
     if result is None:
         return None
     perf_score, trend = result
@@ -429,7 +555,8 @@ def backfill_perf_scores(conn: duckdb.DuckDBPyConnection) -> None:
     for ex in exercises:
         rows = conn.execute(
             """
-            SELECT week_start, e1rm_kg, weekly_tonnage_kg, perf_score
+            SELECT week_start, e1rm_kg, weekly_tonnage_kg, perf_score,
+                   weekly_avg_rpe, rpe_set_count
             FROM exercise_weekly_e1rm
             WHERE exercise = ?
             ORDER BY week_start
@@ -441,6 +568,12 @@ def backfill_perf_scores(conn: duckdb.DuckDBPyConnection) -> None:
         e1rms = [float(r[1]) for r in rows]
         tonnages = [float(r[2]) if r[2] is not None else None for r in rows]
         scored = [r[3] for r in rows]
+        # Same adequacy floor score_exercise applies, so a historical row scores
+        # identically to how the live path would have scored it that week.
+        rpes = [
+            float(r[4]) if r[4] is not None and (r[5] or 0) >= _RPE_MIN_SETS_PER_WEEK else None
+            for r in rows
+        ]
 
         for i in range(len(rows)):
             if scored[i] is not None:
@@ -449,7 +582,11 @@ def backfill_perf_scores(conn: duckdb.DuckDBPyConnection) -> None:
             # Same 14-week cap weekly_e1rm() fetches for live scoring; _score_series
             # picks the dynamic 6/9/12 window from within it, so a historical row
             # scores identically to how it would have scored live that week.
-            result = _score_series(e1rms[max(0, i - 14) : i], tonnages[max(0, i - 14) : i])
+            result = _score_series(
+                e1rms[max(0, i - 14) : i],
+                tonnages[max(0, i - 14) : i],
+                rpes[max(0, i - 14) : i],
+            )
             if result is None:
                 continue
             ps, trend = result
@@ -478,12 +615,14 @@ def backfill_weekly_e1rm(conn: duckdb.DuckDBPyConnection) -> None:
         f"""
         INSERT INTO exercise_weekly_e1rm
             (exercise, week_start, e1rm_kg, work_sets, weekly_tonnage_kg,
-             perf_score, trend, computed_at)
+             weekly_avg_rpe, rpe_set_count, perf_score, trend, computed_at)
         SELECT exercise,
                date_trunc('week', started_at)::DATE AS week_start,
                MAX({_CAPPED_E1RM})                  AS e1rm_kg,
                COUNT(*)                             AS work_sets,
                SUM({_CAPPED_TONNAGE})                AS weekly_tonnage_kg,
+               AVG(rpe)                             AS weekly_avg_rpe,
+               COUNT(rpe)                           AS rpe_set_count,
                NULL, NULL, now()
         FROM workout_sets_dedup
         WHERE weight_kg > 0 AND reps > 0
@@ -493,6 +632,8 @@ def backfill_weekly_e1rm(conn: duckdb.DuckDBPyConnection) -> None:
             e1rm_kg          = excluded.e1rm_kg,
             work_sets        = excluded.work_sets,
             weekly_tonnage_kg = excluded.weekly_tonnage_kg,
+            weekly_avg_rpe   = excluded.weekly_avg_rpe,
+            rpe_set_count    = excluded.rpe_set_count,
             computed_at      = now()
         """
     ).rowcount

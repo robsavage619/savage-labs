@@ -82,8 +82,7 @@ def test_backfill_perf_scores_matches_live_score_exercise(conn) -> None:
 
     backfill_perf_scores(conn)
     backfilled = conn.execute(
-        "SELECT perf_score, trend FROM exercise_weekly_e1rm "
-        "WHERE exercise = ? AND week_start = ?",
+        "SELECT perf_score, trend FROM exercise_weekly_e1rm WHERE exercise = ? AND week_start = ?",
         [ex, weeks[9].isoformat()],
     ).fetchone()
     assert backfilled is not None
@@ -102,3 +101,65 @@ def test_score_series_reclassifies_regressing_e1rm_with_rising_tonnage() -> None
     perf_score, trend = result
     assert perf_score >= 3, "regressing e1RM with rising tonnage must be rescued"
     assert trend in ("progressing", "stalled")
+
+
+# ── Effort as a progression signal (migration 0079) ──────────────────────────
+# e1RM and tonnage both measure OUTPUT. At a flat output only the effort trend
+# separates real adaptation from hidden regression — and before 0079 both
+# scored 3 ("stalled") and got the same +1-set remedy, which is right for one
+# and actively wrong for the other.
+
+_FLAT_E1RM = [100.0, 100.2, 99.9, 100.1, 100.0, 100.2]
+_FLAT_TONNAGE = [2000.0] * 6
+
+
+def test_flat_e1rm_with_falling_rpe_does_not_become_a_volume_add() -> None:
+    # Same load getting easier is real adaptation, but scoring it 4 would route
+    # it to _decide's perf>=4 branch and ADD SETS — silently overriding the
+    # rpe_headroom branch, which argues the right thing for this exact case:
+    # a too-light load needs more LOAD, not more volume. The signal is carried
+    # by _muscle_rpe_headroom instead, so the score must stay stalled here.
+    falling = [8.5, 8.3, 8.1, 7.9, 7.6, 7.4]
+    score, trend = _score_series(_FLAT_E1RM, _FLAT_TONNAGE, falling)
+    assert (score, trend) == (3, "stalled")
+
+
+def test_flat_e1rm_with_rising_rpe_reads_as_regression() -> None:
+    # Same load costing steadily more → hidden regression. This case was
+    # completely invisible to the engine before 0079.
+    rising = [7.0, 7.2, 7.5, 7.8, 8.0, 8.3]
+    score, trend = _score_series(_FLAT_E1RM, _FLAT_TONNAGE, rising)
+    assert (score, trend) == (2, "regressing")
+
+
+def test_rising_rpe_is_not_regression_when_volume_load_is_climbing() -> None:
+    # More tonnage SHOULD cost more effort. Reading that as regression would
+    # punish a working hypertrophy block for working.
+    rising_rpe = [7.0, 7.2, 7.5, 7.8, 8.0, 8.3]
+    rising_tonnage = [2000.0, 2100.0, 2210.0, 2320.0, 2440.0, 2560.0]
+    score, trend = _score_series(_FLAT_E1RM, rising_tonnage, rising_rpe)
+    assert trend == "progressing"
+
+
+def test_rising_e1rm_is_never_demoted_by_effort() -> None:
+    # A rising e1RM is unambiguous progress whatever it cost. Demoting it on
+    # effort would re-create the anti-progression trap invariant 6 prevents.
+    rising_e1rm = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+    rising_rpe = [7.0, 7.3, 7.6, 7.9, 8.2, 8.5]
+    score, trend = _score_series(rising_e1rm, _FLAT_TONNAGE, rising_rpe)
+    assert trend == "progressing"
+    assert score >= 4
+
+
+def test_absent_rpe_scores_identically_to_pre_0079() -> None:
+    # ~87% of Rob's logged history carries no RPE. None must mean "no effort
+    # claim" and fall back to the e1RM-only score, never be read as zero effort.
+    baseline = _score_series(_FLAT_E1RM, _FLAT_TONNAGE)
+    assert _score_series(_FLAT_E1RM, _FLAT_TONNAGE, None) == baseline
+    assert _score_series(_FLAT_E1RM, _FLAT_TONNAGE, [None] * 6) == baseline
+
+
+def test_flat_rpe_leaves_the_stall_call_alone() -> None:
+    # Noise below the meaningful-slope threshold must not flip a call.
+    jitter = [7.5, 7.6, 7.4, 7.5, 7.6, 7.5]
+    assert _score_series(_FLAT_E1RM, _FLAT_TONNAGE, jitter) == (3, "stalled")

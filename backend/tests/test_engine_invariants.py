@@ -787,3 +787,83 @@ def test_a_movement_never_leads_its_head_forever_when_an_alternative_exists() ->
         [lead, shortened], 1, None, {lead[0]: 0, shortened[0]: 0}, {lead[0]: 999}
     )
     assert banded[0][0] == lead[0], "tenure never justifies a shortened-position swap"
+
+
+# ── Invariant 10 ─────────────────────────────────────────────────────────────
+
+
+def test_maintenance_tier_is_explicit_only_and_never_reaches_an_emphasis_muscle() -> None:
+    """Invariant 10: under-training is reachable only by an explicit, stated intent.
+
+    The MV tier (migration 0078) is the one mechanism in the engine that
+    deliberately holds a muscle BELOW its minimum effective volume. That is the
+    exact shape invariant 6 forbids a *fitted* band from taking, and it is only
+    legitimate as a human-set training decision — so every path that could apply
+    it by accident must fail toward growth instead:
+
+      * no tier argument at all (pre-0078 callers)  → grow
+      * a NULL / empty / unrecognised tier string   → grow
+      * an emphasis muscle, whatever the tier says  → grow
+
+    If any of these ever resolves to 'maintain', a muscle can be silently parked
+    at 2 sets/week by a missing migration, a typo, or a stale row — which is the
+    silent under-train this whole contract exists to prevent.
+    """
+    from shc.training.autoregulation import _decide
+
+    common = dict(
+        current=0,
+        mev=10,
+        mav=16,
+        mrv=22,
+        perf=None,
+        soreness=0.0,
+        conditioning_acwr=None,
+        confidence=0.6,
+        scored_weeks=4,
+        mv=2,
+    )
+
+    # Absence → grow, and the muscle still climbs to MEV exactly as before 0078.
+    assert _decide("chest", **common).tier == "grow"
+    assert _decide("chest", **common).target_sets == 10
+
+    # Anything that isn't the exact string 'maintain' → grow.
+    for bogus in ("", "MAINTAIN", "maintenance", "maintain ", "grow", "None"):
+        rx = _decide("chest", tier=bogus, **common)
+        assert rx.tier == "grow", f"tier={bogus!r} must not demote"
+        assert rx.target_sets == 10
+
+    # Only the exact string demotes — proving the guard above is real and the
+    # tier is genuinely wired, not merely never applied.
+    assert _decide("chest", tier="maintain", **common).tier == "maintain"
+
+    # An emphasis muscle overrides the tier and keeps its growth floor.
+    emph = _decide("biceps", tier="maintain", emphasis=True, **common)
+    assert emph.tier == "grow"
+    assert emph.target_sets > 2
+
+
+def test_volume_targets_defaults_to_grow_on_a_pre_0078_schema() -> None:
+    """Invariant 10, read path: a DB without the tier columns must not maintain.
+
+    `volume_targets` degrades to the pre-0078 query when `mv_sets`/`tier` are
+    absent. If that fallback returned anything but 'grow', rolling the migration
+    back — or running against an older snapshot — would silently park every
+    muscle at maintenance.
+    """
+    import duckdb
+
+    from shc.training.mesocycle import volume_targets
+
+    conn = duckdb.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE muscle_volume_targets "
+        "(muscle_group TEXT, mev_sets INTEGER, mav_sets INTEGER, mrv_sets INTEGER, "
+        " mesocycle_id TEXT)"
+    )
+    conn.execute("INSERT INTO muscle_volume_targets VALUES ('chest', 10, 16, 22, '')")
+
+    targets = volume_targets(conn)
+    assert targets["chest"].tier == "grow"
+    assert targets["chest"].mev == 10

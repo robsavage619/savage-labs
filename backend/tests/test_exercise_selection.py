@@ -165,8 +165,7 @@ def fallback_conn() -> duckdb.DuckDBPyConnection:
     c.execute("CREATE TABLE exercise_preferences (exercise TEXT, status TEXT)")
     c.execute("CREATE TABLE exercise_muscle_map (exercise_name TEXT, primary_muscle TEXT)")
     c.execute(
-        "CREATE TABLE workout_sets_dedup "
-        "(exercise TEXT, started_at TIMESTAMP, is_warmup BOOLEAN)"
+        "CREATE TABLE workout_sets_dedup (exercise TEXT, started_at TIMESTAMP, is_warmup BOOLEAN)"
     )
     return c
 
@@ -232,11 +231,11 @@ def trend_conn() -> duckdb.DuckDBPyConnection:
     c.execute(
         "CREATE TABLE exercise_weekly_e1rm "
         "(exercise TEXT, week_start DATE, e1rm_kg DOUBLE, work_sets INTEGER, "
-        " perf_score INTEGER, trend TEXT, weekly_tonnage_kg DOUBLE)"
+        " perf_score INTEGER, trend TEXT, weekly_tonnage_kg DOUBLE, "
+        " weekly_avg_rpe DOUBLE, rpe_set_count INTEGER)"
     )
     c.execute(
-        "CREATE TABLE workout_sets_dedup "
-        "(exercise TEXT, started_at TIMESTAMP, is_warmup BOOLEAN)"
+        "CREATE TABLE workout_sets_dedup (exercise TEXT, started_at TIMESTAMP, is_warmup BOOLEAN)"
     )
     return c
 
@@ -248,8 +247,14 @@ def _rising_series(c, exercise, weeks_ago_start: int, n: int = 6) -> None:
     for i in range(n):
         wk = base + timedelta(weeks=i)
         e1rm = 100.0 + i  # +1kg/wk on a 100kg base ≈ +1%/wk
+        # Name the columns: a bare positional VALUES silently re-maps every time
+        # a column is added to the rollup (0079 added two and shifted tonnage
+        # into weekly_avg_rpe, flipping these trends without touching the code
+        # under test).
         c.execute(
-            "INSERT INTO exercise_weekly_e1rm VALUES (?, ?, ?, ?, NULL, NULL, ?)",
+            "INSERT INTO exercise_weekly_e1rm "
+            "(exercise, week_start, e1rm_kg, work_sets, perf_score, trend, weekly_tonnage_kg) "
+            "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
             [exercise, wk.isoformat(), e1rm, 4, e1rm * 20],
         )
         c.execute(
