@@ -46,8 +46,19 @@ _STIMULATING = f"ws.reps BETWEEN {_REP_MIN} AND {_REP_MAX}"
 #   * RPE <  _STIMULATING_RPE → not stimulating, contributes 0 (a back-off /
 #     feeder single Rob explicitly graded easy shouldn't count toward MRV).
 # When ``rpe`` is NULL we fall back to the prior assumption (count it) rather than
-# silently zeroing the set — Rob logs RPE on <2% of Hevy sets and never on the
-# Fitbod history, so a hard NULL-excludes gate would erase ~99% of real volume.
+# silently zeroing the set — the Fitbod history carries no RPE at all, so a hard
+# NULL-excludes gate would erase most of the historical series.
+#
+# COVERAGE HAS MOVED (verified 2026-07-26). The original note here read "Rob logs
+# RPE on <2% of Hevy sets", which is still true LIFETIME (583 of 27,098) but badly
+# misleading for current data: coverage is 81% over 90 days and 100% over 30. The
+# NULL fallback now protects history, not the present.
+#
+# THIS GATE IS CURRENTLY INERT: zero sets in the database are graded below 6.0,
+# because 6.0 is both this threshold and the floor of Hevy's RPE picker — 110
+# recent sets sit exactly ON the line and pass via `>=`. It has never excluded a
+# set. Left in place (it is correct, and costs nothing) but do not read it as
+# active filtering; :func:`rpe_coverage` reports what it is actually doing.
 # The size of that assumption is surfaced by :func:`rpe_coverage` so it can't
 # hide. Threshold matches Hevy's RPE picker floor of 6 (RIR ≈ 4).
 _STIMULATING_RPE = 6.0

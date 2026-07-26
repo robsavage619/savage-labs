@@ -2,6 +2,23 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-26 — The load model was blind to effort, which is the one thing load is for
+
+**Context.** Rob asked whether the engine "fully understands RPE." An end-to-end audit of every RPE consumer found the answer was no, and the gap was structural rather than incremental: RPE reached the *strength estimate* (e1RM, RIR-adjusted earlier the same day), the *progression score*, the *volume direction* (per-muscle headroom), the *rest gate*, and the *volume RIR gate* — but not **load**. `v_daily_load`'s resistance component was `SUM(weight x reps)`.
+
+**Why that is the wrong metric for this column.** Tonnage is a defensible hypertrophy VOLUME metric. It is being used as FATIGUE — `resistance_acwr` gates today's intensity — and there it inverts the ordering that matters: `3x5 @RPE 9` carries 15 reps of load and scored **below** `3x15 @RPE 6` at 45 reps. A heavy near-failure session registered as *less* load than an easy high-rep one, so a shift toward heavier work read as detraining and the engine answered with more volume. It compounds on propranolol days: `v_session_load` already (correctly) excludes powerlifting/weightlifting strain because lifting load belongs to this arm rather than the HR arm, and beta-blockade suppresses HR on the conditioning arm — so both arms of `composite_load` could understate effort simultaneously.
+
+**Decision.** Migration 0085 weights each set's volume-load by its RPE — the multiplicative form Foster's session-RPE uses (`load = RPE x work`), applied per set because Hevy grades at set level — normalised at 7.0: `SUM(weight_kg * reps * COALESCE(rpe, 7.0) / 7.0)`. 7.0 is a **normaliser, not a threshold**: it keeps the new series on roughly the old scale (Rob's mean logged RPE is 7.21, mean multiplier ~1.03) so the Gabbett thresholds — defined on a ratio, scale-invariant within an arm — keep their meaning. `hevy_tonnes` is deliberately kept unchanged as the raw audit series rather than redefined in place.
+
+**Why no band re-fit was needed** (the thing flagged as the blocker before starting). `self_learning.fit_acwr_bands` fits ONLY the conditioning arm (`whoop_strain`), and invariant 6 records that resistance ACWR is not fitted at all. This migration touches only the resistance and composite columns, so the fitter and the live gate cannot drift apart. The risk it *does* create is a column-axis analogue of invariant 1: `hevy_tonnes` still exists, and a future fit against it would fit a distribution the gate never produces. `_historical_weekly_acwr`'s column contract now says so explicitly, and a test asserts it.
+
+**Live effect.** Resistance ACWR **0.83 → 0.88** — recent weeks were harder than tonnage credited. Conditioning ACWR unchanged (different basis). Pooled unchanged at 0.70. No gate flipped. Per-session: 2026-07-17 (@RPE 6.0) now scores **-14.3%**, 2026-07-19 (@RPE 8.4) **+17.3%**, and every pre-May-2026 day is bit-identical (verified: 0 days differ).
+
+**Two smaller findings from the same audit, fixed here.** (1) `volume.py`'s RIR gate carried the comment "Rob logs RPE on <2% of Hevy sets" — still true lifetime (583 of 27,098) but badly misleading now: coverage is **81% over 90 days and 100% over 30**. Anyone reading it would have made a wrong call about tightening the gate. (2) That gate is **currently inert**: zero sets in the database are graded below its 6.0 threshold, because 6.0 is also the floor of Hevy's RPE picker — 110 recent sets sit exactly on the line and pass via `>=`. Left in place (it is correct and costs nothing), but the comment no longer claims it is filtering.
+
+**Still open.** The RPE-coherence validator remains HIGH-day-only, so a moderate day can still carry a load that does not match its RPE label — that is the check that would have caught the 175x10-at-"RPE 8" prescription, and only the *basis* has been fixed. The deload trigger still has no direct effort input; RPE reaches it only indirectly through the perf score.
+
+
 ## 2026-07-26 — e1RM assumed every set went to failure; it never does
 
 **Context.** Surfaced by the app, not by a test. The plan card renders each exercise beside what Rob last did, and today's plan showed **Leg Extension 175×10 @ "RPE 8"** next to **200×10 @RPE 8 logged three days earlier**. Same claimed effort, 25 lb less load. Hip Abduction (−18) and RDL (−5) were the same shape.

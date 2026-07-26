@@ -297,7 +297,15 @@ def _historical_weekly_acwr(
     conn: duckdb.DuckDBPyConnection,
     column: str,
 ) -> list[float]:
-    """Compute uncoupled weekly ACWR ratios for ``column`` (hevy_tonnes | whoop_strain).
+    """Compute uncoupled weekly ACWR ratios for ``column`` (whoop_strain | hevy_effort_load).
+
+    NOT ``hevy_tonnes``. Since migration 0085 the live resistance arm scores
+    against ``hevy_effort_load`` (RPE-weighted volume-load); ``hevy_tonnes`` is
+    retained only as the raw, auditable series. Fitting a band on tonnage would
+    fit a distribution the gate never produces — the exact invariant-1 failure
+    the history note below records. Every live caller passes ``whoop_strain``
+    (resistance ACWR is not fitted at all; see ENGINE_INVARIANTS #6), so this is
+    a guard against a future change, not a description of current behaviour.
 
     Mirrors the live ``_arm_acwr`` formula in metrics.py (lines ~890-899) EXACTLY —
     the personal percentile bands are only meaningful if fitted on the same ratio
@@ -1126,9 +1134,7 @@ def compute_muscle_signal_quality(
         n_p = len(perfs)
         mean_x = (n_p - 1) / 2.0
         den = sum((i - mean_x) ** 2 for i in range(n_p))
-        slope = (
-            sum((i - mean_x) * (p - mu) for i, p in enumerate(perfs)) / den if den else 0.0
-        )
+        slope = sum((i - mean_x) * (p - mu) for i, p in enumerate(perfs)) / den if den else 0.0
         intercept = mu - slope * mean_x
         residuals = [p - (intercept + slope * i) for i, p in enumerate(perfs)]
         cv = pstdev(residuals) / mu if mu > 0 else _SIGNAL_CV_REF

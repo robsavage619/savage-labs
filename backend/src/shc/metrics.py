@@ -943,7 +943,12 @@ def _sleep(conn, today: date) -> SleepMetrics:
 def _training_load(conn, today: date) -> TrainingLoadMetrics:
     m = TrainingLoadMetrics()
     load_rows = conn.execute(
-        "SELECT date, composite_load, whoop_strain, hevy_tonnes "
+        # Resistance arm reads hevy_effort_load (RPE-weighted volume-load,
+        # migration 0085), NOT raw hevy_tonnes. This column is used as FATIGUE —
+        # it gates today's intensity — and raw tonnage scored a heavy near-failure
+        # session BELOW an easy high-rep one, so a shift to heavier work read as
+        # detraining. Sets with no logged RPE weight 1.0 and are unchanged.
+        "SELECT date, composite_load, whoop_strain, hevy_effort_load "
         "FROM v_daily_load WHERE date >= $s ORDER BY date",
         {"s": (today - timedelta(days=28)).isoformat()},
     ).fetchall()
@@ -1062,7 +1067,11 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             continue
         prior = best_dose_day.get(muscle)
         if prior is None or day > prior[0]:
-            best_dose_day[muscle] = (day, int(n_sets), float(avg_rpe) if avg_rpe is not None else None)
+            best_dose_day[muscle] = (
+                day,
+                int(n_sets),
+                float(avg_rpe) if avg_rpe is not None else None,
+            )
     for muscle, (day, n_sets, avg_rpe) in best_dose_day.items():
         m.muscle_recovery[muscle] = {
             "days_since": (today - day).days,
@@ -2063,9 +2072,7 @@ def _freshness(
     if f.sleep_age_days is not None and f.sleep_age_days > 2:
         f.gaps.append(f"Sleep {f.sleep_age_days}d stale")
     if f.hevy_age_days is not None and f.hevy_age_days > 2:
-        f.gaps.append(
-            f"Hevy {f.hevy_age_days}d stale — resistance ACWR/e1RM trends running blind"
-        )
+        f.gaps.append(f"Hevy {f.hevy_age_days}d stale — resistance ACWR/e1RM trends running blind")
     if f.cardio_age_days is not None and f.cardio_age_days > 2:
         f.gaps.append(f"Cardio {f.cardio_age_days}d stale — conditioning load may be incomplete")
     return f

@@ -943,9 +943,7 @@ def test_e1rm_never_inflates_on_a_set_with_no_logged_rpe() -> None:
 
     c = duckdb.connect(":memory:")
     c.execute("CREATE TABLE s (reps INTEGER, rpe DOUBLE)")
-    c.execute(
-        "INSERT INTO s VALUES (5, NULL), (5, 10.0), (5, 11.0), (5, 8.0), (5, 5.0), (12, 7.0)"
-    )
+    c.execute("INSERT INTO s VALUES (5, NULL), (5, 10.0), (5, 11.0), (5, 8.0), (5, 5.0), (12, 7.0)")
     got = [r[0] for r in c.execute(f"SELECT {effective_reps_sql()} FROM s").fetchall()]
 
     assert got[0] == 5, "NULL rpe must add nothing — it is the 87% case"
@@ -976,4 +974,78 @@ def test_progression_and_ceiling_e1rm_share_one_expression() -> None:
     src = inspect.getsource(workout_planner.e1rm_by_exercise)
     assert "effective_reps_sql" in src, (
         "the ceiling path no longer routes through the shared RIR expression"
+    )
+
+
+def test_resistance_load_is_effort_weighted_and_history_is_untouched() -> None:
+    """Invariant 14: the resistance ACWR arm measures fatigue, not just volume.
+
+    `v_daily_load`'s resistance component was raw volume-load (weight x reps).
+    Tonnage is a good hypertrophy VOLUME metric and a poor FATIGUE metric — and
+    this column is used as fatigue, since `resistance_acwr` gates today's
+    intensity. Raw tonnage inverts the ordering that matters:
+
+        3 x 5  @ RPE 9  -> 15 reps of load, scores LOWER
+        3 x 15 @ RPE 6  -> 45 reps of load, scores HIGHER
+
+    so a shift toward heavier, lower-rep work read to the engine as detraining
+    and was answered with more volume. Sets are now weighted by RPE (the
+    multiplicative form Foster's session-RPE uses), normalised at 7.0.
+
+    The second half is the safety half: a set with NO logged RPE must weight
+    exactly 1.0. ~98% of lifetime sets predate RPE logging, and the historical
+    series — which the chronic window and every band fit read — must move only
+    on evidence, never on an assumption.
+    """
+    import duckdb
+
+    c = duckdb.connect(":memory:")
+    c.execute("CREATE TABLE s (weight_kg DOUBLE, reps INTEGER, rpe DOUBLE)")
+    c.execute(
+        "INSERT INTO s VALUES "
+        "(100, 5, 9.0),"  # heavy, near failure
+        "(40, 15, 6.0),"  # light, easy — MORE tonnage
+        "(100, 5, NULL)"  # ungraded — must be unweighted
+    )
+    rows = c.execute(
+        "SELECT weight_kg * reps AS tonnage, "
+        "       weight_kg * reps * (COALESCE(rpe, 7.0) / 7.0) AS effort FROM s"
+    ).fetchall()
+    heavy, light, ungraded = rows
+
+    assert light[0] > heavy[0], "precondition: the easy set really does carry more tonnage"
+    assert heavy[1] > light[1], (
+        "effort weighting must rank the heavy near-failure set above the easy "
+        "high-rep one — the inversion this invariant exists to fix"
+    )
+    assert ungraded[1] == pytest.approx(ungraded[0]), (
+        "a set with no logged RPE must weight exactly 1.0; the historical series "
+        "may not move under an assumption"
+    )
+
+
+def test_acwr_band_fitter_never_fits_a_column_the_gate_does_not_score() -> None:
+    """Invariant 14, second half: fitter and gate read the SAME resistance column.
+
+    Invariant 1 requires the band-fitter and the live gate to agree on the ACWR
+    window. Migration 0085 adds a way to violate the same contract on the
+    *column* axis: the gate now scores resistance against `hevy_effort_load`,
+    while `hevy_tonnes` survives as a raw audit series. A fit against tonnage
+    would fit a distribution the gate never produces.
+
+    Live callers all pass `whoop_strain` (resistance ACWR is not fitted at all —
+    invariant 6), so this guards a future change rather than current behaviour.
+    """
+    import inspect
+
+    from shc import metrics
+    from shc.training import self_learning
+
+    live = inspect.getsource(metrics._training_load)
+    assert "hevy_effort_load" in live, "the live gate stopped reading the effort-weighted column"
+
+    fitter_doc = self_learning._historical_weekly_acwr.__doc__ or ""
+    assert "hevy_effort_load" in fitter_doc and "NOT ``hevy_tonnes``" in fitter_doc, (
+        "the fitter's column contract no longer records which resistance series "
+        "the gate scores against"
     )
