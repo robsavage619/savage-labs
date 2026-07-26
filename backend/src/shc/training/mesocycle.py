@@ -22,7 +22,7 @@ from datetime import date, timedelta
 import duckdb
 
 from shc.training.exercise_classifier import backfill_exercise_map
-from shc.training.load_mechanics import per_hand_sql
+from shc.training.load_mechanics import effective_reps_sql, per_hand_sql
 from shc.training.self_learning import fit_all
 
 log = logging.getLogger(__name__)
@@ -279,14 +279,19 @@ def weekly_e1rm(
 # estimating; and the performance signal is a multi-week TREND (OLS slope), never
 # a single-week delta whose ~2–5% error (RIR/rep-selection/CNS state) swamps real
 # change. See the sports-science panel review (C1).
-_EPLEY_REP_CAP = 12
+_EPLEY_REP_CAP = 12  # re-exported for tests; canonical value lives in load_mechanics
 # Best estimated 1RM for a set, reps capped so high-rep sets don't inflate it.
 # weight_kg is per-hand-normalized via per_hand_sql (the identity except the
 # verified _LOGGED_AS_COMBINED handful) — the same choke point e1rm_by_exercise
 # (the load-ceiling path) routes through, so a dumbbell lift logged as a combined
 # total doesn't read 2x its real per-hand value in the progression trend.
 _PER_HAND_WEIGHT = per_hand_sql("weight_kg", "exercise")
-_CAPPED_E1RM = f"({_PER_HAND_WEIGHT}) * (1 + LEAST(reps, {_EPLEY_REP_CAP}) / 30.0)"
+_EFFECTIVE_REPS = effective_reps_sql("reps", "rpe")
+# Epley over RIR-ADJUSTED reps: the input set is assumed taken to failure, and
+# Rob's best sets sit at RPE 7-8. Raw reps understate e1RM, and the load ceiling
+# is a percentage OF e1RM, so the understatement compounds into the prescription.
+# A set with no logged RPE is unchanged. See load_mechanics.effective_reps_sql.
+_CAPPED_E1RM = f"({_PER_HAND_WEIGHT}) * (1 + {_EFFECTIVE_REPS} / 30.0)"
 _CAPPED_TONNAGE = f"({_PER_HAND_WEIGHT}) * reps"
 
 

@@ -2,6 +2,23 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-26 — e1RM assumed every set went to failure; it never does
+
+**Context.** Surfaced by the app, not by a test. The plan card renders each exercise beside what Rob last did, and today's plan showed **Leg Extension 175×10 @ "RPE 8"** next to **200×10 @RPE 8 logged three days earlier**. Same claimed effort, 25 lb less load. Hip Abduction (−18) and RDL (−5) were the same shape.
+
+**Cause.** `_CAPPED_E1RM` and `e1rm_by_exercise` both ran Epley on raw reps. Epley assumes the set went to failure; Rob's best logged sets sit at RPE 7-8, i.e. 2-3 reps in reserve. A 200×10 @RPE 8 therefore scored 266.7 when true capacity was nearer 280. The MODERATE-day cap is 90% *of that*, so the error compounded: the prescribed load landed at roughly **64% of what he had just lifted at the same target RPE**. Invariant 5 guards a green day's top-set ceiling, but not this — the cap was legitimate on a yellow day; the *basis* it discounted was wrong. Nothing caught it because the validator's RPE-coherence check is scoped to HIGH days only, so on moderate days a load may sit arbitrarily far below its own RPE label.
+
+**Decision.** `load_mechanics.effective_reps_sql()` — `LEAST(reps + clamp(10 − rpe, 0, MAX_RIR_CREDIT), EPLEY_REP_CAP)` — as a single choke point both e1RM paths import, mirroring how `per_hand_sql` already governs the units question. Three guards, all one-directional because this raises a **safety** ceiling: missing RPE adds nothing, RIR credit caps at 3, and the 12-rep Epley cap binds after the adjustment rather than before. Net ≈ +5%. Migration 0084 nulls `perf_score` for exactly the weeks carrying RPE, since `backfill_perf_scores` only fills NULLs by design and would otherwise leave scores fitted on a basis that no longer exists sitting beside refreshed e1RM values.
+
+**Live effect.** Leg Extension ceiling 180 → **189** (gap to his last session −25 → −11), Hip Abduction 94 → **99** (−18 → −11), RDL 71 → **75** (now exact), Lat Pulldown 130 → **141** — the first of these with genuine room to progress above his last set.
+
+**A bug the guard caught.** The first implementation was `COALESCE(GREATEST(LEAST(10 - rpe, 3), 0), 0)`. It reads correctly and is wrong: DuckDB's LEAST/GREATEST **ignore** NULL arguments rather than propagating them, so `LEAST(10 - NULL, 3)` returns **3**, the COALESCE never fired, and every RPE-less set — 87% of logged history — silently received the full 3-rep credit and inflated the ceiling it feeds. `test_missing_rpe_scores_exactly_as_before` was written before the code and failed immediately. Written after, it would have passed against a broken expression.
+
+**Also this session, from Rob's correction:** traps were never a focus. They had been raised only because the engine was *skipping* them, and were then wrongly carried as ★ emphasis with an 11-set target — the largest single ADD in the week. Removed from `muscle_emphasis` (leaving biceps + glutes, the actual focus) and demoted to maintenance, where the MV floor guarantees they can never return to zero without consuming budget. The `POST /training/tier` guard rejected the demotion until the emphasis was cleared first, which is the ordering it was built to enforce. Side effect: weekly dedicated demand **64.1 → 53.1** against 60.5 capacity — `feasible: true`. Traps' target was the entire overshoot.
+
+**Consequences.** Three tests asserted raw-rep Epley values and were updated to RIR-adjusted ones with the arithmetic spelled out — a deliberate expectation change, not a weakened assertion. Invariant 13 added. **Still open:** the RPE-coherence validator remains HIGH-day-only, so a moderate day can still carry a load that does not match its RPE label; only the *basis* is fixed, not the check. 711 tests pass.
+
+
 ## 2026-07-26 — Four evidence gaps closed by ingesting the literature, not by citing it
 
 **Context.** 0080 left 30 rows marked `UNGROUNDED` because the vault genuinely had nothing to support them, and flagged a real contradiction: `Preacher Curl (Dumbbell)` claimed `shortened` while `(Barbell)` and `(Machine)` claimed `lengthened` for the same movement. `length_bias` is a ranking key in `_select_grounded`, so that disagreement changed which curl got selected depending on which variant the menu happened to surface — a coin-flip dressed as evidence.

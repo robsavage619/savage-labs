@@ -1056,11 +1056,17 @@ def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
     """
     from collections import defaultdict
 
-    from shc.training.load_mechanics import per_hand_kg
+    from shc.training.load_mechanics import effective_reps_sql, per_hand_kg
 
+    # RIR-adjusted reps, the SAME expression the progression rollup uses
+    # (mesocycle._CAPPED_E1RM). These two paths must agree: the rollup decides
+    # whether a lift is progressing, this one decides what may be loaded today,
+    # and a divergence would have the engine grading Rob against one e1RM while
+    # prescribing off another. `test_progression_e1rm_excludes_fitbod_and_
+    # quarantined_sets` asserts they land on the same number.
     rows = conn.execute(
-        """
-        SELECT ws.exercise, ws.weight_kg, LEAST(ws.reps, 12) AS reps
+        f"""
+        SELECT ws.exercise, ws.weight_kg, {effective_reps_sql("ws.reps", "ws.rpe")} AS reps
         FROM workout_sets_dedup ws
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL AND ws.reps > 0
           AND ws.source = 'hevy'

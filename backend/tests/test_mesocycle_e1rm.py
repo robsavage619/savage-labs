@@ -36,7 +36,9 @@ def test_progression_e1rm_excludes_fitbod_and_quarantined_sets(conn, seed) -> No
         [_RDL],
     ).fetchall()
     assert len(rows) == 4, "expected exactly one row per hevy/non-warmup week"
-    expected_e1rm = 34.0 * (1 + 8 / 30.0)  # per-hand 34kg, Epley at 8 reps
+    # per-hand 34kg; Epley over RIR-ADJUSTED reps — the fixture logs rpe=8.0
+    # (2 reps in reserve), so 8 performed reps imply 10 to failure.
+    expected_e1rm = 34.0 * (1 + 10 / 30.0)
     for _week_start, e1rm_kg in rows:
         assert abs(e1rm_kg - expected_e1rm) < 0.01, (
             f"e1rm_kg {e1rm_kg} contaminated by Fitbod/quarantined rows "

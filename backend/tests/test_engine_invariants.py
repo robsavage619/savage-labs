@@ -911,3 +911,69 @@ def test_substring_keywords_never_swallow_unrelated_exercise_names() -> None:
         assert classify_exercise(base)[0] == classify_exercise(f"{base} (Machine)")[0], (
             f"'{base}' and '{base} (Machine)' classify differently"
         )
+
+
+def test_e1rm_never_inflates_on_a_set_with_no_logged_rpe() -> None:
+    """Invariant 13: the RIR adjustment may only fire on evidence.
+
+    e1RM is Epley over RIR-adjusted reps, because Epley assumes failure and
+    Rob's best sets sit at RPE 7-8 — scoring them raw understated e1RM, and the
+    day's load ceiling is a PERCENTAGE of e1RM, so the understatement compounded
+    into the prescription (a MODERATE day's 90% cap landing near 64% of a set he
+    had just completed at RPE 8).
+
+    But the same lever runs the other way: e1RM feeds a SAFETY ceiling — the
+    thing that stops a "deload" being a max attempt — so credit must never be
+    granted without an RPE to justify it. ~87% of logged history has none.
+
+    This is not hypothetical. The first implementation used
+    `COALESCE(GREATEST(LEAST(10 - rpe, 3), 0), 0)`, which reads correctly and is
+    wrong: DuckDB's LEAST/GREATEST IGNORE null arguments rather than propagating
+    them, so `LEAST(10 - NULL, 3)` returns 3, the COALESCE never fired, and every
+    RPE-less set silently received the FULL 3-rep credit. The guard below is what
+    caught it.
+    """
+    import duckdb
+
+    from shc.training.load_mechanics import (
+        EPLEY_REP_CAP,
+        MAX_RIR_CREDIT,
+        effective_reps_sql,
+    )
+
+    c = duckdb.connect(":memory:")
+    c.execute("CREATE TABLE s (reps INTEGER, rpe DOUBLE)")
+    c.execute(
+        "INSERT INTO s VALUES (5, NULL), (5, 10.0), (5, 11.0), (5, 8.0), (5, 5.0), (12, 7.0)"
+    )
+    got = [r[0] for r in c.execute(f"SELECT {effective_reps_sql()} FROM s").fetchall()]
+
+    assert got[0] == 5, "NULL rpe must add nothing — it is the 87% case"
+    assert got[1] == 5, "RPE 10 is failure: 0 RIR"
+    assert got[2] == 5, "a malformed RPE above 10 must never subtract reps"
+    assert got[3] == 7, "RPE 8 -> 2 RIR"
+    assert got[4] == 5 + MAX_RIR_CREDIT, "RPE 5 implies 5 RIR but credit is capped"
+    assert got[5] == EPLEY_REP_CAP, "the rep cap binds AFTER the adjustment, not before"
+
+
+def test_progression_and_ceiling_e1rm_share_one_expression() -> None:
+    """Invariant 13, second half: the two e1RM paths must not drift apart.
+
+    `mesocycle._CAPPED_E1RM` decides whether a lift is progressing;
+    `workout_planner.e1rm_by_exercise` decides what may be loaded today. If they
+    computed e1RM differently the engine would grade Rob against one number and
+    prescribe off another — the same class of split-basis bug that had the
+    progression series mixing per-hand and combined-total units.
+    """
+    import inspect
+
+    from shc.ai import workout_planner
+    from shc.training import mesocycle
+
+    assert "effective_reps_sql" in mesocycle._CAPPED_E1RM or "CASE WHEN" in (
+        mesocycle._CAPPED_E1RM
+    ), "the rollup path no longer routes through the shared RIR expression"
+    src = inspect.getsource(workout_planner.e1rm_by_exercise)
+    assert "effective_reps_sql" in src, (
+        "the ceiling path no longer routes through the shared RIR expression"
+    )

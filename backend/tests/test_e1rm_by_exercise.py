@@ -17,10 +17,13 @@ def test_empty_when_no_data(conn, today: date) -> None:
 
 def test_returns_best_e1rm_per_exercise(conn, seed, today: date) -> None:
     ex = "Bench Press (Barbell)"
-    seed.workout(days_ago(today, 5), ex, [(90, 5)])    # 90*1.167 = 105
-    seed.workout(days_ago(today, 3), ex, [(100, 3)])   # 100*1.10 = 110 (best)
+    # The seed fixture logs rpe=8.0 by default, i.e. 2 reps in reserve, so Epley
+    # runs on reps+2 (see load_mechanics.effective_reps_sql). A set stopped 2
+    # short of failure implies a higher 1RM than its raw rep count does.
+    seed.workout(days_ago(today, 5), ex, [(90, 5)])    # eff 7 reps -> 90*1.233 = 111.0
+    seed.workout(days_ago(today, 3), ex, [(100, 3)])   # eff 5 reps -> 100*1.167 = 116.7 (best)
     result = e1rm_by_exercise(conn, today)
-    assert result[ex] == round(100 * (1 + 3 / 30), 4) or abs(result[ex] - 110.0) < 0.01
+    assert result[ex] == pytest.approx(100 * (1 + 5 / 30))
 
 
 def test_excludes_warmup_sets(conn, seed, today: date) -> None:
@@ -62,7 +65,8 @@ def test_barbell_not_halved(conn, seed, today: date) -> None:
     ex = "Bench Press (Barbell)"
     seed.workout(days_ago(today, 4), ex, [(100, 5)])
     result = e1rm_by_exercise(conn, today)
-    assert result[ex] == pytest.approx(100 * (1 + 5 / 30))  # full bar load, no ÷2
+    # Full bar load, no ÷2. Reps are 5+2 RIR (fixture logs rpe=8.0).
+    assert result[ex] == pytest.approx(100 * (1 + 7 / 30))
 
 
 def test_gross_outlier_set_is_trimmed(conn, seed, today: date) -> None:
@@ -74,3 +78,60 @@ def test_gross_outlier_set_is_trimmed(conn, seed, today: date) -> None:
     seed.workout(days_ago(today, 1), ex, [(400, 1)])  # impossible fat-finger
     result = e1rm_by_exercise(conn, today)
     assert result[ex] < 100  # outlier rejected, not the ~53kg MAD-consistent max
+
+
+# ── RIR-adjusted e1RM ────────────────────────────────────────────────────────
+# Epley assumes the input set went to failure. Rob's don't — his best logged
+# sets sit at RPE 7-8. Feeding raw reps understated e1RM, and since the day's
+# load ceiling is a PERCENTAGE of e1RM, the understatement compounded into the
+# prescription: a MODERATE day's 90% cap landed near 64% of what he'd just
+# lifted at RPE 8. These lock the guards, all of which err downward.
+
+
+def test_missing_rpe_scores_exactly_as_before(conn, seed, today: date) -> None:
+    """~87% of logged history predates RPE. NULL must add nothing.
+
+    If a missing RPE were ever read as "0 RIR credit assumed generously" — or
+    worse, defaulted to some nominal RPE — every pre-2026 set would silently
+    inflate the ceiling it feeds.
+    """
+    ex = "Bench Press (Barbell)"
+    seed.workout(days_ago(today, 3), ex, [(100, 5)], rpe=None)
+    assert e1rm_by_exercise(conn, today)[ex] == pytest.approx(100 * (1 + 5 / 30))
+
+
+def test_rir_credit_is_capped_so_an_easy_set_cannot_extrapolate_far(
+    conn, seed, today: date
+) -> None:
+    """RPE 5 implies 5 RIR, but credit stops at MAX_RIR_CREDIT (3).
+
+    A set that far from failure is a weak 1RM anchor; extrapolating the full
+    distance would let a deliberately light day raise the ceiling.
+    """
+    ex = "Squat (Barbell)"
+    seed.workout(days_ago(today, 3), ex, [(100, 5)], rpe=5.0)
+    # 5 + 3 (capped), not 5 + 5
+    assert e1rm_by_exercise(conn, today)[ex] == pytest.approx(100 * (1 + 8 / 30))
+
+
+def test_rep_cap_applies_after_the_rir_adjustment(conn, seed, today: date) -> None:
+    """The 12-rep Epley cap binds on the ADJUSTED value, not before it.
+
+    Capping first would let a 12-rep RPE-7 set score as 15 effective reps —
+    deep into the range where Epley's overestimate is the known failure mode
+    and the reason the cap exists at all.
+    """
+    ex = "Deadlift (Barbell)"
+    seed.workout(days_ago(today, 3), ex, [(100, 12)], rpe=7.0)  # 12+3 -> capped to 12
+    assert e1rm_by_exercise(conn, today)[ex] == pytest.approx(100 * (1 + 12 / 30))
+
+
+def test_rpe_10_gets_no_credit_and_over_10_never_subtracts(conn, seed, today: date) -> None:
+    """RPE 10 is failure — 0 RIR. A malformed RPE above 10 must not go negative."""
+    ex = "Overhead Press (Barbell)"
+    seed.workout(days_ago(today, 3), ex, [(100, 5)], rpe=10.0)
+    assert e1rm_by_exercise(conn, today)[ex] == pytest.approx(100 * (1 + 5 / 30))
+
+    ex2 = "Front Squat"
+    seed.workout(days_ago(today, 3), ex2, [(100, 5)], rpe=11.0)  # nonsense input
+    assert e1rm_by_exercise(conn, today)[ex2] == pytest.approx(100 * (1 + 5 / 30))

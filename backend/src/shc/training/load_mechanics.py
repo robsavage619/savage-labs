@@ -148,6 +148,58 @@ def per_hand_sql(column: str = "weight_kg", exercise_col: str = "exercise") -> s
     )
 
 
+EPLEY_REP_CAP = 12
+"""Epley overestimates above ~10-12 reps, so reps feeding it are capped here."""
+
+MAX_RIR_CREDIT = 3
+"""Most reps-in-reserve an RPE log may add back before the set stops being a
+usable 1RM anchor. An RPE 6 set has ~4 RIR, but extrapolating four reps past
+what was actually performed is estimation, not measurement — and this number
+feeds a SAFETY ceiling, so it is deliberately clamped short of the full scale."""
+
+
+def effective_reps_sql(reps_col: str = "reps", rpe_col: str = "rpe") -> str:
+    """SQL for RIR-adjusted reps — what the set WOULD have reached at failure.
+
+    Epley assumes the input set was taken to failure. Rob's are not: his best
+    logged sets sit at RPE 7-8, i.e. 2-3 reps in reserve. Feeding those raw
+    understates e1RM, and because the day's load ceiling is a percentage OF that
+    e1RM, the understatement compounds — a MODERATE day's 90% cap was landing at
+    roughly 64% of what he had just lifted at RPE 8 (Leg Extension: did 200x10
+    @RPE 8 on 2026-07-23, prescribed 175x10 three days later at the same target
+    RPE). The plan claimed an effort the load could not deliver.
+
+    ``effective_reps = LEAST(reps + clamp(10 - rpe, 0, MAX_RIR_CREDIT), 12)``
+
+    Three deliberate guards, all one-directional:
+
+    * **A missing RPE adds nothing.** ~87% of logged history predates RPE
+      logging; NULL coalesces to 0 credit, so those sets score exactly as they
+      did before. Under no circumstance is an RIR assumed.
+    * **RIR credit is capped at 3** (:data:`MAX_RIR_CREDIT`), so a very easy set
+      cannot extrapolate far past what was performed.
+    * **The 12-rep Epley cap applies to the ADJUSTED value**, not before it.
+      Capping first would let a 12-rep RPE-7 set score as 15 effective reps,
+      deep into the range where Epley's overestimate is the known failure mode.
+      Net effect is bounded at roughly +5%.
+
+    This raises a SAFETY ceiling, which is why every guard errs downward: the
+    ceiling exists to stop a "deload" being a max attempt.
+    """
+    # The NULL check is an explicit CASE, NOT COALESCE around LEAST/GREATEST:
+    # DuckDB's LEAST/GREATEST IGNORE null arguments rather than propagating
+    # them, so `LEAST(10 - NULL, 3)` returns 3, not NULL. Wrapping that in
+    # COALESCE therefore never fires, and every RPE-less set — ~87% of logged
+    # history — would silently receive the FULL 3-rep credit and inflate the
+    # load ceiling it feeds. Caught by
+    # `test_missing_rpe_scores_exactly_as_before`; do not "simplify" this back.
+    rir = (
+        f"CASE WHEN {rpe_col} IS NULL THEN 0 "
+        f"ELSE GREATEST(LEAST(10 - {rpe_col}, {MAX_RIR_CREDIT}), 0) END"
+    )
+    return f"LEAST({reps_col} + ({rir}), {EPLEY_REP_CAP})"
+
+
 def load_unit_label(name: str) -> str:
     """``'each hand'`` for per-hand lifts, ``''`` for bilateral single-implement lifts."""
     return "each hand" if is_per_hand(name) else ""
