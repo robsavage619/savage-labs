@@ -516,8 +516,24 @@ export interface MiddaySession {
   performance_goal: string;
 }
 
+/** Live plan→session linking. Nightly adherence runs too late for the card. */
+export interface PlanExecution {
+  plan_date: string;
+  plan_created_at: string | null;
+  executed: boolean;
+  workout_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  sets_done: number;
+  prescribed_sets: number;
+  completion_pct: number | null;
+  avg_rpe: number | null;
+  exercises: string[];
+}
+
 export interface WorkoutPlan {
   generated_at: string;
+  execution?: PlanExecution;
   source: "claude" | "claude_code" | "fallback" | string;
   readiness_tier: "green" | "yellow" | "red";
   readiness_summary: string;

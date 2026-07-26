@@ -17,6 +17,7 @@ from shc.ai.workout_planner import (
     build_training_context,
     load_latest_plan,
     load_plan,
+    plan_execution,
     save_plan,
     validate_plan,
 )
@@ -3020,6 +3021,19 @@ async def delete_workout_plan(target_date: str | None = Query(default=None)) -> 
     return {"status": "ok", "date": d}
 
 
+def _with_execution(plan: dict, plan_date: str) -> dict:
+    """Stamp a served plan with whether it has already been trained.
+
+    Without this the card presents a completed session's prescriptions as the
+    day's action, and its loads — set before the session — read as a deload
+    against the heavier weights the session actually logged.
+    """
+    status = plan_execution(plan_date)
+    if status:
+        plan["execution"] = status
+    return plan
+
+
 @router.get("/workout/next")
 async def workout_next(regen: bool = Query(default=False)) -> dict:
     """Return today's workout plan.
@@ -3033,12 +3047,15 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
     today = date.today().isoformat()
 
     if not regen and today in _WORKOUT_CACHE:
-        return _WORKOUT_CACHE[today]
+        # Execution status is deliberately re-read outside the cache: the session
+        # that executes the plan lands hours after the plan is cached, and a
+        # frozen "not executed yet" is exactly the stale-card bug.
+        return _with_execution(_WORKOUT_CACHE[today], today)
 
     stored = load_plan(today)
     if stored and not regen:
         _WORKOUT_CACHE[today] = stored
-        return stored
+        return _with_execution(stored, today)
 
     # No plan for today — try the most recent stored plan from any prior date
     if not regen:
@@ -3046,7 +3063,7 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
         if latest:
             plan_dict, plan_date = latest
             plan_dict["_carried_from"] = plan_date
-            return plan_dict
+            return _with_execution(plan_dict, plan_date)
 
     # No stored plan at all — return a stub that prompts the user to generate via chat
     conn = get_read_conn()

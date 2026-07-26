@@ -2197,3 +2197,104 @@ def load_latest_plan() -> tuple[dict[str, Any], str] | None:
     if not row:
         return None
     return json.loads(row[0]), str(row[1])
+
+
+def plan_execution_status(conn, plan_date: str) -> dict[str, Any] | None:
+    """Report whether the plan stored for ``plan_date`` has already been trained.
+
+    Adherence linking runs nightly (`scheduler.jobs._recompute_adherence`), so a
+    plan executed this morning stays unlinked until ~4am tomorrow. The plan card
+    read path needs the answer live, otherwise a completed session keeps rendering
+    as today's action and its now-stale loads read as a deload against the heavier
+    weights actually lifted.
+
+    Executed means: a session on the plan's own date that started AFTER the plan
+    was created and logged at least one working set. The started-after test is
+    what distinguishes "the plan was executed" from "the plan was regenerated
+    after a session". The working-set requirement dodges the WHOOP shadow row —
+    WHOOP mirrors every Hevy lift as its own zero-set workout — and means a
+    cardio-only day never marks a lifting plan complete.
+
+    Returns:
+        Status dict, or None when no plan is stored for ``plan_date``.
+    """
+    row = conn.execute(
+        "SELECT plan_json, created_at FROM workout_plans WHERE date = $d",
+        {"d": plan_date},
+    ).fetchone()
+    if not row:
+        return None
+    created_at = row[1]
+    try:
+        plan = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        plan = {}
+    prescribed_sets = sum(
+        int(ex.get("sets", 0) or 0)
+        for block in plan.get("blocks", [])
+        for ex in block.get("exercises", [])
+    )
+
+    status: dict[str, Any] = {
+        "plan_date": plan_date,
+        "plan_created_at": created_at.isoformat() if created_at else None,
+        "executed": False,
+        "workout_id": None,
+        "started_at": None,
+        "ended_at": None,
+        "sets_done": 0,
+        "prescribed_sets": prescribed_sets,
+        "completion_pct": None,
+        "avg_rpe": None,
+        "exercises": [],
+    }
+    if created_at is None:
+        return status
+
+    # Ordered by sets_done for the same reason the nightly job is: the WHOOP
+    # mirror row starts a second later and would otherwise win a started_at sort.
+    actual = conn.execute(
+        """
+        SELECT
+            w.id,
+            w.started_at,
+            w.ended_at,
+            COUNT(*) FILTER (WHERE NOT ws.is_warmup) AS sets_done,
+            AVG(ws.rpe) FILTER (WHERE NOT ws.is_warmup AND ws.rpe IS NOT NULL) AS avg_rpe,
+            LIST(DISTINCT ws.exercise) FILTER (WHERE NOT ws.is_warmup) AS exercises
+        FROM workouts w
+        JOIN workout_sets ws ON ws.workout_id = w.id
+        WHERE w.started_at::DATE = $d AND w.started_at > $created
+        GROUP BY w.id, w.started_at, w.ended_at
+        HAVING COUNT(*) FILTER (WHERE NOT ws.is_warmup) > 0
+        ORDER BY sets_done DESC, w.started_at DESC
+        LIMIT 1
+        """,
+        {"d": plan_date, "created": created_at},
+    ).fetchone()
+    if not actual:
+        return status
+
+    sets_done = int(actual[3] or 0)
+    status.update(
+        executed=True,
+        workout_id=str(actual[0]),
+        started_at=actual[1].isoformat() if actual[1] else None,
+        ended_at=actual[2].isoformat() if actual[2] else None,
+        sets_done=sets_done,
+        completion_pct=(
+            round(sets_done / prescribed_sets * 100, 1) if prescribed_sets > 0 else None
+        ),
+        avg_rpe=round(float(actual[4]), 1) if actual[4] is not None else None,
+        exercises=sorted(actual[5] or []),
+    )
+    return status
+
+
+def plan_execution(plan_date: str) -> dict[str, Any] | None:
+    """`plan_execution_status` against a fresh read connection."""
+    conn = get_read_conn()
+    try:
+        return plan_execution_status(conn, plan_date)
+    finally:
+        conn.close()

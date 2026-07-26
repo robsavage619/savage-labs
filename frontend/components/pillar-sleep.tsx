@@ -129,7 +129,12 @@ export function PillarSleep() {
     <div className="shc-card shc-enter p-5 min-h-[320px] flex flex-col">
       <div className="flex items-baseline justify-between">
         <Eyebrow>Sleep architecture</Eyebrow>
-        <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">last 7 nights</span>
+        {/* Not every tile is a 7-night aggregate: efficiency/SpO₂ and wakes are
+            single-night values from DailyState. Headed "last 7 nights" alone, a
+            wakes count of 14 read as a week's total instead of one bad night. */}
+        <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">
+          last 7 nights · <span className="text-[var(--text-faint)]">1n = last night</span>
+        </span>
       </div>
 
       <div className="grid grid-cols-6 gap-2 mt-3">
@@ -156,7 +161,10 @@ export function PillarSleep() {
           />
         </div>
         <div title="Sleep efficiency = time asleep / time in bed. >85% is the target. Falls back to overnight SpO₂ when efficiency data is unavailable.">
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{effLast != null ? "Eff." : spo2Last != null ? "SpO₂" : "Eff."}</p>
+          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
+            {effLast != null ? "Eff." : spo2Last != null ? "SpO₂" : "Eff."}{" "}
+            <span className="text-[var(--text-faint)]">1n</span>
+          </p>
           <Metric
             value={effLast != null ? effLast.toFixed(0) : spo2Last != null ? spo2Last.toFixed(1) : "—"}
             unit={effLast != null || spo2Last != null ? "%" : undefined}
@@ -179,7 +187,9 @@ export function PillarSleep() {
           />
         </div>
         <div title="Mid-sleep awakenings — Whoop disturbance count for last night.">
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Wakes</p>
+          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
+            Wakes <span className="text-[var(--text-faint)]">1n</span>
+          </p>
           <Metric
             value={disturbLast != null ? String(disturbLast) : "—"}
             size="md"

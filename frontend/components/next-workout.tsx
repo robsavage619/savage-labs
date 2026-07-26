@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
 import { ObsidianMark } from "@/components/obsidian-badge";
 import { CheckIcon, RefreshIcon, ArrowRightIcon, XIcon } from "@/components/ui/icons";
-import type { WorkoutPlan, WorkoutBlock, WarmupItem } from "@/lib/api";
+import type { WorkoutPlan, WorkoutBlock, WarmupItem, PlanExecution } from "@/lib/api";
 import { ProgressionDrawer } from "@/components/progression-drawer";
 
 type PushState =
@@ -26,6 +26,65 @@ const TIER = {
   red: { color: "var(--negative)", soft: "var(--negative-soft)", border: "oklch(0.65 0.22 25 / 0.25)", icon: "▼", label: "Rest / active recovery" },
 } as const;
 
+/** Local ISO date — `toISOString()` would roll over to tomorrow after 5pm PDT. */
+const localToday = (): string => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const formatClock = (iso: string | null): string | null => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+};
+
+// ── Completed banner ─────────────────────────────────────────────────────────
+
+/** Shown once a session on the plan's date has actually been logged against it.
+ *  Until this existed the card kept presenting an executed plan as the day's
+ *  action, and its pre-session loads read as a deload against what was lifted. */
+function CompletedBanner({ ex }: { ex: PlanExecution }) {
+  const start = formatClock(ex.started_at);
+  const end = formatClock(ex.ended_at);
+  return (
+    <div
+      className="rounded-[var(--r-md)] p-4 pl-5 flex gap-3 items-start"
+      style={{
+        background: "var(--positive-soft)",
+        border: "1px solid oklch(0.72 0.18 145 / 0.25)",
+      }}
+    >
+      <CheckIcon size={15} className="mt-0.5 flex-shrink-0" style={{ color: "var(--positive)" }} />
+      <div className="min-w-0">
+        <p className="text-[13px] font-semibold" style={{ color: "var(--positive)" }}>
+          Session logged — this plan is done
+        </p>
+        <div className="flex items-center gap-2 flex-wrap text-[11px] text-[var(--text-dim)] tabular-nums mt-1">
+          {start && <span>{start}{end ? `–${end}` : ""}</span>}
+          {start && <span className="text-[var(--text-faint)]">·</span>}
+          <span>
+            {ex.sets_done} working {ex.sets_done === 1 ? "set" : "sets"}
+            {ex.prescribed_sets > 0 && ` of ${ex.prescribed_sets} prescribed`}
+            {ex.completion_pct != null && ` (${ex.completion_pct.toFixed(0)}%)`}
+          </span>
+          {ex.avg_rpe != null && <span className="text-[var(--text-faint)]">·</span>}
+          {ex.avg_rpe != null && <span>avg RPE {ex.avg_rpe.toFixed(1)}</span>}
+        </div>
+        {ex.exercises.length > 0 && (
+          <p className="text-[11.5px] text-[var(--text-muted)] leading-snug mt-1.5">
+            {ex.exercises.join(" · ")}
+          </p>
+        )}
+        <p className="text-[11px] text-[var(--text-faint)] leading-snug mt-2">
+          The prescription below is what was written this morning, before the session —
+          it is a record, not a target. Don&apos;t train it again off these loads.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ── Readiness banner ─────────────────────────────────────────────────────────
 
 function ReadinessBanner({ plan }: { plan: WorkoutPlan }) {
@@ -38,6 +97,7 @@ function ReadinessBanner({ plan }: { plan: WorkoutPlan }) {
       ? "Active recovery"
       : null;
   const t = labelOverride ? { ...base, label: labelOverride } : base;
+  const snapshotAt = formatClock(plan.execution?.plan_created_at ?? null);
   return (
     <div
       className="rounded-[var(--r-md)] overflow-hidden"
@@ -71,6 +131,14 @@ function ReadinessBanner({ plan }: { plan: WorkoutPlan }) {
           </div>
           <p className="text-[12.5px] text-[var(--text-muted)] leading-relaxed">
             {plan.readiness_summary}
+            {/* The narrative is a snapshot taken when the plan was written, and it
+                sits a scroll away from the live readiness gauge. Without this stamp
+                the two numbers read as a contradiction rather than as two times. */}
+            {snapshotAt && (
+              <span className="text-[10.5px] text-[var(--text-faint)] tabular-nums ml-1.5 whitespace-nowrap">
+                (as of {snapshotAt})
+              </span>
+            )}
           </p>
           <p className="text-[11.5px] text-[var(--text-dim)] leading-snug italic mt-2">
             <span className="text-[var(--text-faint)] not-italic font-semibold uppercase tracking-wider text-[9.5px] mr-1.5">Why</span>
@@ -130,7 +198,7 @@ function RPEBadge({ rpe }: { rpe: number }) {
 
 // ── Exercise block ───────────────────────────────────────────────────────────
 
-function ExerciseHistoryStamp({ name, prescribedLbs, modulated }: { name: string; prescribedLbs?: number; modulated?: boolean }) {
+function ExerciseHistoryStamp({ name, prescribedLbs, modulated, executed }: { name: string; prescribedLbs?: number; modulated?: boolean; executed?: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ["exercise-last", name],
     queryFn: () => api.trainingExerciseLast(name),
@@ -145,7 +213,10 @@ function ExerciseHistoryStamp({ name, prescribedLbs, modulated }: { name: string
   }
   const days = Math.floor((Date.now() - new Date(data.date! + "T00:00:00").getTime()) / 86_400_000);
   const ago = days === 0 ? "today" : days === 1 ? "yesterday" : days < 14 ? `${days}d ago` : days < 60 ? `${Math.round(days / 7)}w ago` : `${Math.round(days / 30)}mo ago`;
-  const delta = prescribedLbs != null ? prescribedLbs - data.weight_lbs : null;
+  // Once the session has executed, "history" IS this session — differencing a
+  // pre-session prescription against it renders a deload that was never
+  // prescribed (the live case: 205 vs the 220 actually lifted, shown as −15).
+  const delta = !executed && prescribedLbs != null ? prescribedLbs - data.weight_lbs : null;
   // On modulated-intensity days, a prescribed drop is intentional — use neutral not red.
   const deltaColor =
     delta == null ? "var(--text-faint)"
@@ -191,11 +262,13 @@ function ExerciseCard({
   index,
   onPick,
   modulated,
+  executed,
 }: {
   ex: WorkoutBlock["exercises"][number];
   index: number;
   onPick: (n: string) => void;
   modulated?: boolean;
+  executed?: boolean;
 }) {
   const isSuperset = (ex.notes ?? "").toLowerCase().includes("superset");
   return (
@@ -271,7 +344,7 @@ function ExerciseCard({
           </div>
 
           <div className="ml-7">
-            <ExerciseHistoryStamp name={ex.name} prescribedLbs={ex.weight_lbs} modulated={modulated} />
+            <ExerciseHistoryStamp name={ex.name} prescribedLbs={ex.weight_lbs} modulated={modulated} executed={executed} />
           </div>
 
           {ex.notes && !isSuperset && (
@@ -290,7 +363,7 @@ function ExerciseCard({
   );
 }
 
-function ExerciseBlock({ block, onPick, modulated }: { block: WorkoutBlock; onPick: (ex: string) => void; modulated?: boolean }) {
+function ExerciseBlock({ block, onPick, modulated, executed }: { block: WorkoutBlock; onPick: (ex: string) => void; modulated?: boolean; executed?: boolean }) {
   const accent = blockAccent(block.label);
   return (
     <section className="space-y-2.5">
@@ -305,7 +378,7 @@ function ExerciseBlock({ block, onPick, modulated }: { block: WorkoutBlock; onPi
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {(block.exercises ?? []).map((ex, i) => (
-          <ExerciseCard key={i} ex={ex} index={i} onPick={onPick} modulated={modulated} />
+          <ExerciseCard key={i} ex={ex} index={i} onPick={onPick} modulated={modulated} executed={executed} />
         ))}
       </div>
     </section>
@@ -447,15 +520,37 @@ export function NextWorkoutPane() {
     handleRegen();
   }
 
+  // A plan is only "today's" while it is still the day's action. Once a session
+  // has executed it — or once it has been carried over from an earlier date —
+  // it is history, and its pre-session loads must not read as a prescription.
+  const execution = data?.execution;
+  const executed = execution?.executed === true;
+  const planDate = execution?.plan_date ?? data?.generated_at ?? null;
+  const carried = planDate != null && planDate < localToday();
+  const title = executed ? "Completed" : carried ? "Last Plan" : "Today's Plan";
 
   return (
     <div className="space-y-5">
       {/* Header */}
       <div className="flex items-end justify-between flex-wrap gap-3 pb-1">
         <div>
-          <h2 className="text-[20px] font-semibold tracking-tight text-[var(--text-primary)] leading-none">
-            Today&apos;s Plan
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-[20px] font-semibold tracking-tight text-[var(--text-primary)] leading-none">
+              {title}
+            </h2>
+            {(executed || carried) && (
+              <span
+                className="text-[9.5px] font-semibold uppercase tracking-[0.16em] px-2 py-0.5 rounded-full"
+                style={
+                  executed
+                    ? { background: "var(--positive-soft)", color: "var(--positive)", border: "1px solid oklch(0.72 0.18 145 / 0.25)" }
+                    : { background: "var(--neutral-soft)", color: "var(--neutral)", border: "1px solid oklch(0.75 0.18 75 / 0.25)" }
+                }
+              >
+                {executed ? "Trained" : "Not today's"}
+              </span>
+            )}
+          </div>
           {data && (
             <div className="flex items-center gap-2 mt-2">
               <span className="text-[11px] text-[var(--text-dim)] tabular-nums">
@@ -502,9 +597,13 @@ export function NextWorkoutPane() {
           {/* Push plan to Hevy */}
           <button
             onClick={handlePushHevy}
-            disabled={push.kind === "pushing" || !data}
+            disabled={push.kind === "pushing" || !data || executed}
             className={push.kind === "ok" ? "btn btn-primary" : "btn btn-secondary"}
-            title="Push today's plan to Hevy as a routine"
+            title={
+              executed
+                ? "Already trained — pushing this plan would re-prescribe pre-session loads"
+                : "Push today's plan to Hevy as a routine"
+            }
           >
             <span className={push.kind === "pushing" ? "animate-spin inline-block" : ""}>
               {push.kind === "pushing" ? <RefreshIcon size={13} /> : push.kind === "ok" ? <CheckIcon size={13} /> : <ArrowRightIcon size={13} />}
@@ -558,20 +657,24 @@ export function NextWorkoutPane() {
 
       {data && (
         <div className="space-y-5">
-          <ReadinessBanner plan={data} />
-          <WarmupSection items={data.warmup ?? []} />
-          {(data.blocks ?? []).map((block, i) => (
-            <ExerciseBlock
-              key={i}
-              block={block}
-              onPick={setPicked}
-              modulated={data.recommendation?.intensity === "low" || data.recommendation?.intensity === "rest"}
-            />
-          ))}
-          <CooldownRow text={data.cooldown ?? ""} />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <ClinicalCallout notes={toStringArray(data.clinical_notes)} />
-            <VaultInsights insights={toStringArray(data.vault_insights)} />
+          {executed && execution && <CompletedBanner ex={execution} />}
+          <div className="space-y-5" style={executed ? { opacity: 0.7 } : undefined}>
+            <ReadinessBanner plan={data} />
+            <WarmupSection items={data.warmup ?? []} />
+            {(data.blocks ?? []).map((block, i) => (
+              <ExerciseBlock
+                key={i}
+                block={block}
+                onPick={setPicked}
+                modulated={data.recommendation?.intensity === "low" || data.recommendation?.intensity === "rest"}
+                executed={executed}
+              />
+            ))}
+            <CooldownRow text={data.cooldown ?? ""} />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <ClinicalCallout notes={toStringArray(data.clinical_notes)} />
+              <VaultInsights insights={toStringArray(data.vault_insights)} />
+            </div>
           </div>
         </div>
       )}
