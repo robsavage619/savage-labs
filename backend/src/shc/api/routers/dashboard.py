@@ -51,6 +51,19 @@ class EmphasisSubmission(BaseModel):
     note: str | None = None
 
 
+class TierSubmission(BaseModel):
+    """Set which muscles are growth targets this mesocycle (migration 0078).
+
+    ``grow`` muscles run MEV→MAV progression; ``maintain`` muscles hold at MV
+    (~1-2 sets/wk), which the vault records as sufficient to retain hypertrophy
+    for ~3 months in trained lifters. The list is exhaustive for the muscles it
+    names — anything omitted keeps its current tier.
+    """
+
+    grow: list[str] = []
+    maintain: list[str] = []
+
+
 class BriefingSubmission(BaseModel):
     training_call: str  # Push | Train | Maintain | Easy | Rest
     training_rationale: str
@@ -3019,6 +3032,111 @@ async def set_emphasis(body: EmphasisSubmission) -> dict:
     return {"status": "ok", "muscle": muscle, "weight": body.weight}
 
 
+@router.get("/training/tier")
+async def get_volume_tier() -> dict:
+    """Return each muscle's volume tier + landmarks, and this week's set budget.
+
+    ``grow`` muscles are the mesocycle's growth targets (MEV→MAV); ``maintain``
+    muscles hold at MV so the weekly set budget concentrates instead of
+    spreading across all 17 (see migration 0078 / ENGINE_INVARIANTS #10).
+    """
+    conn = get_read_conn()
+    try:
+        from shc.training.autoregulation import weekly_prescription
+        from shc.training.mesocycle import volume_targets
+
+        targets = volume_targets(conn)
+        capacity = weekly_prescription(conn).capacity
+    finally:
+        conn.close()
+    muscles = [
+        {
+            "muscle": m,
+            "tier": vt.tier,
+            "mv": vt.mv,
+            "mev": vt.mev,
+            "mav": vt.mav,
+            "mrv": vt.mrv,
+            "landmark_source": vt.source,
+        }
+        for m, vt in sorted(targets.items(), key=lambda kv: (kv[1].tier, kv[0]))
+    ]
+    return {
+        "muscles": muscles,
+        "grow": [m["muscle"] for m in muscles if m["tier"] == "grow"],
+        "maintain": [m["muscle"] for m in muscles if m["tier"] == "maintain"],
+        "capacity": capacity,
+    }
+
+
+@router.post("/training/tier", dependencies=[Depends(require_admin_key)])
+async def set_volume_tier(body: TierSubmission) -> dict:
+    """Set which muscles grow this mesocycle and which hold at maintenance.
+
+    Guards, in order:
+
+    * unknown muscle name → 422 (a typo must surface, not silently no-op)
+    * a muscle in BOTH lists → 422 (ambiguous intent is never averaged)
+    * demoting an emphasis muscle → 422. `_decide` would override it anyway
+      (ENGINE_INVARIANTS #7/#10: a lagging bring-up is never parked at MV), so
+      accepting the write would store a lie the engine then ignores. Drop the
+      emphasis first if that is really the intent.
+    * an empty grow tier → 422. Zero growth targets is never a training
+      decision, and it is what a buggy caller sending `{}` would produce.
+    """
+    grow = [m.strip().lower() for m in body.grow if m.strip()]
+    maintain = [m.strip().lower() for m in body.maintain if m.strip()]
+    if overlap := set(grow) & set(maintain):
+        raise HTTPException(
+            status_code=422, detail=f"muscle(s) in both grow and maintain: {sorted(overlap)}"
+        )
+    if not grow and not maintain:
+        raise HTTPException(status_code=422, detail="nothing to set")
+
+    async with write_ctx() as conn:
+        known = {
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT muscle_group FROM muscle_volume_targets"
+            ).fetchall()
+        }
+        if unknown := (set(grow) | set(maintain)) - known:
+            raise HTTPException(status_code=422, detail=f"unknown muscle(s): {sorted(unknown)}")
+
+        emphasis = {r[0] for r in conn.execute("SELECT muscle FROM muscle_emphasis").fetchall()}
+        if clash := set(maintain) & emphasis:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"cannot set emphasis muscle(s) to maintain: {sorted(clash)} — the engine "
+                    "overrides it (invariant 7/10). DELETE /training/emphasis/<muscle> first."
+                ),
+            )
+
+        # Would this leave nothing growing? Check against the resulting state,
+        # not just the payload, so a partial update can't empty the tier either.
+        current_grow = {
+            r[0]
+            for r in conn.execute(
+                "SELECT muscle_group FROM muscle_volume_targets WHERE tier = 'grow'"
+            ).fetchall()
+        }
+        resulting = (current_grow | set(grow)) - set(maintain)
+        if not resulting:
+            raise HTTPException(
+                status_code=422,
+                detail="that would leave no muscle growing — set at least one grow tier",
+            )
+
+        for muscle, tier in [(m, "grow") for m in grow] + [(m, "maintain") for m in maintain]:
+            conn.execute(
+                "UPDATE muscle_volume_targets SET tier = ?, updated_at = now() "
+                "WHERE muscle_group = ?",
+                [tier, muscle],
+            )
+    return {"status": "ok", "grow": grow, "maintain": maintain, "now_growing": sorted(resulting)}
+
+
 @router.delete("/training/emphasis/{muscle}", dependencies=[Depends(require_admin_key)])
 async def delete_emphasis(muscle: str) -> dict:
     """Remove a muscle from the emphasis set (stop prioritizing it)."""
@@ -3128,7 +3246,9 @@ async def workout_next(regen: bool = Query(default=False)) -> dict:
     _prior_load = [float(r[1] or 0) for r in load_rows if _chronic_start <= r[0] < _acute_start]
     acwr_acute = round(sum(_recent_load) / 7.0, 2) if load_rows else None
     acwr_chronic = round(sum(_prior_load) / 21.0, 2) if load_rows else None
-    acwr = round(acwr_acute / acwr_chronic, 2) if (acwr_acute is not None and acwr_chronic) else None
+    acwr = (
+        round(acwr_acute / acwr_chronic, 2) if (acwr_acute is not None and acwr_chronic) else None
+    )
 
     group_last_day: dict[str, str] = {}
     for row in workout_rows:

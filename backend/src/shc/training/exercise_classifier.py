@@ -12,8 +12,21 @@ None if the name cannot be classified confidently.
 """
 
 import logging
+import re
 
 import duckdb
+
+
+def _word(token: str, name: str) -> bool:
+    """Whole-word substring test.
+
+    Exercise classification matches on lowercased substrings, which is fine for
+    multi-word tokens ("lat pulldown") but silently wrong for short ones that
+    occur inside longer words. `"chin" in name` matched "ma-chin-e"; use this
+    for any token that could be embedded in an unrelated word.
+    """
+    return re.search(rf"\b{re.escape(token)}\b", name) is not None
+
 
 log = logging.getLogger(__name__)
 
@@ -176,7 +189,12 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         or "pull-up" in n
         or "pullup" in n
         or "pull down" in n
-        or "chin" in n
+        # "chin" must match as a WORD. As a bare substring it also matches
+        # ma-CHIN-e, so every "(Machine)" exercise that reached this branch was
+        # classified as a chin-up: Ab Crunch Machine (744 sets) credited to lats
+        # instead of abs, and five overhead-press variants (1,402 sets) credited
+        # as PULLING — which also reset the pull rest-gate clock on a push day.
+        or _word("chin", n)
         or "high row" in n
         or "iso row" in n
         or "iso-lateral row" in n

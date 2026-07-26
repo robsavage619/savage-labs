@@ -48,8 +48,13 @@ def test_science_view_shows_only_curated_rows(conn) -> None:
 def test_crediting_and_anatomy_share_one_row(conn) -> None:
     # The whole point: a curated movement carries role/credit AND region/citation
     # in the SAME row, so the two can never disagree again.
+    # Citation is asserted as "a real vault note", not a fixed string: 0080
+    # re-grounded every unverifiable paper citation onto the vault, and pinning
+    # the literal would make this test fail on exactly the change it should
+    # welcome. The property under test is that one row carries BOTH facets.
     row = conn.execute(
         "SELECT role, credit, region, citation FROM exercise_muscle "
         "WHERE exercise_name = 'Hammer Curl (Dumbbell)' AND muscle = 'biceps'"
     ).fetchone()
-    assert row == ("primary", 1.0, "brachialis", "Schoenfeld 2015")
+    assert row[:3] == ("primary", 1.0, "brachialis")
+    assert row[3] and row[3].endswith(".md"), f"expected a vault-note citation, got {row[3]!r}"

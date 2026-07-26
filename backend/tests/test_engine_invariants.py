@@ -867,3 +867,47 @@ def test_volume_targets_defaults_to_grow_on_a_pre_0078_schema() -> None:
     targets = volume_targets(conn)
     assert targets["chest"].tier == "grow"
     assert targets["chest"].mev == 10
+
+
+def test_substring_keywords_never_swallow_unrelated_exercise_names() -> None:
+    """Invariant 4, generalised: a classifier keyword must match a WORD.
+
+    `classify_exercise` tested `"chin" in name` as a bare substring, which also
+    matches ma-CHIN-e. Every "(Machine)" exercise that reached the Back branch
+    was therefore classified as a chin-up — 7 exercises and 2,155 logged sets:
+    Ab Crunch Machine (744 sets) credited to lats instead of abs, and five
+    overhead-press variants (1,402 sets) credited as PULLING. That is invariant
+    4's failure mode with the arrow reversed (a push pattern landing in pull),
+    and it also reset the pull rest-gate clock on a push day.
+
+    Guards the specific collision and the general property that a machine
+    variant classifies the same as its free-weight namesake.
+    """
+    from shc.training.exercise_classifier import classify_exercise
+
+    # The collision itself.
+    for name in (
+        "Machine Shoulder Press",
+        "Seated Shoulder Press (Machine)",
+        "Machine Overhead Press",
+        "Overhead Press (Smith Machine)",
+        "Smith Machine Overhead Shoulder Press",
+    ):
+        primary, _ = classify_exercise(name)
+        assert primary == "front_delts", f"{name} classified as {primary}, not a press"
+
+    for name in ("Ab Crunch Machine", "Crunch (Machine)"):
+        primary, _ = classify_exercise(name)
+        assert primary == "abs", f"{name} classified as {primary}, not core"
+
+    # Chin-ups must still classify — the fix narrows the match, it does not
+    # remove the rule.
+    for name in ("Chin Up", "Chin Up (Assisted)", "Chin Up (Weighted)"):
+        primary, _ = classify_exercise(name)
+        assert primary == "lats", f"{name} lost its classification to the fix"
+
+    # General property: adding "(Machine)" must never change the muscle.
+    for base in ("Shoulder Press", "Crunch", "Leg Extension", "Chest Press", "Row"):
+        assert classify_exercise(base)[0] == classify_exercise(f"{base} (Machine)")[0], (
+            f"'{base}' and '{base} (Machine)' classify differently"
+        )

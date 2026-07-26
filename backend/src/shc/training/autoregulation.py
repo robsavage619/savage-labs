@@ -1574,18 +1574,34 @@ def _weekly_capacity(
     targets: list[MusclePrescription],
     lookback_weeks: int = 10,
 ) -> dict:
-    """Is this week's total set demand deliverable in the sessions Rob actually does?
+    """Is this week's set demand deliverable in the sessions Rob actually does?
 
-    Measures capacity from logged history rather than assuming it: the median
-    working sets/week over ``lookback_weeks`` completed weeks, and the realised
-    credit ratio (muscle-sets awarded per working set, i.e. 1.0 primary +0.5 per
-    secondary). Demand is the sum of prescribed ``target_sets``.
+    Compares DEDICATED demand — muscle-sets that need a working set allocated to
+    that muscle as its PRIMARY — against the median working sets/week measured
+    over ``lookback_weeks`` completed weeks. Both sides are in the same unit
+    (one working set buys one primary muscle-set), so the comparison is direct.
 
-    Exists because the pre-0078 engine had no notion of a budget at all. With
-    MEV as the floor for all 17 muscles the target summed to ~137 muscle-sets/wk
-    against ~94 deliverable — a demand no session plan could satisfy, handed to
-    the planner with no ranking. Silent triage was the only possible response.
-    Returning ``feasible: False`` makes that visible instead.
+    The distinction matters and an earlier cut of this function got it wrong by
+    summing every ``target_sets``. A maintenance muscle that is HOLDING needs
+    zero dedicated sets: its volume arrives as secondary spillover from the
+    grow-tier work (a row credits mid_back 1.0 and biceps/traps 0.5 each), and
+    the same working set cannot be charged twice. Counting those holds as demand
+    inflated the requirement by ~35 muscle-sets and reported a feasible week as
+    infeasible. Dedicated demand is therefore:
+
+        every grow-tier target  +  the TOP-UP delta for a maintenance muscle
+                                   still below MV (that part is real new work)
+
+    ``credit_ratio`` is still reported for context — it says how much total
+    muscle-stimulus each working set generates once spillover is counted — but
+    it is deliberately NOT used to discount the requirement, because the spilled
+    0.48 lands on whichever muscles the movement happens to hit, not necessarily
+    the ones being grown.
+
+    Exists because the pre-0078 engine had no notion of a budget at all: with
+    MEV the floor for all 17 muscles, demand summed to ~137 muscle-sets/wk
+    against ~94 deliverable — unsatisfiable AND unranked, so silent triage was
+    the planner's only option. Reporting ``feasible`` makes that visible.
 
     Degrades to an empty dict (no claim) rather than guessing when there isn't
     enough history to measure — a fabricated budget would be worse than none.
@@ -1626,15 +1642,25 @@ def _weekly_capacity(
     ratio = float(credit[0]) if credit and credit[0] else 1.5
     ratio = max(1.0, min(ratio, 3.0))
 
-    demand = float(sum(t.target_sets for t in targets))
-    needed = demand / ratio if ratio else demand
+    # Dedicated: needs its own working set. A holding maintenance muscle does
+    # not — its sets come free as spillover from the grow-tier work.
+    dedicated = 0.0
+    spillover_held = 0.0
+    for t in targets:
+        if t.tier == "maintain":
+            top_up = max(0.0, t.target_sets - t.current_sets)
+            dedicated += top_up
+            spillover_held += t.target_sets - top_up
+        else:
+            dedicated += t.target_sets
     return {
-        "demand_muscle_sets": round(demand, 1),
-        "capacity_muscle_sets": round(capacity_working * ratio, 1),
-        "working_sets_needed": round(needed, 1),
+        "dedicated_demand_sets": round(dedicated, 1),
+        "held_by_spillover_sets": round(spillover_held, 1),
+        "total_prescribed_muscle_sets": round(float(sum(t.target_sets for t in targets)), 1),
         "capacity_working_sets": round(capacity_working, 1),
         "credit_ratio": round(ratio, 2),
-        "feasible": needed <= capacity_working,
+        "feasible": dedicated <= capacity_working,
+        "over_by_sets": round(max(0.0, dedicated - capacity_working), 1),
     }
 
 
