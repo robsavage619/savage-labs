@@ -1002,6 +1002,70 @@ def load_cap_pct(gates: dict[str, Any]) -> int:
     return {"rest": 60, "low": 78, "moderate": 90}.get(gates.get("max_intensity", "high"), 103)
 
 
+# Today's maximum EFFORT, which is what a reduced day should actually reduce.
+# HIGH is 10.0, not 9.0, and that is invariant 5: a green day must permit a
+# TRUE top set. A new-PR attempt against a stale e1RM is a genuine max effort,
+# which an RPE 9 (1 RIR) label under-states — capping high at 9 would forbid the
+# honest label and freeze the strength ceiling, the exact "stuck loop" invariant
+# 5 exists to prevent.
+RPE_CAP_BY_INTENSITY = {"rest": 6.0, "low": 7.0, "moderate": 8.0, "high": 10.0}
+_DELOAD_RPE_CAP = 6.0
+# High days get headroom above the recorded e1RM so a PR can still register
+# (invariant 5): at RPE 9 the implied e1RM would otherwise always land just
+# under the reference, freezing the strength ceiling.
+_HIGH_DAY_HEADROOM = 1.03
+
+
+def rpe_cap_for(gates: dict[str, Any]) -> float:
+    """Today's maximum target RPE — the effort ceiling.
+
+    This exists because :func:`load_cap_pct` is the WRONG lever for a reduced
+    day, and provably so. That cap bounds load as a fraction of e1RM at a fixed
+    rep count, with no RIR term, while an RPE target implies a load *with* one.
+    Solving the two against each other (the e1RM cancels) gives the highest RPE
+    a day can prescribe while respecting its own ceiling:
+
+        reps    LOW(78%)   MODERATE(90%)   HIGH(105%)
+          6       -0.2          6.0           11.7
+         10       -1.3          5.6           11.9
+         15       -2.7          5.0           12.1
+
+    The engine's own stimulating floor is RPE 6.0 (``volume._STIMULATING_RPE``).
+    So a MODERATE day could not prescribe a stimulating set, and on a LOW day
+    **no load exists** that satisfies both constraints. Meanwhile the planner
+    prompt instructs "working sets should land at RPE 7-8 ... do NOT default to a
+    conservative RPE 6-7" — the engine was asking for something its own validator
+    forbade. That is also why the load–RPE coherence check was scoped to HIGH
+    days: HIGH is the only intensity where both constraints can hold at once.
+
+    A reduced day in a hypertrophy block means **fewer hard sets**, not easy
+    ones — an RPE 5 set is below the threshold at which the volume model counts
+    it at all. So intensity now caps EFFORT, volume is modulated by the
+    per-muscle set targets, and the load ceiling is DERIVED from the effort cap
+    (:func:`rpe_derived_ceiling_kg`) instead of competing with it.
+    """
+    if gates.get("deload_required"):
+        return _DELOAD_RPE_CAP
+    return RPE_CAP_BY_INTENSITY.get(gates.get("max_intensity", "high"), 9.0)
+
+
+def rpe_derived_ceiling_kg(e1rm_kg: float, reps: int, gates: dict[str, Any]) -> float:
+    """Heaviest load that is still at-or-below today's effort cap at ``reps``.
+
+    Inverse RIR-adjusted Epley: the weight whose set of ``reps`` would land
+    exactly on the day's RPE cap. Because it is built from the same RIR model
+    the coherence check uses, a target at or below the cap is ALWAYS satisfiable
+    — the structural contradiction in :func:`rpe_cap_for` cannot recur.
+
+    Still monotonic in intensity (invariant 5): at 10 reps this yields 0.682 x
+    e1RM on a deload, 0.698 low, 0.714 moderate, 0.754 high.
+    """
+    cap = rpe_cap_for(gates)
+    rir = 10.0 - cap
+    headroom = _HIGH_DAY_HEADROOM if gates.get("max_intensity") == "high" else 1.0
+    return e1rm_kg * headroom / (1 + (min(reps, 12) + rir) / 30)
+
+
 # When the core history is near-identical the MAD collapses to zero and a normal
 # threshold can't be formed — yet that is exactly when a fat-fingered heavy log
 # stands out most. Fall back to a multiple of the median: a within-window e1RM
@@ -1701,17 +1765,22 @@ def validate_plan(
                     # is the HIGH end of the prescribed range (e.g. "10-12" -> 12) —
                     # the ceiling must hold at the heaviest-implied rep count the
                     # athlete may actually execute, not just the low end of the range.
-                    demand_kg = (w_lbs / 2.20462) * (1 + min(reps, 12) / 30)
-                    ceiling_kg = e1rm_kg * cap
+                    # Ceiling is derived from today's EFFORT cap, not from a
+                    # fraction of e1RM at a fixed rep count. The old form had no
+                    # RIR term and so fought the RPE model: on a moderate day it
+                    # permitted at most ~RPE 5.6, below the threshold at which the
+                    # volume model counts a set at all. See `rpe_cap_for`.
+                    ceiling_kg = rpe_derived_ceiling_kg(e1rm_kg, reps, gates)
+                    prescribed_kg = w_lbs / 2.20462
                     # 3% tolerance for rounding/load-increment realities.
-                    if demand_kg > ceiling_kg * 1.03:
-                        demand_e1rm = round(demand_kg * 2.20462, 1)
-                        ceil_e1rm = round(ceiling_kg * 2.20462, 1)
+                    if prescribed_kg > ceiling_kg * 1.03:
+                        ceil_lbs = round(ceiling_kg * 2.20462, 1)
                         raise GateViolation(
-                            f"{name!r} prescribed {w_lbs}lb×{reps} demands e1RM "
-                            f"{demand_e1rm}lb, over today's {load_cap_pct(gates)}% "
-                            f"ceiling of {ceil_e1rm}lb. Drop the weight — this is a "
-                            "max attempt, not a deload."
+                            f"{name!r} prescribed {w_lbs}lb×{reps} exceeds today's "
+                            f"effort ceiling: at RPE {rpe_cap_for(gates)} (today's "
+                            f"{gates.get('max_intensity')} cap) {reps} reps implies at most "
+                            f"~{ceil_lbs}lb. Drop the weight or cut the reps — this is a "
+                            "harder set than today allows."
                         )
 
         # Load–RPE coherence (2026-07-23 remediation): the ceiling check above
@@ -1723,26 +1792,30 @@ def validate_plan(
         # median of 7.0 for two months partly because prescribed load was
         # never checked against its own stated target.
         #
-        # Scoped to HIGH-intensity days only — this is deliberate, not an
-        # incidental narrowing. `load_cap_pct` expresses each day's ceiling as
-        # a fraction of a MAX-EFFORT-implied e1RM (no RIR term), while this
-        # check's RIR-adjusted Epley expresses a genuinely submaximal target
-        # (RPE 6-9) against the athlete's TRUE e1RM. For any capped day (low
-        # ~78%, moderate ~90%), those two scales are structurally
-        # incompatible: even the softest realistic RPE target (6, 4 RIR)
-        # implies MORE weight than a low/moderate cap allows at any rep
-        # count, because the cap is a discount off a near-failure (RIR≈0)
-        # reference, not off a submaximal one — so enforcing coherence there
-        # would make it mathematically impossible to ever satisfy both
-        # checks at once. On a HIGH day (cap ≥100%) that tension resolves:
-        # the ceiling roughly tracks the true e1RM, so an honest RPE 8-9
-        # effort naturally clears it. High days are also exactly where the
-        # under-effort problem this check exists for actually shows up —
-        # a low/moderate/rest day is legitimately supposed to be lighter.
-        _COHERENCE_TOLERANCE = 0.075
+        # ENFORCED ON EVERY NON-REST, NON-DELOAD DAY (2026-07-26). This was
+        # previously HIGH-days-only, and that scoping was correct at the time:
+        # the old `load_cap_pct` ceiling had no RIR term, so on a capped day the
+        # two checks were mathematically incompatible — a moderate day permitted
+        # at most ~RPE 5.6, a low day permitted NO stimulating load at all, and
+        # requiring both would have been unsatisfiable. That contradiction is
+        # gone now that the ceiling is DERIVED from the day's effort cap
+        # (`rpe_derived_ceiling_kg`): any target at or below the cap is
+        # satisfiable by construction, so coherence can be enforced everywhere.
+        #
+        # This is the check that matters. It is what catches a plan labelled
+        # "RPE 8" whose load is really an RPE 5 — which is exactly what shipped
+        # on 2026-07-26 (Leg Extension 175x10 called RPE 8, against a 200x10
+        # @RPE 8 logged three days earlier). Fixing the e1RM basis twice did not
+        # catch that; only comparing the load to its own declared effort does.
+        #
+        # Tolerance is expressed in RPE points, not as a percentage of weight:
+        # Epley is flat, so a 7.5% weight error is ~3.4 RPE points — a "tight"
+        # weight tolerance is nearly toothless in effort terms, which is why the
+        # original 175lb prescription would have passed the old form.
+        _COHERENCE_TOLERANCE_RPE = 1.5
         if (
             e1rm_ceilings
-            and gates.get("max_intensity") == "high"
+            and gates.get("max_intensity") != "rest"
             and not gates.get("deload_required")
         ):
             for block in blocks:
@@ -1765,17 +1838,37 @@ def validate_plan(
                     # RIR-adjusted Epley: e1RM = weight × (1 + (reps + RIR)/30),
                     # RIR = 10 − RPE. Solve for the weight this RPE/rep combo
                     # implies against the exercise's known e1RM.
-                    rir = 10 - rpe_t
-                    implied_kg = e1rm_kg / (1 + (min(reps, 12) + rir) / 30)
-                    prescribed_kg = w_lbs / 2.20462
-                    if abs(prescribed_kg - implied_kg) > implied_kg * _COHERENCE_TOLERANCE:
-                        implied_lbs = round(implied_kg * 2.20462, 1)
+                    # A target above today's effort cap is incoherent on its face.
+                    day_cap = rpe_cap_for(gates)
+                    if rpe_t > day_cap:
                         raise GateViolation(
-                            f"{name!r} prescribed {w_lbs}lb×{reps} at target RPE {rpe_t} is "
-                            f"incoherent — that RPE at {reps} reps implies ~{implied_lbs}lb "
-                            f"per today's e1RM, not {w_lbs}lb "
-                            f"(>{_COHERENCE_TOLERANCE:.1%} off). Adjust the weight to match "
-                            "the declared effort, or adjust rpe_target to match the weight."
+                            f"{name!r} targets RPE {rpe_t}, above today's "
+                            f"{gates.get('max_intensity')} effort cap of RPE {day_cap}."
+                        )
+                    # Invert RIR-adjusted Epley for the load actually prescribed:
+                    # reps_to_failure = 30 * (e1RM/weight - 1); RIR = that - reps.
+                    prescribed_kg = w_lbs / 2.20462
+                    if prescribed_kg <= 0 or prescribed_kg >= e1rm_kg:
+                        continue  # supramaximal is the ceiling check's business
+                    reps_to_failure = 30.0 * (e1rm_kg / prescribed_kg - 1)
+                    implied_rpe = 10.0 - (reps_to_failure - min(reps, 12))
+                    # ONE-DIRECTIONAL: only reject a load too LIGHT for its label.
+                    # That is the failure this check exists for — an rpe_target that
+                    # is decorative, "RPE 8" on what is really an RPE 5 set. The
+                    # opposite direction is legitimate and must stay legal: beating a
+                    # stale e1RM is how a PR registers, and it necessarily implies an
+                    # RPE above 10 (invariant 5). Too-heavy is already bounded by the
+                    # effort-derived ceiling above, which caps every day at its own
+                    # RPE, so nothing is unguarded by making this asymmetric.
+                    if rpe_t - implied_rpe > _COHERENCE_TOLERANCE_RPE:
+                        implied_kg = e1rm_kg / (1 + (min(reps, 12) + (10 - rpe_t)) / 30)
+                        raise GateViolation(
+                            f"{name!r} prescribed {w_lbs}lb×{reps} is labelled RPE {rpe_t} "
+                            f"but implies RPE {implied_rpe:.1f} against today's e1RM "
+                            f"(>{_COHERENCE_TOLERANCE_RPE} RPE off). For a real RPE {rpe_t} "
+                            f"at {reps} reps use ~{round(implied_kg * 2.20462, 1)}lb, "
+                            f"or raise the reps, or relabel rpe_target to "
+                            f"{implied_rpe:.1f}."
                         )
 
         # ── Data-backed checks (#18, #21, #22) — require a live connection ────

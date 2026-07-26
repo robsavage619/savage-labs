@@ -2,6 +2,31 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-26 — The load cap was fighting the RPE model, and the RPE model was right
+
+**Context.** Closing the last open item — the load–RPE coherence check being scoped to HIGH days only. The intent was simply to widen it. It could not be widened: the two checks are *mathematically* incompatible below a HIGH day, exactly as the original code comment claimed.
+
+**The proof.** `load_cap_pct` bounds load as a fraction of e1RM at a fixed rep count, with no RIR term. An RPE target implies a load with one. Set them equal and e1RM cancels, leaving the highest RPE a day can prescribe while respecting its own ceiling:
+
+| reps | LOW (78%) | MODERATE (90%) | HIGH (105%) |
+|---|---|---|---|
+| 6 | −0.2 | 6.0 | 11.7 |
+| 10 | −1.3 | 5.6 | 11.9 |
+| 15 | −2.7 | 5.0 | 12.1 |
+
+The stimulating floor is RPE 6.0. So a MODERATE day could not prescribe a set the volume model would count, and a LOW day admitted **no** stimulating load whatsoever — while `workout_planner`'s own context block instructs "working sets should land at **RPE 7-8** ... do NOT default to a conservative RPE 6-7". The engine demanded what it forbade.
+
+**Decision.** Cap effort, not load fraction. `rpe_cap_for` (rest/deload 6, low 7, moderate 8, high 10) and `rpe_derived_ceiling_kg` — the inverse RIR-adjusted Epley weight that lands exactly on the day's cap. Because ceiling and coherence now share one model, a target at or below the cap is satisfiable by construction and the contradiction cannot recur. HIGH is 10.0, not 9.0: a PR against a stale e1RM is a true max effort that RPE 9 under-states, and capping lower would forbid the only honest label and freeze the strength ceiling (invariant 5). Ceilings stay monotonic (0.682 / 0.698 / 0.714 / 0.754 × e1RM at 10 reps).
+
+**Coherence is now enforced on every non-rest, non-deload day, one-directionally.** Too-light-for-its-label is rejected; a load implying RPE > 10 stays legal, because that is what beating a stale e1RM looks like. Tolerance moved from ±7.5% of weight to ±1.5 RPE: Epley is flat, so 7.5% of weight is ~3.4 RPE points — the old "tight" tolerance was nearly toothless, and is why `175×10` labelled RPE 8 would have passed it.
+
+**Validation against reality.** With the new ceiling, the MODERATE-day RPE-8 load for Leg Extension is **200.0 lb — the exact set logged 2026-07-23 at RPE 8**. RDL lands on 75.0 lb, also exact. The model reproduces what Rob actually trains at, which the old cap could never do: today's plan went 175 → 179 → 188 across three revisions, every one labelled RPE 8 and every one really ~RPE 5.
+
+**Test recalibration, stated plainly.** Nine tests failed; none were weakened. Two were genuine breakage I introduced and fixed in the code (a HIGH-day RPE cap of 9.0 forbade the PR label; a two-directional coherence check rejected PR attempts). Four carried arbitrary fixture loads — `Face Pull 50lb×8` against a 105.8 lb e1RM implies RPE −15.5, a warmup posing as a working set — and were given coherent loads. One asserted the old HIGH-only scoping and was inverted. Two deload tests were recalibrated because their loads no longer probed what they claimed: `70lb×12` is 3.3 RIR, a legitimate deload set, flagged by the old ceiling only because it compared *implied* e1RM against a fraction of the real one, conflating implied-1RM with effort. `90lb×12` (~RPE 16.7) is the real pseudo-deload and is still rejected.
+
+**Consequences.** This is a loosening on every capped day — bounded, since the effort cap is the bound, and it is the direction the goal demands: a moderate day should be RPE 8 for fewer sets, not RPE 5 for the same sets. Invariant 15 added; invariant 5 preserved and now explicitly cross-referenced. **Still open:** the deload trigger has no direct effort input, and `load_cap_pct` survives for the no-e1RM fail-visible path — it should probably be retired once every prescribed lift is guaranteed a reference.
+
+
 ## 2026-07-26 — The load model was blind to effort, which is the one thing load is for
 
 **Context.** Rob asked whether the engine "fully understands RPE." An end-to-end audit of every RPE consumer found the answer was no, and the gap was structural rather than incremental: RPE reached the *strength estimate* (e1RM, RIR-adjusted earlier the same day), the *progression score*, the *volume direction* (per-muscle headroom), the *rest gate*, and the *volume RIR gate* — but not **load**. `v_daily_load`'s resistance component was `SUM(weight x reps)`.

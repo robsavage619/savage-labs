@@ -51,14 +51,14 @@ def _ex(name, weight_lbs, reps, **kw):
 
 
 def test_rejects_bad_readiness_tier() -> None:
-    p = _plan(exercises=[_ex("Face Pull", 50, "8")])
+    p = _plan(exercises=[_ex("Face Pull", 75, "8")])
     p["readiness_tier"] = "purple"
     with pytest.raises(ValueError):
         validate_plan(p)
 
 
 def test_rejects_block_using_name_instead_of_label() -> None:
-    p = _plan(exercises=[_ex("Face Pull", 50, "8")])
+    p = _plan(exercises=[_ex("Face Pull", 75, "8")])
     del p["blocks"][0]["label"]
     p["blocks"][0]["name"] = "A"
     with pytest.raises(ValueError):
@@ -66,7 +66,7 @@ def test_rejects_block_using_name_instead_of_label() -> None:
 
 
 def test_rejects_missing_rest_seconds() -> None:
-    ex = _ex("Face Pull", 50, "8")
+    ex = _ex("Face Pull", 75, "8")
     del ex["rest_seconds"]
     with pytest.raises(ValueError):
         validate_plan(_plan(exercises=[ex]))
@@ -111,15 +111,21 @@ REST_STATE = {
 
 
 def test_rejects_supramaximal_pseudo_deload() -> None:
-    """The reported bug: hold near-max weight, add reps. 70lb×12 demands 98lb
-    e1RM, over the deload ceiling."""
-    p = _plan(exercises=[_ex("Face Pull", 70, "12")])
-    with pytest.raises(GateViolation, match="max attempt"):
+    """The reported bug: hold near-max weight, add reps.
+
+    90lb x 12 against a 105.8lb e1RM implies ~RPE 16.7 — well past failure — and
+    breaches the deload day's RPE-6 effort ceiling (~69lb at 12 reps). Recalibrated
+    2026-07-26: the old 70lb case was flagged by a ceiling that compared IMPLIED
+    e1RM against a fraction of the real one, which conflates implied-1RM with
+    effort; 70x12 is really 3.3 RIR, a perfectly good deload set.
+    """
+    p = _plan(exercises=[_ex("Face Pull", 90, "12")])
+    with pytest.raises(GateViolation, match="harder set than today allows"):
         validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)
 
 
 def test_accepts_load_under_ceiling() -> None:
-    p = _plan(exercises=[_ex("Face Pull", 50, "8")])
+    p = _plan(exercises=[_ex("Face Pull", 75, "8")])
     assert validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL) is True
 
 
@@ -164,7 +170,7 @@ def test_unverified_ceiling_silent_on_a_high_day() -> None:
 
 def test_parses_reps_from_each_side_string() -> None:
     # 70lb × 10/side still parses reps=10 → demand 93lb, over deload ceiling.
-    p = _plan(exercises=[_ex("Face Pull", 70, "10 each side")])
+    p = _plan(exercises=[_ex("Face Pull", 90, "10 each side")])
     with pytest.raises(GateViolation):
         validate_plan(p, state=DELOAD_STATE, e1rm_ceilings=CEIL)
 
@@ -173,7 +179,7 @@ def test_parses_reps_from_each_side_string() -> None:
 
 
 def test_intensity_exceeding_gate_rejected() -> None:
-    p = _plan(intensity="high", target_rpe=9, exercises=[_ex("Face Pull", 50, "8")])
+    p = _plan(intensity="high", target_rpe=9, exercises=[_ex("Face Pull", 75, "8")])
     with pytest.raises(GateViolation):
         validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL)
 
@@ -349,7 +355,7 @@ def test_muscle_rest_gate_rejects_directly_targeted_exercise(conn) -> None:
 def test_muscle_rest_gate_allows_untouched_muscle(conn) -> None:
     """A different exercise whose primary muscle is NOT rest-gated still
     passes — this is the point of per-muscle over group-level locking."""
-    p = _plan(intensity="low", exercises=[_ex("Face Pull", 50, "14")])
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 69, "14")])
     assert validate_plan(p, state=FORBID_CHEST_STATE, e1rm_ceilings=CEIL, conn=conn) is True
 
 
@@ -421,7 +427,7 @@ def test_group_override_also_unlocks_member_muscles(conn) -> None:
 def test_override_reason_unused_when_plan_already_within_gate() -> None:
     """A reason present on a plan that's already within the true gate changes
     nothing — validate_plan just passes, same as with no reason at all."""
-    p = _plan(intensity="low", exercises=[_ex("Face Pull", 50, "8")])
+    p = _plan(intensity="low", exercises=[_ex("Face Pull", 75, "8")])
     assert validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL, override_reason="unused") is True
 
 
@@ -454,14 +460,21 @@ def test_rpe_label_incoherent_with_light_load_rejected() -> None:
         intensity="high",
         exercises=[_ex("Bench Press (Barbell)", 50, "8", rpe_target=8, rest_seconds=180)],
     )
-    with pytest.raises(GateViolation, match="incoherent"):
+    with pytest.raises(GateViolation, match="labelled RPE 8"):
         validate_plan(p, state=HIGH_STATE, e1rm_ceilings=CEIL)
 
 
-def test_coherence_not_enforced_on_moderate_day() -> None:
-    """The check is deliberately HIGH-day-only (see the code comment): a low
-    load at a low RPE is exactly right on a moderate/low day, so the same
-    light Bench Press set that fails on a HIGH day must pass here."""
+def test_coherence_now_enforced_on_moderate_day() -> None:
+    """Coherence is enforced on EVERY non-rest, non-deload day (2026-07-26).
+
+    This test previously asserted the opposite, and that scoping was correct
+    while the ceiling was a fraction of e1RM with no RIR term: the two checks
+    were then mathematically incompatible below a HIGH day (a moderate day
+    permitted at most ~RPE 5.6, a low day permitted no stimulating load at all).
+    Now that the ceiling is derived from the day's effort cap, any target at or
+    below that cap is satisfiable, so the check applies everywhere — and it must,
+    because "moderate day" was exactly where a decorative RPE label could hide.
+    """
     p = _plan(
         intensity="low",
         exercises=[_ex("Bench Press (Barbell)", 50, "8", rpe_target=8, rest_seconds=180)],
@@ -474,7 +487,8 @@ def test_coherence_not_enforced_on_moderate_day() -> None:
             "reasons": [],
         }
     }
-    assert validate_plan(p, state=state, e1rm_ceilings=CEIL) is True
+    with pytest.raises(GateViolation, match="labelled RPE 8"):
+        validate_plan(p, state=state, e1rm_ceilings=CEIL)
 
 
 def test_coherence_skips_exercise_missing_rpe_target() -> None:
@@ -655,12 +669,12 @@ def test_rep_range_high_end_of_prescribed_range_rejected(conn) -> None:
 
 
 def test_load_ceiling_checked_against_high_end_of_rep_range() -> None:
-    """A "10-12" prescription at 62lb passes the ceiling at 10 reps but breaches
+    """A "10-12" prescription at 73lb passes the ceiling at 10 reps but breaches
     it at 12 (Face Pull e1RM 48kg, low-day ceiling ~82.5lb e1RM) — the ceiling
     must be evaluated at the range's high end (the heaviest-implied demand the
     athlete may actually execute), not just the range's first number."""
-    p = _plan(exercises=[_ex("Face Pull", 62, "10-12")])
-    with pytest.raises(GateViolation, match="max attempt"):
+    p = _plan(exercises=[_ex("Face Pull", 73, "10-12")])
+    with pytest.raises(GateViolation, match="harder set than today allows"):
         validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL)
 
 

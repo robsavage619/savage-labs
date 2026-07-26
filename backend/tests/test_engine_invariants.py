@@ -1049,3 +1049,67 @@ def test_acwr_band_fitter_never_fits_a_column_the_gate_does_not_score() -> None:
         "the fitter's column contract no longer records which resistance series "
         "the gate scores against"
     )
+
+
+def test_a_capped_day_can_still_prescribe_a_stimulating_set() -> None:
+    """Invariant 15: the day's ceiling caps EFFORT, not load-as-a-fraction-of-1RM.
+
+    `load_cap_pct` bounded load as a fraction of e1RM at a fixed rep count with
+    NO reps-in-reserve term, while an RPE target implies a load WITH one.
+    Solving the two against each other (e1RM cancels) gives the highest RPE a
+    day could prescribe while respecting its own ceiling:
+
+        reps    LOW(78%)   MODERATE(90%)   HIGH(105%)
+         10       -1.3          5.6           11.9
+
+    The engine's own stimulating floor is RPE 6.0 (`volume._STIMULATING_RPE`),
+    so a MODERATE day could not prescribe a set its volume model would COUNT,
+    and on a LOW day no such load existed at all — while the planner prompt
+    simultaneously demanded "RPE 7-8 ... do NOT default to a conservative
+    RPE 6-7". The engine was asking for what its own validator forbade.
+
+    Live consequence: three successive revisions of the 2026-07-26 plan put
+    175, then 179, then 188 lb on Leg Extension, each labelled RPE 8, against a
+    200x10 @RPE 8 logged three days earlier. All three implied ~RPE 5.
+
+    A reduced day means fewer hard sets, not easy ones. Volume is modulated by
+    the per-muscle targets; intensity caps effort; the load ceiling is DERIVED
+    from that cap, so a target at or below it is always satisfiable.
+    """
+    from shc.ai.workout_planner import (
+        RPE_CAP_BY_INTENSITY,
+        rpe_cap_for,
+        rpe_derived_ceiling_kg,
+    )
+    from shc.training.volume import _STIMULATING_RPE
+
+    e1rm = 100.0
+    for intensity in ("low", "moderate", "high"):
+        gates = {"max_intensity": intensity, "deload_required": False}
+        cap = rpe_cap_for(gates)
+        assert cap >= _STIMULATING_RPE, (
+            f"{intensity} day caps effort at RPE {cap}, below the threshold at "
+            f"which a set counts toward volume at all ({_STIMULATING_RPE})"
+        )
+        for reps in (6, 10, 15):
+            ceiling = rpe_derived_ceiling_kg(e1rm, reps, gates)
+            # The load implied by the day's own cap must not exceed its ceiling —
+            # i.e. the two constraints are satisfiable together, at every rep count.
+            implied = e1rm / (1 + (min(reps, 12) + (10 - cap)) / 30)
+            assert implied <= ceiling * 1.001, (
+                f"{intensity}/{reps} reps: a target at the day's own RPE cap "
+                f"({cap}) implies {implied:.1f} but the ceiling is {ceiling:.1f} "
+                "— the structural contradiction has come back"
+            )
+
+    # Monotonic in intensity (invariant 5 preserved), and HIGH still permits a
+    # true top set: a PR against a stale e1RM is a genuine max effort.
+    ceilings = [
+        rpe_derived_ceiling_kg(e1rm, 10, {"max_intensity": i, "deload_required": False})
+        for i in ("rest", "low", "moderate", "high")
+    ]
+    assert ceilings == sorted(ceilings), f"load ceiling not monotonic in intensity: {ceilings}"
+    assert RPE_CAP_BY_INTENSITY["high"] == 10.0, (
+        "a HIGH day must permit an honest RPE 10 label — capping it lower forbids "
+        "the only label a genuine PR attempt can carry (invariant 5)"
+    )
