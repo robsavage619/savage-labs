@@ -2,6 +2,25 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-26 — Closing the open items: the prompt was still teaching the old rule
+
+**Context.** Three items were left open after the effort-cap redesign. Two were real; the third turned out to be the root cause of the whole 175→179→188 episode.
+
+**1. The planner prompt still taught the retired rule.** `prescription_context_block` emitted "Today's intensity ceiling is **90% of e1RM** ... `weight × (1 + reps/30) ≤ e1RM × 0.90`" — the exact formula that had just been replaced, presented to the model as a HARD CONSTRAINT. So the validator was fixed while the instructions still described the defect, which is worse than either alone: plans would keep being generated under-loaded and would now also fail validation. The per-lift ceiling in the WORKING WEIGHTS list used the same stale formula. Both now render the effort ceiling, and the rule reads "a reduced day means fewer hard sets, not easy sets — below RPE 6 the set stops counting toward weekly volume at all."
+
+**2. `EFFORT_RPE_BAND` and `RPE_CAP_BY_INTENSITY` disagreed on `rest`.** The band told the planner to target RPE 6-7; the cap forbade anything above 6. The prompt asked for effort the same session's validator would refuse. Now `(6, 6)`, with a test asserting every band's high end sits at or below its intensity's cap so the two cannot drift again.
+
+**3. The deload trigger had no effort input.** Both existing triggers — muscles regressing, muscles at MRV — are OUTPUT signals: they fire only once performance has already degraded or volume has already maxed. Effort is the input side and moves first. `_effort_overreach` reads weekly mean RPE from the 0079 rollup and compares it to Rob's own 8-week baseline.
+
+**Why the rollup and not `plan_adherence`.** The obvious source was `rpe_drift_signed_mean` (actual − target RPE), but it needs 5 sessions in 14 days and `plan_adherence` holds only 4 rows with an RPE at all — it currently returns **None**, which means `_rpe_drift_factor` and the session-level `_rpe_headroom` are both inert in practice. The weekly rollup has 100% set-level coverage over 30 days. This is the second signal that had to be moved off that table; `plan_adherence`'s sparsity is worth treating as a known limitation rather than rediscovering a third time.
+
+**Why it needs corroboration.** Overreach fires only alongside at least one regressing muscle. Sustained hard training with output still rising is *productive* overreaching, and deloading it would interrupt a block that is working. "Working harder AND getting less" is the signal; "working harder" alone is just training. It also requires BOTH a rise of ≥0.5 above his own baseline AND an absolute level ≥8.0 — a climb from 6.0 to 6.6 is a return to normal training, and a flat 8.5 is simply how somebody trains.
+
+**Live check.** Recent weekly mean RPE 7.51 against a 7.18 baseline: a rise of 0.33, below both bounds, `overreaching: false`. Adherence tracks target closely (7.86 vs 8.0, 8.0 vs 8.0, 6.0 vs 6.0). He is not grinding, and the new trigger correctly says nothing.
+
+**Consequences.** 719 tests pass. **Deliberately not done:** `load_cap_pct` still exists, now only feeding the fail-visible warning for lifts with no e1RM on record — it should be retired once every prescribable lift is guaranteed a reference, which is a catalogue problem rather than a validator one. Four muscle-attribution changes (both upright rows `traps→front_delts`, both sumo squats `+adductors`) remain unapplied: they re-credit ~1,700 logged sets and are training decisions, not curation. 21 `exercise_science` rows stay marked UNGROUNDED because the literature genuinely does not cover them.
+
+
 ## 2026-07-26 — The load cap was fighting the RPE model, and the RPE model was right
 
 **Context.** Closing the last open item — the load–RPE coherence check being scoped to HIGH days only. The intent was simply to widen it. It could not be widened: the two checks are *mathematically* incompatible below a HIGH day, exactly as the original code comment claimed.

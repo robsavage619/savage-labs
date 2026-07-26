@@ -244,17 +244,23 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         lines.append("  · all clear — no overrides")
 
     # ── Load prescription rule — prevents the "deload = max attempt" bug ──
-    cap_pct = load_cap_pct(gates)
+    cap_pct = load_cap_pct(gates)  # legacy display only; the ceiling is effort-derived
+    day_rpe_cap = rpe_cap_for(gates)
     lines.append("\n## ⚠ LOAD PRESCRIPTION RULE (HARD CONSTRAINT)")
     lines.append(
-        f"- Today's intensity ceiling is **{cap_pct}% of e1RM**. For every "
-        "loaded exercise, the prescribed weight × reps must satisfy "
-        f"`weight × (1 + reps/30) ≤ e1RM × {cap_pct / 100:.2f}`."
+        f"- Today's ceiling is an EFFORT ceiling: **RPE {day_rpe_cap}**. For every loaded "
+        "exercise the prescribed weight must be the weight that actually lands at or "
+        "below that RPE for the reps you choose — not a percentage discount off e1RM."
     )
     lines.append(
-        "- NEVER prescribe a weight/rep combo whose Epley e1RM exceeds that "
-        "ceiling. Holding the all-time working weight and just adding reps is a "
-        "MAX ATTEMPT, not a deload — drop the weight instead."
+        "- A reduced day means **fewer hard sets, not easy sets**. Cutting the load until "
+        "the set is trivial does not deload anything: below RPE 6 the set stops counting "
+        "toward weekly volume at all. Reduce sets; keep each one honest."
+    )
+    lines.append(
+        "- If a load is below the target RPE at your chosen rep count, RAISE THE REPS or "
+        "raise the weight — do not keep the light load and relabel it. The validator "
+        "rejects a set whose weight implies an RPE more than 1.5 below its `rpe_target`."
     )
     effort_lo, effort_hi = EFFORT_RPE_BAND.get(gates["max_intensity"], (7, 8))
     lines.append(
@@ -464,12 +470,14 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         lbs = round(ph_kg * 2.20462, 1)
         unit_sfx = f" {unit}" if unit else ""
         is_pair = classify_load(ex) in (LoadType.DUMBBELL_PAIR, LoadType.CABLE_PAIR)
-        total_sfx = f" ({round(ph_kg * 2.20462 * 2)} lbs total both hands)" if is_pair and wkg else ""
+        total_sfx = (
+            f" ({round(ph_kg * 2.20462 * 2)} lbs total both hands)" if is_pair and wkg else ""
+        )
         e1rm_kg = e1rm_by_ex.get(ex)  # already per-hand
         if e1rm_kg:
             e1rm_lbs = round(e1rm_kg * 2.20462, 1)
-            ceiling_lbs = round(e1rm_kg * (cap_pct / 100) / (1 + 8 / 30) * 2.20462, 1)
-            weight_note = f" · e1RM ~{e1rm_lbs} · today ≤{ceiling_lbs} lbs @8"
+            ceiling_lbs = round(rpe_derived_ceiling_kg(e1rm_kg, 8, gates) * 2.20462, 1)
+            weight_note = f" · e1RM ~{e1rm_lbs} · today ≤{ceiling_lbs} lbs @8 (RPE {day_rpe_cap})"
         else:
             weight_note = " · e1RM n/a — set load by feel to RPE on first set"
         lines.append(
@@ -924,11 +932,15 @@ INTENSITY_ORDER = ("rest", "low", "moderate", "high")
 # working sets on a HIGH day should sit at 8-9, tapering down with intensity.
 # Deload/rest days keep their own existing ≤7 ceiling (below) rather than a
 # band — a deload's whole point is capping effort, not targeting a range.
+# INVARIANT: each band's HIGH end must be <= that intensity's RPE_CAP_BY_INTENSITY
+# entry, or the prompt asks for effort the validator rejects. `high` targets 8-9
+# rather than its cap of 10 deliberately — RPE 10 is reserved for a genuine PR
+# attempt, not a routine target. `rest` was (6, 7) against a cap of 6.
 EFFORT_RPE_BAND: dict[str, tuple[int, int]] = {
     "high": (8, 9),
     "moderate": (7, 8),
     "low": (6, 7),
-    "rest": (6, 7),
+    "rest": (6, 6),
 }
 
 # Working-set ceiling for a relative clinical contraindication (#21): acute
@@ -1669,9 +1681,7 @@ def validate_plan(
             # excluded from forbid_muscles (core never rest-gates). It cannot
             # appear here; keeping it in the set would be dead code and
             # misleading documentation.
-            hinge_blocked = "pull" in forbid or bool(
-                {"hamstrings", "glutes"} & forbid_muscles
-            )
+            hinge_blocked = "pull" in forbid or bool({"hamstrings", "glutes"} & forbid_muscles)
             for block in blocks:
                 for ex in block.get("exercises", []):
                     name = ex.get("name", "")

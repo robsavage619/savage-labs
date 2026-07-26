@@ -986,3 +986,91 @@ def test_per_muscle_rpe_headroom_is_empty_without_the_0079_columns() -> None:
     c = duckdb.connect(":memory:")
     c.execute("CREATE TABLE exercise_weekly_e1rm (exercise TEXT, week_start DATE)")
     assert _muscle_rpe_headroom(c) == {}
+
+
+# ── Effort as a deload input ─────────────────────────────────────────────────
+# deload_check saw only OUTPUT signals (perf regression, at-MRV), which fire
+# once damage is done. Effort is the input side and moves first.
+
+_REPORT: list[MuscleVolume] = []
+
+
+def test_effort_overreach_alone_does_not_trigger_a_deload() -> None:
+    """Grinding with output still rising is productive overreaching.
+
+    A deload here would interrupt a working block for no reason, so effort is
+    corroborating evidence, never a standalone trigger.
+    """
+    out = deload_check(
+        {"chest": 4, "lats": 5},  # nothing regressing
+        _REPORT,
+        effort={"overreaching": True, "recent_rpe": 8.6, "baseline_rpe": 7.2},
+    )
+    assert out["recommended"] is False
+
+
+def test_effort_overreach_with_regression_triggers_a_deload() -> None:
+    """ "Working harder AND getting less" — the overreaching signature.
+
+    One regressing muscle is below the 3-muscle threshold and would not trigger
+    on its own; paired with elevated effort it does.
+    """
+    out = deload_check(
+        {"chest": 2, "lats": 4},
+        _REPORT,
+        effort={"overreaching": True, "recent_rpe": 8.6, "baseline_rpe": 7.2},
+    )
+    assert out["recommended"] is True
+    assert any("effort overreach" in t for t in out["triggers"])
+
+
+def test_absent_effort_signal_leaves_deload_behaviour_unchanged() -> None:
+    out = deload_check({"chest": 2}, _REPORT, effort=None)
+    assert out["recommended"] is False
+    assert out == deload_check({"chest": 2}, _REPORT)
+
+
+def test_effort_overreach_needs_both_a_rise_and_an_absolute_level() -> None:
+    """Either bound alone misreads the athlete.
+
+    A climb from 6.0 to 6.6 is a return to normal training, not grinding; a flat
+    8.5 with no rise is simply how someone trains.
+    """
+    import duckdb
+
+    from shc.training.autoregulation import _effort_overreach
+
+    def _conn(weekly: list[float]):
+        c = duckdb.connect(":memory:")
+        c.execute(
+            "CREATE TABLE exercise_weekly_e1rm "
+            "(week_start DATE, weekly_avg_rpe DOUBLE, rpe_set_count INTEGER)"
+        )
+        for i, rpe in enumerate(weekly):  # index 0 = most recent
+            wk = date.today() - timedelta(weeks=i)
+            c.execute("INSERT INTO exercise_weekly_e1rm VALUES (?, ?, 10)", [wk, rpe])
+        return c
+
+    # Big rise, but the absolute level is still easy training.
+    assert _effort_overreach(_conn([6.6, 6.0, 6.0, 6.0]))["overreaching"] is False
+    # High absolute level, but it is simply his norm — no rise.
+    assert _effort_overreach(_conn([8.5, 8.5, 8.5, 8.5]))["overreaching"] is False
+    # Both: a real climb into hard territory.
+    assert _effort_overreach(_conn([8.6, 7.2, 7.1, 7.2]))["overreaching"] is True
+    # Not enough history to claim anything.
+    assert _effort_overreach(_conn([9.9, 6.0]))["overreaching"] is False
+
+
+def test_effort_rpe_band_never_asks_for_more_than_the_day_allows() -> None:
+    """The prompt must not request effort the validator rejects.
+
+    `EFFORT_RPE_BAND` tells the planner what RPE to target; `RPE_CAP_BY_INTENSITY`
+    is the hard ceiling. `rest` was (6, 7) against a cap of 6 — the prompt asked
+    for an RPE the same session's validator would refuse.
+    """
+    from shc.ai.workout_planner import EFFORT_RPE_BAND, RPE_CAP_BY_INTENSITY
+
+    for intensity, (lo, hi) in EFFORT_RPE_BAND.items():
+        cap = RPE_CAP_BY_INTENSITY[intensity]
+        assert lo <= hi, f"{intensity} band is inverted"
+        assert hi <= cap, f"{intensity} band targets RPE {hi} but the day caps at {cap}"

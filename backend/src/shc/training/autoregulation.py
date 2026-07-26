@@ -172,6 +172,7 @@ def deload_check(
     perfs: dict[str, int | None],
     report: list[MuscleVolume],
     threshold: int | None = None,
+    effort: dict | None = None,
 ) -> dict:
     """Decide whether a fatigue-driven deload is warranted from real signals.
 
@@ -181,6 +182,19 @@ def deload_check(
     (:data:`DELOAD_MUSCLE_THRESHOLD`); pass a personal value fitted by
     ``calibrate_deload_trigger`` to override. Returns the recommendation + the
     specific triggers so the prescription can explain itself.
+
+    ``effort`` (from :func:`_effort_overreach`) adds the one fatigue input this
+    check previously had no way to see. Both existing triggers are OUTPUT
+    signals — they only fire once performance has already degraded or volume has
+    already maxed out. Effort is the input side, and it moves first: grinding
+    harder for the same result is the classic overreaching signature, visible
+    weeks before e1RM turns over.
+
+    It is deliberately NOT a standalone trigger. Sustained hard training with
+    output still RISING is productive overreaching, which a deload would
+    interrupt for no reason — so it fires only with at least one muscle actually
+    regressing to corroborate it. "Working harder AND getting less" is the
+    signal; "working harder" alone is just training.
     """
     thr = threshold if threshold is not None else DELOAD_MUSCLE_THRESHOLD
     regressing = sorted(m for m, p in perfs.items() if p is not None and p <= 2)
@@ -190,6 +204,11 @@ def deload_check(
         triggers.append(f"{len(regressing)} muscles regressing ({', '.join(regressing[:5])})")
     if len(at_mrv) >= thr:
         triggers.append(f"{len(at_mrv)} muscles at/over MRV ({', '.join(at_mrv[:5])})")
+    if effort and effort.get("overreaching") and regressing:
+        triggers.append(
+            f"effort overreach — weekly mean RPE {effort['recent_rpe']} vs "
+            f"{effort['baseline_rpe']} baseline, with {len(regressing)} muscle(s) regressing"
+        )
     return {
         "recommended": bool(triggers),
         "reason": "; ".join(triggers) if triggers else "no systemic fatigue signal",
@@ -1508,6 +1527,59 @@ def _rpe_headroom(conn: duckdb.DuckDBPyConnection, min_magnitude: float = 0.75) 
     return signed_mean is not None and signed_mean <= -min_magnitude
 
 
+_OVERREACH_RPE_RISE = 0.5
+"""How far weekly mean RPE must climb above the athlete's own norm to count."""
+_OVERREACH_RPE_FLOOR = 8.0
+"""...and the absolute level it must also clear. Both bounds are required: a
+rise from 6.0 to 6.6 is a return to normal training, not grinding, while a
+steady 8.5 with no rise is simply how someone trains."""
+
+
+def _effort_overreach(conn: duckdb.DuckDBPyConnection, baseline_weeks: int = 8) -> dict:
+    """Is Rob grinding — weekly mean RPE elevated against his own baseline?
+
+    Reads the weekly rollup (migration 0079), NOT ``plan_adherence``. That table
+    holds one actual/target RPE pair per PLANNED session, and it is sparse: only
+    4 rows carry an RPE, so ``rpe_drift_signed_mean`` — which needs 5 sessions in
+    14 days — currently returns None and every signal built on it is inert. The
+    rollup has 100% set-level coverage over the last 30 days.
+
+    Requires BOTH a rise above his own baseline AND an absolute level, because
+    either alone misreads: a rise from 6.0 to 6.6 is a return to normal training,
+    and a flat 8.5 is just how somebody trains. Returns ``overreaching: False``
+    with whatever it could measure when there isn't enough history — never a
+    guess, since this feeds a deload decision.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT week_start, SUM(weekly_avg_rpe * rpe_set_count) / SUM(rpe_set_count) AS rpe
+            FROM exercise_weekly_e1rm
+            WHERE weekly_avg_rpe IS NOT NULL AND COALESCE(rpe_set_count, 0) > 0
+              AND week_start >= (CURRENT_DATE - INTERVAL (? || ' weeks'))
+            GROUP BY week_start
+            ORDER BY week_start DESC
+            """,
+            [str(baseline_weeks + 1)],
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — pre-0079 schema → no claim
+        log.debug("effort overreach unmeasurable: %s", exc)
+        return {"overreaching": False, "reason": "no RPE history"}
+
+    if len(rows) < 3:
+        return {"overreaching": False, "reason": f"only {len(rows)} scored week(s)"}
+    recent = float(rows[0][1])
+    prior = [float(r[1]) for r in rows[1:]]
+    baseline = sum(prior) / len(prior)
+    return {
+        "overreaching": (recent - baseline) >= _OVERREACH_RPE_RISE
+        and recent >= _OVERREACH_RPE_FLOOR,
+        "recent_rpe": round(recent, 2),
+        "baseline_rpe": round(baseline, 2),
+        "weeks": len(rows),
+    }
+
+
 def _muscle_rpe_headroom(
     conn: duckdb.DuckDBPyConnection,
     weeks: int = 8,
@@ -1686,7 +1758,12 @@ def _weekly_deload_context(
     from shc.metrics import _deload_in_cooldown
     from shc.training.self_learning import read_deload_threshold
 
-    signal_deload = deload_check(perfs, targeted, threshold=read_deload_threshold(conn))
+    signal_deload = deload_check(
+        perfs,
+        targeted,
+        threshold=read_deload_threshold(conn),
+        effort=_effort_overreach(conn),
+    )
     if signal_deload["recommended"] and _deload_in_cooldown(conn, date.today()):
         signal_deload = {
             **signal_deload,
