@@ -92,14 +92,10 @@ def alias_gap_report(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     no candidate survived the guards — the name is genuinely never trained or the
     equipment is not in Rob's gym.
     """
-    curated = conn.execute(
-        "SELECT DISTINCT exercise_name, muscle FROM exercise_science"
-    ).fetchall()
+    curated = conn.execute("SELECT DISTINCT exercise_name, muscle FROM exercise_science").fetchall()
     aliases = {
         r[0]: r[1]
-        for r in conn.execute(
-            "SELECT canonical_name, logged_name FROM exercise_alias"
-        ).fetchall()
+        for r in conn.execute("SELECT canonical_name, logged_name FROM exercise_alias").fetchall()
     }
     logged_rows = conn.execute(
         """
@@ -159,3 +155,78 @@ def alias_gap_report(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         )
     report.sort(key=lambda r: (r["verdict"] != "candidates_found", r["canonical_name"]))
     return report
+
+
+def curation_gap_report(conn: duckdb.DuckDBPyConnection, min_sets: int = 10) -> list[dict]:
+    """Movements Rob trains hard that no ``exercise_science`` row can see.
+
+    :func:`alias_gap_report` walks curated→logged: a curated name whose history is
+    unfindable. This walks logged→curated, which is where the damage was actually
+    hiding. A movement with real volume and no science row is invisible to
+    :func:`shc.training.autoregulation.evidence_menu` — it can never be selected,
+    never credits a region, and never competes for a slot, no matter how central it
+    is to how Rob actually trains. Dumbbell Upright Row sat at **1,541 logged sets**
+    while the traps menu recommended movements he had never performed once, and
+    nothing in the system said so; it took him raising "the engine keeps picking the
+    same exercises" five times for anyone to look.
+
+    That silence is the bug this closes. The starved pools it surfaces are the
+    upstream cause of the repetition — selection cannot rotate through movements it
+    cannot see, so a shallow catalog and a stable-by-design selector compound into
+    the same four exercises forever.
+
+    Returns one row per unseen movement, heaviest first::
+
+        {exercise, sets, last_done, muscle, verdict}
+
+    ``verdict`` separates the two fixes, which are not interchangeable:
+
+    * ``mapped_uncurated`` — the movement has an ``exercise_muscle`` row (so it
+      credits volume) but no citation, so it is invisible to selection. Fix is a
+      curation migration adding region/length_bias/rep band/SFR.
+    * ``unmapped`` — no ``exercise_muscle`` row at all. It credits nothing
+      anywhere; fix is the classifier or the muscle map first, curation second.
+
+    Diagnosis only — writes nothing. ``min_sets`` filters one-off experiments;
+    the default of 10 is deliberately low, because a movement can matter long
+    before it accumulates volume.
+    """
+    curated = {r[0] for r in conn.execute("SELECT exercise_name FROM exercise_science").fetchall()}
+    # A logged name is "seen" if it is curated itself or an alias target of a
+    # curated name — the same bridge the plateau signal reads through.
+    # Column is `canonical_name` (migration 0067) — NOT wrapped in a try/except,
+    # deliberately. A swallowed schema error here would silently report every
+    # aliased movement as an uncovered gap, which is the exact failure mode this
+    # report exists to expose. Fail loud instead.
+    aliases = conn.execute("SELECT canonical_name, logged_name FROM exercise_alias").fetchall()
+    seen = set(curated) | {logged for canonical, logged in aliases if canonical in curated}
+
+    rows = conn.execute(
+        """
+        SELECT ws.exercise,
+               COUNT(*)                       AS sets,
+               MAX(w.started_at)::DATE::VARCHAR AS last_done,
+               ANY_VALUE(em.muscle)           AS muscle
+        FROM workout_sets ws
+        JOIN workouts w ON w.id = ws.workout_id
+        LEFT JOIN exercise_muscle em
+               ON em.exercise_name = ws.exercise AND em.role = 'primary'
+        WHERE COALESCE(ws.is_warmup, FALSE) = FALSE
+        GROUP BY ws.exercise
+        HAVING COUNT(*) >= ?
+        ORDER BY sets DESC
+        """,
+        [min_sets],
+    ).fetchall()
+
+    return [
+        {
+            "exercise": ex,
+            "sets": int(sets),
+            "last_done": last_done,
+            "muscle": muscle,
+            "verdict": "mapped_uncurated" if muscle else "unmapped",
+        }
+        for ex, sets, last_done, muscle in rows
+        if ex not in seen
+    ]

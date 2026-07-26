@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import duckdb
 import pytest
 
@@ -14,8 +16,7 @@ def conn() -> duckdb.DuckDBPyConnection:
     c.execute("CREATE TABLE exercise_alias (canonical_name TEXT, logged_name TEXT)")
     c.execute("CREATE TABLE exercise_muscle_map (exercise_name TEXT, primary_muscle TEXT)")
     c.execute(
-        "CREATE TABLE workout_sets_dedup "
-        "(exercise TEXT, started_at TIMESTAMP, is_warmup BOOLEAN)"
+        "CREATE TABLE workout_sets_dedup (exercise TEXT, started_at TIMESTAMP, is_warmup BOOLEAN)"
     )
     return c
 
@@ -27,17 +28,13 @@ def _log(c, exercise, muscle, n=10, day="2026-06-01"):
             [exercise, f"{day} 10:00:00"],
         )
     if muscle is not None:
-        c.execute(
-            "INSERT INTO exercise_muscle_map VALUES (?, ?)", [exercise, muscle]
-        )
+        c.execute("INSERT INTO exercise_muscle_map VALUES (?, ?)", [exercise, muscle])
 
 
 def test_muscle_veto_blocks_cross_muscle_false_pair(conn) -> None:
     # The known false pair: a rear_delts gap must never propose a chest fly, even
     # though "Dumbbell Fly" shares the "fly" token and the same equipment.
-    conn.execute(
-        "INSERT INTO exercise_science VALUES ('Rear Delt Fly (Dumbbell)', 'rear_delts')"
-    )
+    conn.execute("INSERT INTO exercise_science VALUES ('Rear Delt Fly (Dumbbell)', 'rear_delts')")
     _log(conn, "Dumbbell Fly", "chest")
     report = alias_gap_report(conn)
     row = next(r for r in report if r["canonical_name"] == "Rear Delt Fly (Dumbbell)")
@@ -58,9 +55,7 @@ def test_equipment_guard_blocks_conflicting_implement(conn) -> None:
 def test_finds_real_candidate_with_implied_equipment(conn) -> None:
     # "Concentration Curl (Dumbbell)" logged as "Concentration Curl" (equipment
     # omitted) is a valid alias: empty equipment is unspecified, not a conflict.
-    conn.execute(
-        "INSERT INTO exercise_science VALUES ('Concentration Curl (Dumbbell)', 'biceps')"
-    )
+    conn.execute("INSERT INTO exercise_science VALUES ('Concentration Curl (Dumbbell)', 'biceps')")
     _log(conn, "Concentration Curl", "biceps", n=42, day="2026-07-01")
     report = alias_gap_report(conn)
     row = next(r for r in report if r["canonical_name"] == "Concentration Curl (Dumbbell)")

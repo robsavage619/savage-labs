@@ -533,6 +533,35 @@ async def get_prescription() -> dict[str, Any]:
         conn.close()
 
 
+@router.get("/training/curation-gaps")
+async def get_curation_gaps(min_sets: int = 10) -> dict[str, Any]:
+    """Movements Rob trains that no exercise_science row can see.
+
+    The inverse of ``/training/alias-gaps``: not "a curated name with no history"
+    but "real training volume the selector is blind to". A movement with no science
+    row can never be selected and never credits a region, however central it is —
+    Dumbbell Upright Row sat at 1,541 sets while the traps menu offered movements
+    never once performed. Read-only.
+    """
+    from shc.training.alias_audit import curation_gap_report
+
+    conn = get_read_conn()
+    try:
+        gaps = curation_gap_report(conn, min_sets=min_sets)
+        by_muscle: dict[str, int] = {}
+        for g in gaps:
+            key = g["muscle"] or "unmapped"
+            by_muscle[key] = by_muscle.get(key, 0) + 1
+        return {
+            "gaps": gaps,
+            "unseen": len(gaps),
+            "unseen_sets": sum(g["sets"] for g in gaps),
+            "by_muscle": dict(sorted(by_muscle.items(), key=lambda kv: -kv[1])),
+        }
+    finally:
+        conn.close()
+
+
 @router.get("/training/alias-gaps")
 async def get_alias_gaps() -> dict[str, Any]:
     """Curated exercise names the plateau signal can't see, plus alias candidates.
