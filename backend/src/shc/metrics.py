@@ -1996,9 +1996,20 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
     )
     if primary_ex is None:
         return None
+    from shc.training.load_mechanics import per_hand_sql
+
+    ph = per_hand_sql("ws.weight_kg", "ws.exercise", "day_d")
     rows = conn.execute(
-        """
-        SELECT day_d AS day, MAX(ws.weight_kg * (1 + ws.reps / 30.0)) AS e1rm
+        f"""
+        -- Route through the per-hand choke point (`per_hand_sql`) like every
+        -- other e1RM path. This query read RAW `weight_kg`, so when Rob switched
+        -- RDL from logging a two-dumbbell TOTAL to per-hand on 2026-07-23, the
+        -- series went 150 -> 75 and this reported a -50% STRENGTH LOSS. His load
+        -- never moved; the unit did. That false regression sets
+        -- `deload_required` directly once the 9-day cooldown lapses, so it was
+        -- on course to drop a fresh accumulation block back into deload.
+        SELECT day_d AS day,
+               MAX(({ph}) * (1 + ws.reps / 30.0)) AS e1rm
         FROM workout_sets_dedup ws
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL
           AND ws.exercise = $ex AND day_d >= $s

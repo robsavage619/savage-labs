@@ -1142,7 +1142,8 @@ def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
     # quarantined_sets` asserts they land on the same number.
     rows = conn.execute(
         f"""
-        SELECT ws.exercise, ws.weight_kg, {effective_reps_sql("ws.reps", "ws.rpe")} AS reps
+        SELECT ws.exercise, ws.weight_kg, {effective_reps_sql("ws.reps", "ws.rpe")} AS reps,
+               ws.started_at::DATE AS logged_on
         FROM workout_sets_dedup ws
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL AND ws.reps > 0
           AND ws.source = 'hevy'
@@ -1151,10 +1152,13 @@ def e1rm_by_exercise(conn, today: date, days: int = 90) -> dict[str, float]:
         {"since": (today - timedelta(days=days)).isoformat()},
     ).fetchall()
     by_ex: dict[str, list[float]] = defaultdict(list)
-    for ex, wkg, reps in rows:
+    for ex, wkg, reps, logged_on in rows:
         if wkg is None:
             continue
-        by_ex[ex].append(per_hand_kg(ex, float(wkg)) * (1 + reps / 30.0))
+        # Pass the log date: the per-hand convention for RDL changed on
+        # 2026-07-23, and halving a post-switch set manufactures a 50% e1RM
+        # regression that fires an unearned deload.
+        by_ex[ex].append(per_hand_kg(ex, float(wkg), logged_on) * (1 + reps / 30.0))
 
     # Also index under canonical science names so the rep-window and load-ceiling
     # validators can find e1RM when the plan uses a canonical name but the athlete

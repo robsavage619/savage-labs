@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 
 from shc.training.load_mechanics import (
@@ -53,11 +55,24 @@ def test_per_hand_is_identity_hevy_logs_per_hand() -> None:
 
 
 def test_per_hand_halves_verified_combined_logged_lifts() -> None:
-    # RDL is the one verified exception: Rob enters the two-dumbbell TOTAL, so
-    # 150 lb (68 kg) is 75 lb / 34 kg per hand. The single-leg variant is logged
-    # per-hand (one bell) and must NOT halve.
-    assert per_hand_kg("Romanian Deadlift (Dumbbell)", 68.0) == pytest.approx(34.0)
-    assert per_hand_kg("Single Leg Romanian Deadlift (Dumbbell)", 13.6) == pytest.approx(13.6)
+    # RDL is the one verified exception — but the convention is DATE-SCOPED.
+    # Through 2026-07-22 Rob entered the two-dumbbell TOTAL, so 150 lb (68 kg)
+    # is 75 lb / 34 kg per hand. From 2026-07-23 he logs per-hand, and halving
+    # a post-switch set manufactured a phantom -50% e1RM regression.
+    from shc.training.load_mechanics import COMBINED_LOGGING_ENDED
+
+    before = COMBINED_LOGGING_ENDED - dt.timedelta(days=1)
+    assert per_hand_kg("Romanian Deadlift (Dumbbell)", 68.0, before) == pytest.approx(34.0)
+    assert per_hand_kg(
+        "Romanian Deadlift (Dumbbell)", 34.0, COMBINED_LOGGING_ENDED
+    ) == pytest.approx(34.0)
+    # No date -> current (per-hand) convention; see `_was_combined` for why the
+    # failure modes make that the safe default.
+    assert per_hand_kg("Romanian Deadlift (Dumbbell)", 68.0) == pytest.approx(68.0)
+    # The single-leg variant is logged per-hand (one bell) and NEVER halves.
+    assert per_hand_kg("Single Leg Romanian Deadlift (Dumbbell)", 13.6, before) == pytest.approx(
+        13.6
+    )
 
 
 def test_per_hand_leaves_bilateral_lifts_alone() -> None:
@@ -87,9 +102,20 @@ def test_ceiling_halves_combined_logged_lifts_before_testing() -> None:
     150 lb logged is 75 lb per hand — legal. Testing the raw logged value instead
     quarantined six legitimate working sets.
     """
-    assert exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 68.0) is False
+    from shc.training.load_mechanics import COMBINED_LOGGING_ENDED
+
+    before = COMBINED_LOGGING_ENDED - dt.timedelta(days=1)
+    assert exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 68.0, before) is False
     # Only above 2x the ceiling does the combined-logged lift actually breach it.
-    assert exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 100.0) is True
+    assert exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 100.0, before) is True
+    # Post-switch the logged number IS per-hand: 34 kg (75 lb) is legal, and a
+    # genuine 68 kg (150 lb) in ONE hand is not.
+    assert (
+        exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 34.0, COMBINED_LOGGING_ENDED) is False
+    )
+    assert (
+        exceeds_per_hand_max("Romanian Deadlift (Dumbbell)", 68.0, COMBINED_LOGGING_ENDED) is True
+    )
 
 
 def test_ceiling_ignores_bilateral_lifts() -> None:

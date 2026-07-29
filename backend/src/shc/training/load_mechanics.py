@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as _dt
+
 """Exercise load mechanics — how a logged weight maps to per-limb load.
 
 Hevy logs two-implement lifts (a dumbbell in each hand, a cable stack per hand)
@@ -62,6 +64,35 @@ _LOGGED_AS_COMBINED = frozenset(
     }
 )
 
+COMBINED_LOGGING_ENDED = _dt.date(2026, 7, 23)
+"""The date Rob switched from logging RDL as a two-dumbbell TOTAL to per-hand.
+
+A single exercise name carried two conventions, and nothing recorded the switch,
+so the halving rule kept firing after it stopped being true. The engine read a
+logged 75 as 37.5/hand and a logged 70 as 35 — against a genuine 75/hand through
+June — and reported a **-50% e1RM regression** that is not a strength loss at
+all. That false regression sets `deload_required` directly once the 9-day
+post-deload cooldown lapses (`metrics.py`), i.e. it was on course to drop a
+brand-new accumulation block straight back into deload.
+
+Evidence for the boundary, from the full logged history:
+
+    2026-05-29   90, 60   -> combined (45 / 30 per hand)
+    2026-06-11   150      -> MUST be combined; 150/hand exceeds the confirmed
+    2026-06-14   150         105 lb one-hand max, so per-hand is impossible
+    2026-07-23   75       -> per-hand
+    2026-07-26   70       -> per-hand (the plan that day read "70 lb EACH HAND")
+
+Read as combined throughout, the series runs 45 -> 75 -> 37.5, a 50% collapse
+with no corresponding change in programming. Read with the switch applied it
+runs 45 -> 75 -> 75 -> 70 — flat, which is what a deload week should look like.
+Only the second reading is coherent.
+
+A VALUE-based rule (halve anything implying more than the per-hand max) was
+considered and rejected: it fixes June but silently breaks May, where a logged
+90 is a combined 45/hand and sits well under the max.
+"""
+
 _SINGLE_ARM_KEYS = (
     "single arm",
     "single-arm",
@@ -118,7 +149,21 @@ def is_per_hand(name: str) -> bool:
     return classify_load(name) in _PER_HAND
 
 
-def per_hand_kg(name: str, logged_kg: float) -> float:
+def _was_combined(logged_on: _dt.date | None) -> bool:
+    """Whether a set logged on this date used the two-dumbbell-total convention.
+
+    ``None`` means the caller has no date, and resolves to the CURRENT convention
+    (per-hand, no halving). That default is chosen for its failure mode, not its
+    convenience: mis-reading an old combined row as per-hand yields a value above
+    the 105 lb one-hand maximum, which `exceeds_per_hand_max` catches loudly,
+    whereas mis-reading a new per-hand row as combined halves it silently and
+    manufactures the phantom regression this whole rule exists to stop. Prefer a
+    visible wrong number over an invisible one.
+    """
+    return logged_on is not None and logged_on < COMBINED_LOGGING_ENDED
+
+
+def per_hand_kg(name: str, logged_kg: float, logged_on: _dt.date | None = None) -> float:
     """Return the load in ONE hand for a logged weight (kg).
 
     Hevy logs the weight of a single implement, so the logged weight already IS
@@ -127,12 +172,16 @@ def per_hand_kg(name: str, logged_kg: float) -> float:
     halve. This is the single choke point every e1RM / ceiling / prescription
     path routes through.
     """
-    if name.strip().lower() in _LOGGED_AS_COMBINED:
+    if name.strip().lower() in _LOGGED_AS_COMBINED and _was_combined(logged_on):
         return logged_kg / 2.0
     return logged_kg
 
 
-def per_hand_sql(column: str = "weight_kg", exercise_col: str = "exercise") -> str:
+def per_hand_sql(
+    column: str = "weight_kg",
+    exercise_col: str = "exercise",
+    date_col: str | None = None,
+) -> str:
     """SQL expression form of :func:`per_hand_kg` — the identity except for the
     verified :data:`_LOGGED_AS_COMBINED` handful, which halve.
 
@@ -142,10 +191,15 @@ def per_hand_sql(column: str = "weight_kg", exercise_col: str = "exercise") -> s
     silently mixes per-hand and combined-total units into one e1RM/tonnage series.
     """
     names = ", ".join(f"'{n}'" for n in sorted(_LOGGED_AS_COMBINED))
-    return (
-        f"CASE WHEN lower(trim({exercise_col})) IN ({names}) "
-        f"THEN {column} / 2.0 ELSE {column} END"
-    )
+    # Pass `date_col` wherever the query has a date. Without it the expression
+    # resolves to the CURRENT (per-hand) convention, matching `_was_combined`'s
+    # no-date default — see that helper for why the failure modes are asymmetric.
+    when = f"lower(trim({exercise_col})) IN ({names})"
+    if date_col:
+        when += f" AND {date_col} < DATE '{COMBINED_LOGGING_ENDED.isoformat()}'"
+    else:
+        when = "FALSE AND " + when
+    return f"CASE WHEN {when} THEN {column} / 2.0 ELSE {column} END"
 
 
 EPLEY_REP_CAP = 12
@@ -217,14 +271,21 @@ Calf Raise at 495 lb is real.
 _LB_PER_KG = 2.20462
 
 
-def exceeds_per_hand_max(name: str, logged_kg: float | None) -> bool:
+def exceeds_per_hand_max(
+    name: str, logged_kg: float | None, logged_on: _dt.date | None = None
+) -> bool:
     """True when a logged set implies an impossible load in one hand.
 
     Routes through :func:`per_hand_kg` rather than testing the raw logged weight,
     so the lifts Rob enters as a two-dumbbell total are halved before the bound
     is applied. Comparing the raw value instead is what made migration 0071
     quarantine six legitimate 150 lb (= 75 lb/hand) Romanian Deadlift sets.
+
+    Pass ``logged_on``: the combined-vs-per-hand convention changed on
+    :data:`COMBINED_LOGGING_ENDED`, and without a date a pre-switch 150 lb
+    (= 75/hand) set reads as 150 in one hand and gets quarantined — re-creating
+    migration 0071's exact mistake through a different door.
     """
     if logged_kg is None or not is_per_hand(name):
         return False
-    return per_hand_kg(name, logged_kg) * _LB_PER_KG > MAX_PER_HAND_LB
+    return per_hand_kg(name, logged_kg, logged_on) * _LB_PER_KG > MAX_PER_HAND_LB

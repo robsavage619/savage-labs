@@ -2,6 +2,23 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-28 — "I feel like I'm ALWAYS in a deload state"
+
+**Context.** Rob's words, and they were checkable rather than a mood. Measured across the last two blocks: **20 of 80 days were deload — 25%**, against 17% for a healthy 5+1 cycle. Two distinct causes, one historical and one still armed.
+
+**Cause 1 — Block 1 latched for 19 days.** The deload flag is pure calendar arithmetic (`week_number > planned_weeks`), and originally nothing advanced a block past it, so once crossed it flagged deload indefinitely and halved volume on every prescription. Block 1 (2026-05-09) hit deload on 06-08 and stayed there until 06-27, ending with trigger `manual-unstick` — someone had to reach in. `_auto_advance_mesocycle` (daily 04:30) since fixed this with a two-phase dwell: accumulation → deload at week planned+1, deload → fresh block at planned+2. Verified end-to-end today: the condition becomes true 2026-08-03 (week 7 > 6) and stays true on subsequent days so a missed cron self-heals; the scheduler is registered and started (`main.py:39-40`); and simulating the advance on a DB copy yields a fresh block at week 1, `status=active`, `is_deload=False`.
+
+**Cause 2 — a phantom 50% strength loss, still armed.** `metrics._e1rm_regression` read raw `weight_kg`, bypassing the per-hand choke point every other e1RM path uses. Rob switched RDL from logging a two-dumbbell TOTAL to per-hand on 2026-07-23; the series went 150 → 75 and the detector called it a −50% regression. Today it was suppressed only because a deload had fired within the 9-day cooldown — which lapses ~2026-08-05, two days into the new block, at which point it sets `deload_required` directly. The projected sequence was: deload lifts 8/3 → two or three days of real training → phantom regression re-fires. Exactly the complaint, on a timer.
+
+**Decision.** (1) The combined-vs-per-hand rule is now **date-scoped** at `COMBINED_LOGGING_ENDED = 2026-07-23`, threaded through `per_hand_sql`, `per_hand_kg`, `exceeds_per_hand_max`, the Hevy ingest, the weekly rollup, `e1rm_by_exercise`, `_e1rm_regression`, and the reconciliation harness. Live effect: the regression reads **−50% → 0.0%**, and 0.0% is correct — he held 75/hand through the deload. (2) `DEFAULT_PLANNED_WEEKS` 5 → **7** at Rob's request for a longer runway, applied only to blocks created from here on. The block starting 8/3 accumulates through 2026-09-20 with a deload the week of 09-21 — deload share 17% → 12.5%.
+
+**Why date-scoped and not value-scoped.** A value rule ("halve anything implying more than the 105 lb one-hand max") fixes June's 150s and silently breaks May, where a logged 90 is a combined 45/hand sitting well under the max. Read as combined throughout, the series runs 45 → 75 → 37.5 — a 50% collapse with no change in programming. With the switch applied it runs 45 → 75 → 75 → 70, flat through a deload. Only the second reading is coherent.
+
+**The no-date default is chosen for its failure mode.** Absent a date, the rule resolves to the CURRENT (per-hand) convention. Mis-reading an old combined row as per-hand yields a value above the one-hand maximum, which `exceeds_per_hand_max` catches loudly; mis-reading a new per-hand row as combined halves it silently and manufactures the very regression this exists to stop. Visible wrong beats invisible wrong. That same guard had to be made date-aware in the same pass, or a pre-switch 150 lb set would be quarantined at ingest — migration 0071's exact mistake through a different door.
+
+**Consequences.** Invariants 19 and 20; 724 tests pass; reconciliation 6/6. Three tests were recalibrated, none weakened: two asserted unconditional halving and now assert the date-scoped rule on both sides of the boundary, and `test_progression_e1rm_excludes_fitbod_and_quarantined_sets` had seed weeks computed as `today - N weeks`, which straddled 07-23 — pinned to fixed pre-switch dates so a test about Fitbod/quarantine exclusion no longer depends on which side of a convention change it runs on. **Still open:** the illness gate's "corroborated by HRV/RHR/recovery" message fires from a fail-conservative default whenever recovery sits between 50 and the 67 green floor, and says "corroborated" even when nothing corroborates (as on 2026-07-27). The wording should distinguish evidence from precaution.
+
+
 ## 2026-07-26 — Why the suite was green through a dozen calculation bugs, and what actually catches them
 
 **Context.** Rob, after a day of finding defect after defect: *"It makes me nervous that we have had so many bugs in our calculations, how do we ensure things are clean now?"* The honest starting point is the tally of how they were found:

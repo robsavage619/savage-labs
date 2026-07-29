@@ -55,7 +55,7 @@ def _e1rm_from_raw(conn: duckdb.DuckDBPyConnection, exercise: str, days: int = 9
     row = conn.execute(
         f"""
         SELECT MAX(
-            ({per_hand_sql("weight_kg", "exercise")}) * 2.20462
+            ({per_hand_sql("weight_kg", "exercise", "started_at::DATE")}) * 2.20462
             * (1 + LEAST(reps + CASE WHEN rpe IS NULL THEN 0
                                      ELSE GREATEST(LEAST(10 - rpe, 3), 0) END, 12) / 30.0)
         )

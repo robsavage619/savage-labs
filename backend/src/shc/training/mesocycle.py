@@ -28,6 +28,24 @@ from shc.training.self_learning import fit_all
 log = logging.getLogger(__name__)
 
 
+DEFAULT_PLANNED_WEEKS = 7
+"""Accumulation weeks in a new block, before the one-week deload.
+
+Raised 5 -> 7 on 2026-07-28 at Rob's request for "a longer runway". A 5-week
+block is really a 6-week cycle (5 accumulate + 1 shed), so ~17% of calendar time
+was deload; at 7 it is ~12.5%. Deliberately applied only to blocks created from
+here on — the block in flight keeps the 5 it was planned at, so raising this
+cannot yank him out of a deload week mid-shed (`_build_state` derives
+`is_deload_week` live from `planned_weeks`, so editing the active row would take
+effect immediately, which is the opposite of what a deload is for).
+
+This is a calendar bound, not the real stopping rule. The outcome triggers —
+muscles regressing, muscles at MRV, effort overreach — still end a block early
+when fatigue actually arrives, so a longer calendar buys runway without removing
+the brake.
+"""
+
+
 # Epley 1RM estimate
 def _epley(weight_kg: float, reps: int) -> float:
     return weight_kg * (1 + reps / 30.0)
@@ -115,8 +133,9 @@ def ensure_active_mesocycle(conn: duckdb.DuckDBPyConnection) -> MesocycleState:
     conn.execute(
         """
         INSERT INTO mesocycles (started_on, planned_weeks, status, notes)
-        VALUES (CURRENT_DATE, 5, 'active', 'Auto-created by ensure_active_mesocycle')
-        """
+        VALUES (CURRENT_DATE, ?, 'active', 'Auto-created by ensure_active_mesocycle')
+        """,
+        [DEFAULT_PLANNED_WEEKS],
     )
     state = active_mesocycle(conn)
     assert state is not None
@@ -285,7 +304,7 @@ _EPLEY_REP_CAP = 12  # re-exported for tests; canonical value lives in load_mech
 # verified _LOGGED_AS_COMBINED handful) — the same choke point e1rm_by_exercise
 # (the load-ceiling path) routes through, so a dumbbell lift logged as a combined
 # total doesn't read 2x its real per-hand value in the progression trend.
-_PER_HAND_WEIGHT = per_hand_sql("weight_kg", "exercise")
+_PER_HAND_WEIGHT = per_hand_sql("weight_kg", "exercise", "started_at::DATE")
 _EFFECTIVE_REPS = effective_reps_sql("reps", "rpe")
 # Epley over RIR-ADJUSTED reps: the input set is assumed taken to failure, and
 # Rob's best sets sit at RPE 7-8. Raw reps understate e1RM, and the load ceiling
@@ -894,7 +913,8 @@ def advance_mesocycle(
         conn.execute(
             """
             INSERT INTO mesocycles (started_on, planned_weeks, status, notes)
-            VALUES (CURRENT_DATE, 5, 'active', 'Auto-started after deload')
-            """
+            VALUES (CURRENT_DATE, ?, 'active', 'Auto-started after deload')
+            """,
+            [DEFAULT_PLANNED_WEEKS],
         )
     return ensure_active_mesocycle(conn)

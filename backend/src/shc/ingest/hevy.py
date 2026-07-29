@@ -191,14 +191,20 @@ def _map_workout_to_db(w: dict) -> tuple[dict, list[dict], list[dict]]:
             set_hash = _content_hash("hevy", hevy_id, exercise_name, str(ex_i), str(idx))
             set_id = f"hevy_set_{set_hash}"
             weight_kg = s.get("weight_kg")
-            impossible = exceeds_per_hand_max(exercise_name, weight_kg)
+            # Pass the log DATE: the per-hand convention changed on
+            # COMBINED_LOGGING_ENDED, and testing a pre-switch combined total
+            # without it quarantines legitimate sets (migration 0071's bug).
+            _logged_on = started_at.date() if hasattr(started_at, "date") else None
+            impossible = exceeds_per_hand_max(exercise_name, weight_kg, _logged_on)
             if impossible:
                 entry = {
                     "workout_id": workout_id,
                     "started_at": started_at,
                     "exercise": exercise_name,
                     "logged_lbs": round(weight_kg * 2.20462, 1),
-                    "per_hand_lbs": round(per_hand_kg(exercise_name, weight_kg) * 2.20462, 1),
+                    "per_hand_lbs": round(
+                        per_hand_kg(exercise_name, weight_kg, _logged_on) * 2.20462, 1
+                    ),
                     "reps": s.get("reps"),
                 }
                 quarantined.append(entry)

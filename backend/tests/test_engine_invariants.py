@@ -15,6 +15,7 @@ from __future__ import annotations
 import pathlib
 import uuid
 from datetime import date, timedelta
+from datetime import date as dt_date
 
 import pytest
 
@@ -1305,3 +1306,84 @@ def test_reconciliation_checks_do_not_call_the_code_they_check() -> None:
         "run_all no longer reports a check that raised — a check that vanishes "
         "on error reads as clean"
     )
+
+
+def test_a_logging_convention_change_is_never_read_as_a_strength_loss() -> None:
+    """Invariant 19: every e1RM path routes through the per-hand choke point.
+
+    `load_mechanics.per_hand_sql` / `per_hand_kg` exist so one unit governs every
+    e1RM, ceiling and prescription. `metrics._e1rm_regression` bypassed it and
+    read raw `weight_kg`, so when Rob switched Romanian Deadlift from logging a
+    two-dumbbell TOTAL to per-hand on 2026-07-23, the series went 150 -> 75 and
+    the detector reported a **-50% strength loss**. His load never moved; the
+    unit did.
+
+    That is not cosmetic. A regression past -3% sets `deload_required` DIRECTLY
+    once the 9-day post-deload cooldown lapses, so a phantom 50% loss was on
+    course to drop a brand-new accumulation block straight back into deload —
+    the "I'm ALWAYS in a deload state" complaint, arriving on a timer.
+
+    Guards both halves: the date-scoped rule itself, and the requirement that
+    the detector keeps using it.
+    """
+    import datetime as dt
+    import inspect
+
+    from shc import metrics
+    from shc.training.load_mechanics import COMBINED_LOGGING_ENDED, per_hand_kg
+
+    LB = 2.20462
+    rdl = "Romanian Deadlift (Dumbbell)"
+
+    # Before the switch: a logged 150 is a combined total (75/hand). Read as
+    # per-hand it would be 150 in one hand, past the confirmed 105 lb maximum.
+    assert per_hand_kg(rdl, 150 / LB, dt.date(2026, 6, 11)) * LB == pytest.approx(75.0)
+    # On/after the switch: the logged number IS the per-hand load.
+    assert per_hand_kg(rdl, 75 / LB, COMBINED_LOGGING_ENDED) * LB == pytest.approx(75.0)
+    assert per_hand_kg(rdl, 70 / LB, dt.date(2026, 7, 26)) * LB == pytest.approx(70.0)
+    # Read together the series is 75 -> 75 -> 70 (flat through a deload), not
+    # 75 -> 37.5 (a 50% collapse with no change in programming).
+
+    # No date -> CURRENT convention. Deliberate: mis-reading an old combined row
+    # as per-hand exceeds the one-hand max and trips a loud guard, while
+    # mis-reading a new per-hand row as combined halves it silently.
+    assert per_hand_kg(rdl, 70 / LB) * LB == pytest.approx(70.0)
+
+    src = inspect.getsource(metrics._e1rm_regression)
+    assert "per_hand_sql" in src, (
+        "the e1RM regression detector stopped routing through the per-hand choke "
+        "point — a logging-unit change can be read as a strength loss again"
+    )
+
+
+def test_raising_the_block_length_cannot_end_a_deload_already_in_progress() -> None:
+    """Invariant 20: block length applies to NEW blocks, never the one in flight.
+
+    `_build_state` derives `is_deload_week` live from `planned_weeks`, so editing
+    the ACTIVE row would take effect instantly — raising 5 to 7 mid-deload would
+    yank Rob out of a shed week he is partway through, which is the opposite of
+    what a deload is for (and would have done exactly that on 2026-07-28, a day
+    with recovery 25 and a corroborated illness signal).
+
+    `DEFAULT_PLANNED_WEEKS` is therefore consulted only when a block is CREATED.
+    """
+    import inspect
+
+    from shc.training import mesocycle
+
+    assert mesocycle.DEFAULT_PLANNED_WEEKS >= 5
+
+    # Both creation sites parameterise the length; neither hardcodes it.
+    for fn in (mesocycle.ensure_active_mesocycle, mesocycle.advance_mesocycle):
+        src = inspect.getsource(fn)
+        if "INSERT INTO mesocycles" in src:
+            assert "DEFAULT_PLANNED_WEEKS" in src, (
+                f"{fn.__name__} hardcodes planned_weeks instead of using the constant"
+            )
+
+    # A block in flight keeps the length it was planned at: is_deload_week is a
+    # function of the ROW's planned_weeks, so a 5-week block stays a 5-week block.
+    st = mesocycle._build_state(
+        "x", dt_date(2026, 6, 27), 5, "deloading", None, "auto-calendar", None
+    )
+    assert st.is_deload_week is True, "a deloading block must stay in deload"

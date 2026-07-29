@@ -20,7 +20,12 @@ def test_progression_e1rm_excludes_fitbod_and_quarantined_sets(conn, seed) -> No
     Fitbod row and a quarantined (is_warmup) row at wildly different weights
     that would spike the max if either leaked through."""
     today = date.today()
-    weeks = [today - timedelta(weeks=w) for w in range(4)]
+    # Pin the seed weeks BEFORE 2026-07-23, when RDL was logged as a
+    # two-dumbbell TOTAL. `today - weeks` straddled that boundary, so half the
+    # seeded weeks halved and half did not — the assertion below is about Fitbod
+    # and quarantine exclusion, and it should not also depend on which side of a
+    # convention change the test happens to run on.
+    weeks = [date(2026, 6, 1) + timedelta(weeks=w) for w in range(4)]
     for wk in weeks:
         seed.workout(wk, _RDL, [(68.0, 8)], source="hevy", is_warmup=False)
         # Fitbod history at a much higher weight — must not contaminate the trend.
