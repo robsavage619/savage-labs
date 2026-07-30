@@ -88,23 +88,44 @@ function CompletedBanner({ ex }: { ex: PlanExecution }) {
 
 // ── Session header ───────────────────────────────────────────────────────────
 
-function sessionTier(plan: WorkoutPlan) {
-  const base = TIER[plan.readiness_tier] ?? TIER.yellow;
-  const intensity = plan.recommendation?.intensity;
-  // Green body, low/rest intensity = gates forced a deload despite good recovery.
-  // Override the label so "Go hard" doesn't show on a Z2 walk day.
-  const labelOverride =
-    plan.readiness_tier === "green" && (intensity === "low" || intensity === "rest")
-      ? "Active recovery"
-      : null;
-  return labelOverride ? { ...base, label: labelOverride } : base;
+/** How hard today actually is — read off the prescription, not off the body.
+ *
+ *  `readiness_tier` describes RECOVERY: green means the body is fresh. It does
+ *  not mean the session is hard. A calendar deload, a rest gate, or a capped
+ *  `target_rpe` all produce an easy day on a green body, and keying the headline
+ *  off the tier had the strip printing "▲ Go hard" directly above six sets of
+ *  RPE 6 — the card contradicting itself in one glance. The old override caught
+ *  only `low`/`rest`, so a deload sitting at `moderate` sailed straight through.
+ *
+ *  RPE outranks the coarse intensity enum: it is the scale the sets themselves
+ *  are written on, so when the two disagree the sets win. */
+function sessionEffort(plan: WorkoutPlan) {
+  const { intensity, target_rpe: rpe } = plan.recommendation;
+
+  if (intensity === "rest") return { ...TIER.red, label: "Rest / active recovery" };
+  if (intensity === "low") return { ...TIER.red, label: "Active recovery" };
+  if (plan.deload_prescribed)
+    return { ...TIER.yellow, label: "Deload — leave reps in the tank" };
+  if (rpe != null) {
+    if (rpe < 7) return { ...TIER.yellow, label: "Easy — technique and pump" };
+    if (rpe < 8.5) return { ...TIER.yellow, label: "Moderate effort" };
+    return { ...TIER.green, label: "Go hard" };
+  }
+  if (intensity === "high") return { ...TIER.green, label: "Go hard" };
+  return { ...TIER.yellow, label: "Moderate effort" };
 }
 
 /** The operational facts, one strip: how hard, at what, for how long.
  *  Everything a set needs; nothing it doesn't. The reasoning moved below the
  *  exercises — it was pushing the first lift two screens down on a phone. */
 function SessionStrip({ plan }: { plan: WorkoutPlan }) {
-  const t = sessionTier(plan);
+  const t = sessionEffort(plan);
+  const durationMin = plan.recommendation.estimated_duration_min;
+  const rpe = plan.recommendation.target_rpe;
+  // The recovery read is a real, separate fact, and the headline no longer
+  // carries it. Stated plainly it explains the common green-body/capped-day
+  // case instead of leaving the two numbers looking like a contradiction.
+  const recovery = TIER[plan.readiness_tier] ?? TIER.yellow;
   return (
     <div
       className="rounded-[var(--r-md)] px-4 py-3"
@@ -121,11 +142,23 @@ function SessionStrip({ plan }: { plan: WorkoutPlan }) {
           {t.label}
         </span>
         <div className="flex items-center gap-2.5 text-[11px] text-[var(--text-dim)] tabular-nums w-full sm:w-auto sm:ml-auto">
-          <span>~{plan.recommendation.estimated_duration_min} min</span>
-          <span className="text-[var(--text-faint)]">•</span>
-          <span>RPE {plan.recommendation.target_rpe}</span>
-          <span className="text-[var(--text-faint)]">•</span>
+          {durationMin != null && (
+            <>
+              <span>~{durationMin} min</span>
+              <span className="text-[var(--text-faint)]">•</span>
+            </>
+          )}
+          {rpe != null && (
+            <>
+              <span>RPE {rpe}</span>
+              <span className="text-[var(--text-faint)]">•</span>
+            </>
+          )}
           <span className="capitalize">{plan.recommendation.intensity}</span>
+          <span className="text-[var(--text-faint)]">•</span>
+          <span>
+            recovery <span style={{ color: recovery.color }}>{plan.readiness_tier}</span>
+          </span>
         </div>
       </div>
       {/* Focus gets its own line — as a flex sibling it collapsed to a ~90px
@@ -139,8 +172,9 @@ function SessionStrip({ plan }: { plan: WorkoutPlan }) {
 
 /** The readiness narrative and the WHY, below the work. */
 function SessionRationale({ plan }: { plan: WorkoutPlan }) {
-  const t = sessionTier(plan);
+  const t = sessionEffort(plan);
   const snapshotAt = formatClock(plan.execution?.plan_created_at ?? null);
+  if (!plan.readiness_summary && !plan.recommendation.rationale) return null;
   return (
     <div
       className="rounded-[var(--r-md)] overflow-hidden"
@@ -148,6 +182,9 @@ function SessionRationale({ plan }: { plan: WorkoutPlan }) {
     >
       <div className="p-5 flex gap-4 items-start">
         <div className="min-w-0 flex-1">
+          {/* Both of these are omitted on some plans, which rendered an empty
+              box and a bare "WHY" label with nothing after it. */}
+          {plan.readiness_summary && (
           <p className="text-[12.5px] text-[var(--text-muted)] leading-relaxed">
             {plan.readiness_summary}
             {/* The narrative is a snapshot taken when the plan was written, and it
@@ -159,10 +196,13 @@ function SessionRationale({ plan }: { plan: WorkoutPlan }) {
               </span>
             )}
           </p>
-          <p className="text-[11.5px] text-[var(--text-dim)] leading-snug italic mt-2">
-            <span className="text-[var(--text-faint)] not-italic font-semibold uppercase tracking-wider text-[9.5px] mr-1.5">Why</span>
-            {plan.recommendation.rationale}
-          </p>
+          )}
+          {plan.recommendation.rationale && (
+            <p className="text-[11.5px] text-[var(--text-dim)] leading-snug italic mt-2">
+              <span className="text-[var(--text-faint)] not-italic font-semibold uppercase tracking-wider text-[9.5px] mr-1.5">Why</span>
+              {plan.recommendation.rationale}
+            </p>
+          )}
         </div>
       </div>
     </div>

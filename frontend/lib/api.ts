@@ -536,13 +536,19 @@ export interface WorkoutPlan {
   execution?: PlanExecution;
   source: "claude" | "claude_code" | "fallback" | string;
   readiness_tier: "green" | "yellow" | "red";
-  readiness_summary: string;
+  /** Set by the POST handler from `gates.deload_required` — the structured
+   *  "a deload actually fired today" signal, not narrative text. */
+  deload_prescribed?: boolean;
+  /** Optional in practice: the planner omits these on some plans, and the
+   *  validator does not require them. Typed as non-null they rendered as
+   *  "~ min" and an empty "WHY" block. */
+  readiness_summary: string | null;
   recommendation: {
     intensity: "high" | "moderate" | "low" | "rest";
     focus: string;
-    rationale: string;
-    estimated_duration_min: number;
-    target_rpe: number;
+    rationale: string | null;
+    estimated_duration_min: number | null;
+    target_rpe: number | null;
   };
   warmup: WarmupItem[];
   blocks: WorkoutBlock[];
