@@ -16,22 +16,22 @@ def test_returns_none_with_no_data(conn, today: date) -> None:
 # Two sets per session so the candidate-selection floor (>=6 sets) is met and
 # the exclusion/RPE logic is genuinely exercised (not bypassed as no-data).
 
+
 def test_ignores_cable_isolation_as_primary(conn, seed, today: date) -> None:
     """The original bug: most-frequent lift was a cable fly. It must not be
     chosen as the strength primary, so no regression is computed off it."""
     for i in range(8):
-        seed.workout(days_ago(today, 50 - i * 5), "Low Cable Fly Crossovers",
-                     [(40, 12), (35, 12)])
+        seed.workout(days_ago(today, 50 - i * 5), "Low Cable Fly Crossovers", [(40, 12), (35, 12)])
     assert _e1rm_regression(conn, today) is None
 
 
 def test_picks_free_weight_compound_and_detects_real_regression(conn, seed, today: date) -> None:
     ex = "Bench Press (Barbell)"
     # Prior half: strong. Recent half: clearly weaker (peak ~105 → ~84).
-    seed.workout(days_ago(today, 50), ex, [(90, 5), (85, 5)])   # peak 90*1.167=105
-    seed.workout(days_ago(today, 44), ex, [(88, 6), (85, 6)])   # peak 88*1.2 =105.6
-    seed.workout(days_ago(today, 14), ex, [(70, 5), (68, 5)])   # peak 70*1.167=81.7
-    seed.workout(days_ago(today, 7), ex, [(72, 5), (70, 5)])    # peak 72*1.167=84
+    seed.workout(days_ago(today, 50), ex, [(90, 5), (85, 5)])  # peak 90*1.167=105
+    seed.workout(days_ago(today, 44), ex, [(88, 6), (85, 6)])  # peak 88*1.2 =105.6
+    seed.workout(days_ago(today, 14), ex, [(70, 5), (68, 5)])  # peak 70*1.167=81.7
+    seed.workout(days_ago(today, 7), ex, [(72, 5), (70, 5)])  # peak 72*1.167=84
     pct = _e1rm_regression(conn, today)
     assert pct is not None
     val, lift = pct
@@ -76,7 +76,88 @@ def test_no_regression_when_strength_held(conn, seed, today: date) -> None:
     assert result is None or result[0] >= -3.0
 
 
+# ── RIR-adjusted basis (invariant 13) ────────────────────────────────────────
+
+
+def test_same_load_costing_more_effort_reads_as_a_regression(conn, seed, today: date) -> None:
+    """Invariant 13 applied to the detector: reps are RIR-adjusted, not raw.
+
+    Identical load and reps, but the effort to produce them climbs RPE 7 -> 10.
+    On raw reps that series is perfectly FLAT (0%) and the detector says nothing,
+    which is the whole defect: two sets at the same weight are not the same
+    evidence if one had 3 reps in reserve and the other was a grinder.
+
+    This is the teeth test for the fix — it fails on raw-rep Epley.
+    """
+    ex = "Bench Press (Barbell)"
+    seed.workout(days_ago(today, 50), ex, [(90, 5), (88, 5)], rpe=7)
+    seed.workout(days_ago(today, 44), ex, [(90, 5), (88, 5)], rpe=7)
+    seed.workout(days_ago(today, 14), ex, [(90, 5), (88, 5)], rpe=10)
+    seed.workout(days_ago(today, 7), ex, [(90, 5), (88, 5)], rpe=10)
+
+    result = _e1rm_regression(conn, today)
+    assert result is not None, "a lift getting materially harder must be visible"
+    pct, lift = result
+    assert lift == ex
+    assert pct < -3.0, (
+        f"same load at RPE 7 -> 10 should read as a regression, got {pct}% — "
+        "the detector is scoring raw reps and cannot see effort drift"
+    )
+
+
+def test_uneven_rpe_coverage_falls_back_to_raw_reps(conn, seed, today: date) -> None:
+    """The adjustment must apply on a CONSISTENT basis across the two halves.
+
+    Here the safety sign is inverted from the ceiling paths: crediting the recent
+    half while the prior half predates RPE logging INFLATES recent peak and masks
+    a real regression. These loads are a genuine -4.4% loss on raw reps, but a
+    naively-adjusted recent half scores +1.0% and the deload never fires.
+
+    Fully-skewed coverage (0.0 vs 1.0) must therefore drop both halves to raw.
+    """
+    ex = "Bench Press (Barbell)"
+    seed.workout(days_ago(today, 50), ex, [(90, 5), (88, 5)], rpe=None)
+    seed.workout(days_ago(today, 44), ex, [(90, 5), (88, 5)], rpe=None)
+    seed.workout(days_ago(today, 14), ex, [(86, 5), (84, 5)], rpe=8)
+    seed.workout(days_ago(today, 7), ex, [(86, 5), (84, 5)], rpe=8)
+
+    result = _e1rm_regression(conn, today)
+    assert result is not None, "a real strength loss must not vanish"
+    pct, _ = result
+    assert pct < -3.0, (
+        f"got {pct}% — RIR credit was applied to only the RPE-tagged half and "
+        "inflated it past a real regression"
+    )
+
+
+def test_even_rpe_coverage_still_uses_the_adjusted_basis(conn, seed, today: date) -> None:
+    """The fallback is scoped to SKEW, and must not disable the adjustment.
+
+    Guards the lazy fix for the test above (always use raw reps), which would
+    pass it and silently revert invariant 13 for this path.
+    """
+    import inspect
+
+    from shc import metrics
+
+    src = inspect.getsource(metrics._e1rm_regression)
+    assert "effective_reps_sql" in src, (
+        "the regression detector stopped routing through the shared RIR "
+        "expression — it can grade Rob against an e1RM the ceiling never uses"
+    )
+    # Both halves fully covered -> skew 0 -> adjusted basis, which sees the
+    # effort drift the raw basis cannot (same assertion as the teeth test).
+    ex = "Bench Press (Barbell)"
+    seed.workout(days_ago(today, 50), ex, [(90, 5), (88, 5)], rpe=7)
+    seed.workout(days_ago(today, 44), ex, [(90, 5), (88, 5)], rpe=7)
+    seed.workout(days_ago(today, 14), ex, [(90, 5), (88, 5)], rpe=10)
+    seed.workout(days_ago(today, 7), ex, [(90, 5), (88, 5)], rpe=10)
+    result = _e1rm_regression(conn, today)
+    assert result is not None and result[0] < -3.0
+
+
 # ── _deload_in_cooldown ──────────────────────────────────────────────────────
+
 
 def test_cooldown_false_with_no_plans(conn, today: date) -> None:
     assert _deload_in_cooldown(conn, today) is False

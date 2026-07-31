@@ -1953,6 +1953,13 @@ _NOT_STRENGTH = (
     "goblet",
 )
 
+# Max RPE-coverage difference between the two halves of the regression window
+# before the RIR adjustment is abandoned for a raw-rep comparison. Credit tops
+# out at MAX_RIR_CREDIT (3) reps, so at ~10 reps a fully-skewed window inflates
+# the covered half by ~10% of e1RM; at 0.25 the worst spurious drift is ~2.5%,
+# inside the -3% deload trigger.
+_RPE_COVERAGE_SKEW = 0.25
+
 
 def _is_strength_lift(name: str) -> bool:
     """True for free-weight compound lifts whose e1RM tracks real strength."""
@@ -1977,6 +1984,23 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
     - Compares PEAK e1RM recent-half vs prior-half, not averages: a real
       regression means even your best recent effort fell below your best prior
       effort, which a few light sessions can't fake.
+
+    Reps are RIR-adjusted (`effective_reps_sql`), the same basis the progression
+    and ceiling paths use — invariant 13. Two sets at the same load and reps are
+    not the same evidence if one cost RPE 7 and the other RPE 10, and reading
+    them as equal is what let a lift trend flat here while the ceiling path saw
+    it move (measured 2026-07-31: median 5% divergence over 598 real sets, max
+    25% — Face Pull 90lb x26 @RPE 8 read 168lb raw vs 126lb adjusted).
+
+    The adjustment is applied on a CONSISTENT basis across the two halves, which
+    matters more here than in the ceiling paths because the safety sign is
+    INVERTED. There, a missing RPE adding no credit errs downward and is safe.
+    Here, crediting the recent half while the prior half predates RPE logging
+    inflates recent peak by up to ~10% and MASKS a real regression — an
+    under-protection, not an over-protection. So when the two halves' RPE
+    coverage diverges past `_RPE_COVERAGE_SKEW`, both fall back to raw reps: an
+    apples-to-apples comparison on the weaker basis beats a sharper basis
+    applied unevenly.
     """
     since = (today - timedelta(days=56)).isoformat()
     candidates = conn.execute(
@@ -1996,9 +2020,10 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
     )
     if primary_ex is None:
         return None
-    from shc.training.load_mechanics import per_hand_sql
+    from shc.training.load_mechanics import effective_reps_sql, per_hand_sql
 
     ph = per_hand_sql("ws.weight_kg", "ws.exercise", "day_d")
+    eff = effective_reps_sql("ws.reps", "ws.rpe")
     rows = conn.execute(
         f"""
         -- Route through the per-hand choke point (`per_hand_sql`) like every
@@ -2008,8 +2033,14 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
         -- never moved; the unit did. That false regression sets
         -- `deload_required` directly once the 9-day cooldown lapses, so it was
         -- on course to drop a fresh accumulation block back into deload.
+        --
+        -- Both bases are computed so the caller can fall back to raw reps when
+        -- RPE coverage is uneven across the two halves; see the docstring.
         SELECT day_d AS day,
-               MAX(({ph}) * (1 + ws.reps / 30.0)) AS e1rm
+               MAX(({ph}) * (1 + {eff} / 30.0)) AS e1rm_adj,
+               MAX(({ph}) * (1 + ws.reps / 30.0)) AS e1rm_raw,
+               COUNT(ws.rpe) AS n_rpe,
+               COUNT(*) AS n_sets
         FROM workout_sets_dedup ws
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL
           AND ws.exercise = $ex AND day_d >= $s
@@ -2025,8 +2056,16 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
     if len(rows) < 4:
         return None
     half = len(rows) // 2
-    prior = [float(r[1]) for r in rows[:half] if r[1]]
-    recent = [float(r[1]) for r in rows[half:] if r[1]]
+    prior_rows, recent_rows = rows[:half], rows[half:]
+
+    def _rpe_coverage(day_rows: list) -> float:
+        total = sum(int(r[4] or 0) for r in day_rows)
+        return sum(int(r[3] or 0) for r in day_rows) / total if total else 0.0
+
+    skew = abs(_rpe_coverage(prior_rows) - _rpe_coverage(recent_rows))
+    col = 1 if skew <= _RPE_COVERAGE_SKEW else 2
+    prior = [float(r[col]) for r in prior_rows if r[col]]
+    recent = [float(r[col]) for r in recent_rows if r[col]]
     if len(prior) < 2 or len(recent) < 2:
         return None
     p_peak = max(prior)
