@@ -263,3 +263,73 @@ def test_a_ceiling_is_rounded_down_never_up(conn, seed):
     grids = build_grids(conn)
     assert grids.snap_down("Hip Thrust (Machine)", 268.0) == pytest.approx(250.0)
     assert grids.snap_up("Hip Thrust (Machine)", 268.0) == pytest.approx(270.0)
+
+
+# ── Declared equipment facts (migration 0088) ────────────────────────────────
+
+
+def _declare(conn, exercise: str, increment: float, anchor: float) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO equipment_increment "
+        "(exercise_name, increment_lb, anchor_lb, note) VALUES (?, ?, ?, ?)",
+        [exercise, increment, anchor, "test"],
+    )
+
+
+def test_a_declared_increment_fixes_the_case_history_is_too_thin_to_prove(conn, seed):
+    """The complaint that started this work, and the reason overrides exist.
+
+    Hip Thrust (Machine) has 9 real logged sets across exactly two weights. The
+    evidence bar (`_MIN_SETS_TO_PROVE_A_GAP`) correctly refuses to argue any
+    weight is absent on that little data, so 235 passes through untouched — the
+    caution is right and the outcome is still wrong. Rob's declared fact (plate
+    loaded, 10s smallest, loaded in pairs -> 20 lb step, phase anchored at 230)
+    resolves it.
+
+    Reverted (overrides not consulted) this reads 235.0.
+    """
+    _log(seed, "Hip Thrust (Machine)", [230.0, 270.0], times=4)
+    _declare(conn, "Hip Thrust (Machine)", 20.0, 230.0)
+    grids = build_grids(conn)
+    assert grids.snap("Hip Thrust (Machine)", 235.0).weight_lbs == pytest.approx(230.0)
+    # The lattice extends both ways from the anchor, not from zero.
+    assert grids.snap("Hip Thrust (Machine)", 262.0).weight_lbs == pytest.approx(270.0)
+    assert grids.snap("Hip Thrust (Machine)", 215.0).weight_lbs == pytest.approx(210.0)
+
+
+def test_a_declared_increment_outranks_a_thin_inferred_grid(conn, seed):
+    """Declared beats inferred — otherwise the override is dead on the lifts it targets.
+
+    A thin history would route to the name-inferred 5 lb fallback and answer 235.
+    The declaration must win. Reverted, this returns 235.0 via `thin-history`.
+    """
+    _log(seed, "Hip Thrust (Machine)", [230.0, 270.0], times=1)
+    _declare(conn, "Hip Thrust (Machine)", 20.0, 230.0)
+    snap = build_grids(conn).snap("Hip Thrust (Machine)", 235.0)
+    assert snap.weight_lbs == pytest.approx(230.0)
+    assert "declared" in snap.reason
+
+
+def test_a_declared_lattice_still_never_rounds_a_ceiling_up(conn, seed):
+    """Overrides must honour the bound semantics, not just the nearest-notch rule."""
+    _log(seed, "Hip Thrust (Machine)", [230.0, 270.0])
+    _declare(conn, "Hip Thrust (Machine)", 20.0, 230.0)
+    grids = build_grids(conn)
+    assert grids.snap_down("Hip Thrust (Machine)", 245.0) == pytest.approx(230.0)
+    assert grids.snap_up("Hip Thrust (Machine)", 245.0) == pytest.approx(250.0)
+    # An exact lattice value is already loadable and must not be moved either way.
+    assert grids.snap_down("Hip Thrust (Machine)", 250.0) == pytest.approx(250.0)
+    assert grids.snap_up("Hip Thrust (Machine)", 250.0) == pytest.approx(250.0)
+
+
+def test_an_undeclared_exercise_is_unaffected_by_the_override_table(conn, seed):
+    """Scoping guard: one declaration must not become a global step.
+
+    Without this, "declare an increment" could quietly re-round every other lift.
+    """
+    _log(seed, "Hip Thrust (Machine)", [230.0, 270.0])
+    _log(seed, "Leg Extension (Machine)", [160.0, 165.0, 170.0, 175.0])
+    _declare(conn, "Hip Thrust (Machine)", 20.0, 230.0)
+    grids = build_grids(conn)
+    assert grids.snap("Leg Extension (Machine)", 166.0).weight_lbs == pytest.approx(165.0)
+    assert "declared" not in grids.snap("Leg Extension (Machine)", 166.0).reason

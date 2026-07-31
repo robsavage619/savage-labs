@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from shc.training.load_mechanics import (
     LoadType,
@@ -183,6 +183,15 @@ class LoadableGrids:
     dumbbell_rack: list[float]
     rack_sets: int
     _canon: dict[str, str]
+    # exercise key -> (increment_lb, anchor_lb), from `equipment_increment`.
+    overrides: dict[str, tuple[float, float]] = field(default_factory=dict)
+
+    def _override(self, name: str) -> tuple[float, float] | None:
+        """Declared (increment, anchor) for ``name``, if a human recorded one."""
+        key = name.strip().lower()
+        if key in self.overrides:
+            return self.overrides[key]
+        return self.overrides.get(_strip_suffix(key))
 
     def _resolve(self, name: str) -> str | None:
         """Map a plan's exercise name to the key its logged history is stored under."""
@@ -239,6 +248,10 @@ class LoadableGrids:
         """
         if lbs <= 0:
             return Snap(name, lbs, lbs, "bodyweight")
+        ov = self._override(name)
+        if ov:
+            step, anchor = ov
+            return Snap(name, _lattice(lbs, anchor, step), lbs, f"declared(step {step:g})")
         grid = self.for_exercise(name)
         if not grid:
             return Snap(name, lbs, lbs, "no-history")
@@ -270,6 +283,10 @@ class LoadableGrids:
         """
         if lbs <= 0:
             return lbs
+        ov = self._override(name)
+        if ov:
+            step, anchor = ov
+            return _lattice(lbs, anchor, step, mode="down")
         grid = self.for_exercise(name)
         if not grid:
             return lbs
@@ -291,6 +308,10 @@ class LoadableGrids:
         """
         if lbs <= 0:
             return lbs
+        ov = self._override(name)
+        if ov:
+            step, anchor = ov
+            return _lattice(lbs, anchor, step, mode="up")
         grid = self.for_exercise(name)
         if not grid:
             return lbs
@@ -303,6 +324,26 @@ class LoadableGrids:
         step = _dominant_step(grid) or _FALLBACK_STEP_LB[_implement(name)]
         top = grid[-1]
         return round(top + -((-(lbs - top)) // step) * step, 1)
+
+
+def _lattice(lbs: float, anchor: float, step: float, mode: str = "nearest") -> float:
+    """Snap onto the declared lattice ``anchor + k*step`` (k may be negative).
+
+    ``anchor`` carries the PHASE that ``step`` alone cannot: a plate-loaded
+    carriage weighs an unknown amount, so "a multiple of 20" is wrong while
+    "230 plus multiples of 20" is right. Ties resolve downward, matching
+    :meth:`LoadableGrids.snap` — a rounding decision never silently makes a set
+    heavier than asked.
+    """
+    n = (lbs - anchor) / step
+    floor_n = int(n // 1)
+    if mode == "down":
+        k = floor_n
+    elif mode == "up":
+        k = floor_n if abs(n - floor_n) < 1e-9 else floor_n + 1
+    else:
+        k = floor_n + (1 if (n - floor_n) > 0.5 else 0)
+    return round(anchor + k * step, 1)
 
 
 def _snap_to_step(lbs: float, step: float) -> float:
@@ -364,12 +405,26 @@ def build_grids(conn) -> LoadableGrids:
     except Exception as exc:  # table may not exist on an older schema
         log.debug("exercise_alias unavailable for loadable grids: %s", exc)
 
+    # Declared equipment facts (migration 0088). These OUTRANK the inferred grid:
+    # `proves_gaps` correctly refuses to argue a weight is absent on a thinly
+    # logged lift, which leaves exactly the cases a human has to answer.
+    overrides: dict[str, tuple[float, float]] = {}
+    try:
+        for name, inc, anchor in conn.execute(
+            "SELECT exercise_name, increment_lb, anchor_lb FROM equipment_increment"
+        ).fetchall():
+            if inc and float(inc) > 0:
+                overrides[str(name).strip().lower()] = (float(inc), float(anchor))
+    except Exception as exc:  # table absent on an older schema
+        log.debug("equipment_increment unavailable for loadable grids: %s", exc)
+
     return LoadableGrids(
         by_exercise=by_exercise,
         set_counts=counts,
         dumbbell_rack=_cluster(rack),
         rack_sets=rack_sets,
         _canon=canon,
+        overrides=overrides,
     )
 
 
