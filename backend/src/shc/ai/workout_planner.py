@@ -22,6 +22,7 @@ from typing import Any
 
 from shc.db.schema import get_read_conn, write_ctx
 from shc.metrics import (
+    MEANINGFUL_DOSE_SETS,
     MUSCLE_TO_GROUP,
     compute_daily_state,
     muscle_group,
@@ -1498,9 +1499,21 @@ def validate_plan(
 
     Pass `conn` (a live DuckDB connection) to enable the data-backed checks that
     need DB context: the deterministic clinical/lab contraindication guard (#21),
-    the per-muscle dampened-volume re-check (#22), and the engine-split check
-    (#18). When `conn` is None those checks are skipped — schema/gate validation
-    is unchanged, so existing callers and tests keep their contract.
+    the per-muscle dampened-volume re-check (#22), the engine-split check (#18),
+    and the emphasis lower bound (#23). When `conn` is None those checks are
+    skipped — schema/gate validation is unchanged, so existing callers and tests
+    keep their contract.
+
+    #23 is the only LOWER bound in this validator: an EMPHASIS muscle carrying an
+    ADD prescription, placed in this week's split, ungated today, may not receive
+    ZERO credited sets in a session that is itself a session for that muscle's
+    push/pull/legs group (≥ `MEANINGFUL_DOSE_SETS` primary-credited sets in it).
+    It is deliberately narrow — the weekly demand exceeds what one session can
+    deliver, so it asks only that a day already devoted to a group not silently
+    drop the emphasis muscle inside it. A rest-intensity plan, a deload day, a
+    gated group/muscle, an ungrouped muscle (forearms), a muscle the split never
+    placed, any secondary credit at all, and any non-empty `override_reason` all
+    suppress it.
 
     Pass `prescription` (a ``Prescription`` from ``weekly_prescription``) to reuse
     an already-computed engine prescription for #18/#22; when omitted but `conn`
@@ -2025,6 +2038,74 @@ def validate_plan(
                             f"{'them' if len(off_split) > 1 else 'it'} this week "
                             f"(split covers: {sorted(allowed_muscles)}). Build the session "
                             "from the prescribed split."
+                        )
+
+                # #23: the LOWER bound — #22's symmetric partner. Every other
+                # enforced check here is an upper bound ("don't exceed X"), so a
+                # plan could drop a stated priority to ZERO and validate clean:
+                # absence read identically to a deliberate choice. Invariant 10
+                # says under-training is reachable only by explicit, stated
+                # intent — never by absence, typo, or inference.
+                #
+                # Deliberately NARROW, because the weekly demand is genuinely
+                # unsatisfiable in one session (see Prescription.capacity):
+                # requiring coverage of every ADD muscle would reject nearly
+                # every real plan, and forcing menu variety was considered and
+                # rejected on 2026-07-26. This fires only when the session is
+                # already training the muscle's own push/pull/legs group and
+                # skipped the emphasis muscle inside it.
+                emphasis_add = [m for m in rx.muscles if m.emphasis and m.action == "add"]
+                skip_lower_bound = (
+                    rec["intensity"] == "rest"
+                    or bool(gates.get("deload_required"))
+                    # An override IS the stated intent invariant 10 requires.
+                    # This is a volume-programming opinion, not a tissue-recovery
+                    # or medical constraint, so it sits in the same discretionary
+                    # class as max_intensity, which override_reason already loosens.
+                    or bool(override_reason and override_reason.strip())
+                )
+                if emphasis_add and not skip_lower_bound:
+                    # "Is this a session for that group?" is answered on
+                    # PRIMARY-credited sets at MEANINGFUL_DOSE_SETS — invariant
+                    # 8's own constant and basis, mirrored: a sub-meaningful dose
+                    # never locks a muscle out, so it must not obligate one
+                    # either. Secondary spill would make a push day read as a
+                    # pull day and fire on an accessory's shadow.
+                    group_sets: dict[str, float] = {}
+                    for mus, sets in planned_primary.items():
+                        grp = MUSCLE_TO_GROUP.get(mus)
+                        if grp:
+                            group_sets[grp] = group_sets.get(grp, 0.0) + sets
+                    for m in emphasis_add:
+                        group = MUSCLE_TO_GROUP.get(m.muscle)
+                        if (
+                            # Ungrouped muscles (forearms) have no "is this that
+                            # kind of session" signal — no group, no check.
+                            group is None
+                            # Gated today: the skip is the gate's decision.
+                            or group in forbid
+                            or m.muscle in forbid_muscles
+                            # The split never placed it this week (target 0).
+                            or m.muscle not in split_muscles
+                            # Trained at all, in the engine's own volume unit —
+                            # secondary credit is thin but it is not absence,
+                            # and this check is about absence only.
+                            or planned.get(m.muscle, 0.0) > 0
+                            # The session isn't a session for this group: an
+                            # upper day owes nothing to glutes.
+                            or group_sets.get(group, 0.0) < MEANINGFUL_DOSE_SETS
+                        ):
+                            continue
+                        raise GateViolation(
+                            f"{m.muscle} is an EMPHASIS muscle with an ADD prescription "
+                            f"(target {m.target_sets} sets/wk, currently "
+                            f"{m.current_sets:.1f}; reason: {m.reason}), it is not gated "
+                            f"today, and this session is a {group} session "
+                            f"({group_sets[group]:.0f} primary-credited {group} sets) — "
+                            f"but gives {m.muscle} ZERO. A stated priority is not "
+                            "skippable by omission: program at least one direct set, or "
+                            "pass an explicit override_reason to record the decision to "
+                            "skip it."
                         )
     return True
 
