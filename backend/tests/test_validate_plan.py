@@ -678,6 +678,206 @@ def test_load_ceiling_checked_against_high_end_of_rep_range() -> None:
         validate_plan(p, state=LOW_STATE, e1rm_ceilings=CEIL)
 
 
+# ── #23 emphasis lower bound (the symmetric partner to #22) ─────────────────
+#
+# Every other enforced check in validate_plan is an upper bound. These pin the
+# one lower bound: an emphasis+ADD muscle, ungated, in a session that already
+# trains its own group, may not silently get zero. The suppression tests matter
+# at least as much as the firing ones — an over-firing validator blocks Rob from
+# training at all, which is the worse failure.
+
+_PULL_DAY = [
+    {"name": "Lat Pulldown", "sets": 3, "reps": "10-12", "rest_seconds": 120, "notes": "n"},
+    {"name": "Face Pull", "sets": 3, "reps": "10-12", "rest_seconds": 90, "notes": "n"},
+]
+_LEG_DAY = [
+    {"name": "Leg Extension", "sets": 3, "reps": "10-12", "rest_seconds": 120, "notes": "n"},
+    {"name": "Leg Press", "sets": 3, "reps": "10-12", "rest_seconds": 120, "notes": "n"},
+]
+_CLEAR_STATE = {
+    "gates": {
+        "max_intensity": "moderate",
+        "deload_required": False,
+        "forbid_muscle_groups": [],
+        "forbid_muscles": [],
+        "reasons": [],
+    }
+}
+
+
+def _rx(muscle="biceps", *, emphasis=True, action="add", split=("lats", "rear_delts")):
+    """Prescription with one emphasis+ADD muscle and a split covering the test day."""
+    from shc.training.autoregulation import MusclePrescription, Prescription
+
+    placed = sorted({muscle, *split})
+    return Prescription(
+        week_start=date.today(),
+        mesocycle_id="test",
+        muscles=[
+            MusclePrescription(
+                muscle=muscle,
+                current_sets=1.0,
+                target_sets=8,
+                delta=2,
+                action=action,
+                reason="below MEV, lagging bring-up",
+                emphasis=emphasis,
+            )
+        ],
+        session_split=[
+            {
+                "session": "Upper-A",
+                "weekday": "Tue",
+                "region": "upper",
+                "cap": 10,
+                "credited_muscle_sets": len(placed),
+                "muscles": [{"muscle": m, "sets": 4, "over_cap": False} for m in placed],
+            }
+        ],
+    )
+
+
+def test_emphasis_add_muscle_skipped_on_its_own_day_is_rejected(conn) -> None:
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    with pytest.raises(GateViolation, match="biceps is an EMPHASIS muscle"):
+        validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_rx())
+
+
+def test_emphasis_lower_bound_fires_for_glutes_on_a_leg_day(conn) -> None:
+    p = _plan(intensity="moderate", exercises=_LEG_DAY)
+    with pytest.raises(GateViolation, match="glutes is an EMPHASIS muscle"):
+        validate_plan(
+            p, state=_CLEAR_STATE, conn=conn, prescription=_rx("glutes", split=("quads",))
+        )
+
+
+def test_emphasis_lower_bound_satisfied_by_one_direct_set(conn) -> None:
+    p = _plan(
+        intensity="moderate",
+        exercises=[
+            *_PULL_DAY,
+            {
+                "name": "Bicep Curl (Dumbbell)",
+                "sets": 2,
+                "reps": "10-12",
+                "rest_seconds": 90,
+                "notes": "n",
+            },
+        ],
+    )
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_rx()) is True
+
+
+def test_emphasis_lower_bound_counts_secondary_credit_as_trained(conn) -> None:
+    # "Literally zero" means zero. Cable Row credits biceps as a secondary —
+    # thin, but it is not absence, and this check is about absence only. The
+    # session still clears the pull-day threshold (6 primary-credited sets), so
+    # only the secondary credit can be what saves it.
+    p = _plan(
+        intensity="moderate",
+        exercises=[
+            {"name": "Cable Row", "sets": 3, "reps": "10-12", "rest_seconds": 120, "notes": "n"},
+            {"name": "Lat Pulldown", "sets": 3, "reps": "10-12", "rest_seconds": 120, "notes": "n"},
+        ],
+    )
+    rx = _rx(split=("mid_back", "traps", "lats"))
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=rx) is True
+
+
+def test_emphasis_lower_bound_silent_on_a_sub_meaningful_group_dose(conn) -> None:
+    # One 3-set pull accessory on a push day is not a pull day. Mirrors
+    # invariant 8: a sub-meaningful dose never locks a muscle out, so it must
+    # not obligate one either.
+    p = _plan(
+        intensity="moderate",
+        exercises=[
+            {"name": "Face Pull", "sets": 3, "reps": "12-15", "rest_seconds": 90, "notes": "n"}
+        ],
+    )
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_rx()) is True
+
+
+def test_emphasis_lower_bound_self_skips_without_conn() -> None:
+    # Matches the #18/#21/#22 contract: no live conn, no data-backed check.
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    assert validate_plan(p, state=_CLEAR_STATE, prescription=_rx()) is True
+
+
+def test_emphasis_lower_bound_silent_on_the_wrong_kind_of_day(conn) -> None:
+    # An upper day owes nothing to glutes — the session isn't a leg session.
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    rx = _rx("glutes", split=("lats", "rear_delts"))
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=rx) is True
+
+
+def test_emphasis_lower_bound_silent_when_the_muscle_is_rest_gated(conn) -> None:
+    state = {
+        "gates": {
+            "max_intensity": "moderate",
+            "deload_required": False,
+            "forbid_muscle_groups": [],
+            "forbid_muscles": ["biceps"],
+            "reasons": ["biceps 1d ago (6 sets) — needs ≥2d rest"],
+        }
+    }
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    assert validate_plan(p, state=state, conn=conn, prescription=_rx()) is True
+
+
+def test_emphasis_lower_bound_silent_on_a_deload_day(conn) -> None:
+    state = {
+        "gates": {
+            "max_intensity": "moderate",
+            "deload_required": True,
+            "forbid_muscle_groups": [],
+            "forbid_muscles": [],
+            "reasons": ["deload week"],
+        }
+    }
+    p = _plan(intensity="low", target_rpe=6, exercises=_PULL_DAY)
+    assert validate_plan(p, state=state, conn=conn, prescription=_rx()) is True
+
+
+def test_emphasis_lower_bound_silent_on_a_rest_day(conn) -> None:
+    p = _plan(intensity="rest", target_rpe=_UNSET, exercises=_PULL_DAY)
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_rx()) is True
+
+
+def test_emphasis_lower_bound_yields_to_an_explicit_override(conn) -> None:
+    # Invariant 10: under-training must be REACHABLE — by stated intent, and
+    # only by stated intent.
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    assert (
+        validate_plan(
+            p,
+            state=_CLEAR_STATE,
+            conn=conn,
+            prescription=_rx(),
+            override_reason="arms trashed from yesterday's pickleball; skipping curls today",
+        )
+        is True
+    )
+
+
+def test_emphasis_lower_bound_silent_when_the_split_never_placed_the_muscle(conn) -> None:
+    rx = _rx()
+    rx.session_split[0]["muscles"] = [
+        m for m in rx.session_split[0]["muscles"] if m["muscle"] != "biceps"
+    ]
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=rx) is True
+
+
+def test_emphasis_lower_bound_ignores_a_non_emphasis_add(conn) -> None:
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_rx(emphasis=False)) is True
+
+
+def test_emphasis_lower_bound_ignores_a_held_emphasis_muscle(conn) -> None:
+    p = _plan(intensity="moderate", exercises=_PULL_DAY)
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_rx(action="hold")) is True
+
+
 def test_clinical_cap_db_error_fails_visible_not_silent() -> None:
     # Fail-visible hardening: a crashed contraindication query must NOT look like
     # "all clear" (cap=None, reason=None). It returns a reason so the caller

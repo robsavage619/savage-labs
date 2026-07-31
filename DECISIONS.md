@@ -2,6 +2,21 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-07-31 — Every enforced check in the validator was an upper bound
+
+**Context.** The engine computes real per-muscle weekly targets and a ranked, evidence-grounded exercise menu, and then renders all of it into a markdown table in a prompt. It is advisory. The enforcement layer is `validate_plan`, and every one of its 22 checks asks the same question in the same direction: *don't exceed X*. Check #22 rejects a session that overshoots a held or dampened per-muscle target; nothing was its symmetric partner. So a plan that trained **zero** sets of a ★emphasis ADD muscle — a muscle the controller is actively trying to grow, on a day nothing gated it — validated clean. Absence was indistinguishable from a deliberate choice, which is precisely what invariant 10 exists to forbid. Measured over the last 30 plans: 43 distinct exercises across 186 slots against a 574-exercise catalogue, and 15 of 16 muscles averaging below MEV.
+
+**Decision.** Check #23, the one lower bound. It fires only when an emphasis muscle with an ADD prescription, placed in this week's split and ungated today, receives zero credited sets in a session that is *itself* a session for that muscle's push/pull/legs group.
+
+**Why so narrow.** Two constraints bound it from opposite sides. The weekly demand is genuinely unsatisfiable in one session (`Prescription.capacity`; ~137 muscle-sets demanded against ~94 deliverable before the MV tier), so a check requiring coverage of every ADD muscle would reject nearly every real plan. And forcing menu adherence was **considered and rejected on 2026-07-26** — it buys variety, the exact thing Rob rejected. The scoped case is neither: a stated priority dropped to zero on a day devoted to its own group is not a variety opinion, it is a silent skip.
+
+**Why the group test runs on PRIMARY credit at `MEANINGFUL_DOSE_SETS`.** "Is this a pull day?" needed a threshold, and the first attempt — ≥2 *combined*-credited sets, mirroring #18's off-split threshold — over-fired immediately: a single 3-set accessory made a push day read as a pull day, and it broke two existing tests whose plans were one exercise long. Invariant 8 already answers the mirror-image question (a sub-meaningful dose never *locks* a muscle out) on primary credit at 4 sets, so the same constant and the same basis answer this one: a dose too small to lock a muscle is too small to obligate one. Secondary spill still counts as *trained* — thin is not absent, and this check is about absence only — just not as *engagement*.
+
+**Under-training stays reachable.** A non-empty `override_reason` suppresses #23 entirely. This is a volume-programming opinion, not a tissue-recovery or medical constraint, so it belongs in the same discretionary class as `max_intensity`, which `override_reason` already loosens — and invariant 10 requires under-training to be reachable by stated intent, just never by omission.
+
+**Consequences.** Fourteen tests, twelve of them asserting the check does *not* fire (gated muscle, deload, rest day, override, wrong kind of day, sub-meaningful dose, non-emphasis, held, unplaced-in-split, secondary credit, no `conn`) — an over-firing validator blocks Rob from training at all, which is the worse failure here. Every one was mutation-checked: eleven separate mutations of the new block, each killing at least one test. Replayed against the last 25 stored plans it newly rejects **none**; replayed with traps restored to the emphasis set (it was removed from `muscle_emphasis` at some point after migration 0056 seeded it) it rejects two — a 9-set and a 4-set pull day with zero traps, which is the defect shape. 741 tests pass. **Deliberately left out:** ungrouped muscles (forearms) have no "is this that kind of session" signal, so the check does not apply to them; and the `group in forbid` branch is unreachable in any plan that gets that far (the group gate raises first) and is kept only as defence in depth.
+
+
 ## 2026-07-28 — "I feel like I'm ALWAYS in a deload state"
 
 **Context.** Rob's words, and they were checkable rather than a mood. Measured across the last two blocks: **20 of 80 days were deload — 25%**, against 17% for a healthy 5+1 cycle. Two distinct causes, one historical and one still armed.
