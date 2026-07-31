@@ -26,6 +26,7 @@ from shc.db.schema import get_read_conn, get_write_conn, write_ctx
 from shc.lab import _welch_t as _lab_welch
 from shc.metrics import MUSCLE_TO_GROUP, compute_daily_state
 from shc.metrics import muscle_group as _mg
+from shc.training.loadable import snap_plan_weights
 
 router = APIRouter(tags=["dashboard"])
 log = logging.getLogger(__name__)
@@ -2893,6 +2894,27 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
                 except Exception as exc:
                     log.debug("muscle-override audit lookup failed for %r: %s", name, exc)
         muscle_overridden = sorted(forbid_muscles_set & requested_muscles & trained_muscles)
+
+        # Snap every prescribed load onto a weight the gym can actually produce.
+        # The planner is an external LLM handed non-round anchors and returns
+        # `weight_lbs` as a free float, so 37% of recent prescriptions landed in a
+        # physical gap between two weights Rob has used (a 235 lb Hip Thrust on a
+        # 230/270 machine). Deliberately NOT a validator: this runs AFTER
+        # `validate_plan` and never rejects, because a 409 on a non-round number
+        # would block a plan for a cosmetic cause. It mutates `body.plan` in place,
+        # so the persisted plan and the Hevy routine below both carry the loadable
+        # number. Residual, accepted: a snap to the nearer notch can land up to
+        # half a grid step ABOVE a load the ceiling check just approved.
+        #
+        # Broad except on purpose: snapping is a convenience over a validated plan,
+        # so a failure here must never turn into a 422 and cost Rob his session.
+        # It is logged at ERROR, not swallowed — an unloadable weight is a far
+        # smaller problem than a plan that cannot be submitted.
+        try:
+            snapped = snap_plan_weights(conn, body.plan)
+        except Exception:
+            log.exception("loadable snapping failed for %s — plan saved unsnapped", plan_date)
+            snapped = []
     except GateViolation as exc:
         raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
@@ -2954,7 +2976,23 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
 
         hevy_result = await push_routine(plan_with_meta)
 
-    return {"status": "ok", "date": plan_date_iso, "hevy": hevy_result}
+    return {
+        "status": "ok",
+        "date": plan_date_iso,
+        "hevy": hevy_result,
+        # Fail visibly: every load the engine moved onto a loadable notch is
+        # reported back, not just written into the stored plan.
+        "snapped": [
+            {
+                "exercise": s.exercise,
+                "from_lbs": s.original_lbs,
+                "to_lbs": s.weight_lbs,
+                "delta_pct": round(s.delta_pct, 1),
+                "reason": s.reason,
+            }
+            for s in snapped
+        ],
+    }
 
 
 @router.get("/training/science")

@@ -450,12 +450,22 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     # At 40 this hid 212 of 252 exercises — Leg Extension, Seated Leg Curl, Calf
     # Press, Front Raise among them — which is a rich-get-richer loop, not a budget.
     ww_limit = 200
+    # Loadable-notch grids, built once for the whole block. Every anchor below is
+    # snapped onto a weight the gym can actually produce, so the model is no longer
+    # handed a kg-conversion artifact like "≤106.6 lbs" and asked to program from it.
+    from shc.training.loadable import build_grids
+
+    grids = build_grids(conn)
     lines.append(
         f"\n## WORKING WEIGHTS ({len(ww_rows)} exercises on record) — "
         f"recent max (90d) · e1RM · today's ceiling ({cap_pct}% @8 reps). "
         "Dumbbell / cable-crossover loads are shown PER HAND. A lift with no set "
         "in 90d falls back to its all-time max and is flagged — that number may "
-        "predate a logging or implement change, so set load by feel instead."
+        "predate a logging or implement change, so set load by feel instead. "
+        "Ceilings are already rounded DOWN to a weight this implement can actually "
+        "be loaded to — prescribe a load that appears in Rob's logged history for "
+        "that lift (dumbbells come off a shared rack), not an arbitrary number "
+        "between two notches. A load that is not loadable is snapped on save."
     )
     for ex, all_time_kg, src in ww_rows[:ww_limit]:
         recent_kg = recent_max_by_ex.get(ex)
@@ -476,8 +486,12 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         e1rm_kg = e1rm_by_ex.get(ex)  # already per-hand
         if e1rm_kg:
             e1rm_lbs = round(e1rm_kg * 2.20462, 1)
-            ceiling_lbs = round(rpe_derived_ceiling_kg(e1rm_kg, 8, gates) * 2.20462, 1)
-            weight_note = f" · e1RM ~{e1rm_lbs} · today ≤{ceiling_lbs} lbs @8 (RPE {day_rpe_cap})"
+            # Round the ceiling DOWN to a loadable notch — nearest would round a
+            # bound UP past itself, which is no longer a bound.
+            ceiling_lbs = grids.snap_down(
+                ex, round(rpe_derived_ceiling_kg(e1rm_kg, 8, gates) * 2.20462, 1)
+            )
+            weight_note = f" · e1RM ~{e1rm_lbs} · today ≤{ceiling_lbs:g} lbs @8 (RPE {day_rpe_cap})"
         else:
             weight_note = " · e1RM n/a — set load by feel to RPE on first set"
         lines.append(
@@ -1876,11 +1890,24 @@ def validate_plan(
                     # RPE, so nothing is unguarded by making this asymmetric.
                     if rpe_t - implied_rpe > _COHERENCE_TOLERANCE_RPE:
                         implied_kg = e1rm_kg / (1 + (min(reps, 12) + (10 - rpe_t)) / 30)
+                        implied_lb = round(implied_kg * 2.20462, 1)
+                        # Suggest a weight the implement can actually be set to,
+                        # not a kg-conversion artifact ("use ~106.6lb"). Round UP:
+                        # this check is one-directional (too LIGHT is the failure),
+                        # so the lighter neighbouring notch could walk the fix
+                        # straight back into the same rejection.
+                        if conn is not None:
+                            try:
+                                from shc.training.loadable import build_grids
+
+                                implied_lb = build_grids(conn).snap_up(name, implied_lb)
+                            except Exception as exc:
+                                log.debug("loadable snap unavailable for %r: %s", name, exc)
                         raise GateViolation(
                             f"{name!r} prescribed {w_lbs}lb×{reps} is labelled RPE {rpe_t} "
                             f"but implies RPE {implied_rpe:.1f} against today's e1RM "
                             f"(>{_COHERENCE_TOLERANCE_RPE} RPE off). For a real RPE {rpe_t} "
-                            f"at {reps} reps use ~{round(implied_kg * 2.20462, 1)}lb, "
+                            f"at {reps} reps use ~{implied_lb:g}lb, "
                             f"or raise the reps, or relabel rpe_target to "
                             f"{implied_rpe:.1f}."
                         )
