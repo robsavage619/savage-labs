@@ -489,7 +489,19 @@ def _decide(
 
     if deload:
         cur0 = round(current)
-        deload_floor = round(mev * 0.4)  # RP: deloads typically 30-50% of MEV
+        # The tier is an explicit human decision (invariant 10) and a deload must
+        # not silently re-inflate it. A maintenance muscle's productive floor is
+        # MV, not a fraction of MEV — deriving the deload floor from MEV ignored
+        # `tier` entirely and RAISED maintenance muscles during the one week the
+        # program is supposed to be shedding volume: lats (MEV 10, MV 2) sitting
+        # at 2.0 sets were handed a target of 4, and triceps (MEV 12) a target of
+        # 5. Mirrors the `floor`/`maintaining` pair computed below for the normal
+        # tree; an emphasis muscle can never maintain (invariant 7), so it keeps
+        # the MEV-derived floor.
+        if tier == "maintain" and not emphasis:
+            deload_floor = min(mv, mev)
+        else:
+            deload_floor = round(mev * 0.4)  # RP: deloads typically 30-50% of MEV
         target = max(0, min(mrv, max(deload_floor, round(cur0 * 0.5))))
         return MusclePrescription(
             muscle=muscle,

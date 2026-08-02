@@ -851,21 +851,49 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
 
     sq = compute_all_muscle_signal_quality(conn)
 
-    # Rebuild vol_rows with confidence column.
+    # Tier/MV for the volume table. Without these the table printed only MEV, so
+    # every maintenance muscle read "below MEV" and looked like a deficit to fix
+    # — the exact misreading that kept putting direct volume on lats after they
+    # were deliberately moved to the maintain tier (migration 0087). A muscle
+    # held at maintenance is judged against MV, not MEV, and the table has to say
+    # so or the reader re-derives the wrong conclusion every week.
+    try:
+        tiers = {
+            m: (t or "grow", int(v) if v is not None else 2)
+            for m, t, v in conn.execute(
+                "SELECT muscle_group, tier, mv_sets FROM muscle_volume_targets"
+            ).fetchall()
+        }
+    except Exception as exc:  # noqa: BLE001 — table predates 0078 in old copies
+        log.debug("tier lookup unavailable for volume table: %s", exc)
+        tiers = {}
+
+    # Rebuild vol_rows with tier + confidence columns.
     vol_rows_conf: list[str] = []
     for r in report:
+        tier, mv = tiers.get(r.muscle, ("grow", 2))
+        maintaining = tier == "maintain"
         if r.mev is None:
-            mav_str, landmarks = "—", "untargeted"
+            mav_str, landmarks, status = "—", "untargeted", r.status
         else:
             fitted = "*" if r.muscle in personal_muscles else ""
             mav_str = str(r.mav)
-            landmarks = f"{r.mev}/{r.mrv}{fitted}"
+            # Show the floor this muscle is actually judged against.
+            landmarks = (
+                f"{mv}/{r.mrv}{fitted}" if maintaining else f"{r.mev}/{r.mrv}{fitted}"
+            )
+            status = (
+                ("at MV — hold" if r.actual_sets >= mv else f"below MV ({mv}) — top up")
+                if maintaining
+                else r.status
+            )
         muscle_sq = sq.get(r.muscle, {})
         conf = muscle_sq.get("confidence", 0.0)
         conf_str = f"{conf:.0%}" if conf else "—"
+        tier_str = "maintain" if maintaining else "GROW"
         vol_rows_conf.append(
-            f"| {r.muscle:<12} | {r.actual_sets:>6.1f} | {mav_str:>6} | "
-            f"{landmarks:>9} | {r.status} | {conf_str} |"
+            f"| {r.muscle:<12} | {tier_str:<8} | {r.actual_sets:>6.1f} | {mav_str:>6} | "
+            f"{landmarks:>9} | {status} | {conf_str} |"
         )
 
     lines = [
@@ -877,8 +905,13 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         f"ACWR gates from {acwr_src}",
         "",
         "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 0.5; * = fitted to Rob's data)",
-        "| Muscle | Actual | MAV | MEV/MRV | Status | Confidence |",
-        "|--------------|--------|--------|----------|---------|------------|",
+        "GROW-tier muscles are judged against MEV and are where weekly volume belongs.",
+        "MAINTAIN-tier muscles are judged against **MV**, not MEV — a maintain muscle at "
+        "or above MV is DONE, not deficient. Do not add direct volume to it; its sets come "
+        "free as spillover from grow-tier compounds. The floor column shows the relevant "
+        "floor for each muscle's own tier.",
+        "| Muscle | Tier | Actual | MAV | Floor/MRV | Status | Confidence |",
+        "|--------------|----------|--------|--------|----------|---------|------------|",
         *vol_rows_conf,
         "",
     ]

@@ -920,6 +920,47 @@ def test_emphasis_muscle_can_never_be_demoted_to_maintenance() -> None:
     assert rx.target_sets > 2
 
 
+def test_deload_respects_maintenance_tier_floor() -> None:
+    # Regression, 2026-08-02: the deload branch returns BEFORE the tier logic and
+    # derived its floor from `round(mev * 0.4)`, ignoring tier/mv entirely. Real
+    # case: lats (MEV 10, MV 2) sitting at 2.0 sets were handed a deload target
+    # of 4, and triceps (MEV 12, MV 2) a target of 5 — a deload week RAISING the
+    # muscles the athlete explicitly moved to maintenance. Rob caught it from his
+    # own training, not from the data.
+    lats = _decide(
+        "lats", current=2.0, mev=10, perf=None, deload=True, tier="maintain", mv=2, **_MAINT
+    )
+    assert lats.target_sets == 2, "maintenance muscle must deload to MV, not 0.4*MEV"
+
+    triceps = _decide(
+        "triceps", current=1.2, mev=12, perf=None, deload=True, tier="maintain", mv=2, **_MAINT
+    )
+    assert triceps.target_sets == 2
+
+
+def test_deload_still_uses_mev_floor_for_grow_tier() -> None:
+    # The fix must not weaken a GROW muscle's deload: still ~40% of MEV.
+    rx = _decide("chest", current=12, mev=10, perf=None, deload=True, tier="grow", mv=2, **_MAINT)
+    assert rx.target_sets == 6  # max(round(10*0.4)=4, round(12*0.5)=6)
+
+
+def test_deload_emphasis_muscle_never_drops_to_mv() -> None:
+    # Invariant 7: an emphasis muscle can never maintain, so even tagged
+    # 'maintain' it keeps the MEV-derived deload floor rather than MV.
+    rx = _decide(
+        "biceps",
+        current=1.0,
+        mev=12,
+        perf=None,
+        deload=True,
+        emphasis=True,
+        tier="maintain",
+        mv=2,
+        **_MAINT,
+    )
+    assert rx.target_sets == 5  # round(12*0.4), not MV 2
+
+
 def test_maintenance_tier_still_backs_off_when_under_recovered() -> None:
     # Safety branches are evaluated BEFORE the tier: maintenance removes volume
     # DEMAND, never recovery protection.
