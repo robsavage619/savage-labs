@@ -1102,6 +1102,41 @@ def _default_status(trend: str) -> str:
     }.get(trend, "kept")
 
 
+# An implement whose real load step is at/above this share of its top loaded
+# notch is COARSE: a load step there is a big jump (a 15 lb pin on a 200 lb
+# stack ≈ 7.5%), so double progression should ride the rep window and the
+# plateau detector should expect load to move in lurches, not per-week creep.
+_COARSE_INCREMENT_PCT = 7.0
+
+
+def _progressibility(grids, logged_name: str) -> dict | None:
+    """How finely this lift's load can actually move — from its logged grid.
+
+    Returns ``{increment_lb, pct_of_top, coarse}`` or None when the grid is too
+    thin to speak (same evidence bar the snapper uses — an anecdote must not
+    claim a pitch). ``pct_of_top`` is the dominant step as a share of the top
+    logged notch, a working-weight proxy that needs no extra query. A ``coarse``
+    lift stalls ARTIFICIALLY on load: the honest read of a flat e1RM there is
+    "the next notch is a 7%+ jump", not "the stimulus stopped working" — worth
+    surfacing at selection time so a small muscle isn't judged on a big-pitch
+    machine's terms.
+    """
+    from shc.training.loadable import _SPARSE_GRID_MIN, _dominant_step
+
+    grid = grids.for_exercise(logged_name)
+    if len(grid) < _SPARSE_GRID_MIN or not grids.proves_gaps(logged_name):
+        return None
+    step = _dominant_step(grid)
+    if not step or grid[-1] <= 0:
+        return None
+    pct = step / grid[-1] * 100.0
+    return {
+        "increment_lb": step,
+        "pct_of_top": round(pct, 1),
+        "coarse": pct >= _COARSE_INCREMENT_PCT,
+    }
+
+
 def evidence_menu(
     conn: duckdb.DuckDBPyConnection, muscles: list[str], per_muscle: int = 4
 ) -> dict[str, list[dict]]:
@@ -1161,6 +1196,16 @@ def evidence_menu(
     # the scored lead for its head. Drives the 4–6 week rotation trigger.
     tenure = {n: int(v.get("weeks") or 0) for n, v in info.items()}
 
+    # Loadable grids for the progressibility annotation (advisory — selection
+    # ordering is untouched). Optional: absent grids just omit the field.
+    grids = None
+    try:
+        from shc.training.loadable import build_grids
+
+        grids = build_grids(conn)
+    except Exception as exc:  # noqa: BLE001 — annotation optional
+        log.debug("loadable grids unavailable for progressibility: %s", exc)
+
     out: dict[str, list[dict]] = {}
     for muscle, cands in per_muscle_rows.items():
         selected, notes = _select_grounded(cands, per_muscle, region_vol.get(muscle), ranks, tenure)
@@ -1168,23 +1213,26 @@ def evidence_menu(
         for c in selected:
             pi = info.get(c[0], {})
             trend = pi.get("trend", "untrained")
-            picks.append(
-                {
-                    "exercise": c[0],
-                    "region": c[2],
-                    "length_bias": c[3],
-                    "rep_low": c[4],
-                    "rep_high": c[5],
-                    "sfr_tier": c[6],
-                    "rationale": c[7],
-                    "citation": c[8],
-                    "citation_url": c[9],
-                    "trend": trend,
-                    "weeks": pi.get("weeks", 0),
-                    "last_done": pi.get("last_done"),
-                    "status": notes.get(c[0]) or _default_status(trend),
-                }
-            )
+            pick = {
+                "exercise": c[0],
+                "region": c[2],
+                "length_bias": c[3],
+                "rep_low": c[4],
+                "rep_high": c[5],
+                "sfr_tier": c[6],
+                "rationale": c[7],
+                "citation": c[8],
+                "citation_url": c[9],
+                "trend": trend,
+                "weeks": pi.get("weeks", 0),
+                "last_done": pi.get("last_done"),
+                "status": notes.get(c[0]) or _default_status(trend),
+            }
+            if grids is not None:
+                prog = _progressibility(grids, pi.get("logged_name") or c[0])
+                if prog is not None:
+                    pick["progressibility"] = prog
+            picks.append(pick)
         out[muscle] = picks
     return out
 
@@ -2220,6 +2268,14 @@ def prescription_context_block(
                         lines.append(
                             f"        · last {last} · {wk}wk data · "
                             f"{p.get('trend', 'untrained')} · {p['status']}"
+                        )
+                    prog = p.get("progressibility")
+                    if prog and prog.get("coarse"):
+                        lines.append(
+                            f"        · ⚠ coarse increments: this implement steps "
+                            f"{prog['increment_lb']:g} lb (~{prog['pct_of_top']:g}% of top "
+                            "load) — progress by REPS across the window; a flat load "
+                            "here is the machine's pitch, not a stall"
                         )
             else:
                 names = ", ".join(

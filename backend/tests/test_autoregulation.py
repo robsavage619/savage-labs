@@ -1289,3 +1289,27 @@ def test_remaining_split_places_nothing_for_cut_or_satisfied_muscles() -> None:
     out = remaining_split([_rx("lats", 4, 9.0), _rx("chest", 6, 6.0)], tuesday)
     assert out["sessions"] == []
     assert out["unplaceable"] == []
+
+
+def test_progressibility_flags_a_coarse_pitch_and_stays_silent_on_thin_evidence() -> None:
+    """A 40 lb pitch on a 270 lb stack is a rep-progression lift; 3 logged
+    notches may not claim a pitch at all (the snapper's own evidence bar)."""
+    from shc.training.autoregulation import _progressibility
+    from shc.training.loadable import LoadableGrids
+
+    def _g(notches, sets=20):
+        return LoadableGrids(
+            by_exercise={"hip thrust (machine)": notches},
+            set_counts={"hip thrust (machine)": sets},
+            dumbbell_rack=[],
+            rack_sets=0,
+            _canon={"hip thrust": "hip thrust (machine)"},
+            overrides={},
+        )
+
+    coarse = _progressibility(_g([190.0, 230.0, 270.0]), "Hip Thrust (Machine)")
+    assert coarse == {"increment_lb": 40.0, "pct_of_top": 14.8, "coarse": True}
+    fine = _progressibility(_g([180.0, 185.0, 190.0, 195.0, 200.0]), "Hip Thrust (Machine)")
+    assert fine is not None and fine["coarse"] is False
+    # Thin evidence (under the prove-a-gap set floor) → no claim, not a guess.
+    assert _progressibility(_g([190.0, 230.0, 270.0], sets=5), "Hip Thrust (Machine)") is None
