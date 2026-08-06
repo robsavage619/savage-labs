@@ -41,7 +41,12 @@ async def lifespan(app: FastAPI):
     log.info("SHC backend started")
     yield
     # ── shutdown ──
-    scheduler.shutdown(wait=False)
+    # wait=True: an abandoned in-flight whoop_sync mid-token-refresh can
+    # permanently kill the WHOOP connection — WHOOP rotates the refresh token
+    # on every use, so a refresh cut off after the server issues the new one
+    # but before it's persisted locally leaves the stored token dead. See
+    # DECISIONS.md WHOOP reauth entry.
+    scheduler.shutdown(wait=True)
     stop_watcher()
     log.info("SHC backend stopped")
 

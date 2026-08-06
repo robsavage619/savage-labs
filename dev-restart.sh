@@ -19,10 +19,16 @@ if lsof -ti :8000 &>/dev/null; then
   sleep 0.3
 fi
 
-# Kill anything on the ports AND any stale uvicorn processes (prevents DuckDB lock conflicts)
+# Kill anything on the ports AND any stale uvicorn processes (prevents DuckDB lock conflicts).
+# SIGTERM first, then a grace period, then -9 as fallback: a hard -9 mid-flight can truncate
+# a WHOOP token refresh after WHOOP has already rotated it server-side but before the new
+# token is persisted locally, permanently killing the connection until manual reauth.
+PIDS=$(lsof -ti :3000 -ti :8000 2>/dev/null)
+[[ -n "$PIDS" ]] && kill -TERM $PIDS 2>/dev/null
+pkill -TERM -f "uvicorn shc" 2>/dev/null || true
+sleep 2
 lsof -ti :3000 -ti :8000 2>/dev/null | xargs kill -9 2>/dev/null || true
 pkill -9 -f "uvicorn shc" 2>/dev/null || true
-sleep 2
 
 # ── Canonical data dir ────────────────────────────────────────────────────────
 # Must live in the main repo, not inside an ephemeral worktree.
