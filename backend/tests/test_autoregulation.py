@@ -16,6 +16,7 @@ from shc.training.autoregulation import (
     load_emphasis,
     load_muscle_development,
     muscle_science_report,
+    remaining_split,
     trainable_today,
     weekly_prescription,
 )
@@ -1217,3 +1218,74 @@ def test_late_block_planned_effort_rise_is_not_read_as_overreach() -> None:
         _effort_overreach(_conn(grind), meso_state=_meso_state(8, deload=True))["overreaching"]
         is True
     )
+
+
+def _rx(muscle: str, target: int, current: float, emphasis: bool = False) -> MusclePrescription:
+    delta = target - round(current)
+    return MusclePrescription(
+        muscle=muscle,
+        current_sets=current,
+        target_sets=target,
+        delta=delta,
+        action="add" if delta > 0 else ("cut" if delta < 0 else "hold"),
+        reason="test",
+        emphasis=emphasis,
+    )
+
+
+def test_remaining_split_reflows_what_the_week_still_owes() -> None:
+    """A missed day's sets land on the remaining sessions, not the floor.
+
+    Thursday, chest owes 3 more sets: the only upper session left is Upper-B
+    (Thu), so all 3 land there — the Tuesday allocation is not silently lost.
+    Quads owe 4 with only Lower-B (Fri) left. A muscle already at target has
+    nothing to place.
+    """
+    thursday = date(2026, 8, 6)
+    assert thursday.weekday() == 3
+    out = remaining_split(
+        [_rx("chest", 8, 5.0), _rx("quads", 10, 6.0), _rx("biceps", 6, 6.0)],
+        thursday,
+    )
+    assert out["days_left"] == 2
+    by_label = {s["session"]: s for s in out["sessions"]}
+    assert set(by_label) == {"Upper-B", "Lower-B"}
+    assert by_label["Upper-B"]["muscles"] == [{"muscle": "chest", "sets": 3, "over_cap": False}]
+    assert by_label["Lower-B"]["muscles"] == [{"muscle": "quads", "sets": 4, "over_cap": False}]
+    assert out["unplaceable"] == []
+
+
+def test_remaining_split_on_monday_matches_the_full_week() -> None:
+    """With nothing trained yet and every session ahead, reflow IS the skeleton."""
+    monday = date(2026, 8, 3)
+    assert monday.weekday() == 0
+    out = remaining_split([_rx("chest", 8, 0.0)], monday)
+    assert out["days_left"] == 4
+    allocs = {s["session"]: s["muscles"][0]["sets"] for s in out["sessions"]}
+    assert allocs == {"Upper-A": 4, "Upper-B": 4}
+
+
+def test_remaining_split_surfaces_an_unreachable_target_instead_of_dropping_it() -> None:
+    """After Friday a leg target has no session left — it must be SAID, not lost.
+
+    And a single-session pile-up past the per-session cap is flagged over_cap,
+    mirroring _session_split's never-silently-truncate rule.
+    """
+    saturday = date(2026, 8, 8)
+    assert saturday.weekday() == 5
+    out = remaining_split([_rx("glutes", 8, 2.0, emphasis=True)], saturday)
+    assert out["sessions"] == []
+    assert out["unplaceable"] == [{"muscle": "glutes", "remaining": 6, "emphasis": True}]
+
+    friday = date(2026, 8, 7)
+    crammed = remaining_split([_rx("quads", 14, 2.0)], friday)
+    (lower,) = crammed["sessions"]
+    assert lower["muscles"] == [{"muscle": "quads", "sets": 12, "over_cap": True}]
+
+
+def test_remaining_split_places_nothing_for_cut_or_satisfied_muscles() -> None:
+    """A cut/deload target below current volume owes nothing forward."""
+    tuesday = date(2026, 8, 4)
+    out = remaining_split([_rx("lats", 4, 9.0), _rx("chest", 6, 6.0)], tuesday)
+    assert out["sessions"] == []
+    assert out["unplaceable"] == []

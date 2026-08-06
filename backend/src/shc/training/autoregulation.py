@@ -162,6 +162,10 @@ class Prescription:
     # {demand_muscle_sets, capacity_muscle_sets, working_sets_needed,
     #  capacity_working_sets, feasible, credit_ratio}
     capacity: dict = field(default_factory=dict)
+    # Mid-week reflow (see :func:`remaining_split`): what the week still owes,
+    # redistributed over the sessions that haven't happened yet, so a missed or
+    # gated day's sets land on the remaining days instead of evaporating.
+    remaining_week: dict = field(default_factory=dict)
 
 
 # Number of muscles that must independently signal fatigue to trigger a deload.
@@ -1343,6 +1347,74 @@ def _session_split(
     return out
 
 
+_WEEKDAY_NUM = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
+
+
+def remaining_split(
+    muscle_rx: list[MusclePrescription],
+    today: date,
+    split: tuple[dict[str, str], ...] = WEEKLY_SPLIT,
+) -> dict:
+    """Reflow each muscle's REMAINING weekly sets over the sessions still ahead.
+
+    :func:`_session_split` distributes the whole weekly target evenly across the
+    fixed Tue–Fri skeleton, once — so when a session is missed or a day is
+    gated, the sets it carried silently evaporate and the weekly target degrades
+    from a controlled quantity to an aspiration. This is the daily re-planner:
+    ``target_sets − current_sets`` (what the week still owes; ``current_sets``
+    is the in-progress week's credited volume) spread over the split sessions
+    whose weekday is today or later, same even-divmod allocation, same
+    :data:`PER_SESSION_SET_CAP` over-cap flagging (never silent truncation).
+
+    Returns ``{"sessions": [...], "unplaceable": [...], "days_left": int}``.
+    ``unplaceable`` lists muscles that still owe sets but have no matching
+    session left this week (e.g. a leg target after Friday) — surfaced, not
+    dropped, so a shortfall is a visible number. A muscle whose week is already
+    at/over target (holds, cuts, deloads mid-shed) simply has nothing left to
+    place and is absent.
+    """
+    ahead = [s for s in split if _WEEKDAY_NUM.get(s["weekday"], 7) >= today.weekday()]
+    upper_labels = [s["label"] for s in ahead if s["region"] != "lower"]
+    lower_labels = [s["label"] for s in ahead if s["region"] == "lower"]
+    meta = {s["label"]: s for s in ahead}
+    split_map: dict[str, list[dict]] = {s["label"]: [] for s in ahead}
+    unplaceable: list[dict] = []
+
+    for rx in muscle_rx:
+        rem = rx.target_sets - round(rx.current_sets)
+        if rem <= 0:
+            continue
+        labels = lower_labels if rx.muscle in LOWER_BODY else upper_labels
+        if not labels:
+            unplaceable.append({"muscle": rx.muscle, "remaining": rem, "emphasis": rx.emphasis})
+            continue
+        base, extra = divmod(rem, len(labels))
+        for i, label in enumerate(labels):
+            sets_this = base + (1 if i < extra else 0)
+            if sets_this > 0:
+                split_map[label].append(
+                    {
+                        "muscle": rx.muscle,
+                        "sets": sets_this,
+                        "over_cap": sets_this > PER_SESSION_SET_CAP,
+                    }
+                )
+
+    sessions = [
+        {
+            "session": label,
+            "weekday": meta[label]["weekday"],
+            "region": meta[label]["region"],
+            "cap": PER_SESSION_SET_CAP,
+            "credited_muscle_sets": sum(e["sets"] for e in entries),
+            "muscles": entries,
+        }
+        for label, entries in split_map.items()
+        if entries
+    ]
+    return {"sessions": sessions, "unplaceable": unplaceable, "days_left": len(ahead)}
+
+
 def trainable_today(
     muscle_rx: list[MusclePrescription],
     gates: dict,
@@ -2059,6 +2131,7 @@ def weekly_prescription(
         protein_gate=protein,
         data_gaps=data_gaps,
         capacity=_weekly_capacity(conn, muscle_rx),
+        remaining_week=remaining_split(muscle_rx, date.today()),
     )
 
 
@@ -2172,6 +2245,33 @@ def prescription_context_block(
             lines.append(
                 f"- **{sess['session']} ({day})** "
                 f"[{credited} credited muscle-sets; compounds overlap]: {entries}"
+            )
+
+    # Mid-week reflow: what the week still owes, over the sessions actually
+    # left. Rendered ABOVE the trainable-today lens because this is the number
+    # to build today's session from — the skeleton above is where the week was
+    # SUPPOSED to land, this is where it still CAN.
+    rw = rx.remaining_week
+    if rw.get("sessions") or rw.get("unplaceable"):
+        lines.append(
+            "\n## REMAINING THIS WEEK (reflowed over the sessions left — "
+            "build today from this, not the skeleton)"
+        )
+        for sess in rw.get("sessions", []):
+            entries = ", ".join(
+                f"{e['muscle']} ×{e['sets']}" + ("⚠over-cap" if e.get("over_cap") else "")
+                for e in sess["muscles"]
+            )
+            lines.append(
+                f"- **{sess['session']} ({sess['weekday']})** "
+                f"[{sess['credited_muscle_sets']} muscle-sets remaining]: {entries}"
+            )
+        for u in rw.get("unplaceable", []):
+            star = " ★" if u.get("emphasis") else ""
+            lines.append(
+                f"- ⚠ **{u['muscle']}{star}**: {u['remaining']} set(s) still owed but no "
+                "matching session remains this week — either add them today if gates "
+                "allow, or accept the shortfall (it will show in next week's targets)"
             )
 
     # Trainable-today: the daily lens on top of the weekly skeleton above —
