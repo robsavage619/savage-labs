@@ -110,6 +110,58 @@ def _iso_week_start(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
+# Intra-mesocycle effort ramp (RIR periodization). Week 1 of an accumulation
+# block starts at ~3-2 RIR (RPE 7-8) and the band climbs linearly to ~1-0.5 RIR
+# (RPE 8.5-9.5) in the final accumulation week, so fatigue arrives on schedule
+# and the calendar deload sheds something real. The top stays below 10: RPE 10
+# is reserved for a deliberate PR attempt (invariant 5 / PR re-anchor), never a
+# routine target. Values are the TARGET band; the day's recovery gates still
+# own the CAP (`rpe_cap_for`) and always win when lower.
+_MESO_RPE_START = (7.0, 8.0)
+_MESO_RPE_END = (8.5, 9.5)
+_MESO_DELOAD_BAND = (6.0, 6.0)
+
+
+def _round_half(x: float) -> float:
+    """Round to the nearest 0.5 — RPE's real-world resolution."""
+    return round(x * 2) / 2
+
+
+def meso_rpe_band(week_number: int, planned_weeks: int) -> tuple[float, float]:
+    """Target working-set RPE band for this week of the mesocycle.
+
+    Linear ramp across the accumulation weeks from :data:`_MESO_RPE_START` to
+    :data:`_MESO_RPE_END`; past ``planned_weeks`` (the shed week) it returns the
+    deload band. A one-week block has no ramp and holds the start band. This is
+    the missing time axis: sets already ramp across the block (`_decide`), and
+    without this week 1 and week ``planned_weeks`` prescribed identical effort.
+    """
+    if planned_weeks <= 0 or week_number > planned_weeks:
+        return _MESO_DELOAD_BAND
+    if planned_weeks == 1:
+        return _MESO_RPE_START
+    f = max(0.0, min(1.0, (week_number - 1) / (planned_weeks - 1)))
+    lo = _round_half(_MESO_RPE_START[0] + (_MESO_RPE_END[0] - _MESO_RPE_START[0]) * f)
+    hi = _round_half(_MESO_RPE_START[1] + (_MESO_RPE_END[1] - _MESO_RPE_START[1]) * f)
+    return lo, hi
+
+
+def meso_rpe_midpoint_rise(week_number: int, planned_weeks: int) -> float:
+    """How far this week's PLANNED effort midpoint sits above week 1's.
+
+    The effort-overreach detector compares recent weekly RPE to the athlete's
+    own trailing baseline; with the ramp above, a late-accumulation week is
+    SUPPOSED to read higher. This is the planned component of that rise, so the
+    detector can require effort above what the plan itself asked for. Zero in
+    week 1, on a deload, or with no active ramp.
+    """
+    if planned_weeks <= 0 or week_number > planned_weeks:
+        return 0.0
+    lo0, hi0 = meso_rpe_band(1, planned_weeks)
+    lo, hi = meso_rpe_band(week_number, planned_weeks)
+    return max(0.0, (lo + hi) / 2 - (lo0 + hi0) / 2)
+
+
 def active_mesocycle(conn: duckdb.DuckDBPyConnection) -> MesocycleState | None:
     row = conn.execute(
         """

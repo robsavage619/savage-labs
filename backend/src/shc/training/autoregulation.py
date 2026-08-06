@@ -1547,7 +1547,11 @@ rise from 6.0 to 6.6 is a return to normal training, not grinding, while a
 steady 8.5 with no rise is simply how someone trains."""
 
 
-def _effort_overreach(conn: duckdb.DuckDBPyConnection, baseline_weeks: int = 8) -> dict:
+def _effort_overreach(
+    conn: duckdb.DuckDBPyConnection,
+    baseline_weeks: int = 8,
+    meso_state: MesocycleState | None = None,
+) -> dict:
     """Is Rob grinding — weekly mean RPE elevated against his own baseline?
 
     Reads the weekly rollup (migration 0079), NOT ``plan_adherence``. That table
@@ -1561,6 +1565,17 @@ def _effort_overreach(conn: duckdb.DuckDBPyConnection, baseline_weeks: int = 8) 
     and a flat 8.5 is just how somebody trains. Returns ``overreaching: False``
     with whatever it could measure when there isn't enough history — never a
     guess, since this feeds a deload decision.
+
+    ``meso_state`` makes the check PHASE-AWARE. The intra-meso RIR ramp
+    (:func:`shc.training.mesocycle.meso_rpe_band`) deliberately raises the
+    effort target across the accumulation weeks, so a late-block week is
+    SUPPOSED to read above the trailing baseline — without this, following the
+    plan trips the detector and (with any regressing muscle as corroboration)
+    recommends deloading Rob for doing what the plan asked. The planned
+    midpoint rise is added to the required rise: only effort above what the
+    plan itself asked for counts as grinding. Erring toward NOT deloading is
+    deliberate — this trigger is corroboration-gated anyway, and the other
+    deload triggers (regression count, MRV count) are untouched.
     """
     try:
         rows = conn.execute(
@@ -1583,11 +1598,17 @@ def _effort_overreach(conn: duckdb.DuckDBPyConnection, baseline_weeks: int = 8) 
     recent = float(rows[0][1])
     prior = [float(r[1]) for r in rows[1:]]
     baseline = sum(prior) / len(prior)
+    planned_rise = 0.0
+    if meso_state is not None:
+        from shc.training.mesocycle import meso_rpe_midpoint_rise
+
+        planned_rise = meso_rpe_midpoint_rise(meso_state.week_number, meso_state.planned_weeks)
     return {
-        "overreaching": (recent - baseline) >= _OVERREACH_RPE_RISE
+        "overreaching": (recent - baseline) >= _OVERREACH_RPE_RISE + planned_rise
         and recent >= _OVERREACH_RPE_FLOOR,
         "recent_rpe": round(recent, 2),
         "baseline_rpe": round(baseline, 2),
+        "planned_rise": round(planned_rise, 2),
         "weeks": len(rows),
     }
 
@@ -1774,7 +1795,7 @@ def _weekly_deload_context(
         perfs,
         targeted,
         threshold=read_deload_threshold(conn),
-        effort=_effort_overreach(conn),
+        effort=_effort_overreach(conn, meso_state=state),
     )
     if signal_deload["recommended"] and _deload_in_cooldown(conn, date.today()):
         signal_deload = {

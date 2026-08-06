@@ -1115,3 +1115,105 @@ def test_effort_rpe_band_never_asks_for_more_than_the_day_allows() -> None:
         cap = RPE_CAP_BY_INTENSITY[intensity]
         assert lo <= hi, f"{intensity} band is inverted"
         assert hi <= cap, f"{intensity} band targets RPE {hi} but the day caps at {cap}"
+
+
+def _meso_state(week_number: int, planned_weeks: int = 7, deload: bool = False):
+    from shc.training.mesocycle import MesocycleState
+
+    return MesocycleState(
+        id="test",
+        started_on=date.today() - timedelta(weeks=week_number - 1),
+        planned_weeks=planned_weeks,
+        status="active",
+        week_number=week_number,
+        weeks_remaining=max(0, planned_weeks - week_number + 1),
+        is_deload_week=deload,
+        deload_trigger=None,
+        notes=None,
+    )
+
+
+def test_meso_rpe_band_ramps_across_the_block() -> None:
+    """Week 1 and the final accumulation week must not prescribe identical effort.
+
+    The RIR periodization axis: sets already ramp across the block; effort now
+    does too — ~RPE 7-8 in week 1 climbing to ~8.5-9.5 in the final week, in
+    half-point steps, monotonically.
+    """
+    from shc.training.mesocycle import meso_rpe_band
+
+    assert meso_rpe_band(1, 7) == (7.0, 8.0)
+    assert meso_rpe_band(7, 7) == (8.5, 9.5)
+    # Past the accumulation weeks = the shed week — flat deload band.
+    assert meso_rpe_band(8, 7) == (6.0, 6.0)
+    # A one-week block has no ramp to run.
+    assert meso_rpe_band(1, 1) == (7.0, 8.0)
+    prev = (0.0, 0.0)
+    for wk in range(1, 8):
+        lo, hi = meso_rpe_band(wk, 7)
+        assert lo <= hi
+        assert (lo, hi) >= prev, "band must never step DOWN mid-accumulation"
+        assert lo * 2 == int(lo * 2) and hi * 2 == int(hi * 2), "RPE resolves in halves"
+        prev = (lo, hi)
+
+
+def test_effort_band_is_clamped_by_the_day_cap_and_never_exceeds_it() -> None:
+    """The ramp asks; the day's gates answer. The gate cap always wins when lower.
+
+    A late-block 8.5-9.5 target on a MODERATE day must collapse to the day's cap
+    (8), and on any intensity the band top must stay at or under
+    RPE_CAP_BY_INTENSITY — the same invariant the static band test enforces.
+    """
+    from shc.ai.workout_planner import RPE_CAP_BY_INTENSITY, effort_band_for
+
+    late = _meso_state(7)
+    assert effort_band_for({"max_intensity": "high"}, late) == (8.5, 9.5)
+    assert effort_band_for({"max_intensity": "moderate"}, late) == (8.0, 8.0)
+    assert effort_band_for({"max_intensity": "low"}, late) == (7.0, 7.0)
+    assert effort_band_for({"max_intensity": "rest"}, late) == (6.0, 6.0)
+    # No meso state (or a deload week) → the static per-intensity band, unchanged.
+    assert effort_band_for({"max_intensity": "high"}, None) == (8.0, 9.0)
+    assert effort_band_for({"max_intensity": "high"}, _meso_state(8, deload=True)) == (8.0, 9.0)
+    for wk in range(1, 8):
+        for intensity, cap in RPE_CAP_BY_INTENSITY.items():
+            lo, hi = effort_band_for({"max_intensity": intensity}, _meso_state(wk))
+            assert lo <= hi <= cap, f"wk{wk} {intensity}: band ({lo},{hi}) breaches cap {cap}"
+
+
+def test_late_block_planned_effort_rise_is_not_read_as_overreach() -> None:
+    """Following the ramp must not trip the grind detector.
+
+    The overreach check compares recent weekly RPE to the trailing baseline; a
+    late-accumulation week is SUPPOSED to sit above it by the planned ramp
+    delta. The same +1.4 rise that reads as grinding in week 1 (planned rise 0)
+    is inside the plan's own ask in the final week (planned rise 1.5) — while a
+    rise that blows through plan + threshold still fires.
+    """
+    import duckdb
+
+    from shc.training.autoregulation import _effort_overreach
+
+    def _conn(weekly: list[float]):
+        c = duckdb.connect(":memory:")
+        c.execute(
+            "CREATE TABLE exercise_weekly_e1rm "
+            "(week_start DATE, weekly_avg_rpe DOUBLE, rpe_set_count INTEGER)"
+        )
+        for i, rpe in enumerate(weekly):  # index 0 = most recent
+            wk = date.today() - timedelta(weeks=i)
+            c.execute("INSERT INTO exercise_weekly_e1rm VALUES (?, ?, 10)", [wk, rpe])
+        return c
+
+    grind = [8.6, 7.2, 7.1, 7.2]  # +1.4 over baseline, above the 8.0 floor
+    assert _effort_overreach(_conn(grind), meso_state=_meso_state(1))["overreaching"] is True
+    out = _effort_overreach(_conn(grind), meso_state=_meso_state(7))
+    assert out["overreaching"] is False
+    assert out["planned_rise"] == 1.5
+    # Effort beyond even the plan's final-week ask is still grinding.
+    beyond = [9.5, 7.2, 7.1, 7.2]
+    assert _effort_overreach(_conn(beyond), meso_state=_meso_state(7))["overreaching"] is True
+    # A deload/shed week has no planned rise — the detector reverts to baseline.
+    assert (
+        _effort_overreach(_conn(grind), meso_state=_meso_state(8, deload=True))["overreaching"]
+        is True
+    )

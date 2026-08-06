@@ -263,16 +263,37 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "raise the weight — do not keep the light load and relabel it. The validator "
         "rejects a set whose weight implies an RPE more than 1.5 below its `rpe_target`."
     )
-    effort_lo, effort_hi = EFFORT_RPE_BAND.get(gates["max_intensity"], (7, 8))
+    # Meso-phase effort ramp: the band comes from the block position (RIR
+    # periodization), clamped by today's gate cap. No meso → static band.
+    _meso_state = None
+    try:
+        from shc.training.mesocycle import active_mesocycle
+
+        _meso_state = active_mesocycle(conn)
+    except Exception as _exc:  # noqa: BLE001 — meso state optional for the band
+        log.debug("mesocycle state unavailable for effort band: %s", _exc)
+    effort_lo, effort_hi = effort_band_for(gates, _meso_state)
+    ramp_note = ""
+    if _meso_state is not None and not _meso_state.is_deload_week:
+        ramp_note = (
+            f" — week {_meso_state.week_number} of {_meso_state.planned_weeks} "
+            "accumulation; the target band ramps across the block, so early weeks "
+            "are DELIBERATELY sub-maximal"
+        )
     lines.append(
         "- The WORKING WEIGHTS list below shows each lift's e1RM and today's "
         "load ceiling at 8 reps. The ceiling is the HARD upper bound — never "
-        f"exceed it. Working sets should land at **RPE {effort_lo}-{effort_hi}** "
-        f"(today's {gates['max_intensity'].upper()}-day target). "
+        f"exceed it. Working sets should land at **RPE {effort_lo:g}-{effort_hi:g}** "
+        f"(today's {gates['max_intensity'].upper()}-day target{ramp_note}). "
         "RPE 8 = 2 RIR = ~87% of your best single at those reps; RPE 9 = 1 RIR. "
         "Do NOT default to a conservative RPE 6-7 — that leaves hypertrophy stimulus "
         "on the table. Prescribe enough weight to actually reach the target RPE at "
         "your chosen rep count."
+    )
+    lines.append(
+        "- **RPE LOGGING**: ask Rob to tag an RPE on at least the FINAL working set "
+        "of every exercise in Hevy — the engine's effort machinery (headroom, "
+        "overreach, RIR-adjusted e1RM) runs on whatever coverage he gives it."
     )
     lines.append(
         "- **PER-HAND LOADS**: for dumbbell and cable-crossover lifts, every "
@@ -957,6 +978,31 @@ EFFORT_RPE_BAND: dict[str, tuple[int, int]] = {
     "low": (6, 7),
     "rest": (6, 6),
 }
+
+
+def effort_band_for(gates: dict[str, Any], meso_state: Any | None = None) -> tuple[float, float]:
+    """Today's working-set RPE target band — meso ramp clamped by the day's cap.
+
+    The static :data:`EFFORT_RPE_BAND` gave the block no time axis: week 1 and
+    the final accumulation week asked for identical effort. With an active
+    mesocycle the band comes from :func:`shc.training.mesocycle.meso_rpe_band`
+    (RIR periodization: ~RPE 7-8 week 1 climbing to ~8.5-9.5 in the final
+    week), then the day's recovery gates CLAMP it — the gate cap always wins
+    when lower, so a yellow/red day still reduces effort exactly as before.
+    No meso state (or a deload week, where the band would be the flat deload
+    band) falls back to the static per-intensity band unchanged.
+    """
+    lo, hi = EFFORT_RPE_BAND.get(gates.get("max_intensity", "high"), (7, 8))
+    if meso_state is None or getattr(meso_state, "is_deload_week", True):
+        return float(lo), float(hi)
+    from shc.training.mesocycle import meso_rpe_band
+
+    ramp_lo, ramp_hi = meso_rpe_band(meso_state.week_number, meso_state.planned_weeks)
+    cap = rpe_cap_for(gates)
+    hi_eff = min(ramp_hi, cap)
+    lo_eff = min(ramp_lo, hi_eff)
+    return lo_eff, hi_eff
+
 
 # Working-set ceiling for a relative clinical contraindication (#21): acute
 # illness / significant anemia warrant a reduced session, not a hard stop.
