@@ -525,6 +525,50 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             f"(showing {ww_limit} most-recently-updated of {len(ww_rows)})"
         )
 
+    # Deterministic per-lift next targets: the engine's own double-progression
+    # arithmetic. The LLM composes the session AROUND these numbers instead of
+    # re-deriving load math (the recurring failure mode the validators exist to
+    # catch); sets-per-exercise still come from the weekly prescription.
+    try:
+        from shc.training.prescriptor import next_prescriptions, pr_reanchor_due
+
+        _nrx = next_prescriptions(conn, gates, today, e1rm_by_ex, grids=grids)
+    except Exception as _exc:  # noqa: BLE001 — advisory layer, never blocks context
+        log.debug("next prescriptions unavailable: %s", _exc)
+        _nrx = []
+    if _nrx:
+        lines.append(
+            "\n## NEXT PRESCRIPTION (deterministic double progression — COPY these "
+            "load × rep targets for any of these lifts you program; do NOT re-derive "
+            "them). Loads are per-hand for dumbbell/cable-pair lifts and already "
+            "snapped to weights the gym can produce. Set counts come from THIS "
+            "WEEK'S PRESCRIPTION, not from here."
+        )
+        for n in _nrx:
+            rpe_sfx = f" @RPE {n.last_rpe:g}" if n.last_rpe is not None else ""
+            lines.append(
+                f"- {n.exercise}: **{n.next_weight_lbs:g} lb × {n.next_reps}** — "
+                f"{n.note} [last {n.last_date}: {n.last_weight_lbs:g} lb × "
+                f"{n.last_reps}{rpe_sfx} · window {n.rep_low}-{n.rep_high}]"
+            )
+    try:
+        _pr_due = pr_reanchor_due(conn, today, gates)
+    except Exception as _exc:  # noqa: BLE001 — advisory layer, never blocks context
+        log.debug("PR re-anchor unavailable: %s", _exc)
+        _pr_due = []
+    if _pr_due:
+        lines.append(
+            "\n## PR RE-ANCHOR DUE (high day — schedule ONE deliberate top set "
+            "per lift below, RPE 9-10, AFTER its working sets are warm. The e1RM "
+            "reference is stale; a true top set re-anchors every ceiling built on it.)"
+        )
+        for p in _pr_due:
+            lines.append(
+                f"- {p['exercise']}: peak e1RM {p['peak_e1rm_lbs']:g} lb set "
+                f"{p['weeks_since_peak']}wk ago ({p['trend']} since) — beat it or "
+                "confirm it"
+            )
+
     lines.append(
         f"\n## TOP EXERCISES (last 90d by frequency — top {len(top_exercises)}, "
         f"capped at SQL LIMIT 20) — HABIT MIRROR, not a menu. This is what you've "
