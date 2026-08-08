@@ -285,6 +285,7 @@ def volume_targets(
         elif mid == (meso_id or ""):
             personal[mg] = VolumeTarget(mg, mev, mav, mrv, source="personal", **vt_kwargs)
 
+    brief_low = _brief_weekly_low(conn)
     targets: dict[str, VolumeTarget] = dict(defaults)
     for mg, vt in personal.items():
         pop = defaults.get(mg)
@@ -292,17 +293,53 @@ def volume_targets(
         # row that predates 0078 carries no tier, so inherit the default's
         # rather than silently promoting the muscle back to 'grow'.
         tier = vt.tier if vt.tier == "maintain" else (pop.tier if pop else vt.tier)
-        # If the fitted MRV is below 50% of the population MRV, flag as
-        # undertrained — the fit is measuring habit, not physiology.
-        if pop and vt.mrv < pop.mrv * 0.5:
+        # Undertrained-fit guard. The fit measures HABIT, not physiology: MEV is
+        # the P20 of weeks actually performed, so a muscle that has never been
+        # trained hard can never be prescribed hard. Two independent triggers:
+        #
+        #  * MRV at or below half the population MRV. Was `<`, which missed the
+        #    exact-boundary case — quads fitted MRV 10 against a population 20
+        #    evaluated `10 < 10` and stayed "personal", pinning the CEILING at 10
+        #    while the curated brief asks for 12–18.
+        #  * MEV below the curated `muscle_development` weekly floor. The brief is
+        #    the evidence-based dose and is already rendered into the planner
+        #    context; a fitted MEV underneath it means the two authorities printed
+        #    in the same block disagree, and the lower one was silently winning
+        #    (abs: brief 12–20, fitted MEV 6 → 6 sets/wk → one exercise a session).
+        low = brief_low.get(mg)
+        undertrained_mrv = pop is not None and vt.mrv <= pop.mrv * 0.5
+        undertrained_mev = low is not None and vt.mev < low
+        if pop and (undertrained_mrv or undertrained_mev):
+            # Floor to the population landmarks, then lift MEV to the curated
+            # brief when even those sit under it. Never LOWER a fitted value.
+            mev = max(pop.mev, low or 0, vt.mev if not undertrained_mev else 0)
+            mrv = max(pop.mrv, vt.mrv)
+            mav = min(max(pop.mav, mev), mrv)
             targets[mg] = VolumeTarget(
-                mg, pop.mev, pop.mav, pop.mrv, source="personal_floored", mv=pop.mv, tier=tier
+                mg, mev, mav, mrv, source="personal_floored", mv=pop.mv, tier=tier
             )
         else:
             targets[mg] = VolumeTarget(
                 mg, vt.mev, vt.mav, vt.mrv, source="personal", mv=vt.mv, tier=tier
             )
     return targets
+
+
+def _brief_weekly_low(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    """Curated evidence-based weekly set floor per muscle from ``muscle_development``.
+
+    Absent table (pre-migration) returns empty, so the fitted landmarks stand
+    unchanged and this guard degrades to the population-MRV trigger alone.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT muscle, weekly_sets_low FROM muscle_development "
+            "WHERE weekly_sets_low IS NOT NULL"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — curated brief optional
+        log.debug("muscle_development unavailable for landmark floor: %s", exc)
+        return {}
+    return {r[0]: int(r[1]) for r in rows}
 
 
 def weekly_e1rm(
@@ -931,9 +968,7 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
             fitted = "*" if r.muscle in personal_muscles else ""
             mav_str = str(r.mav)
             # Show the floor this muscle is actually judged against.
-            landmarks = (
-                f"{mv}/{r.mrv}{fitted}" if maintaining else f"{r.mev}/{r.mrv}{fitted}"
-            )
+            landmarks = f"{mv}/{r.mrv}{fitted}" if maintaining else f"{r.mev}/{r.mrv}{fitted}"
             status = (
                 ("at MV — hold" if r.actual_sets >= mv else f"below MV ({mv}) — top up")
                 if maintaining

@@ -644,26 +644,28 @@ def test_abs_on_gated_day_passes_off_split_check(conn) -> None:
 
 
 def test_rep_range_enforced_rejects_out_of_band(conn) -> None:
-    # Binding the sports-science layer: Incline Curl is curated for 10–20 reps;
+    # Binding the sports-science layer: Seated Incline Curl is curated for 10–20 reps;
     # a 3-rep grinder defeats the lengthened-isolation stimulus → rejected.
     state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
-    plan = _plan(intensity="moderate", exercises=[_ex("Incline Curl (Dumbbell)", 30, "3")])
+    plan = _plan(intensity="moderate", exercises=[_ex("Seated Incline Curl (Dumbbell)", 30, "3")])
     with pytest.raises(GateViolation, match="evidence-based"):
         validate_plan(plan, state=state, conn=conn)
 
 
 def test_rep_range_allows_in_band(conn) -> None:
     state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
-    plan = _plan(intensity="moderate", exercises=[_ex("Incline Curl (Dumbbell)", 30, "12")])
+    plan = _plan(intensity="moderate", exercises=[_ex("Seated Incline Curl (Dumbbell)", 30, "12")])
     validate_plan(plan, state=state, conn=conn)  # in-band → no rep violation
 
 
 def test_rep_range_high_end_of_prescribed_range_rejected(conn) -> None:
-    """Incline Curl's window is 10-20 (+3 tolerance -> 23). A "20-25" prescription
+    """Seated Incline Curl's window is 10-20 (+3 tolerance -> 23). A "20-25" prescription
     has an in-band LOW end (20) but its HIGH end (25) overshoots — must be caught
     on the range's high end, not just its first/low number."""
     state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
-    plan = _plan(intensity="moderate", exercises=[_ex("Incline Curl (Dumbbell)", 30, "20-25")])
+    plan = _plan(
+        intensity="moderate", exercises=[_ex("Seated Incline Curl (Dumbbell)", 30, "20-25")]
+    )
     with pytest.raises(GateViolation, match="evidence-based"):
         validate_plan(plan, state=state, conn=conn)
 
@@ -888,3 +890,39 @@ def test_clinical_cap_db_error_fails_visible_not_silent() -> None:
     assert cap is None
     assert reason is not None
     assert "failed" in reason.lower()
+
+
+def test_unloggable_exercise_rejected(conn) -> None:
+    """#24: the planner was TOLD to use Hevy names verbatim but nothing enforced it.
+
+    A movement outside the catalog cannot be logged, so it is invisible to e1RM,
+    plateau detection and volume crediting — the plan silently stops feeding the
+    engine. The curated catalog itself carried such names, so the instruction and
+    the exercise menu actively contradicted each other.
+    """
+    conn.execute(
+        "INSERT INTO hevy_exercise_templates (id, title, primary_muscle_group) "
+        "VALUES ('t1', 'Cable Crunch', 'abs')"
+    )
+    state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
+    plan = _plan(intensity="moderate", exercises=[_ex("Sorcerer's Curl (Imaginary)", 30, "12")])
+    with pytest.raises(GateViolation, match="not in the Hevy catalog"):
+        validate_plan(plan, state=state, conn=conn)
+
+
+def test_loggable_exercise_passes_the_catalog_check(conn) -> None:
+    """The catalog gate itself must not fire for a name that IS in the catalog.
+
+    Asserted narrowly: other validators (split coverage, rep windows) have their
+    own fixtures and are not what this test is pinning.
+    """
+    conn.execute(
+        "INSERT INTO hevy_exercise_templates (id, title, primary_muscle_group) "
+        "VALUES ('t1', 'Cable Crunch', 'abs')"
+    )
+    state = {"gates": {"max_intensity": "high", "forbid_muscle_groups": [], "reasons": []}}
+    plan = _plan(intensity="moderate", exercises=[_ex("Cable Crunch", 30, "12")])
+    try:
+        validate_plan(plan, state=state, conn=conn)
+    except GateViolation as exc:
+        assert "not in the Hevy catalog" not in str(exc)

@@ -279,3 +279,110 @@ def test_stale_progressing_trend_is_demoted_to_neutral(trend_conn) -> None:
     info = _progress_info(trend_conn, {"Dormant Lift"})["Dormant Lift"]
     assert info["trend"] == "stale"
     assert info["rank"] == 1
+
+
+# --- Catalog name bridge (2026-08-08) ----------------------------------------
+# The engine rotated correctly and then named exercises Rob cannot log, so the
+# displaced staple stayed in the plan. These lock the vocabulary shut.
+
+
+def test_every_curated_movement_is_loggable(conn) -> None:
+    """The selection menu may only offer exercises Rob can actually put in Hevy.
+
+    A curated movement outside that vocabulary consumes a menu slot and, when it
+    wins the 6-week rotation, kills the swap outright — the replacement cannot be
+    written, so the lift it displaced stays in the plan. This was the mechanism
+    behind Face Pull and Lateral Raise appearing on 23 of 49 training days.
+    """
+    from shc.training.autoregulation import unloggable_curated
+
+    # Four movements are knowingly unavailable (absent from Hevy AND never
+    # logged): they are filtered at runtime and reported by /training/alias-gaps.
+    # The bar is that the list does not GROW — a new curated row must name a
+    # loggable exercise.
+    assert len(unloggable_curated(conn)) <= 4
+
+
+def test_menu_never_offers_an_unloggable_movement(conn) -> None:
+    """With a catalog present, an unloggable curated movement must be filtered out."""
+    from shc.training.autoregulation import evidence_menu, loggable_names
+
+    curated = [
+        r[0]
+        for r in conn.execute(
+            "SELECT DISTINCT exercise_name FROM exercise_science WHERE muscle = 'biceps'"
+        ).fetchall()
+    ]
+    assert len(curated) > 2, "fixture has too few biceps options to prove a filter"
+    # Publish every curated biceps movement to the catalog EXCEPT one.
+    withheld = sorted(curated)[0]
+    for name in curated:
+        if name != withheld:
+            conn.execute(
+                "INSERT INTO hevy_exercise_templates (id, title, primary_muscle_group) "
+                "VALUES (?, ?, 'biceps')",
+                [name, name],
+            )
+
+    legal = loggable_names(conn)
+    assert withheld not in legal
+
+    offered = {p["exercise"] for p in evidence_menu(conn, ["biceps"])["biceps"]}
+    assert offered, "menu returned nothing — fixture regression, not a real pass"
+    assert withheld not in offered, "menu offered a movement Rob cannot log"
+    assert not (offered - legal)
+
+
+def test_empty_catalog_does_not_empty_the_menu(conn) -> None:
+    """No catalog rows means the vocabulary is unknown, not that nothing is legal.
+
+    Filtering against an empty set would silently blank every menu — a far worse
+    failure than the naming gap this guards.
+    """
+    from shc.training.autoregulation import evidence_menu, loggable_names
+
+    assert loggable_names(conn) == set()
+    assert evidence_menu(conn, ["biceps"]).get("biceps")
+
+
+def test_one_movement_cannot_occupy_two_menu_slots(conn) -> None:
+    """The catalog carried the same lift under two name conventions.
+
+    Without a movement-identity key the pair could both be picked, or one be
+    'swapped in' to replace the other — burning a rotation on a pure rename
+    (e.g. 'Dumbbell Bench Press' replacing 'Bench Press (Dumbbell)').
+    """
+    from shc.training.autoregulation import _movement_key, evidence_menu
+
+    for muscle, picks in evidence_menu(conn, ["chest", "biceps", "triceps"]).items():
+        keys = [_movement_key(p["exercise"]) for p in picks]
+        assert len(keys) == len(set(keys)), f"{muscle} offers one movement twice: {picks}"
+
+
+def test_movement_key_keeps_equipment_distinct() -> None:
+    """Punctuation collapses; equipment never does — a machine press is not a
+    dumbbell press, and an earlier fuzzy pass that ignored this paired seated
+    with standing calf raises."""
+    from shc.training.autoregulation import _movement_key
+
+    assert _movement_key("Bench Press (Dumbbell)") == _movement_key("Dumbbell Bench Press")
+    assert _movement_key("Chin-Up") == _movement_key("Chin Up")
+    assert _movement_key("Machine Bench Press") != _movement_key("Bench Press (Dumbbell)")
+    assert _movement_key("Seated Calf Raise (Machine)") != _movement_key(
+        "Standing Calf Raise (Machine)"
+    )
+
+
+def test_sparse_catalog_does_not_blank_a_muscle(conn) -> None:
+    """A partial template sync must not read as 'nothing to train here'.
+
+    `loggable_names` is non-empty but covers none of the biceps options; keeping
+    the candidates is strictly better than emptying the muscle's menu.
+    """
+    from shc.training.autoregulation import evidence_menu
+
+    conn.execute(
+        "INSERT INTO hevy_exercise_templates (id, title, primary_muscle_group) "
+        "VALUES ('t1', 'Some Unrelated Machine', 'calves')"
+    )
+    assert evidence_menu(conn, ["biceps"]).get("biceps")

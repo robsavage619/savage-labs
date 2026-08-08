@@ -23,11 +23,28 @@ fi
 # SIGTERM first, then a grace period, then -9 as fallback: a hard -9 mid-flight can truncate
 # a WHOOP token refresh after WHOOP has already rotated it server-side but before the new
 # token is persisted locally, permanently killing the connection until manual reauth.
-PIDS=$(lsof -ti :3000 -ti :8000 2>/dev/null)
-[[ -n "$PIDS" ]] && kill -TERM $PIDS 2>/dev/null
+# -sTCP:LISTEN matters: a bare `lsof -ti :3000` matches ANY socket on the port,
+# including CLIENTS. An open browser tab meant this list contained Google Chrome,
+# so the restart SIGTERM'd Rob's browser — and, because Chrome is not ours to
+# reap, the script died here under `set -e` before ever starting uvicorn.
+listening_pids() {
+  # One port per lsof call — `-ti :3000 -sTCP:LISTEN -ti :8000` does NOT combine,
+  # it returns nothing. `|| true` on each: lsof exits 1 when a port is free, and
+  # under `set -e` even a failing command SUBSTITUTION aborts the script, so the
+  # one case that most needs a restart (the API already crashed) silently did
+  # nothing at all.
+  { lsof -ti :3000 -sTCP:LISTEN 2>/dev/null || true; lsof -ti :8000 -sTCP:LISTEN 2>/dev/null || true; }
+}
+
+# -sTCP:LISTEN matters: a bare `lsof -ti :3000` matches ANY socket on the port,
+# including CLIENTS. An open browser tab put Google Chrome in this list, so the
+# restart SIGTERM'd Rob's browser — and since Chrome is not ours to reap, the
+# script then died here before ever starting uvicorn.
+PIDS=$(listening_pids)
+[[ -n "$PIDS" ]] && kill -TERM ${=PIDS} 2>/dev/null || true
 pkill -TERM -f "uvicorn shc" 2>/dev/null || true
 sleep 2
-lsof -ti :3000 -ti :8000 2>/dev/null | xargs kill -9 2>/dev/null || true
+listening_pids | xargs kill -9 2>/dev/null || true
 pkill -9 -f "uvicorn shc" 2>/dev/null || true
 
 # ── Canonical data dir ────────────────────────────────────────────────────────

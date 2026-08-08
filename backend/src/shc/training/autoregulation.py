@@ -28,6 +28,7 @@ program the chat assembles the actual session from.
 import json
 import logging
 import math
+import re
 import statistics
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -63,7 +64,7 @@ log = logging.getLogger(__name__)
 # muscle the silhouette/critique trend no longer flags drops out; a softening
 # taper muscle (e.g. side_delts, lats) is promoted. This prior is Rob's stated
 # focus set (biceps/glutes/traps) and applies when the physique signal is absent.
-EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes", "traps"})
+EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes", "abs"})
 
 # A physique-bias factor at/above this promotes a muscle into the emphasis set
 # even if it isn't in the biceps/glutes prior. The factor is in
@@ -1137,6 +1138,97 @@ def _progressibility(grids, logged_name: str) -> dict | None:
     }
 
 
+_EQUIP_SYNONYMS = {"tricep": "triceps", "bicep": "biceps", "hamstring": "hamstrings"}
+
+
+def _movement_key(name: str) -> str:
+    """Identity of the MOVEMENT, independent of how the name is punctuated.
+
+    ``Bench Press (Dumbbell)`` and ``Dumbbell Bench Press`` are one exercise
+    logged under two strings. Equipment words are deliberately KEPT (a machine
+    press is not a dumbbell press); only punctuation, plural, word order, and
+    the tricep/bicep spelling drift are normalized away.
+    """
+    n = name.lower()
+    for a, b in _EQUIP_SYNONYMS.items():
+        n = re.sub(rf"\b{a}\b", b, n)
+    n = re.sub(r"[^a-z0-9 ]", " ", n)
+    toks = [t[:-1] if t.endswith("s") and len(t) > 3 else t for t in n.split()]
+    return " ".join(sorted(toks))
+
+
+def loggable_names(conn: duckdb.DuckDBPyConnection) -> set[str]:
+    """Exercise names Rob can actually put in Hevy — the planner's legal vocabulary.
+
+    Two sources, both exact:
+      * ``hevy_exercise_templates`` — the catalog the planner is told to quote
+        VERBATIM.
+      * exercises logged with ``workouts.source = 'hevy'`` — a few genuine
+        customs (e.g. "Cable Core Pallof Press", "Bulgarian Split Squat
+        (Dumbbell)") exist that the template endpoint does not return.
+
+    Fitbod-imported strings are deliberately EXCLUDED. The log carries a decade
+    of them ("Hammer Curls", "Leg Extension", "Cable Row") and they must keep
+    crediting historical volume, but Rob cannot select one in Hevy today — so
+    offering it as a rotation is the same dead end as a name that never existed.
+    Provenance is the precise test here; recency is only a proxy for it.
+
+    A curated movement outside this set cannot be programmed no matter how good
+    the science is, so surfacing it only burns a rotation slot.
+    """
+    names: set[str] = set()
+    sources = (
+        ("hevy_exercise_templates", "SELECT title FROM hevy_exercise_templates"),
+        (
+            "workout_sets",
+            "SELECT DISTINCT ws.exercise FROM workout_sets ws "
+            "JOIN workouts w ON w.id = ws.workout_id "
+            "WHERE ws.exercise IS NOT NULL AND w.source = 'hevy'",
+        ),
+    )
+    for label, sql in sources:
+        try:
+            names.update(r[0] for r in conn.execute(sql).fetchall() if r[0])
+        except Exception as exc:  # noqa: BLE001 — either source alone is usable
+            log.warning("loggable_names: %s unavailable: %s", label, exc)
+    return names
+
+
+def unloggable_curated(conn: duckdb.DuckDBPyConnection) -> list[str]:
+    """Curated movements the planner is forbidden to name — the selection dead-list.
+
+    Every entry here is science the engine can rank but Rob can never log, so it
+    silently consumes a menu slot and, when it wins a rotation, kills the swap.
+    Exposed for the alias-gap diagnostic and guarded by a coverage test.
+    """
+    loggable = loggable_names(conn)
+    if not loggable:
+        return []
+    try:
+        rows = conn.execute("SELECT DISTINCT exercise_name FROM exercise_science").fetchall()
+    except Exception as exc:  # noqa: BLE001 — evidence layer optional
+        log.debug("exercise_science unavailable for unloggable audit: %s", exc)
+        return []
+    return sorted(r[0] for r in rows if r[0] not in loggable)
+
+
+def _logged_set_counts(conn: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, int]:
+    """Working-set counts per exercise name — which twin Rob actually trains under."""
+    if not names:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT exercise, COUNT(*) FROM workout_sets "
+            "WHERE COALESCE(is_warmup, FALSE) = FALSE AND exercise IN "
+            f"({','.join('?' * len(names))}) GROUP BY exercise",
+            names,
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — tie-break only, never load-bearing
+        log.debug("logged set counts unavailable: %s", exc)
+        return {}
+    return {r[0]: int(r[1] or 0) for r in rows}
+
+
 def evidence_menu(
     conn: duckdb.DuckDBPyConnection, muscles: list[str], per_muscle: int = 4
 ) -> dict[str, list[dict]]:
@@ -1166,9 +1258,16 @@ def evidence_menu(
         log.debug("weekly_region_volume unavailable: %s", exc)
         region_vol = {}
 
+    # The planner may only name exercises Rob can log. A curated movement outside
+    # that vocabulary is unprogrammable, so admitting it to the menu costs a slot
+    # and — when it wins the rotation — silently kills the swap (the lift it
+    # displaced stays in the plan because the replacement cannot be written).
+    loggable = loggable_names(conn)
+
     # Pull each muscle's curated candidates, then score every distinct candidate's
     # progression once so selection can demote plateaued lifts (swap-on-plateau).
     per_muscle_rows: dict[str, list[tuple]] = {}
+    dropped: dict[str, list[str]] = {}
     for muscle in muscles:
         try:
             rows = conn.execute(
@@ -1185,8 +1284,45 @@ def evidence_menu(
             log.debug("exercise_science unavailable for %s: %s", muscle, exc)
             continue
         cands = [r for r in rows if r[0] not in avoid]
+        if loggable:
+            writable = [c for c in cands if c[0] in loggable]
+            if writable:
+                unwritable = [c[0] for c in cands if c[0] not in loggable]
+                if unwritable:
+                    dropped[muscle] = sorted(set(unwritable))
+                cands = writable
+            elif cands:
+                # Every option for this muscle is unloggable. That is far more
+                # likely a stale/partial template sync than a real dead end, and
+                # blanking the muscle would read downstream as "nothing to train
+                # here" — strictly worse than the naming gap this filters. Keep
+                # the candidates and say so.
+                log.warning(
+                    "evidence_menu: every curated option for %s is unloggable "
+                    "(%d) — keeping them; check the Hevy template sync",
+                    muscle,
+                    len(cands),
+                )
+        # One movement, one slot: the catalog carries the same lift under two
+        # name conventions, and without this both twins can be picked — or worse,
+        # one is "swapped in" to replace the other, burning a rotation on a
+        # rename. Prefer the twin Rob has actually logged (it carries the real
+        # progression history); tie-break on name for determinism.
+        logged_counts = _logged_set_counts(conn, [c[0] for c in cands])
+        by_movement: dict[str, tuple] = {}
+        for c in sorted(cands, key=lambda r: (-logged_counts.get(r[0], 0), r[0])):
+            by_movement.setdefault(f"{c[1]}|{_movement_key(c[0])}", c)
+        cands = sorted(by_movement.values(), key=lambda r: r[0])
         if cands:
             per_muscle_rows[muscle] = cands
+    if dropped:
+        # Fail visibly: a muscle silently losing its best-evidence option to a
+        # naming gap reads downstream as "no good exercise exists".
+        log.warning(
+            "evidence_menu: %d curated movement(s) dropped as unloggable — %s",
+            sum(len(v) for v in dropped.values()),
+            "; ".join(f"{m}: {', '.join(v)}" for m, v in sorted(dropped.items())),
+        )
 
     aliases = _load_exercise_aliases(conn)
     all_names = {c[0] for cands in per_muscle_rows.values() for c in cands}

@@ -757,12 +757,20 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         if hevy_tmpl_rows:
             from collections import defaultdict
 
+            from shc.training.autoregulation import loggable_names
+
             by_group: dict[str, list[str]] = defaultdict(list)
             for title, pmg in hevy_tmpl_rows:
                 by_group[pmg or "Other"].append(title)
-            lines.append(
-                f"\n## AVAILABLE HEVY EXERCISES ({len(hevy_tmpl_rows)} total — use VERBATIM names)"
-            )
+            # A few movements Rob logs are Hevy customs the template endpoint
+            # doesn't return (e.g. Bulgarian Split Squat (Dumbbell)). Validator
+            # #24 accepts them, so the list the planner picks from must show
+            # them too — otherwise the context forbids what the validator allows.
+            listed = {t for t, _ in hevy_tmpl_rows}
+            for extra in sorted(loggable_names(conn) - listed):
+                by_group["Other (logged in Hevy, no template)"].append(extra)
+            total = sum(len(v) for v in by_group.values())
+            lines.append(f"\n## AVAILABLE HEVY EXERCISES ({total} total — use VERBATIM names)")
             for group in sorted(by_group):
                 lines.append(f"### {group}")
                 for ex in by_group[group]:
@@ -1711,6 +1719,38 @@ def validate_plan(
         raise ValueError("vault_insights is empty — must cite research")
     if allowed_citations is not None:
         _validate_citations(plan, allowed_citations)
+
+    # ── #24: every exercise must be one Rob can actually log ──────────────────
+    # The context tells the planner to use Hevy names VERBATIM but nothing
+    # enforced it, so a plan could name a movement that does not exist in his
+    # catalog — unloggable, and therefore invisible to every downstream signal
+    # (e1RM, plateau, volume crediting). Checked here rather than trusted to the
+    # prompt because the curated science catalog itself carries names Hevy does
+    # not have, so the instruction and the menu actively contradicted each other.
+    if conn is not None:
+        try:
+            from shc.training.autoregulation import loggable_names
+
+            legal = loggable_names(conn)
+        except Exception as exc:  # noqa: BLE001 — never fail a plan on a lookup error
+            log.warning("loggable-name check unavailable, skipping #24: %s", exc)
+            legal = set()
+        if legal:
+            unwritable = sorted(
+                {
+                    ex.get("name", "")
+                    for block in plan.get("blocks", [])
+                    for ex in block.get("exercises", [])
+                    if ex.get("name") and ex["name"] not in legal
+                }
+            )
+            if unwritable:
+                raise GateViolation(
+                    f"Exercise(s) {unwritable} are not in the Hevy catalog — Rob cannot "
+                    "log them, so they would be invisible to e1RM, plateau detection and "
+                    "volume crediting. Use a name exactly as it appears in AVAILABLE HEVY "
+                    "EXERCISES."
+                )
 
     # ── Session budget (#17): working-set cap + ~1h duration ──────────────────
     # Rob has ~1h to train. A plan that blows past the working-set cap or the

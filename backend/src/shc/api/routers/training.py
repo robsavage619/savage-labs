@@ -601,6 +601,7 @@ async def get_alias_gaps() -> dict[str, Any]:
     logged names to confirm and add via migration. Read-only — mutates nothing.
     """
     from shc.training.alias_audit import alias_gap_report
+    from shc.training.autoregulation import unloggable_curated
 
     conn = get_read_conn()
     try:
@@ -609,6 +610,12 @@ async def get_alias_gaps() -> dict[str, Any]:
             "gaps": gaps,
             "unresolved": len(gaps),
             "with_candidates": sum(1 for g in gaps if g["verdict"] == "candidates_found"),
+            # Curated movements outside the Hevy vocabulary. Distinct from the
+            # gaps above (which are about the plateau signal): these are filtered
+            # out of the exercise menu entirely, because programming one produces
+            # a session Rob cannot log. Each needs either a Hevy template or a
+            # migration retiring it — see 0089.
+            "unloggable": unloggable_curated(conn),
         }
     finally:
         conn.close()
