@@ -1313,3 +1313,74 @@ def test_progressibility_flags_a_coarse_pitch_and_stays_silent_on_thin_evidence(
     assert fine is not None and fine["coarse"] is False
     # Thin evidence (under the prove-a-gap set floor) → no claim, not a guess.
     assert _progressibility(_g([190.0, 230.0, 270.0], sets=5), "Hip Thrust (Machine)") is None
+
+
+# --- Weekly budget visibility (2026-08-08) -----------------------------------
+
+
+def test_over_budget_week_is_declared(conn, monkeypatch) -> None:
+    """An over-prescribed week must SAY so.
+
+    `_weekly_capacity` was computed on every prescription and never rendered, so
+    a week asking for more than Rob can deliver reached the planner looking
+    identical to a feasible one — leaving silent triage as the only response.
+    """
+    import shc.training.autoregulation as ar
+
+    real = ar.weekly_prescription
+
+    def _over(c, **kw):
+        rx = real(c, **kw)
+        rx.capacity = {
+            "dedicated_demand_sets": 66.6,
+            "capacity_working_sets": 59.0,
+            "over_by_sets": 7.6,
+            "feasible": False,
+        }
+        return rx
+
+    monkeypatch.setattr(ar, "weekly_prescription", _over)
+    block = ar.prescription_context_block(conn)
+    assert "OVER BUDGET" in block
+    assert "66.6" in block and "59" in block
+    # The instruction that makes it actionable rather than just alarming.
+    assert "Do NOT silently drop" in block
+    assert "say which muscles you cut" in block
+
+
+def test_feasible_week_states_the_budget_without_alarm(conn, monkeypatch) -> None:
+    import shc.training.autoregulation as ar
+
+    real = ar.weekly_prescription
+
+    def _ok(c, **kw):
+        rx = real(c, **kw)
+        rx.capacity = {
+            "dedicated_demand_sets": 40.0,
+            "capacity_working_sets": 59.0,
+            "over_by_sets": 0.0,
+            "feasible": True,
+        }
+        return rx
+
+    monkeypatch.setattr(ar, "weekly_prescription", _ok)
+    block = ar.prescription_context_block(conn)
+    assert "OVER BUDGET" not in block
+    assert "fits" in block
+
+
+def test_unmeasurable_capacity_makes_no_claim(conn, monkeypatch) -> None:
+    """Too little history must produce silence, not a fabricated budget."""
+    import shc.training.autoregulation as ar
+
+    real = ar.weekly_prescription
+
+    def _none(c, **kw):
+        rx = real(c, **kw)
+        rx.capacity = {}
+        return rx
+
+    monkeypatch.setattr(ar, "weekly_prescription", _none)
+    block = ar.prescription_context_block(conn)
+    assert "OVER BUDGET" not in block
+    assert "measured capacity" not in block

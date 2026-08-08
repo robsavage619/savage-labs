@@ -2342,6 +2342,39 @@ def prescription_context_block(
     lines += [
         "Per-muscle volume targets the engine set from your performance + recovery.",
         "Prioritize muscles marked ADD and ★ emphasis; respect HOLD/CUT/DELOAD.",
+    ]
+
+    # Weekly budget. This was computed on every prescription and never rendered,
+    # so an over-prescribed week reached the planner looking exactly like a
+    # feasible one and the only available response was SILENT triage — drop
+    # whatever didn't fit and never say which. The table below is already ranked
+    # (emphasis first, then adds), so the honest handling is to publish the
+    # shortfall and name the ranking, not to quietly trim targets that the
+    # landmark logic set deliberately.
+    cap = rx.capacity or {}
+    if cap.get("feasible") is False:
+        lines += [
+            "",
+            f"⚠ **OVER BUDGET — the full table does not fit this week.** It asks for "
+            f"{cap['dedicated_demand_sets']:g} dedicated working sets against a measured "
+            f"capacity of {cap['capacity_working_sets']:g}/wk "
+            f"(your median over the last 10 weeks) — over by {cap['over_by_sets']:g}.",
+            "  Do NOT silently drop the overflow. Work DOWN the table in order: ★ emphasis "
+            "muscles get their full target first, then the other ADDs, then holds. Whatever "
+            "does not fit is a deliberate shortfall — say which muscles you cut and by how "
+            "much in the plan notes, so next week's targets inherit an honest number.",
+            "  A muscle far below MEV is re-seeded to its minimum in ONE step by design "
+            "(block initialization), so several muscles can land here at once after a "
+            "deload or a landmark change. That is the ramp working, not an error — but it "
+            "is exactly when the budget binds hardest.",
+        ]
+    elif cap.get("feasible") is True:
+        lines.append(
+            f"\nWeekly budget: {cap['dedicated_demand_sets']:g} dedicated sets against "
+            f"~{cap['capacity_working_sets']:g}/wk measured capacity — fits."
+        )
+
+    lines += [
         "",
         "| Muscle | Now | → Target | Action | Why |",
         "|--------|-----|----------|--------|-----|",

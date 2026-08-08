@@ -152,8 +152,9 @@ echo "  Web launch PID $WEB_LAUNCH_PID"
 # Wait for ports
 for i in {1..20}; do
   sleep 1
-  API=$(lsof -ti :8000 2>/dev/null | head -1)
-  WEB=$(lsof -ti :3000 2>/dev/null | head -1)
+  # -sTCP:LISTEN here too, or an open browser tab is reported as the server.
+  API=$(lsof -ti :8000 -sTCP:LISTEN 2>/dev/null | head -1)
+  WEB=$(lsof -ti :3000 -sTCP:LISTEN 2>/dev/null | head -1)
   API_OK=$(curl -sf http://127.0.0.1:8000/api/state/today >/dev/null 2>&1 && echo yes || true)
   WEB_OK=$(curl -sf http://127.0.0.1:3000/ >/dev/null 2>&1 && echo yes || true)
   [[ -n "$API" && -n "$WEB" && "$API_OK" == yes && "$WEB_OK" == yes ]] && break
