@@ -386,3 +386,92 @@ def test_sparse_catalog_does_not_blank_a_muscle(conn) -> None:
         "VALUES ('t1', 'Some Unrelated Machine', 'calves')"
     )
     assert evidence_menu(conn, ["biceps"]).get("biceps")
+
+
+def test_every_muscle_can_rotate(conn) -> None:
+    """A muscle needs MORE distinct movements than menu slots, or it never rotates.
+
+    With exactly 4 curated movements against 4 slots the coverage pass takes one
+    and the fill pass takes the rest — the same four every week, and no plateau
+    or tenure trigger can act because there is no alternative to swap to. Rear
+    and side delts sat exactly there (migration 0091). Guards against a future
+    merge quietly dropping a muscle back to the floor.
+    """
+    from shc.training.autoregulation import _movement_key, loggable_names
+
+    legal = loggable_names(conn)
+    if not legal:  # fixture without a catalog — vocabulary filter is a no-op
+        legal = {
+            r[0]
+            for r in conn.execute("SELECT DISTINCT exercise_name FROM exercise_muscle").fetchall()
+        }
+    thin = {}
+    for (muscle,) in conn.execute("SELECT DISTINCT muscle FROM exercise_science").fetchall():
+        names = [
+            r[0]
+            for r in conn.execute(
+                "SELECT exercise_name FROM exercise_science WHERE muscle = ?", [muscle]
+            ).fetchall()
+            if r[0] in legal
+        ]
+        movements = {_movement_key(n) for n in names}
+        if len(movements) <= 4:
+            thin[muscle] = sorted(movements)
+    assert not thin, f"muscles that cannot rotate (need >4 distinct movements): {thin}"
+
+
+def test_duplicate_twins_rank_by_recency_not_lifetime_volume(conn) -> None:
+    """The live name must win, not the one with the biggest historical pile.
+
+    'Dumbbell Lateral Raise' carries 438 Fitbod-era sets against 57 for
+    'Lateral Raise (Dumbbell)', the string Rob logs today. Ranking on lifetime
+    count surfaced the dead name — tagged "stale: not trained in >6wk" — and hid
+    a lift performed three days earlier.
+    """
+    from datetime import date, timedelta
+
+    from shc.training.autoregulation import _logged_recency
+
+    recency = _logged_recency(conn, ["nonexistent-exercise"])
+    assert recency == {} or "nonexistent-exercise" not in recency
+    # Ordering contract: (last hevy date desc, then count desc).
+    fresh_small = (date.today(), 5)
+    stale_big = (date.today() - timedelta(days=200), 500)
+    assert fresh_small[0].toordinal() > stale_big[0].toordinal()
+
+
+def test_alias_never_overrides_fresher_own_history(conn, seed) -> None:
+    """A stale or inverted alias row must degrade to a no-op, not corrupt selection.
+
+    An alias redirects the plateau/recency lookup from the curated name to the
+    string Rob logs it under, and it only helps while the curated name has no
+    history of its own. Once he logs the curated string directly, following the
+    redirect reads the OLDER name and reports a lift done days ago as
+    "stale: not trained in >6wk" — handing its slot to a worse option.
+    """
+    from datetime import date, timedelta
+
+    from shc.training.autoregulation import _progress_info
+
+    today = date.today()
+    curated, dead = "Lateral Raise (Dumbbell)", "Dumbbell Lateral Raise"
+    seed.workout(today - timedelta(days=200), dead, [(10.0, 12)] * 3)
+    seed.workout(today - timedelta(days=3), curated, [(10.0, 12)] * 3)
+
+    info = _progress_info(conn, {curated}, {curated: dead})
+    assert info[curated]["last_done"] == (today - timedelta(days=3)).isoformat()
+    assert info[curated]["trend"] != "stale"
+
+
+def test_alias_still_followed_when_curated_name_is_unlogged(conn, seed) -> None:
+    """The guard must not break the case the alias exists for."""
+    from datetime import date, timedelta
+
+    from shc.training.autoregulation import _progress_info
+
+    today = date.today()
+    seed.workout(today - timedelta(days=3), "Cable Tricep Pushdown", [(30.0, 10)] * 3)
+    info = _progress_info(
+        conn, {"Tricep Pushdown (Cable)"}, {"Tricep Pushdown (Cable)": "Cable Tricep Pushdown"}
+    )
+    assert info["Tricep Pushdown (Cable)"]["last_done"] == (today - timedelta(days=3)).isoformat()

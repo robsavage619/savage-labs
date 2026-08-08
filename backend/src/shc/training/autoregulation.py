@@ -1063,7 +1063,20 @@ def _progress_info(
     stale_before = date.today() - timedelta(weeks=_STALE_TREND_WEEKS)
     info: dict[str, dict] = {}
     for name in names:
+        # An alias is only useful while the curated name has NO history of its
+        # own. Once Rob logs under the curated string directly, following the
+        # redirect reads the OLDER name's history and reports a lift done days
+        # ago as "stale: not trained in >6wk" — which then hands its slot to a
+        # worse option. Seen live on Lateral Raise (Dumbbell) (own history
+        # 2026-08-05, alias target last logged 2026-02-17) and on Bulgarian Split
+        # Squat (Dumbbell). Prefer whichever name Rob actually trained most
+        # recently, so a stale or inverted alias row degrades to a no-op instead
+        # of corrupting the selection signal.
         logged = al.get(name, name)
+        if logged != name:
+            own, aliased = last_done.get(name), last_done.get(logged)
+            if own and (not aliased or own > aliased):
+                logged = name
         ld = last_done.get(logged)
         try:
             ps = score_exercise(conn, logged)
@@ -1212,21 +1225,29 @@ def unloggable_curated(conn: duckdb.DuckDBPyConnection) -> list[str]:
     return sorted(r[0] for r in rows if r[0] not in loggable)
 
 
-def _logged_set_counts(conn: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, int]:
-    """Working-set counts per exercise name — which twin Rob actually trains under."""
+def _logged_recency(conn: duckdb.DuckDBPyConnection, names: list[str]) -> dict[str, tuple]:
+    """``name -> (last_hevy_date, set_count)`` — which twin Rob trains under NOW.
+
+    Recency leads, and it must: 'Dumbbell Lateral Raise' carries 438 lifetime
+    sets from the Fitbod era against 57 for 'Lateral Raise (Dumbbell)', the name
+    he actually logs today. Ranking the pair by lifetime volume surfaced the dead
+    string — tagged "stale: not trained in >6wk" — and hid the lift he did three
+    days ago. Lifetime count only breaks ties between names of equal recency.
+    """
     if not names:
         return {}
     try:
         rows = conn.execute(
-            "SELECT exercise, COUNT(*) FROM workout_sets "
-            "WHERE COALESCE(is_warmup, FALSE) = FALSE AND exercise IN "
-            f"({','.join('?' * len(names))}) GROUP BY exercise",
+            "SELECT ws.exercise, MAX(CASE WHEN w.source = 'hevy' THEN w.started_at::DATE END), "
+            "COUNT(*) FROM workout_sets ws JOIN workouts w ON w.id = ws.workout_id "
+            "WHERE COALESCE(ws.is_warmup, FALSE) = FALSE AND ws.exercise IN "
+            f"({','.join('?' * len(names))}) GROUP BY ws.exercise",
             names,
         ).fetchall()
     except Exception as exc:  # noqa: BLE001 — tie-break only, never load-bearing
-        log.debug("logged set counts unavailable: %s", exc)
+        log.debug("logged recency unavailable: %s", exc)
         return {}
-    return {r[0]: int(r[1] or 0) for r in rows}
+    return {r[0]: (r[1] or date.min, int(r[2] or 0)) for r in rows}
 
 
 def evidence_menu(
@@ -1308,9 +1329,16 @@ def evidence_menu(
         # one is "swapped in" to replace the other, burning a rotation on a
         # rename. Prefer the twin Rob has actually logged (it carries the real
         # progression history); tie-break on name for determinism.
-        logged_counts = _logged_set_counts(conn, [c[0] for c in cands])
+        recency = _logged_recency(conn, [c[0] for c in cands])
         by_movement: dict[str, tuple] = {}
-        for c in sorted(cands, key=lambda r: (-logged_counts.get(r[0], 0), r[0])):
+        for c in sorted(
+            cands,
+            key=lambda r: (
+                -recency.get(r[0], (date.min, 0))[0].toordinal(),
+                -recency.get(r[0], (date.min, 0))[1],
+                r[0],
+            ),
+        ):
             by_movement.setdefault(f"{c[1]}|{_movement_key(c[0])}", c)
         cands = sorted(by_movement.values(), key=lambda r: r[0])
         if cands:
