@@ -4,6 +4,58 @@ All notable changes to this project. Dates are commit dates (Pacific time).
 
 ---
 
+## 2026-08-08 (exercise selection: the rotation was naming lifts I can't log)
+
+I kept seeing the same exercises and assumed the selection engine wasn't smart. It was — it ranked, it rotated, it fired plateau and tenure triggers on schedule. Then it emitted a name that doesn't exist in my Hevy catalog, the plan couldn't write it, and the lift it was supposed to replace stayed in. The intelligence was real and it was landing on the floor.
+
+Over 90 days: 49 training days, 50 distinct exercises, but Face Pull and Lateral Raise each on **23 of 49 days** against a 574-exercise catalog.
+
+### The vocabulary boundary
+
+- **59 of 167 curated exercise names did not exist in the catalog the planner is told to quote verbatim.** The context hands the model an `AVAILABLE HEVY EXERCISES` list and an evidence-ranked menu, and the two were drawn from different namespaces that had quietly diverged. On 2026-08-08 the engine actuated seven rotations and **four named a lift that could not be written** — `Hammer Curls`, `Chin-Up`, `Dumbbell Bench Press`, `Cable Rope Overhead Triceps Extension`. Nothing enforced the instruction, so there was no error to notice: the swap simply had no effect.
+
+- **Two of those four were the same movement under a different spelling.** The curated catalog carried 17 movements under two name conventions each — `Bench Press (Dumbbell)` / `Dumbbell Bench Press`, `Overhead Triceps Extension (Cable)` / `Cable Rope Overhead Triceps Extension`. The twins also disagreed with each other on attributes (`Leg Extension` tagged high stimulus-to-fatigue, `Leg Extension (Machine)` moderate), and since selection sorts on those, the better-tagged twin won — systematically the unloggable one, which also looked "fresh" because all the training history sat on its sibling. The 4–6 week rotation trigger was being consumed by renames.
+
+- **`loggable_names()` is now the planner's legal vocabulary:** the Hevy template catalog plus anything logged with `source = 'hevy'`. Fitbod-era strings (`Hammer Curls`, `Leg Extension`, `Cable Row`) are deliberately excluded — they must keep crediting a decade of historical volume, but I cannot select one in the app today, so programming it produces a session I can't log. Provenance is the exact test; recency is only a proxy for it. A movement-identity key collapses punctuation and word-order duplicates while *preserving* equipment words, and the menu fails safe per muscle: if filtering would empty a muscle it keeps the candidates and warns, because a blank menu reads as "nothing to train here."
+
+- **Validator #24 rejects any plan naming something outside that vocabulary.** Previously the load checks *skipped* an unknown exercise rather than failing it, so an unloggable lift sailed through and was then invisible to e1RM, plateau detection, and volume crediting.
+
+  Migration 0089 reconciles 33 duplicate pairs by clone-then-retire: the loggable survivor inherits the science, the duplicate's citation clears so it leaves the menu, and its crediting row **survives** — several carry four-figure Fitbod histories that an in-place rename would have orphaned. Alias redirects are inverted rather than dropped so sets logged under either name still credit. Unwritable recommendations went **18 → 0**; unwritable rotations **4 → 0**.
+
+> Twenty-five curated names still sit outside the vocabulary. They are filtered, harmless, and reported at `/api/training/alias-gaps` under `unloggable`. They need a real judgment call — an earlier automated pass paired seated with standing calf raises, and a chest fly with a rear-delt fly — so they stay unresolved rather than guessed.
+
+### Two volume authorities, and the lower one was winning
+
+- **Abs asked for 12–20 sets/week and drew 6.** The curated `muscle_development` brief and the fitted `muscle_volume_targets` row are printed two lines apart in the same planner block, and the prescription followed the fitted one. Six sets across four sessions is one exercise per session — which is exactly what I'd been getting.
+
+- **Abs was never in `muscle_emphasis`.** It held only glutes and biceps. The `EMPHASIS_MUSCLES` constant in code additionally listed `traps`, which the table has never contained — dead code, since a non-empty table wins. Code and data now agree.
+
+- **The undertrained-fit guard missed at exactly the boundary.** Landmarks are fitted as percentiles of weeks actually performed, so a muscle never trained hard can never be prescribed hard. There's a guard that floors an obviously habit-driven fit to population values — but it tested `fitted_MRV < population_MRV × 0.5`, and quads sat at fitted 10 against population 20. `10 < 10` is false, so quads kept a personal *ceiling* of 10 while its brief asked for 12–18. Now `<=`, and it additionally floors a fitted MEV that falls below the curated weekly low. Abs 6 → 12, quads 8 → 12, chest 10 → 12, glutes 6 → 8.
+
+### The weekly budget is published instead of silently triaged
+
+`_weekly_capacity()` ran on every prescription and its verdict was never rendered. An over-prescribed week reached the planner looking identical to a feasible one, so dropping whatever didn't fit — without saying which — was the only available response. Raising eight MEV floors at once pushed demand to 66.6 dedicated sets against a measured capacity of 59/wk, which is now stated above the table with the triage order named and an instruction to record what was cut.
+
+I deliberately did **not** rate-limit the climb to MEV, which was the obvious companion change. That exemption is intentional: a muscle far below MEV is re-seeded in one step because crawling it at +2/wk left a recovered athlete with a one-set-per-muscle session. Several muscles seeding at once is that ramp working, at the moment the budget binds hardest — so the block says so rather than quietly clamping targets the landmark logic set on purpose.
+
+### Rear and side delts could not rotate at all
+
+Measured per muscle rather than trusted: both had exactly **4 distinct movements against 4 menu slots**, so the coverage pass took one and the fill pass took the rest, forever — no alternative existed for a plateau trigger to swap to. Neither had a single name-blocked option; they were simply under-curated. Migration 0091 curates four more by copying science from already-vetted, mechanically-equivalent rows, carrying `UNGROUNDED` provenance flags forward rather than laundering them. Every muscle can now rotate, and rear delts actuates a swap for the first time.
+
+Two adjacent defects fell out of that:
+
+- **Duplicate twins were ranked by lifetime set count.** `Dumbbell Lateral Raise` (438 Fitbod sets, last February) beat `Lateral Raise (Dumbbell)` (57 sets, source `hevy`, last *three days ago*) — surfacing a dead string tagged "stale: not trained in >6wk" while hiding the lift I'd actually just done. Ranking is now by most-recent Hevy log.
+
+- **`exercise_alias` is read in opposite directions by its two consumers.** The plateau lookup maps curated name → logged string; volume crediting joins the other way. One row serves both only while the curated name has no history of its own — once I log it directly, following the redirect reads the older name. `_progress_info` now prefers whichever name was trained most recently, so a stale or inverted row degrades to a no-op. That also fixed a pre-existing misdirection on Bulgarian Split Squat.
+
+### Also
+
+- **`dev-restart.sh` was SIGTERM-ing my browser and then dying.** `lsof -ti :3000` matches any socket on the port, including client connections, so an open Chrome tab was in the kill list; since Chrome isn't the script's to reap it then aborted under `set -e` before starting uvicorn. A failing `PIDS=$(lsof …)` assignment aborts too, so the case that most needs a restart — the API already dead — silently did nothing. The parent uvicorn had survived five days this way, with `--reload` swapping only the child. Worth knowing: a `.sql`-only change doesn't trigger that reload, so a new migration won't apply until the process genuinely restarts.
+
+> **Verified end-to-end.** A full plan built from the engine's own prescription passes the validator, and the three names the old engine was actively recommending — `Chin-Up`, `Hammer Curls`, `Cable Rope Overhead Triceps Extension` — are now rejected by #24. Three of six lifts in that session also needed their loads corrected: the deterministic prescriptor and the RPE-coherence check disagreed, and on the Pallof press double-progression had walked the load down from 90 lb to 70 by anchoring on the most recent session rather than the best one. That disagreement looks systematic and is not yet fixed.
+
+---
+
 ## 2026-07-25 (stale-plan fix, dashboard restructure, research-program lifecycle)
 
 Three passes on things the UI was asserting that weren't true: a completed session still presented as today's action, a readiness number that appeared to disagree with itself, and a research program that could not display a conclusion.
