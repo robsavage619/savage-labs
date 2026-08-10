@@ -167,6 +167,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "grip-strength",
         "compression-morbidity",
         "progression-by-training",
+        "trainability",
         "relative-vs-absolute",
         "sport-specific",
         "force-velocity",
@@ -265,8 +266,20 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
 
 RELEVANT_DOMAINS = {"training", "nutrition", "sleep", "hrv", "health"}
 
+_EXCLUDED_DOMAIN = "other"  # not in RELEVANT_DOMAINS — never reaches the planner
+
+# Floor for the in-scope note count. Admission is evidence-based, so a broken
+# tag/domain table would silently starve the planner instead of erroring; this
+# turns that into a visible warning at build time.
+_MIN_EXPECTED_RELEVANT = 250
+
 # Frontmatter tags that imply a domain when the filename keyword tables miss.
 # Lets note authors steer classification without touching this module.
+#
+# The `resistance-training` / `muscle-hypertrophy` / `exercise-science` block
+# is load-bearing: those are the most common tags in the health corpus, and
+# without them notes like `kassiano-2024-preacher-incline-curl-regional.md`
+# reach the planner only by accident. See the 2026-08-09 audit.
 _TAG_DOMAIN_HINTS: dict[str, str] = {
     "nutrition": "nutrition",
     "diet": "nutrition",
@@ -285,22 +298,84 @@ _TAG_DOMAIN_HINTS: dict[str, str] = {
     "health": "health",
     "bloodwork": "health",
     "biomarker": "health",
+    # Core exercise-science vocabulary — the health corpus's dominant tags.
+    "resistance-training": "training",
+    "muscle-hypertrophy": "training",
+    "hypertrophy": "training",
+    "strength-training": "training",
+    "exercise-science": "training",
+    "exercise-prescription": "training",
+    "exercise-physiology": "training",
+    "exercise-selection": "training",
+    "regional-hypertrophy": "training",
+    "periodization": "training",
+    "programming": "training",
+    "biomechanics": "training",
+    "emg": "training",
+    "motor-learning": "training",
+    "injury-prevention": "training",
+    "rehabilitation": "training",
+    # Conditioning + monitoring share the `hrv` bucket.
+    "endurance-training": "hrv",
+    "training-monitoring": "hrv",
+    "athlete-monitoring": "hrv",
+    "training-load": "hrv",
+    "vo2max": "hrv",
+    "polarized-training": "hrv",
+    "sports-performance": "hrv",
+    "wearables": "hrv",
+    "heart-rate": "hrv",
+}
+
+# Values of the vault's `domains:` frontmatter that place a note inside SHC's
+# health/training scope, mapped to the local domain bucket. The vault became
+# multi-domain on 2026-08-08 (sports business, coding agents, governance), so a
+# note that explicitly declares its domains and names none of these is out of
+# scope regardless of what its filename happens to contain — this is what stops
+# `huyen-2022-ch4-training-data.md` matching the "training" keyword table.
+_HEALTH_FRONTMATTER_DOMAINS: dict[str, str] = {
+    "exercise-science": "training",
+    "sport-science": "training",
+    "sports-science": "training",
+    "physiology": "training",
+    "biomechanics": "training",
+    "sleep-science": "sleep",
+    "nutrition": "nutrition",
+    "health": "health",
+    "medicine": "health",
+    "longevity": "health",
 }
 
 
-def _classify_domain(stem: str, tags: list[str] | None = None) -> str:
-    """Classify a note into a domain (fail-open).
+def _classify_domain(
+    stem: str,
+    tags: list[str] | None = None,
+    frontmatter_domains: list[str] | None = None,
+) -> str:
+    """Classify a note into a domain, admitting it only on positive evidence.
 
     Resolution order:
-      1. filename-keyword tables (``_DOMAIN_KEYWORDS``)
-      2. frontmatter-tag hints (``_TAG_DOMAIN_HINTS``)
-      3. fall back to ``training`` so the note stays retrievable and is ranked
-         purely on content/semantic similarity — never silently dropped.
+      1. explicit ``domains:`` frontmatter — authoritative in both directions.
+         A note declaring only non-health domains is excluded even if its
+         filename matches a keyword.
+      2. filename-keyword tables (``_DOMAIN_KEYWORDS``)
+      3. frontmatter-tag hints (``_TAG_DOMAIN_HINTS``)
+      4. no positive evidence → ``_EXCLUDED_DOMAIN``
 
-    The previous behaviour returned ``other`` on a miss, which excluded the
-    note from ``RELEVANT_DOMAINS`` permanently (fail-closed). Unclassifiable
-    notes are now logged once at build time and remain searchable.
+    Step 4 used to fall back to ``training`` (fail-open), which was safe while
+    the vault was a health corpus. Once it went multi-domain the fallback put
+    brand-positioning and LLM notes into the planner's catalog and citation
+    allow-list, so admission is now evidence-based. The tag hints in step 3
+    were widened at the same time so the real training notes that fail-open
+    used to rescue are classified properly rather than by accident.
     """
+    for declared in frontmatter_domains or ():
+        domain = _HEALTH_FRONTMATTER_DOMAINS.get(declared.lower())
+        if domain:
+            return domain
+    if frontmatter_domains:
+        return _EXCLUDED_DOMAIN
+
     lower = stem.lower()
     for domain, keywords in _DOMAIN_KEYWORDS.items():
         if any(k in lower for k in keywords):
@@ -309,11 +384,7 @@ def _classify_domain(stem: str, tags: list[str] | None = None) -> str:
         domain = _TAG_DOMAIN_HINTS.get(tag.lower())
         if domain:
             return domain
-    log.debug("Vault note %s unclassifiable by keyword/tag — retained as 'training'", stem)
-    return _FALLBACK_DOMAIN
-
-
-_FALLBACK_DOMAIN = "training"  # fail-open bucket for unclassifiable notes
+    return _EXCLUDED_DOMAIN
 
 
 # ── Tag → signal mapping ──────────────────────────────────────────────────────
@@ -502,12 +573,24 @@ class VaultIndex:
             count += 1
         self._embed_relevant_notes()
         self._built = True
+        relevant = sum(1 for n in self._notes.values() if n.domain in RELEVANT_DOMAINS)
         log.info(
-            "VaultIndex built: %d notes (%d relevant, semantic=%s)",
+            "VaultIndex built: %d notes (%d relevant, %d out-of-scope, semantic=%s)",
             count,
-            sum(1 for n in self._notes.values() if n.domain in RELEVANT_DOMAINS),
+            relevant,
+            count - relevant,
             "on" if any(n.embedding is not None for n in self._notes.values()) else "off",
         )
+        if relevant < _MIN_EXPECTED_RELEVANT:
+            # The vault is multi-domain; a collapse in the relevant count means
+            # classification broke, not that the research vanished. Say so
+            # rather than quietly planning off a thin corpus.
+            log.warning(
+                "VaultIndex: only %d in-scope notes (expected ≥%d) — domain "
+                "classification may be mis-scoped; planner grounding is degraded",
+                relevant,
+                _MIN_EXPECTED_RELEVANT,
+            )
 
     def _embed_relevant_notes(self) -> None:
         """Batch-encode relevant notes for semantic retrieval. No-op if model unavailable."""
@@ -530,7 +613,7 @@ class VaultIndex:
     def _parse(filename: str, raw: str) -> VaultNote:
         tags = _parse_frontmatter_tags(raw)
         content = _strip_frontmatter(raw)
-        domain = _classify_domain(Path(filename).stem, tags)
+        domain = _classify_domain(Path(filename).stem, tags, _parse_frontmatter_domains(raw))
 
         # Title: first `# ` heading in content, or humanised filename
         title = Path(filename).stem.replace("-", " ").title()
@@ -794,6 +877,28 @@ def _parse_frontmatter_tags(raw: str) -> list[str]:
             if t:
                 tags.append(t)
     return [t.lower() for t in tags if t]
+
+
+def _parse_frontmatter_domains(raw: str) -> list[str]:
+    """Read the vault's ``domains:`` frontmatter list (empty when absent)."""
+    if not raw.startswith("---"):
+        return []
+    end = raw.find("---", 3)
+    if end == -1:
+        return []
+    fm = raw[3:end]
+    inline = re.search(r"^domains:\s*\[([^\]]*)\]", fm, re.MULTILINE)
+    if inline:
+        return [d.strip().strip("\"'").lower() for d in inline.group(1).split(",") if d.strip()]
+    block = re.search(r"^domains:\s*\n((?:\s*-\s*\S+.*\n?)+)", fm, re.MULTILINE)
+    if block:
+        out = []
+        for line in block.group(1).splitlines():
+            d = line.strip().lstrip("-").strip().strip("\"'")
+            if d:
+                out.append(d.lower())
+        return out
+    return []
 
 
 def _extract_sections(text: str) -> str:
