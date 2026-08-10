@@ -83,3 +83,44 @@ def test_no_positive_evidence_is_excluded() -> None:
 def test_filename_keyword_still_classifies_untagged_notes() -> None:
     assert _classify_domain("schoenfeld-2016-rt-volume-hypertrophy", [], []) == "training"
     assert _classify_domain("epstein-2013-ch6-trainability-of-muscle", [], []) == "training"
+
+
+@pytest.mark.parametrize(
+    "stem",
+    [
+        "agentbench-evaluating-llm-agents",  # "bench" inside "agentbench"
+        "llm-as-judge-mt-bench",  # "bench" inside "mt-bench"
+        "mteb-massive-text-embedding-benchmark",  # "bench" inside "benchmark"
+        "faber-2007-tactical-asset-allocation",  # "set-" inside "asset-allocation"
+        "measurement-demands-judgment",  # "rem" inside "measurement"
+        "ml-requirements-framework",  # "rem" inside "requirements"
+        "winston-2022-ch1-pythagorean-theorem",  # "rem" inside "theorem"
+        "sharpe-1966-mutual-fund-performance",  # "rpe" inside "sharpe"
+        "tetlock-2015-ch8-perpetual-beta",  # "rpe" inside "perpetual"
+    ],
+)
+def test_short_generic_keywords_do_not_collide_with_unrelated_filenames(stem: str) -> None:
+    """bench/set-/rem/rpe used to substring-match unrelated filenames.
+
+    Discovered 2026-08-09 once the vault went multi-domain: these four-ish
+    character tokens are common inside ordinary English compounds
+    ("agentbench", "measurement", "sharpe", "perpetual"), and none of them are
+    load-bearing for a real vault note that isn't already caught by a more
+    specific keyword (e.g. "training-load", "resistance").
+    """
+    assert _classify_domain(stem, [], []) not in RELEVANT_DOMAINS
+
+
+def test_ambiguous_biomechanics_tag_does_not_admit_baseball_notes() -> None:
+    """The `biomechanics` tag is used by both exercise-science and Driveline
+
+    baseball trade-eval notes; only the exercise-science *filename* keyword
+    or an explicit `domains:` declaration should admit a note, not the tag
+    alone.
+    """
+    domain = _classify_domain(
+        "lindbergh-2019-ch4-first-principles",
+        ["trade-eval", "baseball", "player-development", "driveline", "biomechanics"],
+        [],
+    )
+    assert domain not in RELEVANT_DOMAINS
