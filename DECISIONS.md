@@ -2,6 +2,18 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-08-10 — The sleep history has two eras, and no live code spans the seam
+
+**Context.** Investigating a supplement question turned up what looked like a collapse in sleep quality: REM fell from ~140 min/night (31% of sleep) across 2024 to ~95 min (22%) from 2025-03 onward, sustained 17 months with no recovery, and 2026-08 is the lowest month on record at 19.5%. Read naively against a diagnosed OSA and an off-CPAP status, that is an alarming physiological finding. It is almost certainly not one.
+
+**Mechanism.** Everything that should worsen if the cause were physiological instead improved across the same seam. Disturbances fell 13 → 9, awake minutes fell ~70 → ~26, sleep efficiency rose 88% → 94%, and respiratory rate stayed flat at ~13.6. No sleep pathology halves your awakenings while reshuffling your stage percentages; a re-scoring does. The seam also lands exactly on a known ingest boundary — the WHOOP CSV export ends 2025-02-15 and API sync takes over — and the `source` column reads `whoop` on both sides, so it cannot discriminate. A second table corroborates independently: `whoop_journal`, populated the same day, also terminates at 2025-02-15. Two unrelated tables ending in the same week is a data handoff, not a physiology.
+
+Ruled out: Lexapro. It restarted 2026-02-06, a year after the step, and REM ticked *up* in the months following. Not ruled out, and not distinguishable with the data on hand: CPAP discontinuation (the date was never recorded — only "confirmed off by 04/2026").
+
+**Decision.** No guard, no cutover constant, no truncation of the pre-2025-03 rows. Every live consumer of `sleep` reads a bounded window: `metrics._sleep` and the consistency calc use 14 days, `self_learning._historical_sleep_metric` uses `_SLEEP_LOOKBACK_DAYS = 180`, and the widest `lab_questions.window_days` is 365. The seam is 528 days back and recedes by one day per day, so no rolling window can reach it again. Writing a boundary constant that nothing consumes would be a speculative abstraction defending an unreachable state.
+
+**Consequences.** `personal_sleep_bands` is clean and stays clean — it fits `disturbance_count` and `sleep_cycle_count`, both of which shifted at the seam, but on a 180-day window that cannot reach 2025-03. The one all-time query, `dashboard.py`'s top-5 longest nights, reads duration only, which the re-staging does not touch. What stays exposed is **ad-hoc analysis**: any full-history query invites exactly the wrong conclusion, and this one nearly produced it. Do not compare sleep-architecture metrics across 2025-03 without saying which era each number came from. If the CPAP stop date ever surfaces, that would make the physiological share of the step testable; until then the honest statement is that the ruler changed and the size of any real change underneath is unknown.
+
 ## 2026-08-06 — WHOOP reauth kept dying because restarts abandoned in-flight token refreshes
 
 **Context.** Rob: "figure out why it keeps turning off every day." The API log pinpointed one clean break — 2026-08-05 18:00:14, `POST oauth2/token` → 400 — after which every subsequent access attempt 401'd and every refresh attempt 400'd on the same dead token, across 7+ separate calls spanning 17 hours and multiple restarts. Refresh tokens don't self-heal; once dead, every future call fails until the full OAuth consent flow runs again (`whoop.py::_refresh`, raises `WHOOPAuthError`).
