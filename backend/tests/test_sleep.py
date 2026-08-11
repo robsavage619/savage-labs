@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from shc.metrics import _sleep
+from shc.metrics import _recovery, _sleep
 
 
 def test_empty_returns_blank_metrics(conn, today: date) -> None:
@@ -89,3 +89,15 @@ def test_spo2_reaches_the_sleep_score(conn, seed, today: date) -> None:
 
     assert good is not None and bad is not None
     assert bad < good
+
+
+def test_recovery_counts_14d_spo2_burden(conn, seed, today: date) -> None:
+    # 6 breaching nights, 4 clean, plus one outside the window that must not count.
+    for i in range(6):
+        seed.recovery(today - timedelta(days=i), spo2=93.5)
+    for i in range(6, 10):
+        seed.recovery(today - timedelta(days=i), spo2=97.0)
+    seed.recovery(today - timedelta(days=20), spo2=88.0)
+    r = _recovery(conn, today)
+    assert r.spo2_nights_14d == 10
+    assert r.spo2_lt95_nights_14d == 6

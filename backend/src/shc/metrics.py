@@ -139,6 +139,11 @@ class RecoveryMetrics:
     spo2_pct: float | None = (
         None  # WHOOP recovery-night SpO2 (clinical: <95% sleep-disordered breathing)
     )
+    # Chronic oxygenation burden. A single night's mean is noisy and <95% alone is a
+    # screening threshold, not an exercise contraindication — so the burden informs,
+    # it never gates. Only sustained <92% caps intensity.
+    spo2_nights_14d: int | None = None
+    spo2_lt95_nights_14d: int | None = None
     user_calibrating: bool | None = None  # WHOOP still calibrating — score is unreliable
     respiratory_rate_baseline_28d: float | None = None
     respiratory_rate_delta: float | None = (
@@ -781,6 +786,15 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
         m.skin_temp = float(rec[4]) if rec[4] is not None else None
         m.spo2_pct = float(rec[5]) if rec[5] is not None else None
         m.user_calibrating = bool(rec[6]) if rec[6] is not None else None
+
+    spo2_burden = conn.execute(
+        "SELECT COUNT(spo2), COUNT(*) FILTER (WHERE spo2 < 95.0) "
+        "FROM recovery WHERE date > $s AND date <= $t",
+        {"s": (today - timedelta(days=14)).isoformat(), "t": today.isoformat()},
+    ).fetchone()
+    if spo2_burden and spo2_burden[0]:
+        m.spo2_nights_14d = int(spo2_burden[0])
+        m.spo2_lt95_nights_14d = int(spo2_burden[1])
     if hrv_base:
         hrv_n = int(hrv_base[3]) if hrv_base[3] is not None else 0
         # Require a minimum number of valid nights — a thin baseline gives an
@@ -1474,6 +1488,8 @@ _ILLNESS_CORROB_RECOVERY = 50.0  # WHOOP recovery clearly depressed (not just ye
 _ILLNESS_CORROB_RHR_PCT = 8.0  # RHR meaningfully elevated vs 28d baseline
 _GREEN_RECOVERY_MIN = 67.0  # WHOOP green floor — affirmative "recovered" evidence
 _SKIN_TEMP_FEVER_DELTA = 2.0  # °F rise too large to be peripheral vasodilation alone
+_SPO2_BURDEN_MIN_NIGHTS = 10  # too few scored nights to call a 14d burden
+_SPO2_BURDEN_FLAG_NIGHTS = 8  # clear majority of the window below the screening line
 
 
 def _illness_gate_corroborated(rec: RecoveryMetrics) -> bool:
@@ -1634,6 +1650,21 @@ def _gates(
             # Clinical threshold for sleep-disordered breathing / hypoxia overnight.
             g.max_intensity = "low" if g.max_intensity == "high" else g.max_intensity
             reasons.append(f"Overnight SpO₂ {rec.spo2_pct:.1f}% < 92% — cap intensity LOW")
+    # Chronic sub-95% burden is a screening finding, not a training decision: it says
+    # "get a sleep study", not "lift lighter", so it never touches max_intensity. Read
+    # over 14 nights because one night's mean is noisy, and reported as a count so a
+    # worsening trend is legible rather than collapsing to a boolean.
+    if (
+        rec.spo2_nights_14d is not None
+        and rec.spo2_nights_14d >= _SPO2_BURDEN_MIN_NIGHTS
+        and rec.spo2_lt95_nights_14d is not None
+        and rec.spo2_lt95_nights_14d >= _SPO2_BURDEN_FLAG_NIGHTS
+    ):
+        reasons.append(
+            f"Overnight SpO₂ < 95% on {rec.spo2_lt95_nights_14d} of "
+            f"{rec.spo2_nights_14d} nights — chronic desaturation burden, "
+            "not capping; warrants a sleep study, not a lighter session"
+        )
     if rec.user_calibrating:
         # WHOOP recovery score is unreliable while calibrating — flag it but don't gate.
         reasons.append("WHOOP user_calibrating=true — recovery score may be unreliable")

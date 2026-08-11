@@ -641,3 +641,41 @@ def test_personal_cycle_band_never_tightens_above_population(conn) -> None:
     sleep.sleep_cycle_count_last = 4  # below personal 5, at population floor 4 (not < 4)
     g = _gates(rec, sleep, load, chk, readiness, None, conn=conn)
     assert g.max_intensity == "high"
+
+
+# ── chronic SpO2 burden: says it out loud, never gates ───────────────────────
+
+
+def _gate_with_spo2(**spo2_fields):
+    _, sleep, load, chk, readiness = _baseline_gate_inputs()
+    rec = RecoveryMetrics(**spo2_fields)
+    return _gates(rec, sleep, load, chk, readiness, None, deload_cooldown=False)
+
+
+def test_spo2_chronic_burden_flags_without_gating() -> None:
+    # <95% is a screening threshold for sleep-disordered breathing, not an exercise
+    # contraindication. The burden must be said out loud but must NOT cap intensity —
+    # otherwise a chronic finding caps Rob 3 nights in 4 and the engine is useless.
+    g = _gate_with_spo2(spo2_nights_14d=14, spo2_lt95_nights_14d=14)
+    reasons = " ".join(g.reasons)
+    assert "chronic desaturation burden" in reasons
+    assert "14 of 14 nights" in reasons
+    assert g.max_intensity != "low"
+
+
+def test_spo2_burden_silent_when_oxygenation_normal() -> None:
+    g = _gate_with_spo2(spo2_nights_14d=14, spo2_lt95_nights_14d=1)
+    assert "desaturation burden" not in " ".join(g.reasons)
+
+
+def test_spo2_burden_needs_enough_scored_nights() -> None:
+    # 9 scored nights is under _SPO2_BURDEN_MIN_NIGHTS — too thin to call a trend,
+    # even though every one of them breached.
+    g = _gate_with_spo2(spo2_nights_14d=9, spo2_lt95_nights_14d=9)
+    assert "desaturation burden" not in " ".join(g.reasons)
+
+
+def test_spo2_hard_cap_still_gates_at_92() -> None:
+    # The burden advisory must not have displaced the real gate.
+    g = _gate_with_spo2(spo2_pct=90.0, spo2_nights_14d=14, spo2_lt95_nights_14d=14)
+    assert g.max_intensity == "low"
