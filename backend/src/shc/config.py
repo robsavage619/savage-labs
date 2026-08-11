@@ -27,6 +27,7 @@ def _load_db_encryption_key() -> str | None:
         kc = None
     return kc
 
+
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -58,7 +59,16 @@ class Settings(BaseSettings):
 
     # Fitbod CSV export path (defaults to iCloud location, override via FITBOD_CSV_PATH env var)
     fitbod_csv_path: Path = Field(
-        default=Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/Health Data/Fitness Data/WorkoutExport.csv"
+        default=Path.home()
+        / "Library/Mobile Documents/com~apple~CloudDocs/Health Data/Fitness Data/WorkoutExport.csv"
+    )
+
+    # WHOOP journal export CSV — per-cycle behaviour flags, from a manual WHOOP
+    # account export. The OAuth sync path (ingest/whoop.py) pulls no journal data,
+    # so this file is the only source; coverage ends at the export date.
+    whoop_journal_csv_path: Path = Field(
+        default=Path.home()
+        / "Library/Mobile Documents/com~apple~CloudDocs/Health Data/Fitness Data/my_whoop_data_2025_02_16/journal_entries.csv"
     )
 
     # Security — prefer Keychain over .env (see _load_db_encryption_key)

@@ -126,6 +126,29 @@ def ingest_fitbod(csv_path: str | None, rebuild: bool) -> None:
     )
 
 
+@main.command("ingest-whoop-journal")
+@click.option(
+    "--csv", "csv_path", default=None, help="Path to journal_entries.csv (auto-detected if omitted)"
+)
+def ingest_whoop_journal_cmd(csv_path: str | None) -> None:
+    """Ingest a WHOOP export journal_entries.csv into whoop_journal."""
+    from pathlib import Path
+
+    from shc.config import settings
+    from shc.ingest.whoop_journal import ingest_whoop_journal as _ingest
+
+    init_db()
+    path = Path(csv_path) if csv_path else settings.whoop_journal_csv_path
+    click.echo(f"Loading WHOOP journal from {path} ...")
+    result = _ingest(path)
+    click.echo(
+        f"Done: {result['inserted']} inserted, {result['updated']} updated, "
+        f"{result['skipped']} skipped ({result['rows']} rows in CSV)"
+    )
+    for warning in result["skipped_detail"]:
+        click.echo(f"  skipped {warning}")
+
+
 @main.command("ingest-clinical-profile")
 @click.option("--yaml", "yaml_path", default=None, help="Path to clinical_profile.yml")
 def ingest_clinical_profile_cmd(yaml_path: str | None) -> None:
