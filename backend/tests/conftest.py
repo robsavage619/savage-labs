@@ -92,6 +92,17 @@ def seed(conn: duckdb.DuckDBPyConnection):
             list(row.values()),
         )
 
+    def _add_recovery(day: date, **fields) -> None:
+        rid = str(uuid.uuid4())
+        row = {"id": rid, "source": "whoop", "date": day, "content_hash": rid}
+        row.update(fields)
+        cols = list(row)
+        placeholders = ", ".join("?" for _ in cols)
+        conn.execute(
+            f"INSERT INTO recovery ({', '.join(cols)}) VALUES ({placeholders})",
+            list(row.values()),
+        )
+
     def _add_checkin(day: date, **fields) -> None:
         cols = ["date", "created_at"]
         vals: list = [day, datetime.now()]
@@ -113,6 +124,7 @@ def seed(conn: duckdb.DuckDBPyConnection):
             "med": staticmethod(_add_med),
             "cardio": staticmethod(_add_cardio),
             "sleep": staticmethod(_add_sleep),
+            "recovery": staticmethod(_add_recovery),
             "checkin": staticmethod(_add_checkin),
         },
     )

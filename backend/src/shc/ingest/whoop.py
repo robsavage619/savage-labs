@@ -325,8 +325,10 @@ def _sleep_row(r: dict) -> dict:
         "ts_in": r.get("start"),
         "ts_out": r.get("end"),
         "stages_json": str(ss),
-        # Sleep endpoint does NOT return spo2_percentage — that's on
-        # the recovery endpoint. Leave NULL here; it's joined later.
+        # Sleep endpoint does NOT return spo2_percentage — that's on the
+        # recovery endpoint, so this column stays NULL forever. Readers must
+        # LEFT JOIN recovery ON date = night_date; see metrics._sleep and
+        # dashboard.sleep_recent. Do not read sleep.spo2_avg directly.
         "spo2_avg": None,
         "respiratory_rate": score.get("respiratory_rate"),
         "hrv": None,  # HRV is on recovery, not sleep

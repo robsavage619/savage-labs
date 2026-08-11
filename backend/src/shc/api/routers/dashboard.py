@@ -169,12 +169,15 @@ async def sleep_recent(days: int = Query(7, gt=0, le=365)) -> list[dict]:
     conn = get_read_conn()
     try:
         rows = conn.execute(
-            "SELECT night_date, stages_json, spo2_avg, respiratory_rate, "
-            "epoch(ts_out - ts_in) / 3600.0 AS hours "
-            "FROM sleep WHERE night_date >= $since "
-            "  AND COALESCE(is_nap, FALSE) = FALSE "
-            "  AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
-            "ORDER BY night_date",
+            # spo2 lives on `recovery` — Whoop's sleep endpoint omits it, so
+            # sleep.spo2_avg is always NULL. See metrics._sleep for the same join.
+            "SELECT s.night_date, s.stages_json, r.spo2, s.respiratory_rate, "
+            "epoch(s.ts_out - s.ts_in) / 3600.0 AS hours "
+            "FROM sleep s LEFT JOIN recovery r ON r.date = s.night_date "
+            "WHERE s.night_date >= $since "
+            "  AND COALESCE(s.is_nap, FALSE) = FALSE "
+            "  AND s.ts_in IS NOT NULL AND s.ts_out IS NOT NULL "
+            "ORDER BY s.night_date",
             {"since": since},
         ).fetchall()
     finally:

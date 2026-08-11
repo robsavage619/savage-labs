@@ -834,18 +834,23 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
 
 
 def _sleep(conn, today: date) -> SleepMetrics:
+    # SpO2 comes from `recovery`, not `sleep`: Whoop's sleep endpoint does not
+    # return spo2_percentage, so the ingest writes sleep.spo2_avg as NULL. Join
+    # rather than denormalise — sleep and recovery sync independently, so a
+    # copied value would be NULL whenever sleep lands first.
     rows = conn.execute(
-        "SELECT night_date, epoch(ts_out-ts_in)/3600.0 AS hrs, "
-        "       sws_min, rem_min, light_min, awake_min, "
-        "       sleep_efficiency_pct, sleep_consistency_pct, sleep_performance_pct, "
-        "       disturbance_count, sleep_needed_min, spo2_avg, "
-        "       ts_in, ts_out, stages_json, "
-        "       sleep_cycle_count, in_bed_min, no_data_min, "
-        "       sleep_need_baseline_min, sleep_need_debt_min, sleep_need_strain_min, "
-        "       sleep_need_nap_min, respiratory_rate "
-        "FROM sleep WHERE night_date >= $s AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
-        "  AND COALESCE(is_nap, FALSE) = FALSE "
-        "ORDER BY night_date, ts_in",
+        "SELECT s.night_date, epoch(s.ts_out-s.ts_in)/3600.0 AS hrs, "
+        "       s.sws_min, s.rem_min, s.light_min, s.awake_min, "
+        "       s.sleep_efficiency_pct, s.sleep_consistency_pct, s.sleep_performance_pct, "
+        "       s.disturbance_count, s.sleep_needed_min, r.spo2, "
+        "       s.ts_in, s.ts_out, s.stages_json, "
+        "       s.sleep_cycle_count, s.in_bed_min, s.no_data_min, "
+        "       s.sleep_need_baseline_min, s.sleep_need_debt_min, s.sleep_need_strain_min, "
+        "       s.sleep_need_nap_min, s.respiratory_rate "
+        "FROM sleep s LEFT JOIN recovery r ON r.date = s.night_date "
+        "WHERE s.night_date >= $s AND s.ts_in IS NOT NULL AND s.ts_out IS NOT NULL "
+        "  AND COALESCE(s.is_nap, FALSE) = FALSE "
+        "ORDER BY s.night_date, s.ts_in",
         {"s": (today - timedelta(days=14)).isoformat()},
     ).fetchall()
     m = SleepMetrics()

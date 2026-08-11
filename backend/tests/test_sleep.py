@@ -18,8 +18,9 @@ def test_basic_night_hours_and_stage_percentages(conn, seed, today: date) -> Non
         datetime(2026, 5, 19, 23, 0),
         datetime(2026, 5, 20, 6, 0),
         sws_min=84, rem_min=42, light_min=294, awake_min=18,
-        spo2_avg=96.0, sleep_cycle_count=5, disturbance_count=4,
+        sleep_cycle_count=5, disturbance_count=4,
     )
+    seed.recovery(today, spo2=96.0)
     m = _sleep(conn, today)
     assert m.last_hours == 7.0
     assert m.deep_min_last == 84.0
@@ -52,3 +53,39 @@ def test_latest_night_is_used(conn, seed, today: date) -> None:
                datetime(2026, 5, 20, 6, 0))   # 8h, last night
     m = _sleep(conn, today)
     assert m.last_hours == 8.0
+
+
+def test_spo2_comes_from_recovery_not_sleep(conn, seed, today: date) -> None:
+    # Whoop's sleep endpoint omits spo2_percentage, so the ingest always writes
+    # sleep.spo2_avg = NULL. Reading that column silently drops every reading:
+    # Rob has diagnosed OSA and 880+ nights of oximetry that reached nothing.
+    seed.sleep(today, datetime(2026, 5, 19, 23, 0), datetime(2026, 5, 20, 6, 0),
+               sws_min=84, rem_min=42, light_min=294, spo2_avg=None)
+    seed.recovery(today, spo2=93.4)
+    m = _sleep(conn, today)
+    assert m.spo2_avg_last == 93.4
+
+
+def test_spo2_absent_when_recovery_missing(conn, seed, today: date) -> None:
+    # LEFT JOIN: a night with sleep but no recovery row must not raise.
+    seed.sleep(today, datetime(2026, 5, 19, 23, 0), datetime(2026, 5, 20, 6, 0),
+               sws_min=84, rem_min=42, light_min=294)
+    m = _sleep(conn, today)
+    assert m.spo2_avg_last is None
+    assert m.last_hours == 7.0
+
+
+def test_spo2_reaches_the_sleep_score(conn, seed, today: date) -> None:
+    # spo2 carries 20% of the composite; a desaturating night must score below
+    # an identical night with normal oxygen, or the signal is decorative.
+    seed.sleep(today, datetime(2026, 5, 19, 23, 0), datetime(2026, 5, 20, 6, 0),
+               sws_min=84, rem_min=42, light_min=294)
+    seed.recovery(today, spo2=97.0)
+    good = _sleep(conn, today).score
+
+    conn.execute("DELETE FROM recovery")
+    seed.recovery(today, spo2=90.0)
+    bad = _sleep(conn, today).score
+
+    assert good is not None and bad is not None
+    assert bad < good
