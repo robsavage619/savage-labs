@@ -9,6 +9,7 @@ import { LabPanel } from "@/components/lab-panel";
 import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { CorrelationCards } from "@/components/correlation-cards";
+import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
 import { TrendIntelligence } from "@/components/trend-intelligence";
 import { AppShell } from "@/components/app-shell";
 import { CollapsibleSection } from "@/components/collapsible-section";
@@ -102,6 +103,18 @@ export default function LabPage() {
           <ErrorBoundary label="Clinical research">
             <ClinicalResearchPanel />
           </ErrorBoundary>
+        </CollapsibleSection>
+
+        {/* ── AUTONOMIC LOAD ── */}
+        <CollapsibleSection id="stress" title="Autonomic load">
+          <div className="space-y-5">
+            <ErrorBoundary label="Stress">
+              <StressPanel />
+            </ErrorBoundary>
+            <ErrorBoundary label="WHOOP behavior impact">
+              <BehaviorImpactPanel />
+            </ErrorBoundary>
+          </div>
         </CollapsibleSection>
 
         {/* ── WHAT MOVES YOUR HRV ── */}

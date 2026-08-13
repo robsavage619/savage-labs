@@ -4437,3 +4437,87 @@ async def get_midday_session() -> dict:
         return {"session": None}
     rec = json.loads(row[1]) if isinstance(row[1], str) else row[1]
     return {"session": {"session_type": row[0], **rec}}
+
+
+@router.get("/whoop/stress")
+def whoop_stress(days: int = Query(7, ge=1, le=30)) -> dict:
+    """Stress curve + daily rollup from the private-API ingest.
+
+    Returns the per-sample timeline for charting plus one row per day. Empty
+    lists (not an error) when `shc whoop-private sync-metrics` has never run —
+    the panel renders an explicit "not synced" state rather than a blank chart.
+    """
+    conn = get_read_conn()
+    try:
+        since = date.today() - timedelta(days=days)
+        daily = [
+            {
+                "date": r[0].isoformat(),
+                "score": r[1],
+                "level": r[2],
+                "high_pct": r[3],
+            }
+            for r in conn.execute(
+                """
+                SELECT date, stress_score, stress_level, stress_high_pct
+                FROM whoop_private_daily
+                WHERE date > ? AND stress_score IS NOT NULL
+                ORDER BY date
+                """,
+                [since],
+            ).fetchall()
+        ]
+        samples = [
+            {"t": r[0].isoformat(), "value": r[1], "level": r[2]}
+            for r in conn.execute(
+                """
+                SELECT sampled_at, value, level
+                FROM whoop_stress_timeline
+                WHERE date > ? AND value IS NOT NULL
+                ORDER BY sampled_at
+                """,
+                [since],
+            ).fetchall()
+        ]
+        return {"daily": daily, "samples": samples, "high_day_threshold": 0.15}
+    finally:
+        conn.close()
+
+
+@router.get("/whoop/behavior-impact")
+def whoop_behavior_impact() -> dict:
+    """WHOOP's own server-side impact analysis (latest snapshot).
+
+    `AUTOMATED` rows are metric-derived and populate without journal data;
+    journal-derived rows need weeks of logging before WHOOP will score them.
+    """
+    conn = get_read_conn()
+    try:
+        latest = conn.execute("SELECT MAX(as_of) FROM whoop_behavior_impact").fetchone()
+        if not latest or latest[0] is None:
+            return {"as_of": None, "items": []}
+        rows = conn.execute(
+            """
+            SELECT title, impact_pct, impact_style, tag_style, yes_count, no_count
+            FROM whoop_behavior_impact
+            WHERE as_of = ?
+            ORDER BY impact_pct DESC NULLS LAST
+            """,
+            [latest[0]],
+        ).fetchall()
+        return {
+            "as_of": latest[0].isoformat(),
+            "items": [
+                {
+                    "title": r[0],
+                    "impact_pct": r[1],
+                    "style": r[2],
+                    "tag": r[3],
+                    "yes_count": r[4],
+                    "no_count": r[5],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()

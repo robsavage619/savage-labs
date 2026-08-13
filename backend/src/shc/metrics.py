@@ -65,6 +65,18 @@ BASELINE_MIN_N = 14
 # threshold with no cited basis; low stakes since it doesn't gate anything.
 SLEEP_NEED_BASELINE_H = 8.0
 
+# WHOOP's own behavior-impact model attributes -5% recovery to days with 15%+ of
+# waking time in the high-stress zone; that published threshold is the anchor
+# rather than a number we invented.
+STRESS_HIGH_DAY_THRESHOLD = 0.15
+# Share of the last 7 days over that threshold before the state says anything.
+# Deliberately a MAJORITY: with ~11pp day-to-day spread a couple of hot days is
+# noise, and [[recovery-adaptation-tradeoff]] warns that some sympathetic load is
+# the adaptation signal itself — suppressing it is not automatically good.
+STRESS_HIGH_RATE_NOTE = 0.5
+# Below this many days of stress data the rate is not worth reporting at all.
+STRESS_MIN_DAYS = 4
+
 # ACWR gate thresholds on the UNCOUPLED scale (see _arm_acwr). Uncoupled ratios
 # run systematically higher than the coupled form these bands were first set
 # against, so they're shifted up (panel review M2). These are HEURISTIC priors
@@ -153,6 +165,12 @@ class RecoveryMetrics:
     stress_score: float | None = None  # 0.0-3.0 daily stress gauge
     stress_level: str | None = None  # LOW / MEDIUM / HIGH
     stress_high_pct: float | None = None  # fraction of sampled day in the HIGH zone
+    # Multi-day rate, NOT a single day. Day-to-day high_pct carries a ~11pp
+    # standard deviation, so one day is below the noise floor
+    # ([[sesoi-typical-error-individual-change]]); the share of days over
+    # WHOOP's own 15% threshold is the part that survives.
+    stress_high_rate_7d: float | None = None
+    stress_days_7d: int = 0  # days with stress data — guards against acting on 1-2 days
     sleeping_hr_baseline: float | None = None  # HR floor during sleep, distinct from waking RHR
 
 
@@ -912,6 +930,18 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
         m.stress_level = private[1]
         m.stress_high_pct = private[2]
         m.sleeping_hr_baseline = private[3]
+
+    stress_rows = conn.execute(
+        """
+        SELECT stress_high_pct FROM whoop_private_daily
+        WHERE date > ? AND date <= ? AND stress_high_pct IS NOT NULL
+        """,
+        [today - timedelta(days=7), today],
+    ).fetchall()
+    m.stress_days_7d = len(stress_rows)
+    if stress_rows:
+        over = sum(1 for row in stress_rows if float(row[0]) >= STRESS_HIGH_DAY_THRESHOLD)
+        m.stress_high_rate_7d = round(over / len(stress_rows), 3)
     return m
 
 
@@ -1829,6 +1859,25 @@ def _gates(
     elif sleep_flags:
         reasons.append(
             f"Sleep marker: {sleep_flags[0]} — single marker (OSA-normal), noted but not capping"
+        )
+
+    # Chronic stress load — SURFACED, NEVER CAPPING. Three reasons it does not
+    # touch max_intensity: the personal history is only days old (no fitted
+    # baseline to gate against), a single day sits below the measurement noise
+    # floor, and [[recovery-adaptation-tradeoff]] holds that sympathetic load is
+    # partly the adaptation signal — capping training to lower a stress score
+    # would trade the adaptation for the metric. Behaviour change (sleep timing,
+    # breathing practice) is the lever here, not a lighter session.
+    if (
+        rec.stress_high_rate_7d is not None
+        and rec.stress_days_7d >= STRESS_MIN_DAYS
+        and rec.stress_high_rate_7d >= STRESS_HIGH_RATE_NOTE
+    ):
+        over_days = round(rec.stress_high_rate_7d * rec.stress_days_7d)
+        reasons.append(
+            f"Chronic stress load: {over_days}/{rec.stress_days_7d} days ≥"
+            f"{STRESS_HIGH_DAY_THRESHOLD:.0%} of day in the high-stress zone "
+            f"(WHOOP scores that -5% recovery) — noted but not capping"
         )
 
     if chk.illness_flag:

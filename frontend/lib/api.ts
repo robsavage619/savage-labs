@@ -660,6 +660,8 @@ export const api = {
   trainingWeekly: (weeks = 16) => get<WeeklyVolume[]>(`/api/training/weekly?weeks=${weeks}`),
   trainingPRs: (n = 15) => get<PR[]>(`/api/training/prs?n=${n}`),
   insightsCorrelations: () => get<Correlation[]>("/api/insights/correlations"),
+  whoopStress: (days = 7) => get<WhoopStress>(`/api/whoop/stress?days=${days}`),
+  whoopBehaviorImpact: () => get<WhoopBehaviorImpact>("/api/whoop/behavior-impact"),
   clinicalOverview: () => get<ClinicalOverview>("/api/clinical/overview"),
   clinicalRisk: () => get<ClinicalRisk>("/api/clinical/risk"),
   bodyTrend: () => get<WeightPoint[]>("/api/body/trend"),
@@ -1189,3 +1191,34 @@ export interface ProgressComparison {
   weight_kg: { before: number | null; after: number | null };
   conflict: string | null;
 }
+
+
+// --- WHOOP private-API surfaces (empty until `shc whoop-private sync-metrics`) ---
+
+export type WhoopStressDay = {
+  date: string;
+  score: number | null;
+  level: string | null;
+  high_pct: number | null;
+};
+
+export type WhoopStressSample = { t: string; value: number | null; level: string | null };
+
+export type WhoopStress = {
+  daily: WhoopStressDay[];
+  samples: WhoopStressSample[];
+  /** WHOOP scores a day above this share of high-stress time at -5% recovery. */
+  high_day_threshold: number;
+};
+
+export type WhoopImpactItem = {
+  title: string;
+  impact_pct: number | null;
+  style: string | null;
+  /** "AUTOMATED" = metric-derived, populates without journal data. */
+  tag: string | null;
+  yes_count: number | null;
+  no_count: number | null;
+};
+
+export type WhoopBehaviorImpact = { as_of: string | null; items: WhoopImpactItem[] };
