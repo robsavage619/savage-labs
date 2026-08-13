@@ -181,7 +181,10 @@ _CATALOG_PATH = "/journal-service/v2/journals/behaviors"
 _DRAFT_PATH = "/journal-service/v3/journals/drafts/mobile/{date}"
 
 _CATALOG_ID_KEYS = ("behavior_tracker_id", "id", "tracker_id")
-_CATALOG_NAME_KEYS = ("question", "name", "display_name", "label", "title", "question_text")
+# `question_text` FIRST: catalog records carry both, and `title` is the bare
+# noun ("Accutane") while `question_text` is the prose the CSV history stored
+# ("Took Accutane?"). Preferring title would name the same behavior two ways.
+_CATALOG_NAME_KEYS = ("question_text", "question", "name", "display_name", "label", "title")
 
 
 def _first_key(record: dict, keys: tuple[str, ...]) -> object | None:
@@ -251,11 +254,17 @@ async def sync_journal_api(days: int = 30) -> dict:
     authoritative record of what was logged that day) and upserting one row per
     answered behavior.
 
+    Note the date shift: the API serves a journal under its cycle START date,
+    while this table keys on the cycle END (the morning WHOOP scores it), so a
+    draft fetched at D is stored at D+1 to match the CSV path and the join
+    against sleep/recovery.
+
     Rows are keyed on (date, question) within the `api` source namespace, so
-    re-running is idempotent. A date/question already present from the CSV
-    export is SKIPPED rather than written twice — the two sources would
-    otherwise double-count in the correlations query, which groups on question
-    alone. Those are reported under `collisions`, never dropped silently.
+    re-running is idempotent. Any date the CSV export already covers is skipped
+    WHOLESALE — WHOOP reworded the questions between the export and the current
+    API, so a per-question dedup silently fails to match and splits one
+    behavior's history into two series in the correlations query. Skipped dates
+    are reported under `collisions`, never dropped silently.
     """
 
     from shc.db.schema import write_ctx
@@ -271,9 +280,38 @@ async def sync_journal_api(days: int = 30) -> dict:
     unknown_ids: set[int] = set()
     failed_dates: list[str] = []
     entries_seen = 0
+    unparseable = 0
+    unanswered = 0
 
     async with write_ctx() as conn:
         for day in dates:
+            # The API serves a journal under its cycle START date; this table's
+            # `date` is the cycle END — the morning WHOOP scores the cycle, and
+            # the date `recovery` carries. Verified against live data: the 13
+            # entries the CSV files under 2025-02-15 are served by the API at
+            # 2025-02-14. Dropping this shifts every row one day earlier and
+            # mis-joins the entire table against sleep/recovery.
+            entry_date = day + timedelta(days=1)
+
+            # Skip whole dates the CSV export already covers, rather than
+            # deduping question-by-question: WHOOP REWORDED the questions
+            # between the export and the current API ("Have any caffeine?" →
+            # "Consumed caffeine?", "Share your bed?" → "Shared your bed?"), so
+            # a text match silently fails to collide and inserts a second copy
+            # of a behavior already stored. The correlations query groups on
+            # question alone, so that would split one behavior's history into
+            # two half-length series. The CSV is a complete export for the days
+            # it covers, so per-date is the right granularity.
+            csv_rows = conn.execute(
+                "SELECT COUNT(*) FROM whoop_journal WHERE date = ? AND source = 'csv'",
+                [entry_date],
+            ).fetchone()[0]
+            if csv_rows:
+                collisions.append(
+                    f"{entry_date.isoformat()} — {csv_rows} CSV rows already cover this date"
+                )
+                continue
+
             try:
                 payload = await get(_DRAFT_PATH.format(date=day.isoformat()))
             except Exception as exc:  # isolate per date — one gap shouldn't kill the backfill
@@ -282,37 +320,53 @@ async def sync_journal_api(days: int = 30) -> dict:
                 continue
 
             for behavior in _tracked_behaviors(payload):
-                raw_id = _first_key(behavior, _CATALOG_ID_KEYS)
+                # The READ shape nests two sub-objects; it is NOT the flat
+                # `tracker_inputs` shape the write path documents. Reading the
+                # top level directly finds nothing and skips every entry.
+                tracker = behavior.get("behavior_tracker") or {}
+                answer = behavior.get("tracker_input") or {}
+
+                raw_id = answer.get("behavior_tracker_id", tracker.get("id"))
                 if raw_id is None:
+                    unparseable += 1
                     continue
                 try:
                     tracker_id = int(raw_id)
                 except (TypeError, ValueError):
+                    unparseable += 1
                     continue
 
-                question = catalog.get(tracker_id)
-                if question is None:
+                # `question_text` rides along on the entry, so the catalog is
+                # only a fallback for a behavior that omits it.
+                question = (tracker.get("question_text") or "").strip() or catalog.get(tracker_id)
+                if not question:
                     unknown_ids.add(tracker_id)
                     continue
 
+                # Three distinct states, and collapsing them loses real meaning:
+                #   key absent      → a "bare" log; the behavior happened, no
+                #                     yes/no was ever asked → True
+                #   key present, None → the question was shown and NOT answered
+                #                     → carries no information, must not be
+                #                     recorded as "no" (that would invent a
+                #                     negative observation the user never made)
+                #   key present, bool → the real answer
+                if "answered_yes" not in answer:
+                    answered = True
+                elif answer["answered_yes"] is None:
+                    unanswered += 1
+                    continue
+                else:
+                    answered = bool(answer["answered_yes"])
+
                 entries_seen += 1
-                answered = bool(behavior.get("answered_yes", True))
-                magnitude_value = behavior.get("magnitude_input_value")
-                magnitude_label = behavior.get("magnitude_input_label")
+                magnitude_value = answer.get("magnitude_input_value")
+                magnitude_label = answer.get("magnitude_input_label")
                 notes = (payload.get("journal") or {}).get("notes") or None
 
-                clash = conn.execute(
-                    "SELECT 1 FROM whoop_journal "
-                    "WHERE date = ? AND question = ? AND source = 'csv'",
-                    [day, question],
-                ).fetchone()
-                if clash:
-                    collisions.append(f"{day.isoformat()} {question!r} already present from CSV")
-                    continue
-
-                entry_id = _content_hash("api", day.isoformat(), question)
+                entry_id = _content_hash("api", entry_date.isoformat(), question)
                 row_hash = _content_hash(
-                    day.isoformat(),
+                    entry_date.isoformat(),
                     question,
                     str(answered),
                     str(magnitude_value),
@@ -347,8 +401,8 @@ async def sync_journal_api(days: int = 30) -> dict:
                     [
                         entry_id,
                         datetime.combine(day, datetime.min.time(), tzinfo=UTC),
-                        None,
-                        day,
+                        datetime.combine(entry_date, datetime.min.time(), tzinfo=UTC),
+                        entry_date,
                         question,
                         answered,
                         notes,
@@ -363,6 +417,12 @@ async def sync_journal_api(days: int = 30) -> dict:
                 elif before[0] != row_hash:
                     updated += 1
 
+    if unanswered:
+        log.info("WHOOP journal: %d questions were shown but never answered (skipped)", unanswered)
+    if unparseable:
+        log.warning(
+            "WHOOP journal: %d entries carried no resolvable tracker id (skipped)", unparseable
+        )
     if unknown_ids:
         log.warning(
             "WHOOP journal: %d tracker IDs absent from the catalog (skipped): %s",
@@ -379,6 +439,8 @@ async def sync_journal_api(days: int = 30) -> dict:
         "entries_seen": entries_seen,
         "inserted": inserted,
         "updated": updated,
+        "unparseable": unparseable,
+        "unanswered": unanswered,
         "collisions": len(collisions),
         "collision_detail": collisions,
         "unknown_tracker_ids": sorted(unknown_ids),
