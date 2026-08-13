@@ -111,6 +111,7 @@ async def _seed(days: int) -> None:
 def ingest_fitbod(csv_path: str | None, rebuild: bool) -> None:
     """Ingest Fitbod WorkoutExport.csv into workouts + workout_sets + working_weights."""
     from pathlib import Path
+
     from shc.config import settings
     from shc.ingest.fitbod import ingest_fitbod as _ingest
 
@@ -154,6 +155,7 @@ def ingest_whoop_journal_cmd(csv_path: str | None) -> None:
 def ingest_clinical_profile_cmd(yaml_path: str | None) -> None:
     """Load Rob's clinical profile (conditions, meds, labs, vitals) from YAML."""
     from pathlib import Path
+
     from shc.ingest.clinical_profile import ingest_clinical_profile as _ingest
 
     init_db()
@@ -176,3 +178,51 @@ def reset() -> None:
         click.echo(f"Deleted {db}")
     asyncio.run(_seed(90))
     click.echo("Database reset and seeded.")
+
+
+@main.group("whoop-private")
+def whoop_private() -> None:
+    """WHOOP private-iOS-API commands (Journal backfill).
+
+    Separate from the OAuth sync: this surface is not sanctioned by WHOOP and is
+    run deliberately, on demand, rather than on the scheduler.
+    """
+
+
+@whoop_private.command("login")
+@click.option("--email", prompt="WHOOP email", help="WHOOP account email")
+def whoop_private_login(email: str) -> None:
+    """Establish a private-API session. Prompts for password + MFA; neither is stored."""
+    from shc.ingest.whoop_private import login
+
+    password = click.prompt("WHOOP password", hide_input=True)
+
+    def mfa_prompt(destination: str) -> str:
+        label = f" (sent to {destination})" if destination else ""
+        return str(click.prompt(f"MFA code{label}")).strip()
+
+    asyncio.run(login(email, password, mfa_prompt))
+    click.echo("Private-API session established — tokens stored in Keychain.")
+
+
+@whoop_private.command("sync-journal")
+@click.option("--days", default=30, show_default=True, help="Calendar days to walk back")
+def whoop_private_sync_journal(days: int) -> None:
+    """Backfill whoop_journal from the private API."""
+    from shc.ingest.whoop_journal import sync_journal_api
+
+    init_db()
+    click.echo(f"Pulling WHOOP journal for the last {days} days ...")
+    result = asyncio.run(sync_journal_api(days))
+    click.echo(
+        f"Done: {result['inserted']} inserted, {result['updated']} updated, "
+        f"{result['entries_seen']} entries seen"
+    )
+    if result["collisions"]:
+        click.echo(f"  {result['collisions']} skipped — already covered by the CSV export:")
+        for detail in result["collision_detail"][:10]:
+            click.echo(f"    {detail}")
+    if result["unknown_tracker_ids"]:
+        click.echo(f"  unknown tracker IDs (not in catalog): {result['unknown_tracker_ids'][:20]}")
+    if result["failed_dates"]:
+        click.echo(f"  {len(result['failed_dates'])} dates failed to fetch")
