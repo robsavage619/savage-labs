@@ -391,6 +391,10 @@ export interface DailyStateLoad {
   cardio_z2_min_7d: number;
   cardio_zone_min_7d: Record<string, number>;
   max_hr_measured: number | null;
+  // Real WHOOP zone boundaries {ZONE_0..ZONE_5: [min_bpm, max_bpm]}; empty
+  // until `shc whoop-private sync-metrics` has run.
+  hr_zone_bounds?: Record<string, [number, number]>;
+  cardio_aerobic_base_min_7d?: number;
   max_hr_tanaka: number | null;
   pickleball_min_7d: number;
   pickleball_min_28d: number;

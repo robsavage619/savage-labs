@@ -242,7 +242,20 @@ class TrainingLoadMetrics:
     pull_sets_28d: int = 0
     legs_sets_28d: int = 0
     cardio_min_28d: int = 0
-    cardio_z2_min_7d: int = 0
+    cardio_z2_min_7d: int = 0  # WHOOP's own Z2 band only (70-77% of max here)
+    # Aerobic-base minutes under the METABOLIC zone-2 definition (~70-85% of true
+    # max HR, lactate 1.7-2.0), which is the band [[zone-2-training]] prescribes
+    # ~180 min/wk of. That band spans WHOOP's Z2 AND Z3 (128-141 + 142-155 at a
+    # measured max of 183), so reporting WHOOP Z2 alone undercounts the dose by
+    # roughly 40%. Kept as a SEPARATE field rather than redefining
+    # cardio_z2_min_7d, because gates and the planner already read that one and
+    # silently widening it would move thresholds nobody re-tuned.
+    cardio_aerobic_base_min_7d: int = 0
+    # Real WHOOP zone boundaries {zone_id: [min_bpm, max_bpm]}. WHOOP does NOT
+    # use the textbook 50/60/70/80/90% cutoffs (Z5 starts at 93% of max, Z4 at
+    # 85%), so anything deriving a zone label from a percentage disagrees with
+    # the zone minutes WHOOP itself reported.
+    hr_zone_bounds: dict[str, list[int]] = field(default_factory=dict)
     cardio_zone_min_7d: dict[str, float] = field(
         default_factory=dict
     )  # {z0:.., z1:.., ..., z5:..} from WHOOP
@@ -1236,6 +1249,7 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             "z5": round(float(zone_row[5]), 1),
         }
         m.cardio_z2_min_7d = int(round(float(zone_row[2])))
+        m.cardio_aerobic_base_min_7d = int(round(float(zone_row[2]) + float(zone_row[3])))
         m.cardio_zone3_min_7d = m.cardio_zone_min_7d["z3"]
         m.cardio_zone4_min_7d = m.cardio_zone_min_7d["z4"]
         m.cardio_zone5_min_7d = m.cardio_zone_min_7d["z5"]
@@ -1260,6 +1274,15 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         ).fetchone()
         if z2 and z2[0] is not None:
             m.cardio_z2_min_7d = int(z2[0])
+
+    zone_bounds = conn.execute(
+        "SELECT zone_id, min_bpm, max_bpm FROM whoop_hr_zones ORDER BY zone_id"
+    ).fetchall()
+    m.hr_zone_bounds = {
+        row[0]: [int(row[1]), int(row[2])]
+        for row in zone_bounds
+        if row[1] is not None and row[2] is not None
+    }
 
     # Max HR — prefer WHOOP-measured, fall back to Tanaka formula.
     m.max_hr_measured = _latest_max_hr(conn)

@@ -57,13 +57,32 @@ function rpeColor(rpe: number | null | undefined): string {
   return "var(--positive)";
 }
 
+// WHOOP's real zone boundaries, keyed ZONE_0..ZONE_5, when the backend has them.
+export type HrZoneBounds = Record<string, [number, number]>;
+
+// WHOOP does NOT use the textbook 50/60/70/80/90% cutoffs — its Z5 starts at
+// ~93% of max and Z4 at ~85%. Labelling a session by percentage therefore put
+// it a full zone hotter than the zone MINUTES WHOOP reported for the very same
+// session (130bpm read "Z3" here while WHOOP counted it in Z2). Prefer the real
+// boundaries; fall back to percentages only when they haven't been synced.
 function hrZone(
   hr: number | null | undefined,
   shift = 0,
   measuredMax: number | null = null,
   tanaka = 180,
+  bounds?: HrZoneBounds,
 ): string {
   if (hr == null) return "—";
+  if (bounds && Object.keys(bounds).length > 0) {
+    // `shift` models a propranolol-day HR suppression, so add it back before
+    // comparing against absolute boundaries.
+    const effective = hr + shift;
+    for (let z = 5; z >= 1; z--) {
+      const band = bounds[`ZONE_${z}`];
+      if (band && effective >= band[0]) return `Z${z}`;
+    }
+    return "Z1";
+  }
   const max = resolveHrMax(measuredMax, shift, tanaka);
   const pct = hr / max;
   if (pct < 0.6) return "Z1";
@@ -87,6 +106,7 @@ function bucketByWeek(
   hrShift = 0,
   measuredMax: number | null = null,
   tanaka = 180,
+  bounds?: HrZoneBounds,
 ): { weekStart: string; label: string; z12: number; z3: number; z45: number; total: number }[] {
   // Anchor the rightmost bucket to this Monday so the bars stay aligned with
   // calendar weeks rather than rolling 7-day buckets.
@@ -123,7 +143,7 @@ function bucketByWeek(
     if (!dur) continue;
     // Only apply propranolol shift for today's session.
     const shift = s.date === todayStr && hrShift > 0 ? hrShift : 0;
-    const z = hrZone(s.avg_hr, shift, measuredMax, tanaka);
+    const z = hrZone(s.avg_hr, shift, measuredMax, tanaka, bounds);
     if (z === "Z4" || z === "Z5") bins[idx].z45 += dur;
     else if (z === "Z3") bins[idx].z3 += dur;
     else bins[idx].z12 += dur; // Z1, Z2, or unknown HR → assume base aerobic
@@ -137,15 +157,17 @@ function WeeklyZoneVolume({
   hrShift,
   measuredMax,
   tanaka,
+  bounds,
 }: {
   sessions: CardioSession[];
   hrShift: number;
   measuredMax: number | null;
   tanaka: number;
+  bounds?: HrZoneBounds;
 }) {
   const data = useMemo(
-    () => bucketByWeek(sessions, 12, hrShift, measuredMax, tanaka),
-    [sessions, hrShift, measuredMax, tanaka],
+    () => bucketByWeek(sessions, 12, hrShift, measuredMax, tanaka, bounds),
+    [sessions, hrShift, measuredMax, tanaka, bounds],
   );
   const recent4 = data.slice(-4);
   const totalMin = recent4.reduce((a, b) => a + b.total, 0);
@@ -551,6 +573,7 @@ function SessionRow({
   measuredMax,
   bodyWeightKg,
   age,
+  bounds,
   onDelete,
   onHide,
 }: {
@@ -558,6 +581,7 @@ function SessionRow({
   hrShift: number;
   kcalMultiplier: number;
   measuredMax: number | null;
+  bounds?: HrZoneBounds;
   bodyWeightKg: number;
   age: number;
   onDelete: (id: string) => void;
@@ -589,7 +613,7 @@ function SessionRow({
               style={{ color: shifted ? "var(--neutral)" : "var(--text-faint)" }}
               title={shifted ? `Zone adjusted for propranolol (−${hrShift} bpm HR max)` : undefined}
             >
-              {hrZone(s.avg_hr, shifted ? hrShift : 0, measuredMax)}
+              {hrZone(s.avg_hr, shifted ? hrShift : 0, measuredMax, 180, bounds)}
               {shifted && "*"}
             </span>
           </span>
@@ -643,6 +667,7 @@ export function CardioPanel() {
   const hrShift = stateQ.data?.gates.hr_zone_shift_bpm ?? 0;
   const kcalMultiplier = stateQ.data?.gates.kcal_multiplier ?? 1.0;
   const measuredMax = stateQ.data?.training_load.max_hr_measured ?? null;
+  const zoneBounds = stateQ.data?.training_load.hr_zone_bounds as HrZoneBounds | undefined;
   const tanaka = stateQ.data?.training_load.max_hr_tanaka ?? 180;
   // Derive age from Tanaka formula: age = (208 − tanaka) / 0.7
   const age = Math.round((208 - tanaka) / 0.7);
@@ -815,7 +840,7 @@ export function CardioPanel() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-4 border-b border-[var(--hairline)]">
-        <WeeklyZoneVolume sessions={data?.sessions ?? []} hrShift={hrShift} measuredMax={measuredMax} tanaka={tanaka} />
+        <WeeklyZoneVolume sessions={data?.sessions ?? []} hrShift={hrShift} measuredMax={measuredMax} tanaka={tanaka} bounds={zoneBounds} />
         <PickleballEfficiency sessions={data?.sessions ?? []} measuredMax={measuredMax} tanaka={tanaka} />
       </div>
 
@@ -848,7 +873,7 @@ export function CardioPanel() {
                 </td>
               </tr>
             ) : (
-              (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} bodyWeightKg={bodyWeightKg} age={age} onDelete={handleDelete} onHide={handleHide} />)
+              (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} bodyWeightKg={bodyWeightKg} age={age} bounds={zoneBounds} onDelete={handleDelete} onHide={handleHide} />)
             )}
           </tbody>
         </table>
