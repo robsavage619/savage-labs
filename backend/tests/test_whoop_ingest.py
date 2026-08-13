@@ -398,3 +398,109 @@ def test_workout_window_guard_tolerates_missing_data() -> None:
 
     no_zones = _workout_row({**W_COMPLETED, "score": {"strain": 5.0}})
     assert _workout_window_mismatch(no_zones) is None
+
+
+# --- Refresh-token rotation (2026-08-12) -------------------------------------
+#
+# WHOOP rotates the refresh token on every use, so a refresh that succeeds
+# server-side without handing back a usable replacement strands the connection
+# permanently. Two ways that happened here, both invisible for ~an hour (the
+# access-token lifetime) and then fatal — which is what made it look like a
+# mysterious "WHOOP logs out every day".
+
+
+def _refresh_body(monkeypatch, response) -> dict:
+    """Run `_refresh` against a stubbed WHOOP and return the POST body it sent."""
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    sent: dict = {}
+    stored: dict[str, str] = {"refresh_token": "OLD_REFRESH", "access_token": "OLD_ACCESS"}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, url, data=None, **_):
+            sent.update(data or {})
+            return response
+
+    monkeypatch.setattr(w.httpx, "AsyncClient", lambda *a, **k: _Client())
+    monkeypatch.setattr(w, "load_token", lambda src, kind: stored.get(kind))
+    monkeypatch.setattr(w, "store_token", lambda src, kind, val: stored.__setitem__(kind, val))
+    monkeypatch.setattr(w, "_client_id", lambda: "cid")
+    monkeypatch.setattr(w, "_client_secret", lambda: "secret")
+
+    asyncio.run(w._refresh())
+    return {"sent": sent, "stored": stored}
+
+
+def test_refresh_sends_offline_scope(monkeypatch) -> None:
+    """Omitting scope=offline spends the refresh token and gets no replacement.
+
+    WHOOP's refresh tutorial lists `scope` as a body parameter: "The offline
+    scope allows you to get a new refresh token and an access token." Without
+    it the connection dies one access-token lifetime after each refresh.
+    """
+    import httpx
+
+    resp = httpx.Response(
+        200,
+        json={"access_token": "NEW_ACCESS", "refresh_token": "NEW_REFRESH", "expires_in": 3600},
+        request=httpx.Request("POST", "https://api.prod.whoop.com/oauth/oauth2/token"),
+    )
+    result = _refresh_body(monkeypatch, resp)
+    assert result["sent"].get("scope") == "offline"
+    assert result["stored"]["refresh_token"] == "NEW_REFRESH"
+
+
+def test_refresh_keeps_old_token_when_response_omits_a_new_one(monkeypatch) -> None:
+    """A missing refresh_token must not crash mid-rotation and strand the access token."""
+    import httpx
+
+    resp = httpx.Response(
+        200,
+        json={"access_token": "NEW_ACCESS", "expires_in": 3600},
+        request=httpx.Request("POST", "https://api.prod.whoop.com/oauth/oauth2/token"),
+    )
+    result = _refresh_body(monkeypatch, resp)
+    assert result["stored"]["refresh_token"] == "OLD_REFRESH"
+    assert result["stored"]["access_token"] == "NEW_ACCESS"
+
+
+def test_refresh_5xx_is_not_reported_as_needing_reauth(monkeypatch) -> None:
+    """A Cloudflare 502 leaves rotation state unknown — it is not an auth failure.
+
+    Raising WHOOPAuthError here would flip needs_reauth and send Rob through a
+    consent flow over a transient gateway blip.
+    """
+    import asyncio
+
+    import httpx
+    import pytest
+
+    from shc.ingest import whoop as w
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, *a, **k):
+            return httpx.Response(502, text="Bad Gateway")
+
+    monkeypatch.setattr(w.httpx, "AsyncClient", lambda *a, **k: _Client())
+    monkeypatch.setattr(w, "load_token", lambda src, kind: "OLD_REFRESH")
+    monkeypatch.setattr(w, "store_token", lambda *a, **k: None)
+    monkeypatch.setattr(w, "_client_id", lambda: "cid")
+    monkeypatch.setattr(w, "_client_secret", lambda: "secret")
+
+    with pytest.raises(Exception) as exc:
+        asyncio.run(w._refresh())
+    assert not isinstance(exc.value, w.WHOOPAuthError)

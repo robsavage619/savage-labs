@@ -2,6 +2,16 @@
 
 ADR log for architecture choices. Most recent first. One section per decision.
 
+## 2026-08-12 — WHOOP daily reauth: the refresh request never asked for `offline`
+
+**Context.** Rob: "we lose our whoop auth every day... we need the longest amount of time between auths." The 2026-08-06 entry blamed interrupted rotations and narrowed that race, but flagged itself unverified — and the connection died again on 2026-08-12. Research against WHOOP's own docs found a second, deterministic cause the race theory had masked.
+
+**Mechanism.** WHOOP rotates the refresh token on every use, and its refresh tutorial lists `scope` as a required body parameter: "The `offline` scope allows you to get a new refresh token and an access token." `_refresh()` sent `grant_type`, `refresh_token`, `client_id` and `client_secret` — no `scope`. So each refresh spent the current token and got back an access token with no replacement, after which `tokens["refresh_token"]` raised `KeyError`, the new access token was never stored, and the old refresh token was already dead server-side. The connection then worked for exactly one access-token lifetime (~1h per WHOOP's `expires_in: 3600`) before every later call 401'd and every refresh 400'd. With syncs 12h apart, that surfaces as "it logs out about once a day". This is deterministic, not a race, which is why the 2026-08-06 graceful-shutdown fix could not have stopped it.
+
+**Decision.** Send `scope=offline` on refresh. Store the refresh token BEFORE the access token — it is the half that cannot be re-derived. Treat a missing `refresh_token` in the response as "keep the stored one and log loudly" rather than a `KeyError` mid-rotation. Treat 5xx as `RuntimeError`, not `WHOOPAuthError`: a Cloudflare 502 on the token endpoint leaves rotation state unknown (WHOOP community calls this "token desync"), and reporting it as an auth failure sends Rob through a consent flow over a transient blip. The code exchange now also refuses to store a grant that came back without a refresh token, instead of discovering it an hour later.
+
+**Consequences.** Refresh tokens have no documented expiry, so with rotation now completing correctly the expected time between manual reauths is indefinite — bounded by WHOOP-side revocation, not by our client. Deliberately NOT adding the background refresh cron WHOOP suggests: that recommendation exists to avoid concurrent refreshes, our refreshes are already serialised, and every extra rotation is another chance to lose the token. Regression coverage in `backend/tests/test_whoop_ingest.py` (offline scope sent, missing-token tolerated, 5xx not misreported) because the failure is invisible for an hour and then fatal. Still open: `sync_cycle` pages through 800+ cycles on every sync and 429s near the end — unnecessary load on the same infrastructure whose 502s cause desync.
+
 ## 2026-08-10 — The sleep history has two eras, and no live code spans the seam
 
 **Context.** Investigating a supplement question turned up what looked like a collapse in sleep quality: REM fell from ~140 min/night (31% of sleep) across 2024 to ~95 min (22%) from 2025-03 onward, sustained 17 months with no recovery, and 2026-08 is the lowest month on record at 19.5%. Read naively against a diagnosed OSA and an off-CPAP status, that is an alarming physiological finding. It is almost certainly not one.

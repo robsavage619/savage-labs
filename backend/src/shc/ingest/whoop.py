@@ -121,18 +121,46 @@ async def exchange_code(code: str, state: str) -> None:
         )
         resp.raise_for_status()
     tokens = resp.json()
+    # Refresh token first — it is the half that cannot be re-derived, and this
+    # is the one moment we are guaranteed to have a valid one.
+    refresh = tokens.get("refresh_token")
+    if not refresh:
+        raise WHOOPAuthError(
+            "WHOOP returned no refresh_token on code exchange — the `offline` scope "
+            "was not granted, so every later sync would need a fresh consent"
+        )
+    store_token("whoop", "refresh_token", refresh)
     store_token("whoop", "access_token", tokens["access_token"])
-    store_token("whoop", "refresh_token", tokens["refresh_token"])
     log.info("WHOOP tokens stored")
 
 
 async def _refresh() -> str:
-    """Refresh the access token. Serialised via _refresh_lock to prevent rotating-token races."""
+    """Refresh the access token. Serialised via _refresh_lock to prevent rotating-token races.
+
+    WHOOP rotates the refresh token on every use: the moment this request
+    succeeds, the token we sent is dead server-side. Everything below exists so
+    that a rotation can never complete without the replacement reaching the
+    Keychain — losing that hand-off is unrecoverable and costs a manual reauth.
+
+    * `scope=offline` is REQUIRED on refresh, not just on the initial consent.
+      WHOOP's own refresh tutorial lists it as a body parameter: "The offline
+      scope allows you to get a new refresh token and an access token." Omitting
+      it spends the current refresh token and gets back an access token with NO
+      replacement refresh token — so the connection works for one access-token
+      lifetime (~1h) and is then permanently dead. That is the daily-reauth bug.
+    * The refresh token is stored BEFORE the access token. It is the
+      irreplaceable half; an interruption between the two writes must not be
+      what strands us.
+    * A 5xx/network failure leaves the rotation in an UNKNOWN state (WHOOP may
+      have rotated before the gateway ate the response — the documented
+      "token desync"). That is not an auth failure, so it must not be reported
+      as one; the stored token may well still be valid.
+    """
     async with _refresh_lock:
         refresh = load_token("whoop", "refresh_token")
         if not refresh:
             raise WHOOPAuthError("No WHOOP refresh token — run OAuth flow first")
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 TOKEN_URL,
                 data={
@@ -140,17 +168,36 @@ async def _refresh() -> str:
                     "refresh_token": refresh,
                     "client_id": _client_id(),
                     "client_secret": _client_secret(),
+                    "scope": "offline",
                 },
             )
         if resp.status_code in (400, 401):
             raise WHOOPAuthError(
                 f"WHOOP refresh rejected ({resp.status_code}) — re-authorization required"
             )
+        if resp.status_code >= 500:
+            # Do NOT raise WHOOPAuthError here: that sets needs_reauth and tells
+            # Rob to re-consent over what is usually a transient Cloudflare 502.
+            raise RuntimeError(
+                f"WHOOP refresh got {resp.status_code} (gateway/transient) — "
+                "rotation state unknown, stored token may still be valid"
+            )
         resp.raise_for_status()
         tokens = resp.json()
+
+        new_refresh = tokens.get("refresh_token")
+        if new_refresh:
+            store_token("whoop", "refresh_token", new_refresh)
+        else:
+            # Keep the existing token rather than crashing mid-rotation. If WHOOP
+            # really did rotate, it is already dead and the next call surfaces a
+            # clean 400; blowing up here would strand a usable access token too.
+            log.error(
+                "WHOOP refresh returned no refresh_token (scope=offline sent) — "
+                "keeping the stored one; if the next sync 400s, reauthorize"
+            )
         store_token("whoop", "access_token", tokens["access_token"])
-        store_token("whoop", "refresh_token", tokens["refresh_token"])
-        log.info("WHOOP tokens refreshed")
+        log.info("WHOOP tokens refreshed (rotated=%s)", bool(new_refresh))
         return tokens["access_token"]
 
 
