@@ -149,6 +149,11 @@ class RecoveryMetrics:
     respiratory_rate_delta: float | None = (
         None  # bpm above 28d baseline (Bourdillon: +1 bpm = illness sentinel)
     )
+    # --- private-API only (no public WHOOP endpoint exposes these) ---
+    stress_score: float | None = None  # 0.0-3.0 daily stress gauge
+    stress_level: str | None = None  # LOW / MEDIUM / HIGH
+    stress_high_pct: float | None = None  # fraction of sampled day in the HIGH zone
+    sleeping_hr_baseline: float | None = None  # HR floor during sleep, distinct from waking RHR
 
 
 @dataclass
@@ -181,6 +186,15 @@ class SleepMetrics:
     midpoint_stdev_h_7d: float | None = None  # social jet-lag proxy
     spo2_avg_last: float | None = None  # < 95% is a clinical flag for sleep-disordered breathing
     score: float | None = None  # 0-100 composite (duration + deep% + spo2)
+    # --- private-API only: WHOOP's own recommended sleep window ---
+    optimal_bedtime_start: str | None = None  # local "HH:MM:SS"
+    optimal_bedtime_end: str | None = None
+    recommended_tib_min: float | None = None  # time in bed for a 100% sleep-performance night
+    # Signed hours between the actual sleep midpoint and the midpoint of WHOOP's
+    # recommended window. This is the number the consistency problem lives in:
+    # `midpoint_stdev_h_7d` says how much the midpoint MOVES, this says how far
+    # it sits from where it should be. Positive = going to bed later than ideal.
+    midpoint_vs_optimal_h: float | None = None
 
 
 @dataclass
@@ -755,6 +769,40 @@ def _tier(score: float | None) -> Tier | None:
 # ── Section builders ─────────────────────────────────────────────────────────
 
 
+
+def _private_daily(conn, today: date) -> tuple:
+    """Most recent whoop_private_daily row at or before `today`, or ().
+
+    Falls back to the latest prior row rather than requiring an exact date
+    match: the sleep-need window and sleeping-HR baseline are current-state
+    values WHOOP only serves for "now", so they land on the sync date and would
+    otherwise vanish from the state on any day the sync did not run.
+    """
+    row = conn.execute(
+        """
+        SELECT stress_score, stress_level, stress_high_pct, sleeping_hr_baseline,
+               optimal_bedtime_start, optimal_bedtime_end, recommended_tib_min
+        FROM whoop_private_daily
+        WHERE date <= ?
+        ORDER BY date DESC
+        LIMIT 1
+        """,
+        [today],
+    ).fetchone()
+    return row or ()
+
+
+def _clock_to_hours(text: str | None) -> float | None:
+    """Parse "HH:MM:SS" into decimal hours, or None."""
+    if not isinstance(text, str):
+        return None
+    bits = text.split(":")
+    try:
+        return int(bits[0]) + int(bits[1]) / 60.0
+    except (ValueError, IndexError):
+        return None
+
+
 def _recovery(conn, today: date) -> RecoveryMetrics:
     rec = conn.execute(
         "SELECT date, score, hrv, rhr, skin_temp, spo2, user_calibrating "
@@ -844,6 +892,13 @@ def _recovery(conn, today: date) -> RecoveryMetrics:
         m.respiratory_rate_baseline_28d = round(_st.median(rr_vals), 2)
         last_rr = rr_vals[-1]
         m.respiratory_rate_delta = round(last_rr - m.respiratory_rate_baseline_28d, 2)
+
+    private = _private_daily(conn, today)
+    if private:
+        m.stress_score = private[0]
+        m.stress_level = private[1]
+        m.stress_high_pct = private[2]
+        m.sleeping_hr_baseline = private[3]
     return m
 
 
@@ -956,6 +1011,21 @@ def _sleep(conn, today: date) -> SleepMetrics:
             m.consistency_stdev_7d = round(_st.pstdev(last7), 2)
         m.debt_7d_h = round(sum(max(0.0, SLEEP_NEED_BASELINE_H - h) for h in last7), 1)
     m.score = _sleep_subscore(m.last_hours, m.deep_pct_last, m.spo2_avg_last)
+
+    private = _private_daily(conn, today)
+    if private:
+        m.optimal_bedtime_start = private[4]
+        m.optimal_bedtime_end = private[5]
+        m.recommended_tib_min = private[6]
+        start_h = _clock_to_hours(m.optimal_bedtime_start)
+        end_h = _clock_to_hours(m.optimal_bedtime_end)
+        if start_h is not None and end_h is not None and m.midpoint_local_h_last is not None:
+            # The window crosses midnight (23:25 -> 07:15), so the midpoint is
+            # computed on an unwrapped end before folding back into 0-24.
+            optimal_mid = ((start_h + (end_h + 24 if end_h < start_h else end_h)) / 2) % 24
+            delta = m.midpoint_local_h_last - optimal_mid
+            # Fold to [-12, 12] so 23:50 vs 00:10 reads as +0.33h, not -23.67h.
+            m.midpoint_vs_optimal_h = round((delta + 12) % 24 - 12, 2)
     return m
 
 

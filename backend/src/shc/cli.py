@@ -226,3 +226,21 @@ def whoop_private_sync_journal(days: int) -> None:
         click.echo(f"  unknown tracker IDs (not in catalog): {result['unknown_tracker_ids'][:20]}")
     if result["failed_dates"]:
         click.echo(f"  {len(result['failed_dates'])} dates failed to fetch")
+
+
+@whoop_private.command("sync-metrics")
+@click.option("--days", default=7, show_default=True, help="Days of stress curve to walk back")
+def whoop_private_sync_metrics(days: int) -> None:
+    """Pull sleep need, stress, behavior impact and HR zones from the private API."""
+    from shc.ingest.whoop_private_metrics import sync_private_metrics
+
+    init_db()
+    click.echo(f"Pulling WHOOP private metrics ({days}d of stress) ...")
+    result = asyncio.run(sync_private_metrics(days))
+    click.echo(
+        f"Done: {result['stress_days']} stress days ({result['stress_samples']} samples), "
+        f"{result['hr_zones']} zones, {result['behavior_impacts']} impacts, "
+        f"sleeping HR baseline {result['sleeping_hr_baseline']}"
+    )
+    if result["failed"]:
+        click.echo(f"  FAILED surfaces: {result['failed']}")
