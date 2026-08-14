@@ -472,11 +472,17 @@ def test_refresh_keeps_old_token_when_response_omits_a_new_one(monkeypatch) -> N
     assert result["stored"]["access_token"] == "NEW_ACCESS"
 
 
+async def _instant_sleep(*_a, **_k) -> None:
+    return None
+
+
 def test_refresh_5xx_is_not_reported_as_needing_reauth(monkeypatch) -> None:
-    """A Cloudflare 502 leaves rotation state unknown — it is not an auth failure.
+    """Two straight 502s leave rotation state unknown — not an auth failure.
 
     Raising WHOOPAuthError here would flip needs_reauth and send Rob through a
-    consent flow over a transient gateway blip.
+    consent flow over a transient gateway blip. _refresh retries once on 5xx
+    (patched to skip the real sleep), so this asserts the behavior AFTER that
+    retry also 5xxs: still WHOOPTransientError, never WHOOPAuthError.
     """
     import asyncio
 
@@ -500,7 +506,150 @@ def test_refresh_5xx_is_not_reported_as_needing_reauth(monkeypatch) -> None:
     monkeypatch.setattr(w, "store_token", lambda *a, **k: None)
     monkeypatch.setattr(w, "_client_id", lambda: "cid")
     monkeypatch.setattr(w, "_client_secret", lambda: "secret")
+    monkeypatch.setattr(w.asyncio, "sleep", _instant_sleep)
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(w.WHOOPTransientError):
         asyncio.run(w._refresh())
-    assert not isinstance(exc.value, w.WHOOPAuthError)
+
+
+def test_refresh_retries_once_and_recovers_from_a_single_502(monkeypatch) -> None:
+    """The deliberate in-call retry is what a genuinely transient blip needs.
+
+    First POST 502s, second succeeds — this must NOT surface as any kind of
+    failure, and the retry must reuse the same refresh token (nothing rotated
+    on the failed attempt, so there is nothing else to send).
+    """
+    import asyncio
+
+    import httpx
+
+    from shc.ingest import whoop as w
+
+    calls = {"n": 0}
+    stored: dict[str, str] = {"refresh_token": "OLD_REFRESH"}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, url, data=None, **_):
+            calls["n"] += 1
+            assert data["refresh_token"] == "OLD_REFRESH"
+            if calls["n"] == 1:
+                return httpx.Response(502, text="Bad Gateway")
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "NEW_ACCESS",
+                    "refresh_token": "NEW_REFRESH",
+                    "expires_in": 3600,
+                },
+                request=httpx.Request("POST", "https://api.prod.whoop.com/oauth/oauth2/token"),
+            )
+
+    monkeypatch.setattr(w.httpx, "AsyncClient", lambda *a, **k: _Client())
+    monkeypatch.setattr(w, "load_token", lambda src, kind: stored.get(kind))
+    monkeypatch.setattr(w, "store_token", lambda src, kind, val: stored.__setitem__(kind, val))
+    monkeypatch.setattr(w, "_client_id", lambda: "cid")
+    monkeypatch.setattr(w, "_client_secret", lambda: "secret")
+    monkeypatch.setattr(w.asyncio, "sleep", _instant_sleep)
+
+    token = asyncio.run(w._refresh())
+    assert token == "NEW_ACCESS"
+    assert calls["n"] == 2
+    assert stored["refresh_token"] == "NEW_REFRESH"
+
+
+def test_refresh_retry_getting_400_is_a_real_confirmed_dead_token(monkeypatch) -> None:
+    """A 502 then a 400 on the SAME deliberate retry is real signal, not a guess.
+
+    Unlike the 2026-08-14 incident (an uncoordinated second attempt from an
+    unrelated endpoint), this 400 comes from _refresh's own controlled retry —
+    so it is safe to treat as a confirmed dead token and raise WHOOPAuthError.
+    """
+    import asyncio
+
+    import httpx
+    import pytest
+
+    from shc.ingest import whoop as w
+
+    calls = {"n": 0}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(502, text="Bad Gateway")
+            return httpx.Response(400, json={"error": "invalid_grant"})
+
+    monkeypatch.setattr(w.httpx, "AsyncClient", lambda *a, **k: _Client())
+    monkeypatch.setattr(w, "load_token", lambda src, kind: "OLD_REFRESH")
+    monkeypatch.setattr(w, "store_token", lambda *a, **k: None)
+    monkeypatch.setattr(w, "_client_id", lambda: "cid")
+    monkeypatch.setattr(w, "_client_secret", lambda: "secret")
+    monkeypatch.setattr(w.asyncio, "sleep", _instant_sleep)
+
+    with pytest.raises(w.WHOOPAuthError):
+        asyncio.run(w._refresh())
+
+
+def test_sync_all_stops_on_transient_refresh_failure_without_hitting_more_endpoints(
+    monkeypatch,
+) -> None:
+    """The 2026-08-14 regression: a transient refresh failure on endpoint 1 must
+    stop the loop, not let endpoint 2's independent 401 fire a second, blind
+    refresh attempt with the same (possibly already-rotated) token seconds later.
+    That second attempt is what actually killed the connection that morning.
+    """
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    async def _recovery_hits_a_transient_refresh_failure():
+        raise w.WHOOPTransientError("WHOOP refresh got 502 after retry (gateway/transient)")
+
+    async def _sleep_must_never_be_called():
+        raise AssertionError("sync_all continued past a transient refresh failure")
+
+    written: dict = {}
+
+    class _FakeConn:
+        def execute(self, sql, params=None):
+            written["sql"] = sql
+            written["params"] = params
+
+    class _WriteCtx:
+        async def __aenter__(self):
+            return _FakeConn()
+
+        async def __aexit__(self, *_):
+            return False
+
+    monkeypatch.setattr(w, "sync_recovery", _recovery_hits_a_transient_refresh_failure)
+    monkeypatch.setattr(w, "sync_sleep", _sleep_must_never_be_called)
+    monkeypatch.setattr(w, "sync_workout", _sleep_must_never_be_called)
+    monkeypatch.setattr(w, "sync_cycle", _sleep_must_never_be_called)
+    monkeypatch.setattr(w, "sync_body_measurement", _sleep_must_never_be_called)
+    monkeypatch.setattr(w, "sync_user_profile", _sleep_must_never_be_called)
+    monkeypatch.setattr(w, "write_ctx", lambda: _WriteCtx())
+
+    try:
+        asyncio.run(w.sync_all())
+        raise AssertionError("sync_all should have raised the transient failure")
+    except w.WHOOPTransientError:
+        pass
+
+    # oauth_state must be untouched -- neither a needs_reauth=TRUE (this isn't a
+    # confirmed dead token) nor a needs_reauth=FALSE/last_sync_at bump (most
+    # endpoints never ran, so that would be a false "fully synced" signal).
+    assert "sql" not in written

@@ -71,6 +71,21 @@ class WHOOPSchemaError(RuntimeError):
     """Raised when a WHOOP response is missing fields we expect — fails loud, never silent."""
 
 
+class WHOOPTransientError(RuntimeError):
+    """Raised when a token refresh hits a 5xx — rotation state is genuinely unknown.
+
+    Distinct from a bare RuntimeError so `sync_all` can catch it specifically: a
+    2026-08-14 incident showed that letting the endpoint loop continue after one
+    of these lets the NEXT endpoint's independent 401 trigger a second, uncoordinated
+    refresh attempt with the same (possibly already-rotated) token seconds later —
+    turning a transient gateway blip into a real dead-token reauth. This is WHOOP's
+    own documented "token desync from 502 gateway errors" failure mode: the origin
+    can complete the rotation and invalidate the old token even though the response
+    never reached us. `sync_all` must stop trying more endpoints on this, not
+    silently swallow it and press on.
+    """
+
+
 def _client_id() -> str:
     return load_token("whoop", "client_id") or settings.whoop_client_id or ""
 
@@ -160,17 +175,33 @@ async def _refresh() -> str:
         refresh = load_token("whoop", "refresh_token")
         if not refresh:
             raise WHOOPAuthError("No WHOOP refresh token — run OAuth flow first")
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                TOKEN_URL,
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh,
-                    "client_id": _client_id(),
-                    "client_secret": _client_secret(),
-                    "scope": "offline",
-                },
-            )
+
+        # One deliberate retry on a 5xx, not zero. This is a controlled follow-up
+        # from within the SAME call — unlike the 2026-08-14 incident, where the
+        # uncoordinated second attempt came from an unrelated endpoint's 401 two
+        # seconds later. A genuinely transient gateway blip often clears in that
+        # window; if the retry ALSO 5xxs, or comes back 400, we now have a real
+        # answer instead of a guess.
+        resp: httpx.Response | None = None
+        for attempt in range(2):
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    TOKEN_URL,
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh,
+                        "client_id": _client_id(),
+                        "client_secret": _client_secret(),
+                        "scope": "offline",
+                    },
+                )
+            if resp.status_code < 500:
+                break
+            if attempt == 0:
+                log.warning("WHOOP refresh got %d, retrying once after 2s", resp.status_code)
+                await asyncio.sleep(2.0)
+        assert resp is not None
+
         if resp.status_code in (400, 401):
             raise WHOOPAuthError(
                 f"WHOOP refresh rejected ({resp.status_code}) — re-authorization required"
@@ -178,8 +209,11 @@ async def _refresh() -> str:
         if resp.status_code >= 500:
             # Do NOT raise WHOOPAuthError here: that sets needs_reauth and tells
             # Rob to re-consent over what is usually a transient Cloudflare 502.
-            raise RuntimeError(
-                f"WHOOP refresh got {resp.status_code} (gateway/transient) — "
+            # WHOOPTransientError (not bare RuntimeError) so sync_all can stop the
+            # endpoint loop instead of letting the next endpoint's 401 trigger a
+            # second blind refresh with this same, now-uncertain token.
+            raise WHOOPTransientError(
+                f"WHOOP refresh got {resp.status_code} after retry (gateway/transient) — "
                 "rotation state unknown, stored token may still be valid"
             )
         resp.raise_for_status()
@@ -953,7 +987,11 @@ async def sync_all() -> dict[str, Any]:
     Only sets needs_reauth on WHOOPAuthError. Transient failures (429, network
     errors, schema drift) are logged but do not trigger the reauth banner.
     Per-endpoint failures are isolated so a single bad endpoint doesn't kill
-    the whole sync.
+    the whole sync — EXCEPT a WHOOPTransientError (a 5xx on token refresh),
+    which stops the loop outright rather than letting the next endpoint's 401
+    fire an uncoordinated second refresh attempt with the same, now-uncertain
+    token. That double-attempt is what turned a single 2026-08-14 gateway blip
+    into a real dead-token reauth four seconds later.
 
     Endpoint values are record counts (negative means that endpoint failed — see
     `report.failed_endpoints`). An endpoint that also detects anomalies returns
@@ -970,6 +1008,7 @@ async def sync_all() -> dict[str, Any]:
         ("user_profile", sync_user_profile),
     ]
     auth_failure: WHOOPAuthError | None = None
+    transient_failure: WHOOPTransientError | None = None
     other_failures: list[str] = []
 
     for name, fn in endpoints:
@@ -985,6 +1024,17 @@ async def sync_all() -> dict[str, Any]:
             auth_failure = e
             results[name] = -1
             break  # Auth dead — stop trying.
+        except WHOOPTransientError as e:
+            # 2026-08-14: a 502 here left rotation state unknown, and letting the
+            # loop continue meant the NEXT endpoint's 401 triggered a second,
+            # uncoordinated refresh with the same possibly-already-rotated token
+            # seconds later — that second attempt was the one that actually died.
+            # Stop instead of retrying blind; the next independent sync attempt
+            # (scheduled or manual) gets a clean shot with no split-second race.
+            transient_failure = e
+            results[name] = -1
+            log.warning("WHOOP %s hit a transient refresh failure — stopping sync: %s", name, e)
+            break
         except WHOOPSchemaError:
             log.exception("WHOOP %s schema drift — investigate", name)
             results[name] = -1
@@ -1000,6 +1050,11 @@ async def sync_all() -> dict[str, Any]:
                 "INSERT INTO oauth_state (source, needs_reauth) VALUES ('whoop', TRUE) "
                 "ON CONFLICT (source) DO UPDATE SET needs_reauth = TRUE"
             )
+        elif transient_failure:
+            # Genuinely uncertain: neither confirm a clean sync (don't touch
+            # last_sync_at — most endpoints never ran) nor demand reauth (the
+            # token may well still be valid). Leave oauth_state as it was.
+            pass
         else:
             conn.execute(
                 "INSERT INTO oauth_state (source, last_sync_at, needs_reauth) "
@@ -1010,6 +1065,10 @@ async def sync_all() -> dict[str, Any]:
 
     if auth_failure:
         raise auth_failure
+    if transient_failure:
+        skipped = [n for n, _ in endpoints if n not in results]
+        log.warning("WHOOP sync stopped after a transient refresh failure; skipped: %s", skipped)
+        raise transient_failure
     if other_failures:
         # Surface partial-failure clearly — never silent.
         log.error("WHOOP sync completed with failures on: %s", other_failures)
