@@ -915,6 +915,56 @@ def test_substring_keywords_never_swallow_unrelated_exercise_names() -> None:
         )
 
 
+def test_synergist_credit_requires_the_muscle_to_actually_work() -> None:
+    """A secondary row is a claim about mechanics, and it sets its own target.
+
+    Two rows failed that bar. Hip abduction credited the ADDUCTORS, which are the
+    movement's antagonist — they lengthen under it. Flyes and crossovers credited
+    the TRICEPS, though the elbow angle is fixed throughout, so the triceps never
+    shorten against load.
+
+    Neither was cosmetic. `fit_volume_landmarks` refits MEV/MAV/MRV from this same
+    credit path over 104 weeks, so phantom volume was also moving the target it
+    was measured against: dropping the two rows took adductors from 6/9/12 to
+    4/6/8 and triceps from 11/14/18 to 9/12/16.
+
+    The inverse guard is here too — a neutral grip makes the brachioradialis a
+    prime mover, so hammer variants must keep crediting forearms. Losing that
+    would starve the one muscle whose volume is 100% indirect.
+    """
+    from shc.training.exercise_classifier import classify_exercise
+
+    for name in ("Hip Abduction (Machine)", "Machine Hip Abductor", "Fire Hydrant"):
+        primary, secondaries = classify_exercise(name)
+        assert primary == "glutes", f"{name} classified as {primary}"
+        assert "adductors" not in secondaries, (
+            f"{name} credits its ANTAGONIST — abduction does not train the adductors"
+        )
+
+    for name in ("Cable Fly Crossovers", "Cable Crossover Fly", "Chest Fly (Dumbbell)"):
+        primary, secondaries = classify_exercise(name)
+        assert primary == "chest", f"{name} classified as {primary}"
+        assert "triceps" not in secondaries, (
+            f"{name} credits triceps, but the elbow angle is fixed through a fly"
+        )
+
+    # Presses keep their triceps credit — the fix splits flyes out, it does not
+    # strip the chest branch.
+    for name in ("Bench Press (Barbell)", "Incline Bench Press (Dumbbell)"):
+        assert "triceps" in classify_exercise(name)[1], f"{name} lost its triceps credit"
+
+    for name in ("Hammer Curl (Dumbbell)", "Cable Rope Hammer Curls", "Seated Hammer Curls"):
+        primary, secondaries = classify_exercise(name)
+        assert primary == "biceps", f"{name} classified as {primary}"
+        assert "forearms" in secondaries, f"{name} must credit forearms on a neutral grip"
+
+    # Supinated curls stay out of it — their omission is the catalog's convention.
+    for name in ("Bicep Curl (Cable)", "Preacher Curl (Barbell)"):
+        assert "forearms" not in classify_exercise(name)[1], (
+            f"{name} is supinated; no supinated curl in the catalog credits forearms"
+        )
+
+
 def test_e1rm_never_inflates_on_a_set_with_no_logged_rpe() -> None:
     """Invariant 13: the RIR adjustment may only fire on evidence.
 

@@ -80,8 +80,14 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         return "adductors", ["glutes"]
 
     # ── Glutes (abduction keywords → glutes, not adductors) ─────────────────
+    # The adductors are abduction's ANTAGONIST, not a synergist — they lengthen
+    # under the movement rather than working against it. Crediting them here put
+    # 45 phantom sets into the adductor ledger (58 Hip Abduction (Machine) + 32
+    # Machine Hip Abductor sets at 0.5), which both inflates weekly volume and
+    # biases the fitted MEV/MAV/MRV, since landmarks are refitted from this same
+    # credit path over 104 weeks of history.
     if "abduction" in n or "abductor" in n:
-        return "glutes", ["adductors"]
+        return "glutes", []
     if "hip thrust" in n or "glute bridge" in n or "glute" in n or "kickback" in n:
         return "glutes", ["hamstrings"]
 
@@ -130,6 +136,15 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
     # ── Arms ─────────────────────────────────────────────────────────────────
     if "reverse curl" in n:
         return "forearms", ["biceps"]
+    # Neutral-grip curls before the general curl branch: the brachioradialis is a
+    # prime mover under a neutral grip, which is why the curated catalog credits
+    # forearms on Hammer Curl (Dumbbell) (migration 0065) but on no supinated
+    # curl. Only those two names were listed there, so every other hammer variant
+    # Rob logs — Cable Rope Hammer Curls (121 sets), Incline Hammer Curl (185),
+    # Seated Hammer Curls (44) — credits nothing. Supinated curls are deliberately
+    # NOT included: their omission is the catalog's convention, not an oversight.
+    if "hammer" in n and "hammerstrength" not in n and "curl" in n:
+        return "biceps", ["forearms"]
     if (
         "curl" in n
         or ("hammer" in n and "hammerstrength" not in n)
@@ -157,11 +172,17 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
         return "rear_delts", ["traps"]
 
     # ── Chest ────────────────────────────────────────────────────────────────
+    # Flyes and crossovers split from presses: the elbow angle is held fixed
+    # through a fly, so the triceps never shorten against load and crediting
+    # them is mechanically wrong. It was not a small error — 1,301 logged
+    # fly/crossover sets were feeding the triceps ledger at 0.5, and triceps
+    # already draws 57% of its volume from indirect credit. Migration 0064 had
+    # already tried to record flyes as front_delts-only; its ON CONFLICT DO
+    # NOTHING lost to the row this classifier writes on every compute_all_scores.
+    if ("fly" in n and "reverse fly" not in n) or "crossover" in n or "pec" in n:
+        return "chest", ["front_delts"]
     if (
-        ("fly" in n and "reverse fly" not in n)
-        or "crossover" in n
-        or "pec" in n
-        or ("chest" in n and "chest supported" not in n)
+        ("chest" in n and "chest supported" not in n)
         or "bench press" in n
         or ("decline" in n and "row" not in n)
         or ("incline" in n and "row" not in n)
@@ -247,7 +268,7 @@ def classify_exercise(name: str) -> tuple[str, list[str]] | None:
     if "hip flexor" in n:
         return "quads", []  # hip flexors assist quads; no dedicated canonical key
     if "fire hydrant" in n:
-        return "glutes", ["adductors"]
+        return "glutes", []  # abduction — see the hip-abduction branch above
 
     # ── High pull (band/cable) → traps + upper back ───────────────────────────
     if "high pull" in n:
