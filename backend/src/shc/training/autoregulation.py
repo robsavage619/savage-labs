@@ -30,6 +30,7 @@ import logging
 import math
 import re
 import statistics
+from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -167,6 +168,11 @@ class Prescription:
     # redistributed over the sessions that haven't happened yet, so a missed or
     # gated day's sets land on the remaining days instead of evaporating.
     remaining_week: dict = field(default_factory=dict)
+    # Muscles whose total credited volume reaches target but whose DIRECT
+    # (primary-role) work does not — i.e. the muscle looks covered only because
+    # compounds are paying into it. Selection stops these heads being led by yet
+    # another synergist, and the context block says so out loud.
+    direct_short: list[str] = field(default_factory=list)
 
 
 # Number of muscles that must independently signal fatigue to trigger a deload.
@@ -880,6 +886,8 @@ def _select_grounded(
     tenure_weeks: Mapping[str, int] | None = None,
     rotate_after_weeks: int = _ROTATE_AFTER_WEEKS,
     verified: Mapping[str, bool] | None = None,
+    secondary_deficit: Mapping[str, float] | None = None,
+    is_direct: Mapping[str, bool] | None = None,
 ) -> tuple[list[tuple], dict[str, str]]:
     """Pick exercises head-first, quality-ranked, and stable — swap only on plateau.
 
@@ -929,6 +937,16 @@ def _select_grounded(
        movements sit in pools with genuine peers and do rotate. That approximates
        Helms' "compounds stable, isolation rotates" without inventing a
        classifier — it is an approximation, not a faithful implementation of it.
+    4c. **Cross-muscle payoff** — among options still tied, the one whose
+       SECONDARY credit serves another muscle's shortfall wins.
+       ``secondary_deficit`` maps ``exercise_name -> sum(that muscle's deficit ×
+       credit)``; absent → no effect. Deliberately placed BELOW every key that
+       speaks for the muscle being programmed: a lift must never be chosen for
+       what it does to some other muscle at this one's expense. It only decides
+       ties, and ties are pervasive — every curated muscle has candidates equal
+       on region/length/SFR, which is exactly where "and it also feeds the
+       lagging muscle" is free information rather than a compromise.
+
     5. **Name** — deterministic final tiebreaker (storage-order independent).
 
     Because the ordering carries no time term, selection is STABLE week to week
@@ -964,12 +982,18 @@ def _select_grounded(
     pr = progress_rank or {}
     tw = tenure_weeks or {}
     vf = verified or {}
+    sd = secondary_deficit or {}
+    dr = is_direct
 
     def _region(c) -> str:
         return c[2] or c[1]
 
     def _verified(c) -> bool:
         return vf.get(c[0], True) if vf else True
+
+    def _direct(c) -> bool:
+        # None → the caller is not gating on role for this muscle.
+        return True if dr is None else dr.get(c[0], False)
 
     def _stale(c) -> bool:
         """Swap-eligible: plateaued, or leading its head past the rotation window."""
@@ -997,6 +1021,7 @@ def _select_grounded(
             _LENGTH_RANK.get(c[3], 1),
             _SFR_RANK.get(c[6], 1),
             _progress(c),
+            -sd.get(c[0], 0.0),  # more of another muscle's shortfall served → earlier
             c[0],  # exercise name — deterministic final tiebreaker (storage-order independent)
         ),
     )
@@ -1004,6 +1029,13 @@ def _select_grounded(
     # not take the coverage slot or be swapped in. A head absent from this set has
     # nothing verified to offer, so its best candidate leads as a tagged trial.
     verified_regions = {_region(c) for c in ordered if _verified(c)}
+    # Heads with a genuine direct (primary-role) option, used only when the
+    # caller says this muscle is short on direct work. Synergist credit is real
+    # but it is not a substitute for training the muscle: measured across eight
+    # weeks, nine of seventeen muscles had a week where total volume cleared MEV
+    # while direct work alone did not — glutes three times, hamstrings and traps
+    # twice. Leading such a head with another synergist compounds exactly that.
+    direct_regions = {_region(c) for c in ordered if _direct(c)}
 
     notes: dict[str, str] = {}
     picks: list[tuple] = []
@@ -1016,6 +1048,8 @@ def _select_grounded(
             continue
         if region in verified_regions and not _verified(c):
             continue  # a usable option exists for this head — let it lead instead
+        if region in direct_regions and not _direct(c):
+            continue  # this muscle needs training, not more synergist credit
         pick = c
         if _stale(c):  # plateaued or past its rotation window — try an in-band swap
             why = "plateaued" if _progress(c) == 2 else f"held this head {tw.get(c[0], 0)}wk"
@@ -1360,8 +1394,36 @@ def _logged_recency(conn: duckdb.DuckDBPyConnection, names: list[str]) -> dict[s
     return {r[0]: (r[1] or date.min, int(r[2] or 0)) for r in rows}
 
 
+def _cross_muscle_credit(conn: duckdb.DuckDBPyConnection) -> dict[str, list[tuple[str, float]]]:
+    """``exercise -> [(secondary muscle, credit), ...]`` — what else a lift pays into.
+
+    The accounting layer has always known this (359 secondary rows, and indirect
+    work is the MAJORITY of several muscles' volume — forearms 100%, mid_back
+    76%, traps 61%, triceps 57%). Selection never saw it: the candidate pool is
+    built per-muscle, so picking for lats could not tell that a Chin Up buys
+    biceps volume a Lat Pulldown does not. Under an hour that fits ~20 sets, that
+    is the difference between covering a muscle and skipping it.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT exercise_name, muscle, credit FROM exercise_muscle "
+            "WHERE role = 'secondary' AND credit > 0"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — annotation optional
+        log.debug("cross-muscle credit unavailable: %s", exc)
+        return {}
+    out: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    for ex, muscle, credit in rows:
+        out[ex].append((muscle, float(credit or 0)))
+    return dict(out)
+
+
 def evidence_menu(
-    conn: duckdb.DuckDBPyConnection, muscles: list[str], per_muscle: int = 4
+    conn: duckdb.DuckDBPyConnection,
+    muscles: list[str],
+    per_muscle: int = 4,
+    muscle_deficit: Mapping[str, float] | None = None,
+    direct_short: set[str] | None = None,
 ) -> dict[str, list[dict]]:
     """Sports-science-grounded exercise picks per muscle (the guiding light).
 
@@ -1476,6 +1538,28 @@ def evidence_menu(
     verified_cutoff = (date.today() - timedelta(days=_VERIFIED_WITHIN_DAYS)).isoformat()
     verified = {n: (v.get("last_done") or "") >= verified_cutoff for n, v in info.items()}
 
+    # What each candidate also pays into, and how much of another muscle's
+    # shortfall that buys. Used ONLY to break ties below the quality keys — see
+    # _select_grounded — so a lift is never chosen for what it does to some other
+    # muscle at the expense of the one being programmed.
+    cross = _cross_muscle_credit(conn)
+    deficit = muscle_deficit or {}
+    secondary_deficit = {
+        name: sum(deficit.get(mu, 0.0) * cr for mu, cr in cross.get(name, [])) for name in all_names
+    }
+    # Role per (exercise, muscle): a muscle short on DIRECT work must not have its
+    # head led by a lift that only trains it as a synergist.
+    try:
+        direct_pairs = {
+            (r[0], r[1])
+            for r in conn.execute(
+                "SELECT exercise_name, muscle FROM exercise_muscle WHERE role = 'primary'"
+            ).fetchall()
+        }
+    except Exception as exc:  # noqa: BLE001 — gate optional, degrade to no gate
+        log.debug("primary-role lookup unavailable: %s", exc)
+        direct_pairs = set()
+
     # Loadable grids for the progressibility annotation (advisory — selection
     # ordering is untouched). Optional: absent grids just omit the field.
     grids = None
@@ -1486,10 +1570,27 @@ def evidence_menu(
     except Exception as exc:  # noqa: BLE001 — annotation optional
         log.debug("loadable grids unavailable for progressibility: %s", exc)
 
+    short_on_direct = direct_short or set()
     out: dict[str, list[dict]] = {}
     for muscle, cands in per_muscle_rows.items():
+        # Only gate on role where the muscle is actually short of DIRECT work.
+        # Elsewhere a synergist-role option is a legitimate pick — a row really
+        # does build mid-back — and blocking it everywhere would empty the pools
+        # that are mostly compound.
+        is_direct = (
+            {c[0]: (c[0], muscle) in direct_pairs for c in cands}
+            if muscle in short_on_direct and direct_pairs
+            else None
+        )
         selected, notes = _select_grounded(
-            cands, per_muscle, region_vol.get(muscle), ranks, tenure, verified=verified
+            cands,
+            per_muscle,
+            region_vol.get(muscle),
+            ranks,
+            tenure,
+            verified=verified,
+            secondary_deficit=secondary_deficit,
+            is_direct=is_direct,
         )
         picks: list[dict] = []
         for c in selected:
@@ -1508,6 +1609,7 @@ def evidence_menu(
                 "trend": trend,
                 "weeks": pi.get("weeks", 0),
                 "tenure": pi.get("tenure", 0),
+                "also_credits": sorted(cross.get(c[0], []), key=lambda mc: -mc[1]),
                 "last_done": pi.get("last_done"),
                 "status": notes.get(c[0]) or _default_status(trend, pi.get("tenure", 0)),
             }
@@ -2451,7 +2553,44 @@ def weekly_prescription(
     # them accordingly.
     need_volume = [m.muscle for m in muscle_rx]
     menu = _exercise_menu(conn, need_volume)
-    science = evidence_menu(conn, need_volume)
+
+    # How short each muscle is of its target — the currency the cross-muscle
+    # tiebreak spends, so a tie is settled by which option also feeds a lagging
+    # muscle rather than by alphabetical order.
+    muscle_deficit = {m.muscle: max(0.0, m.target_sets - m.current_sets) for m in muscle_rx}
+
+    # Muscles whose DIRECT work is below MEV even though total credited volume is
+    # not. Synergist credit is real volume but it is not a substitute for
+    # training the muscle, and the total was hiding the difference: mid_back
+    # draws 76% of its volume indirectly, traps 61%, triceps 57%. Where this
+    # holds, the muscle's head may not be led by a lift that trains it only as a
+    # synergist.
+    direct_short: set[str] = set()
+    try:
+        direct_now = dict(
+            conn.execute(
+                """
+                SELECT em.muscle, COUNT(*)::DOUBLE
+                FROM workout_sets_dedup ws
+                JOIN exercise_muscle em
+                  ON em.exercise_name = ws.exercise AND em.role = 'primary'
+                WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
+                  AND NOT ws.is_warmup AND ws.weight_kg > 0
+                GROUP BY em.muscle
+                """,
+                [this_week.isoformat(), (this_week + timedelta(days=7)).isoformat()],
+            ).fetchall()
+        )
+        for m in muscle_rx:
+            floor = m.target_sets
+            if m.current_sets >= floor and direct_now.get(m.muscle, 0.0) < floor:
+                direct_short.add(m.muscle)
+    except Exception as exc:  # noqa: BLE001 — gate optional, degrade to no gate
+        log.debug("direct-volume lookup unavailable: %s", exc)
+
+    science = evidence_menu(
+        conn, need_volume, muscle_deficit=muscle_deficit, direct_short=direct_short
+    )
     development = {m: d for m, d in load_muscle_development(conn).items() if m in need_volume}
     try:
         all_regions = weekly_region_volume(conn, this_week)
@@ -2475,6 +2614,7 @@ def weekly_prescription(
         data_gaps=data_gaps,
         capacity=_weekly_capacity(conn, muscle_rx),
         remaining_week=remaining_split(muscle_rx, date.today()),
+        direct_short=sorted(direct_short),
     )
 
 
@@ -2562,7 +2702,20 @@ def prescription_context_block(
             "  `held Nwk` is how long that lift has occupied its slot. Past the "
             "rotation window the engine proposes a swap — if you program the incumbent "
             "anyway, say why in the plan notes rather than doing it silently.",
+            "  `also credits` is what else the lift pays into at synergist rate. Under "
+            "an hour that fits ~20 sets, a pick that covers a lagging muscle on the way "
+            "past is worth more than one that doesn't — it breaks ties, it never "
+            "outranks the target muscle's own stimulus.",
         ]
+        if rx.direct_short:
+            lines.append(
+                "  ⚠ **DIRECT WORK SHORTFALL** — "
+                + ", ".join(rx.direct_short)
+                + ": total credited volume reaches target, but only because compounds "
+                "are paying into it — primary-role work alone is still short. Synergist "
+                "credit is real volume and NOT a substitute for training the muscle, so "
+                "these heads lead with a movement that trains them directly."
+            )
         action_by_muscle = {m.muscle: m.action for m in rx.muscles}
         for muscle, exs in rx.exercise_menu.items():
             picks = rx.exercise_science.get(muscle)
@@ -2601,9 +2754,15 @@ def prescription_context_block(
                     )
                 for p in picks:
                     head = f"{p['region']}, " if p.get("region") else ""
+                    also = p.get("also_credits") or []
+                    also_sfx = (
+                        " · also credits " + ", ".join(f"{mu} {cr:g}" for mu, cr in also)
+                        if also
+                        else ""
+                    )
                     lines.append(
                         f"    - {p['exercise']} — {head}{p['length_bias']}-biased, "
-                        f"{p['rep_low']}–{p['rep_high']} reps · {p['rationale']} "
+                        f"{p['rep_low']}–{p['rep_high']} reps{also_sfx} · {p['rationale']} "
                         f"[{p['citation']}]"
                     )
                     # Legibility line: why this pick is here and its plateau state,

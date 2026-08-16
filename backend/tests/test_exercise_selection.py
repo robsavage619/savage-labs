@@ -601,3 +601,70 @@ def test_rotation_never_swaps_a_working_lift_for_an_unproven_one() -> None:
     )
     assert picks[0][0] == "Preacher Curl"
     assert "swapped in" in notes["Preacher Curl"]
+
+
+# ── Cross-muscle awareness ───────────────────────────────────────────────────
+
+
+def test_cross_muscle_payoff_breaks_ties_but_never_outranks_stimulus() -> None:
+    """Selection is built per-muscle, so it could not see that a Chin Up buys
+    biceps volume a Lat Pulldown does not — even though the ACCOUNTING layer has
+    always known (indirect work is the majority of several muscles' volume:
+    forearms 100%, mid_back 76%, traps 61%, triceps 57%).
+
+    The payoff may only settle ties. A lift chosen for what it does to ANOTHER
+    muscle, at the expense of the one being programmed, is a worse lift.
+    """
+    # Tied on region, length and SFR — the case where the payoff is free.
+    plain = _cand("Plain Curl", "short_head")
+    pays = _cand("Zz Compound Curl", "short_head")  # sorts last by name
+    picks, _ = _select_grounded([plain, pays], per_muscle=1)
+    assert picks[0][0] == "Plain Curl", "with no payoff signal the name tiebreak stands"
+
+    picks, _ = _select_grounded(
+        [plain, pays], per_muscle=1, secondary_deficit={"Zz Compound Curl": 6.0}
+    )
+    assert picks[0][0] == "Zz Compound Curl", "a tie is settled by what else the lift feeds"
+
+    # NOT tied: the payoff lift is worse for THIS muscle (shortened vs lengthened).
+    better = _cand("Plain Curl", "short_head", length="lengthened", sfr="high")
+    worse = _cand("Zz Compound Curl", "short_head", length="shortened", sfr="low")
+    picks, _ = _select_grounded(
+        [better, worse], per_muscle=1, secondary_deficit={"Zz Compound Curl": 99.0}
+    )
+    assert picks[0][0] == "Plain Curl", (
+        "cross-muscle payoff must never buy volume elsewhere by degrading the stimulus here"
+    )
+
+
+def test_a_muscle_short_on_direct_work_is_not_led_by_another_synergist() -> None:
+    """Synergist credit is real volume but not a substitute for training the
+    muscle. Measured over eight weeks, nine of seventeen muscles had a week where
+    TOTAL credited volume cleared MEV while direct work alone did not — glutes
+    three times, hamstrings and traps twice. Leading such a head with yet another
+    compound is how that state perpetuates itself.
+    """
+    synergist = _cand("Barbell Row", "rhomboids", length="lengthened", sfr="high")
+    direct = _cand("Zz Rear Delt Row", "rhomboids", length="mid", sfr="moderate")
+
+    # Not flagged: the synergist wins on the quality keys, as it should.
+    picks, _ = _select_grounded([synergist, direct], per_muscle=1)
+    assert picks[0][0] == "Barbell Row"
+
+    # Flagged: this muscle needs training, not more incidental credit.
+    picks, _ = _select_grounded(
+        [synergist, direct],
+        per_muscle=1,
+        is_direct={"Barbell Row": False, "Zz Rear Delt Row": True},
+    )
+    assert picks[0][0] == "Zz Rear Delt Row"
+
+
+def test_direct_work_gate_does_not_empty_a_head_with_no_direct_option() -> None:
+    """A head whose every option is a synergist still gets programmed — blanking
+    it would read downstream as "nothing to train here", which is worse.
+    """
+    a = _cand("Row A", "rhomboids")
+    b = _cand("Row B", "rhomboids")
+    picks, _ = _select_grounded([a, b], per_muscle=1, is_direct={"Row A": False, "Row B": False})
+    assert len(picks) == 1
