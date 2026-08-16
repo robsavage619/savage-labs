@@ -13,7 +13,7 @@ import httpx
 
 from shc.auth.keychain import load_token, store_token
 from shc.config import settings
-from shc.db.schema import write_ctx
+from shc.db.schema import get_read_conn, write_ctx
 
 # Fallback only — used when a record carries no `timezone_offset` (recovery
 # records don't have this field at all; see _utc_to_local_date) or the offset
@@ -304,10 +304,19 @@ def _require(record: dict, *keys: str, kind: str) -> None:
         )
 
 
-async def _paginate(path: str) -> list[dict]:
-    """Fetch all pages from a v2 WHOOP endpoint using next_token pagination."""
+async def _paginate(path: str, start: datetime | None = None) -> list[dict]:
+    """Fetch pages from a v2 WHOOP endpoint using next_token pagination.
+
+    `start` is WHOOP's own occurrence-time filter ("return records that
+    occurred after or during this time") — passing it turns a full-history
+    walk into a bounded resume. It's resent on every page rather than only the
+    first: WHOOP's docs don't say whether `nextToken` alone preserves the
+    original filter, and re-sending it is a no-op if it does.
+    """
     records: list[dict] = []
     params: dict = {"limit": 25}
+    if start is not None:
+        params["start"] = start.isoformat()
     while True:
         page = await _get(path, params)
         records.extend(page.get("records", []))
@@ -315,15 +324,81 @@ async def _paginate(path: str) -> list[dict]:
         if not next_token:
             break
         params = {"limit": 25, "nextToken": next_token}
+        if start is not None:
+            params["start"] = start.isoformat()
     return records
+
+
+# Records can carry a PENDING score at fetch time and finalize afterward (a
+# cycle's score isn't final until the cycle ends, up to ~24h later). Resuming
+# from the exact last-seen occurrence time would permanently miss a record
+# that finalizes after its own occurrence time has scrolled out of the fetch
+# window, so every incremental fetch re-walks a safety margin behind the
+# stored cursor. The re-fetched records are idempotent (content_hash-gated
+# upserts), so the only cost of a wide margin is a handful of extra rows —
+# tiny next to the 800+-record full-history walk this replaces.
+_SYNC_OVERLAP = timedelta(days=7)
+
+
+def _read_sync_cursor(endpoint: str) -> datetime | None:
+    """Read the stored high-water-mark cursor for one WHOOP sub-endpoint.
+
+    Deliberately a dedicated table, not `oauth_state(source=...)`: that table
+    is enumerated directly as the "connected data sources" list in
+    /api/oauth/status and DailyState.data_sources (dashboard.py, subject.py),
+    one row per real external connection. Four per-endpoint rows there would
+    show up as four fake extra WHOOP connections in that UI.
+    """
+    read_conn = get_read_conn()
+    try:
+        row = read_conn.execute(
+            "SELECT cursor FROM whoop_sync_cursor WHERE endpoint = $endpoint",
+            {"endpoint": endpoint},
+        ).fetchone()
+    finally:
+        read_conn.close()
+    return row[0] if row else None
+
+
+def _write_sync_cursor(conn: Any, endpoint: str, cursor: datetime) -> None:
+    """Advance the stored cursor for one WHOOP sub-endpoint. Never moves it backward."""
+    conn.execute(
+        """
+        INSERT INTO whoop_sync_cursor (endpoint, cursor, updated_at)
+        VALUES ($endpoint, $cursor, $updated_at)
+        ON CONFLICT (endpoint) DO UPDATE SET
+            cursor = EXCLUDED.cursor,
+            updated_at = EXCLUDED.updated_at
+        WHERE EXCLUDED.cursor > whoop_sync_cursor.cursor
+        """,
+        {
+            "endpoint": endpoint,
+            "cursor": cursor.isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
+        },
+    )
+
+
+def _high_water_mark(records: list[dict], field: str) -> datetime | None:
+    """Latest occurrence timestamp across a page of records, or None if empty/unparseable."""
+    stamps = [t for r in records if (t := _parse_ts(r.get(field))) is not None]
+    return max(stamps) if stamps else None
 
 
 # ── Recovery ─────────────────────────────────────────────────────────────────
 
 
-async def sync_recovery() -> int:
-    """Fetch recent recovery records and upsert into DuckDB."""
-    records = await _paginate("/v2/recovery")
+async def sync_recovery(*, force_full: bool = False) -> int:
+    """Fetch recovery records since the last sync and upsert into DuckDB.
+
+    Resumes from the stored per-endpoint cursor minus `_SYNC_OVERLAP` instead
+    of re-walking the whole account — see DECISIONS.md 2026-08-16.
+    `force_full=True` ignores the stored cursor for this call (manual
+    backfill); the cursor still advances from whatever this call fetches.
+    """
+    cursor = None if force_full else _read_sync_cursor("recovery")
+    fetch_start = cursor - _SYNC_OVERLAP if cursor else None
+    records = await _paginate("/v2/recovery", start=fetch_start)
     skipped_no_score = 0
     async with write_ctx() as conn:
         for r in records:
@@ -374,6 +449,9 @@ async def sync_recovery() -> int:
                 """,
                 row,
             )
+        hwm = _high_water_mark(records, "created_at")
+        if hwm:
+            _write_sync_cursor(conn, "recovery", hwm)
     if skipped_no_score:
         log.warning("WHOOP recovery: %d records skipped (no score yet)", skipped_no_score)
     log.info("synced %d WHOOP recovery records", len(records) - skipped_no_score)
@@ -521,14 +599,21 @@ WHERE EXCLUDED.content_hash != sleep.content_hash
 """
 
 
-async def sync_sleep() -> tuple[int, list[str]]:
-    """Sync sleep records. Returns (count, window-mismatch descriptions).
+async def sync_sleep(*, force_full: bool = False) -> tuple[int, list[str]]:
+    """Sync sleep records since the last sync. Returns (count, window-mismatch descriptions).
+
+    Resumes from the stored per-endpoint cursor minus `_SYNC_OVERLAP` instead
+    of re-walking the whole account — see DECISIONS.md 2026-08-16.
+    `force_full=True` ignores the stored cursor for this call (manual
+    backfill); the cursor still advances from whatever this call fetches.
 
     The mismatches ride back on the return value rather than living only in the
     log — a log line is not somewhere anomalies get noticed. Hevy does the same
     with `quarantined`.
     """
-    records = await _paginate("/v2/activity/sleep")
+    cursor = None if force_full else _read_sync_cursor("sleep")
+    fetch_start = cursor - _SYNC_OVERLAP if cursor else None
+    records = await _paginate("/v2/activity/sleep", start=fetch_start)
     skipped_no_score = 0
     mismatches: list[str] = []
     async with write_ctx() as conn:
@@ -542,6 +627,9 @@ async def sync_sleep() -> tuple[int, list[str]]:
             if mismatch:
                 mismatches.append(mismatch)
             conn.execute(_SLEEP_UPSERT_SQL, row)
+        hwm = _high_water_mark(records, "start")
+        if hwm:
+            _write_sync_cursor(conn, "sleep", hwm)
     if skipped_no_score:
         log.warning("WHOOP sleep: %d records skipped (no score yet)", skipped_no_score)
     if mismatches:
@@ -801,13 +889,20 @@ WHERE EXCLUDED.content_hash != cardio_sessions.content_hash
 """
 
 
-async def sync_workout() -> tuple[int, list[str]]:
-    """Fetch WHOOP workouts into the workouts and cardio_sessions tables.
+async def sync_workout(*, force_full: bool = False) -> tuple[int, list[str]]:
+    """Fetch WHOOP workouts since the last sync into workouts and cardio_sessions.
 
     Returns (count, window-mismatch descriptions) — same contract as sync_sleep,
     so the anomalies reach the sync result instead of only the log.
+
+    Resumes from the stored per-endpoint cursor minus `_SYNC_OVERLAP` instead
+    of re-walking the whole account — see DECISIONS.md 2026-08-16.
+    `force_full=True` ignores the stored cursor for this call (manual
+    backfill); the cursor still advances from whatever this call fetches.
     """
-    records = await _paginate("/v2/activity/workout")
+    cursor = None if force_full else _read_sync_cursor("workout")
+    fetch_start = cursor - _SYNC_OVERLAP if cursor else None
+    records = await _paginate("/v2/activity/workout", start=fetch_start)
     skipped_no_score = 0
     mismatches: list[str] = []
     async with write_ctx() as conn:
@@ -826,6 +921,9 @@ async def sync_workout() -> tuple[int, list[str]]:
             kind = row["kind"]
             if kind not in _STRENGTH_KINDS and kind not in _EXCLUDED_KINDS:
                 conn.execute(_CARDIO_UPSERT_SQL, _cardio_row(r))
+        hwm = _high_water_mark(records, "start")
+        if hwm:
+            _write_sync_cursor(conn, "workout", hwm)
     if skipped_no_score:
         log.warning("WHOOP workout: %d records skipped (no score yet)", skipped_no_score)
     if mismatches:
@@ -841,9 +939,20 @@ async def sync_workout() -> tuple[int, list[str]]:
 # ── Cycle ────────────────────────────────────────────────────────────────────
 
 
-async def sync_cycle() -> int:
-    """Fetch daily cycle records (strain, kcal, avg/max HR) and upsert into daily_cycle."""
-    records = await _paginate("/v2/cycle")
+async def sync_cycle(*, force_full: bool = False) -> int:
+    """Fetch daily cycle records (strain, kcal, avg/max HR) since the last sync
+    and upsert into daily_cycle.
+
+    Resumes from the stored per-endpoint cursor minus `_SYNC_OVERLAP` instead
+    of re-walking the whole account — this is the endpoint DECISIONS.md
+    2026-08-12 flagged as paging through 800+ cycles and 429ing near the end
+    of every sync; see DECISIONS.md 2026-08-16. `force_full=True` ignores the
+    stored cursor for this call (manual backfill); the cursor still advances
+    from whatever this call fetches.
+    """
+    cursor = None if force_full else _read_sync_cursor("cycle")
+    fetch_start = cursor - _SYNC_OVERLAP if cursor else None
+    records = await _paginate("/v2/cycle", start=fetch_start)
     skipped: dict[str, int] = {"unscorable": 0, "no_score": 0}
     async with write_ctx() as conn:
         for r in records:
@@ -898,6 +1007,9 @@ async def sync_cycle() -> int:
                 """,
                 row,
             )
+        hwm = _high_water_mark(records, "start")
+        if hwm:
+            _write_sync_cursor(conn, "cycle", hwm)
     if skipped["unscorable"]:
         log.warning("WHOOP cycle: %d records skipped (UNSCORABLE)", skipped["unscorable"])
     log.info("synced %d WHOOP cycle records", len(records) - sum(skipped.values()))

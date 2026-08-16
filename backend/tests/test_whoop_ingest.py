@@ -21,6 +21,7 @@ from shc.ingest.whoop import (
     _SLEEP_UPSERT_SQL,
     _WORKOUT_UPSERT_SQL,
     _cardio_row,
+    _high_water_mark,
     _parse_offset,
     _sleep_row,
     _sleep_window_mismatch,
@@ -653,3 +654,251 @@ def test_sync_all_stops_on_transient_refresh_failure_without_hitting_more_endpoi
     # confirmed dead token) nor a needs_reauth=FALSE/last_sync_at bump (most
     # endpoints never ran, so that would be a false "fully synced" signal).
     assert "sql" not in written
+
+
+# ── Incremental sync cursor (2026-08-16 fix) ──────────────────────────────────
+#
+# sync_recovery/sync_sleep/sync_workout/sync_cycle used to call `_paginate` with
+# no bound, walking every page WHOOP has ever returned on every sync. DECISIONS.md
+# 2026-08-12 flagged this explicitly for sync_cycle: 800+ cycles paged on every
+# run, 429ing near the end — unnecessary load on the same WHOOP infrastructure
+# whose 502s cause the token-desync reauth bug. These functions now resume from
+# a stored per-endpoint high-water mark (`whoop_sync_cursor`) minus a safety
+# overlap, because a record can carry a PENDING score at fetch time and finalize
+# later (a cycle's score isn't final until the cycle ends, up to ~24h after) —
+# resuming from the exact last-seen timestamp would permanently miss it.
+
+
+class _WriteCtxOn:
+    """Wrap a real (migrated) in-memory conn as the async write_ctx() the sync
+    functions expect, so a full sync_* run can be exercised against real SQL."""
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection) -> None:
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *_):
+        return False
+
+
+def test_high_water_mark_picks_the_latest_timestamp() -> None:
+    records = [
+        {"start": "2026-08-01T00:00:00Z"},
+        {"start": "2026-08-10T00:00:00Z"},
+        {"start": "2026-08-05T00:00:00Z"},
+    ]
+    hwm = _high_water_mark(records, "start")
+    assert hwm is not None
+    assert hwm.isoformat() == "2026-08-10T00:00:00+00:00"
+
+
+def test_high_water_mark_ignores_missing_and_malformed_timestamps() -> None:
+    records = [
+        {"start": "2026-08-05T00:00:00Z"},
+        {"start": None},
+        {},
+        {"start": "not-a-timestamp"},
+    ]
+    hwm = _high_water_mark(records, "start")
+    assert hwm is not None
+    assert hwm.isoformat() == "2026-08-05T00:00:00+00:00"
+
+
+def test_high_water_mark_empty_or_all_unparseable_returns_none() -> None:
+    assert _high_water_mark([], "start") is None
+    assert _high_water_mark([{"start": None}, {}], "start") is None
+
+
+def test_sync_cursor_round_trips_and_is_independent_per_endpoint(
+    monkeypatch, conn: duckdb.DuckDBPyConnection
+) -> None:
+    from shc.ingest import whoop as w
+
+    monkeypatch.setattr(w, "get_read_conn", lambda: conn.cursor())
+
+    assert w._read_sync_cursor("recovery") is None
+    ts = w._parse_ts("2026-08-10T00:00:00Z")
+    assert ts is not None
+    w._write_sync_cursor(conn, "recovery", ts)
+    assert w._read_sync_cursor("recovery") == ts
+    assert w._read_sync_cursor("sleep") is None  # untouched — separate row
+
+
+def test_sync_cursor_never_moves_backward(monkeypatch, conn: duckdb.DuckDBPyConnection) -> None:
+    """A stale/reordered write must not regress a cursor that already advanced —
+    that would re-open the whole gap the cursor exists to close."""
+    from shc.ingest import whoop as w
+
+    monkeypatch.setattr(w, "get_read_conn", lambda: conn.cursor())
+
+    later = w._parse_ts("2026-08-10T00:00:00Z")
+    earlier = w._parse_ts("2026-08-01T00:00:00Z")
+    assert later is not None
+    assert earlier is not None
+    w._write_sync_cursor(conn, "cycle", later)
+    w._write_sync_cursor(conn, "cycle", earlier)
+    assert w._read_sync_cursor("cycle") == later
+
+
+def test_paginate_sends_start_and_resends_it_on_every_page(monkeypatch) -> None:
+    """WHOOP's docs don't confirm nextToken alone preserves the start filter, so
+    _paginate resends it on every page rather than betting on that being true."""
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    calls: list[dict] = []
+
+    async def _fake_get(path, params=None):
+        calls.append(dict(params or {}))
+        if "nextToken" not in (params or {}):
+            return {"records": [{"id": 1}], "next_token": "page2"}
+        return {"records": [{"id": 2}], "next_token": None}
+
+    monkeypatch.setattr(w, "_get", _fake_get)
+
+    start = w._parse_ts("2026-08-01T00:00:00Z")
+    assert start is not None
+    records = asyncio.run(w._paginate("/v2/cycle", start=start))
+
+    assert [r["id"] for r in records] == [1, 2]
+    assert len(calls) == 2
+    assert calls[0]["start"] == start.isoformat()
+    assert calls[1]["start"] == start.isoformat()
+    assert calls[1]["nextToken"] == "page2"
+
+
+def test_paginate_omits_start_when_none(monkeypatch) -> None:
+    """First-time sync / force_full path: no cursor yet, so no start filter is
+    sent — this is what preserves the full-history walk for a fresh connection."""
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    calls: list[dict] = []
+
+    async def _fake_get(path, params=None):
+        calls.append(dict(params or {}))
+        return {"records": [], "next_token": None}
+
+    monkeypatch.setattr(w, "_get", _fake_get)
+    asyncio.run(w._paginate("/v2/cycle"))
+    assert "start" not in calls[0]
+
+
+def test_sync_cycle_resumes_from_stored_cursor_minus_overlap(
+    monkeypatch, conn: duckdb.DuckDBPyConnection
+) -> None:
+    """The exact endpoint DECISIONS.md 2026-08-12 flagged: sync_cycle must stop
+    walking 800+ cycles on every run and instead fetch from near its cursor."""
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    stored_cursor = w._parse_ts("2026-08-10T00:00:00Z")
+    assert stored_cursor is not None
+    w._write_sync_cursor(conn, "cycle", stored_cursor)
+
+    seen_start: dict = {}
+
+    async def _fake_paginate(path, start=None):
+        seen_start["value"] = start
+        return []
+
+    monkeypatch.setattr(w, "get_read_conn", lambda: conn.cursor())
+    monkeypatch.setattr(w, "_paginate", _fake_paginate)
+    monkeypatch.setattr(w, "write_ctx", lambda: _WriteCtxOn(conn))
+
+    asyncio.run(w.sync_cycle())
+
+    assert seen_start["value"] == stored_cursor - w._SYNC_OVERLAP
+
+
+def test_sync_cycle_force_full_ignores_stored_cursor(
+    monkeypatch, conn: duckdb.DuckDBPyConnection
+) -> None:
+    """A deliberate backfill must still be able to re-walk full history even
+    once a cursor exists — force_full bypasses it for one call."""
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    stored_cursor = w._parse_ts("2026-08-10T00:00:00Z")
+    assert stored_cursor is not None
+    w._write_sync_cursor(conn, "cycle", stored_cursor)
+
+    seen_start: dict = {}
+
+    async def _fake_paginate(path, start=None):
+        seen_start["value"] = start
+        return []
+
+    monkeypatch.setattr(w, "get_read_conn", lambda: conn.cursor())
+    monkeypatch.setattr(w, "_paginate", _fake_paginate)
+    monkeypatch.setattr(w, "write_ctx", lambda: _WriteCtxOn(conn))
+
+    asyncio.run(w.sync_cycle(force_full=True))
+
+    assert seen_start["value"] is None
+
+
+def test_sync_cycle_first_ever_sync_has_no_cursor_and_walks_full_history(
+    monkeypatch, conn: duckdb.DuckDBPyConnection
+) -> None:
+    """No stored cursor yet — a brand-new connection must still fetch everything,
+    not silently sync nothing."""
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    seen_start: dict = {}
+
+    async def _fake_paginate(path, start=None):
+        seen_start["value"] = start
+        return []
+
+    monkeypatch.setattr(w, "get_read_conn", lambda: conn.cursor())
+    monkeypatch.setattr(w, "_paginate", _fake_paginate)
+    monkeypatch.setattr(w, "write_ctx", lambda: _WriteCtxOn(conn))
+
+    asyncio.run(w.sync_cycle())
+
+    assert seen_start["value"] is None
+
+
+def test_sync_recovery_advances_cursor_past_an_unscored_record(
+    monkeypatch, conn: duckdb.DuckDBPyConnection
+) -> None:
+    """The cursor must move forward from the newest record actually fetched,
+    including one WHOOP hasn't scored yet — that record is what re-syncs on the
+    next run inside the overlap window instead of being permanently missed."""
+    import asyncio
+
+    from shc.ingest import whoop as w
+
+    scored = {
+        "cycle_id": 1,
+        "sleep_id": 1,
+        "created_at": "2026-08-01T00:00:00Z",
+        "score": {"recovery_score": 71},
+    }
+    pending = {
+        "cycle_id": 2,
+        "sleep_id": 2,
+        "created_at": "2026-08-05T00:00:00Z",
+        "score": {},
+    }
+
+    async def _fake_paginate(path, start=None):
+        return [scored, pending]
+
+    monkeypatch.setattr(w, "get_read_conn", lambda: conn.cursor())
+    monkeypatch.setattr(w, "_paginate", _fake_paginate)
+    monkeypatch.setattr(w, "write_ctx", lambda: _WriteCtxOn(conn))
+
+    count = asyncio.run(w.sync_recovery())
+
+    assert count == 1  # the pending-score record is skipped, not stored
+    assert w._read_sync_cursor("recovery") == w._parse_ts(pending["created_at"])
