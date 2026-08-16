@@ -1204,8 +1204,18 @@ def _progress_info(
     return info
 
 
-def _default_status(trend: str) -> str:
-    """One-line rank reason when selection left no explicit swap/held note."""
+def _default_status(trend: str, tenure: int = 0) -> str:
+    """One-line rank reason when selection left no explicit swap/held note.
+
+    Tenure is reported even on picks the rotation machinery never inspected. Only
+    the coverage-pass LEAD for a head goes through the swap logic, so a staple
+    that fills a later slot — Lateral Raise (Dumbbell) at twelve weeks in its
+    slot, on a muscle with a single head — otherwise rendered as
+    "kept: progressing", which reads as an endorsement of the exact repetition
+    the rotation window exists to break.
+    """
+    if tenure >= _ROTATE_AFTER_WEEKS and trend in ("progressing", "young"):
+        return f"past the rotation window (held {tenure}wk) — prefer an alternative above"
     return {
         "progressing": "kept: progressing",
         "stalled": "stalled: swap-eligible",
@@ -1497,8 +1507,9 @@ def evidence_menu(
                 "citation_url": c[9],
                 "trend": trend,
                 "weeks": pi.get("weeks", 0),
+                "tenure": pi.get("tenure", 0),
                 "last_done": pi.get("last_done"),
-                "status": notes.get(c[0]) or _default_status(trend),
+                "status": notes.get(c[0]) or _default_status(trend, pi.get("tenure", 0)),
             }
             if grids is not None:
                 prog = _progressibility(grids, pi.get("logged_name") or c[0])
@@ -2421,12 +2432,24 @@ def weekly_prescription(
             }
         )
 
-    # Exercise menu for muscles that need volume: this week's prescription is
-    # "add", OR the muscle is an emphasis priority (surfaced even on a hold/cut
-    # week, so a lagging priority muscle's menu stays visible). Sports-science-
-    # grounded selection (evidence_menu) leads; the legacy recency menu fills
-    # any muscle not yet curated in the exercise-science layer.
-    need_volume = [m.muscle for m in muscle_rx if m.action == "add" or m.emphasis]
+    # Exercise menu for EVERY prescribed muscle, not just the ones gaining sets.
+    #
+    # This was previously gated on `action == "add" or emphasis`, which coupled
+    # two independent training variables: how MUCH to train a muscle, and WHICH
+    # movement to train it with. A muscle sitting exactly at its target got no
+    # selection input at all, so the only exercise-shaped signal left for it was
+    # the recency-sorted staple list — and it kept getting the same lift forever.
+    #
+    # The coupling is visible in the data: the seven muscles on HOLD were the
+    # seven with the worst single-exercise monopolies (side_delts 95%, mid_back
+    # 100%, traps 100%, front_delts 74%, rear_delts 73%, triceps 63%, lats 55%),
+    # while every muscle that happened to be ADD-ing had a menu and a spread.
+    #
+    # A HOLD muscle's menu is a SUBSTITUTION list, not an invitation to add
+    # volume — every one of them sits at delta +0, and the set-count validator
+    # rejects a plan that exceeds target+1. `prescription_context_block` labels
+    # them accordingly.
+    need_volume = [m.muscle for m in muscle_rx]
     menu = _exercise_menu(conn, need_volume)
     science = evidence_menu(conn, need_volume)
     development = {m: d for m, d in load_muscle_development(conn).items() if m in need_volume}
@@ -2456,14 +2479,22 @@ def weekly_prescription(
 
 
 def prescription_context_block(
-    conn: duckdb.DuckDBPyConnection, daily_state: dict | None = None
+    conn: duckdb.DuckDBPyConnection,
+    daily_state: dict | None = None,
+    prescription: Prescription | None = None,
 ) -> str:
     """Markdown block injected into the workout planner — the build order.
 
     Pass ``daily_state`` (an already-computed ``DailyState`` dict) when the
     caller has one in scope to avoid recomputing it.
     """
-    rx = weekly_prescription(conn, daily_state=daily_state)
+    # Callers that already computed the prescription pass it in rather than pay
+    # for it twice (the context builder needs it before this block is rendered).
+    rx = (
+        prescription
+        if prescription is not None
+        else weekly_prescription(conn, daily_state=daily_state)
+    )
     if not rx.muscles:
         return ""
     lines = ["## THIS WEEK'S PRESCRIPTION (build the session from this)"]
@@ -2522,22 +2553,32 @@ def prescription_context_block(
             f"({m.delta:+d}) | {m.action.upper()} | {m.reason} |"
         )
     if rx.exercise_menu or rx.exercise_science:
-        lines.append(
-            "\n**Exercise menu for muscles needing volume** — sports-science-grounded "
-            "where curated (lengthened-position + head coverage); recency otherwise:"
-        )
+        lines += [
+            "\n**Exercise menu — EVERY prescribed muscle** — sports-science-grounded "
+            "where curated (lengthened-position + head coverage); recency otherwise.",
+            "  A muscle marked HOLD/CUT still gets a menu: that is a SUBSTITUTION list "
+            "for the sets it is already doing, NOT permission to add volume. Its set "
+            "count comes from the table above and the validator enforces it.",
+            "  `held Nwk` is how long that lift has occupied its slot. Past the "
+            "rotation window the engine proposes a swap — if you program the incumbent "
+            "anyway, say why in the plan notes rather than doing it silently.",
+        ]
+        action_by_muscle = {m.muscle: m.action for m in rx.muscles}
         for muscle, exs in rx.exercise_menu.items():
             picks = rx.exercise_science.get(muscle)
+            act = (action_by_muscle.get(muscle) or "").upper()
+            sub_sfx = " — SUBSTITUTE ONLY, do not add sets" if act in ("HOLD", "CUT") else ""
             if picks:
                 dev = rx.development.get(muscle)
                 if dev:
                     lines.append(
-                        f"- **{muscle}** — target {dev['weekly_sets_low']}–{dev['weekly_sets_high']} "
+                        f"- **{muscle}** [{act}{sub_sfx}] — target "
+                        f"{dev['weekly_sets_low']}–{dev['weekly_sets_high']} "
                         f"sets/wk over {dev['freq_per_week']}×; {dev['rep_scheme']} "
                         f"[{dev['citation']}]"
                     )
                 else:
-                    lines.append(f"- **{muscle}** (evidence-based selection):")
+                    lines.append(f"- **{muscle}** [{act}{sub_sfx}] (evidence-based selection):")
                 # Show EVERY head this muscle should cover — including the ones at
                 # zero this week, since a neglected head is exactly what the plan
                 # should lead. weekly_region_volume only returns trained heads, so
@@ -2570,9 +2611,13 @@ def prescription_context_block(
                     if "status" in p:
                         last = p.get("last_done") or "never"
                         wk = p.get("weeks", 0)
+                        # Tenure and evidence depth are different numbers and were
+                        # being conflated: "Nwk data" was read as "has led this head
+                        # N weeks" when it only ever meant "has N weeks of e1RM on
+                        # record". Both are shown, each labelled for what it is.
                         lines.append(
-                            f"        · last {last} · {wk}wk data · "
-                            f"{p.get('trend', 'untrained')} · {p['status']}"
+                            f"        · last {last} · held {p.get('tenure', 0)}wk · "
+                            f"{wk}wk e1RM data · {p.get('trend', 'untrained')} · {p['status']}"
                         )
                     prog = p.get("progressibility")
                     if prog and prog.get("coarse"):

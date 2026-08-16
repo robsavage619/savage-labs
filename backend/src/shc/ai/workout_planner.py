@@ -122,6 +122,34 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     ww_rows = conn.execute(
         "SELECT exercise, weight_kg, source FROM working_weights ORDER BY updated_at DESC"
     ).fetchall()
+
+    # This week's prescription is computed ONCE here and reused for its context
+    # block further down, because the working-weights block below needs to know
+    # which exercises the menu names. Four menu picks were landing in the block's
+    # truncated tail, so the plan was told to program a lift whose load reference
+    # never reached the page — one more reason to fall back on the staples.
+    try:
+        from shc.training.autoregulation import weekly_prescription
+
+        _rx = weekly_prescription(conn, daily_state=state)
+        _menu_names = {p["exercise"] for v in _rx.exercise_science.values() for p in v} | {
+            e["exercise"] for v in _rx.exercise_menu.values() for e in v
+        }
+    except Exception as _exc:  # noqa: BLE001 — advisory layer, never blocks context
+        log.debug("weekly prescription unavailable: %s", _exc)
+        _rx, _menu_names = None, set()
+
+    # Primary muscle per exercise — the working-weights block groups by it rather
+    # than by recency (see there).
+    try:
+        _primary_muscle = dict(
+            conn.execute(
+                "SELECT exercise_name, muscle FROM exercise_muscle WHERE role = 'primary'"
+            ).fetchall()
+        )
+    except Exception as _exc:  # noqa: BLE001 — grouping is cosmetic, never load-bearing
+        log.debug("primary-muscle lookup unavailable: %s", _exc)
+        _primary_muscle = {}
     # Best Epley e1RM per exercise (90d) — the basis for today's target load.
     # working_weights is an all-time ratcheting MAX, so prescribing off it at
     # higher reps demands a SUPRAMAXIMAL e1RM (a fake "deload"). Target load must
@@ -472,6 +500,26 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     # At 40 this hid 212 of 252 exercises — Leg Extension, Seated Leg Curl, Calf
     # Press, Front Raise among them — which is a rich-get-richer loop, not a budget.
     ww_limit = 200
+    # Two further recency traps, both measured on live data:
+    #
+    # 1. Even at 200 the cut still bites the menu. Four of the exercises this
+    #    week's menu names sat in the truncated tail, so the plan was told to
+    #    program a lift whose load never appeared on the page. Every menu name is
+    #    now pinned in regardless of when its working weight was last touched.
+    # 2. The surviving rows were PRINTED in recency order, which is a ranking
+    #    whether or not it is labelled one — 203 lines of "what you did most
+    #    recently" sitting directly above the exercise choice. Grouping by muscle
+    #    makes the block a load reference, which is all it was ever meant to be.
+    _ww_by_name = {r[0]: r for r in ww_rows}
+    _kept = list(ww_rows[:ww_limit])
+    _pinned = [_ww_by_name[n] for n in sorted(_menu_names) if n in _ww_by_name]
+    _seen_ww: set[str] = set()
+    _ww_shown = []
+    for _row in _kept + _pinned:
+        if _row[0] not in _seen_ww:
+            _seen_ww.add(_row[0])
+            _ww_shown.append(_row)
+    _ww_shown.sort(key=lambda r: (_primary_muscle.get(r[0], "~unmapped"), r[0]))
     # Loadable-notch grids, built once for the whole block. Every anchor below is
     # snapped onto a weight the gym can actually produce, so the model is no longer
     # handed a kg-conversion artifact like "≤106.6 lbs" and asked to program from it.
@@ -487,9 +535,16 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "Ceilings are already rounded DOWN to a weight this implement can actually "
         "be loaded to — prescribe a load that appears in Rob's logged history for "
         "that lift (dumbbells come off a shared rack), not an arbitrary number "
-        "between two notches. A load that is not loadable is snapped on save."
+        "between two notches. A load that is not loadable is snapped on save. "
+        "GROUPED BY MUSCLE, not by recency — this is a load lookup, not a "
+        "ranking, and position here says nothing about what to program."
     )
-    for ex, all_time_kg, src in ww_rows[:ww_limit]:
+    _last_group: str | None = None
+    for ex, all_time_kg, src in _ww_shown:
+        _group = _primary_muscle.get(ex, "~unmapped")
+        if _group != _last_group:
+            lines.append(f"### {_group}")
+            _last_group = _group
         recent_kg = recent_max_by_ex.get(ex)
         wkg = recent_kg if recent_kg else all_time_kg
         stale_sfx = "" if recent_kg else " ⚠ no set in 90d — historic max"
@@ -519,10 +574,11 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         lines.append(
             f"- {ex}: {lbs} lbs{unit_sfx}{total_sfx} ({ph_kg:.1f} kg) [{src}]{stale_sfx}{weight_note}"
         )
-    if len(ww_rows) > ww_limit:
+    if len(ww_rows) > len(_ww_shown):
         lines.append(
-            f"  ... {len(ww_rows) - ww_limit} more truncated "
-            f"(showing {ww_limit} most-recently-updated of {len(ww_rows)})"
+            f"  ... {len(ww_rows) - len(_ww_shown)} more truncated (showing "
+            f"{len(_ww_shown)} of {len(ww_rows)}: the {ww_limit} most-recently-updated "
+            "plus every exercise this week's menu names)"
         )
 
     # Deterministic per-lift next targets: the engine's own double-progression
@@ -792,7 +848,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     try:
         from shc.training.autoregulation import prescription_context_block
 
-        rx_block = prescription_context_block(conn, daily_state=state)
+        rx_block = prescription_context_block(conn, daily_state=state, prescription=_rx)
         if rx_block:
             lines.append("\n" + rx_block)
     except Exception as _e:
