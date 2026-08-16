@@ -822,6 +822,20 @@ _ROTATE_AFTER_WEEKS = 6
 # the "progressing/plateaued" read no longer reflects what Rob is doing now.
 _STALE_TREND_WEEKS = 6
 
+# The window rotation tenure is counted over, and how recently a lift must have
+# been trained for that count to mean it currently holds its slot. 12 weeks is
+# wide enough that a lift trained most weeks reaches _ROTATE_AFTER_WEEKS even
+# with skipped weeks, and 2 weeks is tight enough that a benched lift stops
+# claiming tenure after roughly one rotation cooldown. See _rotation_tenure.
+_TENURE_WINDOW_WEEKS = 12
+_TENURE_LIVE_WEEKS = 2
+
+# A movement is programmable evidence only if Rob has actually logged it recently
+# enough to know the equipment exists and the name is loggable. Beyond this it is
+# a TRIAL: still worth surfacing, never worth LEADING a head with. 9 of 17 muscles
+# were leading with a movement never logged or last logged in 2018-2019.
+_VERIFIED_WITHIN_DAYS = 365
+
 
 def load_muscle_development(conn: duckdb.DuckDBPyConnection) -> dict[str, dict]:
     """Per-muscle programming evidence (regions to cover, dose, freq, citation).
@@ -865,6 +879,7 @@ def _select_grounded(
     progress_rank: Mapping[str, int] | None = None,
     tenure_weeks: Mapping[str, int] | None = None,
     rotate_after_weeks: int = _ROTATE_AFTER_WEEKS,
+    verified: Mapping[str, bool] | None = None,
 ) -> tuple[list[tuple], dict[str, str]]:
     """Pick exercises head-first, quality-ranked, and stable — swap only on plateau.
 
@@ -901,8 +916,9 @@ def _select_grounded(
        The "constrain variety" guidance in that note is scoped to beginners in
        their first 8–12 weeks.
 
-    4b. **Tenure** — a lift that has led its head for ``rotate_after_weeks``
-       consecutive scored weeks becomes swap-eligible *even while progressing*,
+    4b. **Tenure** — a lift that has held its head for ``rotate_after_weeks``
+       weeks inside the rotation window becomes swap-eligible *even while
+       progressing*,
        via the same in-band machinery as a plateau. ``tenure_weeks`` maps
        ``exercise_name → completed weeks behind its trend``; absent → no tenure
        rotation. Compounds are protected structurally rather than by a
@@ -927,16 +943,33 @@ def _select_grounded(
     displaced lead reappears when the remaining slots are filled with next-best, so
     it stays visible (tagged) rather than vanishing.
 
+    **Availability gates what may LEAD, not what may appear.** ``verified`` maps
+    ``exercise_name -> logged recently enough to prove the equipment exists``;
+    absent → everything counts as verified. Where a head has at least one
+    verified option, unverified ones cannot take its coverage slot or win a swap
+    into it. Without this the quality keys happily led nine of seventeen muscles
+    with a movement never logged or last touched in 2018 — chest with a 2019
+    barbell bench, lats with a Chin Up that has no logged set at all — which
+    reads as noise and gets the whole menu discarded rather than followed. A head
+    with NO verified option still surfaces its best candidate, tagged as a trial
+    to verify, because that is real information (the pool may be dead) rather
+    than an empty slot.
+
     Returns ``(picks, notes)`` where ``notes`` maps an exercise name to a one-line
-    rank reason (``swapped in`` / ``swap candidate: plateaued`` / ``held``) for the
-    menu to surface. Absence of a note means the pick led on merit.
+    rank reason (``swapped in`` / ``swap candidate: plateaued`` / ``held`` /
+    ``TRIAL``) for the menu to surface. Absence of a note means the pick led on
+    merit.
     """
     rv = region_volume or {}
     pr = progress_rank or {}
     tw = tenure_weeks or {}
+    vf = verified or {}
 
     def _region(c) -> str:
         return c[2] or c[1]
+
+    def _verified(c) -> bool:
+        return vf.get(c[0], True) if vf else True
 
     def _stale(c) -> bool:
         """Swap-eligible: plateaued, or leading its head past the rotation window."""
@@ -967,6 +1000,11 @@ def _select_grounded(
             c[0],  # exercise name — deterministic final tiebreaker (storage-order independent)
         ),
     )
+    # Heads that have a verified option: within these, an unverified candidate may
+    # not take the coverage slot or be swapped in. A head absent from this set has
+    # nothing verified to offer, so its best candidate leads as a tagged trial.
+    verified_regions = {_region(c) for c in ordered if _verified(c)}
+
     notes: dict[str, str] = {}
     picks: list[tuple] = []
     seen_regions: set[str] = set()
@@ -976,12 +1014,16 @@ def _select_grounded(
         region = _region(c)
         if region in seen_regions:
             continue
+        if region in verified_regions and not _verified(c):
+            continue  # a usable option exists for this head — let it lead instead
         pick = c
         if _stale(c):  # plateaued or past its rotation window — try an in-band swap
-            why = "plateaued" if _progress(c) == 2 else f"led this head {tw.get(c[0], 0)}wk"
+            why = "plateaued" if _progress(c) == 2 else f"held this head {tw.get(c[0], 0)}wk"
             for alt in ordered:
                 if _region(alt) != region or alt is c or _stale(alt):
                     continue
+                if region in verified_regions and not _verified(alt):
+                    continue  # never rotate a working lift out for an unproven one
                 if _in_band(c, alt):
                     pick = alt
                     notes[alt[0]] = f"swapped in: replaces {c[0]} ({why})"
@@ -989,6 +1031,8 @@ def _select_grounded(
                     break
             else:
                 notes[c[0]] = f"held: {why}, no in-band alternative"
+        if not _verified(pick):
+            notes[pick[0]] = "TRIAL — no verified option for this head; verify equipment exists"
         picks.append(pick)
         seen_regions.add(region)
     for c in ordered:  # fill remaining slots with next-best (displaced lead resurfaces here)
@@ -1019,6 +1063,50 @@ def _load_exercise_aliases(conn: duckdb.DuckDBPyConnection) -> dict[str, str]:
         return {}
 
 
+def _rotation_tenure(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    """``logged name -> weeks trained inside the rotation window``, 0 if benched.
+
+    This is the number :func:`_select_grounded` needs to answer "has this lift
+    led its head long enough to rotate", and it is measured two ways at once:
+
+    * **Exposure, not a streak.** A consecutive-week counter resets on every
+      skipped week, and Rob trains a lift twice one week then skips the next —
+      so a streak fires on only 5 of his 16 monopoly lifts and misses the worst
+      of them (triceps streak 1, traps 2, adductors 0, all while one exercise
+      owns 63-100% of that muscle's sets). Counting the weeks a lift appears in
+      the trailing window fires on 12 of 16 instead.
+    * **Gated on recency.** Exposure alone flags a lift that is already out of
+      rotation — Seated Cable Row shows 6 window-weeks but has not been trained
+      in 4, so it needs no rotation, it has had one. Only a lift trained within
+      :data:`_TENURE_LIVE_WEEKS` counts as currently holding its slot.
+
+    The pairing also removes the ping-pong a streak metric creates. Benching a
+    lift zeroes a streak immediately, so it is re-eligible to lead the very next
+    week; exposure decays a week at a time and the recency gate releases it after
+    ~3 weeks off, which is the cooldown the rotation window wants anyway.
+    """
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT exercise,
+                   COUNT(DISTINCT date_trunc('week', started_at)::DATE) AS window_weeks,
+                   MAX(date_trunc('week', started_at)::DATE) AS last_week
+            FROM workout_sets_dedup
+            WHERE COALESCE(is_warmup, FALSE) = FALSE
+              AND date_trunc('week', started_at)::DATE
+                  > (date_trunc('week', CURRENT_DATE)::DATE
+                     - INTERVAL '{_TENURE_WINDOW_WEEKS} weeks')
+            GROUP BY exercise
+            """
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — rotation signal optional, never blocks selection
+        log.debug("rotation tenure unavailable: %s", exc)
+        return {}
+    this_week = _iso_week_start(date.today())
+    live_after = this_week - timedelta(weeks=_TENURE_LIVE_WEEKS)
+    return {r[0]: int(r[1] or 0) for r in rows if r[2] is not None and r[2] >= live_after}
+
+
 def _progress_info(
     conn: duckdb.DuckDBPyConnection,
     names: set[str],
@@ -1026,7 +1114,7 @@ def _progress_info(
 ) -> dict[str, dict]:
     """Per curated exercise: swap-priority rank + the evidence behind it.
 
-    Returns ``{name: {rank, trend, weeks, last_done, logged_name}}``:
+    Returns ``{name: {rank, trend, weeks, tenure, last_done, logged_name}}``:
 
     * ``rank`` — ``0`` progressing (keep) < ``1`` untried/young (neutral) < ``2``
       plateaued (stalled/regressing, swap-eligible). Drives :func:`_select_grounded`.
@@ -1036,6 +1124,16 @@ def _progress_info(
       name or its alias — the "verify the equipment exists" case, distinct from
       ``young``).
     * ``weeks`` — completed weeks of e1RM behind the trend (0 when unscored).
+      This is a measure of EVIDENCE DEPTH and nothing else. It was previously
+      handed to selection as the rotation trigger, which it never was: it counts
+      weeks with e1RM data anywhere in history, capped at 14, so Deadlift last
+      done in 2019 reported 6 and Overhead Press last done Feb 2025 reported 14.
+      60% of candidates read as over-tenured against 4% under a real measure,
+      and since a swap-in is rejected when it is itself over-tenured, every
+      alternative WITH history was disqualified — leaving only never-logged and
+      years-stale movements to rotate into. Use ``tenure`` for rotation.
+    * ``tenure`` — weeks this lift has actually held its slot recently, from
+      :func:`_rotation_tenure`. This is the rotation trigger.
     * ``last_done`` — ISO date of the most recent working set, alias-resolved.
 
     Curated names are resolved to Rob's logged variant via ``aliases`` before
@@ -1061,6 +1159,7 @@ def _progress_info(
         log.debug("last-done lookup unavailable: %s", exc)
 
     stale_before = date.today() - timedelta(weeks=_STALE_TREND_WEEKS)
+    tenure_by_logged = _rotation_tenure(conn)
     info: dict[str, dict] = {}
     for name in names:
         # An alias is only useful while the curated name has NO history of its
@@ -1098,6 +1197,7 @@ def _progress_info(
             "rank": rank,
             "trend": trend,
             "weeks": weeks,
+            "tenure": tenure_by_logged.get(logged, 0),
             "last_done": ld,
             "logged_name": logged,
         }
@@ -1356,9 +1456,15 @@ def evidence_menu(
     all_names = {c[0] for cands in per_muscle_rows.values() for c in cands}
     info = _progress_info(conn, all_names, aliases)
     ranks = {n: v["rank"] for n, v in info.items()}
-    # Weeks behind the trend doubles as tenure: how long this movement has been
-    # the scored lead for its head. Drives the 4–6 week rotation trigger.
-    tenure = {n: int(v.get("weeks") or 0) for n, v in info.items()}
+    # Weeks this movement has actually held its slot — NOT the depth of its e1RM
+    # history, which is what used to be passed here and meant a lift last trained
+    # in 2019 read as a six-week incumbent. Drives the 4–6 week rotation trigger.
+    tenure = {n: int(v.get("tenure") or 0) for n, v in info.items()}
+    # Whether Rob has logged the movement recently enough to prove the equipment
+    # exists and the name is loggable. Gates what may LEAD a head, not what may
+    # appear on the menu.
+    verified_cutoff = (date.today() - timedelta(days=_VERIFIED_WITHIN_DAYS)).isoformat()
+    verified = {n: (v.get("last_done") or "") >= verified_cutoff for n, v in info.items()}
 
     # Loadable grids for the progressibility annotation (advisory — selection
     # ordering is untouched). Optional: absent grids just omit the field.
@@ -1372,7 +1478,9 @@ def evidence_menu(
 
     out: dict[str, list[dict]] = {}
     for muscle, cands in per_muscle_rows.items():
-        selected, notes = _select_grounded(cands, per_muscle, region_vol.get(muscle), ranks, tenure)
+        selected, notes = _select_grounded(
+            cands, per_muscle, region_vol.get(muscle), ranks, tenure, verified=verified
+        )
         picks: list[dict] = []
         for c in selected:
             pi = info.get(c[0], {})

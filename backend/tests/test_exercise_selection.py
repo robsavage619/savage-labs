@@ -475,3 +475,129 @@ def test_alias_still_followed_when_curated_name_is_unlogged(conn, seed) -> None:
         conn, {"Tricep Pushdown (Cable)"}, {"Tricep Pushdown (Cable)": "Cable Tricep Pushdown"}
     )
     assert info["Tricep Pushdown (Cable)"]["last_done"] == (today - timedelta(days=3)).isoformat()
+
+
+# ── Rotation tenure: the value production actually passes ────────────────────
+
+
+def test_tenure_measures_slot_occupancy_not_evidence_depth(conn, seed) -> None:
+    """The bug this locks: `_progress_info` handed selection `len(e1rm history)`
+    as tenure. That counts weeks with e1RM data anywhere in history, capped at
+    14, so a lift last trained in 2019 reported six weeks of "tenure" and read as
+    an incumbent due for rotation. 60% of candidates were flagged that way.
+
+    Testing `_select_grounded` with a synthetic tenure dict — which is all the
+    suite did before — cannot catch this: the mechanism was always correct, the
+    number fed into it was not.
+    """
+    from datetime import date, timedelta
+
+    from shc.training.autoregulation import _progress_info
+
+    today = date.today()
+    abandoned = "Abandoned Press"
+    # Deep history, none of it recent: eight weeks of real training, two years ago.
+    for wk in range(8):
+        seed.workout(today - timedelta(weeks=104 + wk), abandoned, [(40.0, 10)] * 3)
+
+    info = _progress_info(conn, {abandoned})
+    assert info[abandoned]["tenure"] == 0, (
+        "a lift not trained in two years holds no slot and cannot be 'due for rotation'"
+    )
+
+
+def test_tenure_survives_a_skipped_week(conn, seed) -> None:
+    """Exposure, not a streak.
+
+    A consecutive-week counter resets on every missed week, and Rob trains a lift
+    twice one week then skips the next. Measured against his real history a
+    streak fired on 5 of 16 monopoly lifts and missed the worst of them — triceps
+    at streak 1 while one exercise owned 63% of its sets.
+    """
+    from datetime import date, timedelta
+
+    from shc.training.autoregulation import _ROTATE_AFTER_WEEKS, _progress_info
+
+    today = date.today()
+    staple = "Skipping Staple"
+    # Trained most weeks across the window, with a gap that would zero a streak.
+    for wk in (0, 1, 2, 4, 5, 6, 7):
+        seed.workout(today - timedelta(weeks=wk), staple, [(40.0, 10)] * 3)
+
+    info = _progress_info(conn, {staple})
+    assert info[staple]["tenure"] >= _ROTATE_AFTER_WEEKS, (
+        "a lift trained 7 of the last 8 weeks holds its slot despite the skipped week"
+    )
+
+
+def test_a_benched_lift_stops_claiming_tenure(conn, seed) -> None:
+    """The cooldown. Rotating a lift out must not leave it flagged forever, or it
+    can never come back; equally it must not free up instantly, or it re-wins the
+    slot the following week and the rotation ping-pongs.
+    """
+    from datetime import date, timedelta
+
+    from shc.training.autoregulation import _progress_info
+
+    today = date.today()
+    benched = "Benched Staple"
+    for wk in range(4, 12):  # ran for eight weeks, then benched a month ago
+        seed.workout(today - timedelta(weeks=wk), benched, [(40.0, 10)] * 3)
+
+    assert _progress_info(conn, {benched})[benched]["tenure"] == 0
+
+
+# ── Availability: what may LEAD a head ───────────────────────────────────────
+
+
+def test_an_unverified_movement_never_leads_a_head_that_has_a_verified_option() -> None:
+    """Nine of seventeen muscles led with a movement never logged or last touched
+    in 2018 — chest with a 2019 barbell bench, lats with a Chin Up carrying no
+    logged set at all. The quality keys are indifferent to whether the equipment
+    exists, so a paper-perfect option outranked everything Rob can actually do,
+    and the menu read as noise.
+    """
+    # The unverified option genuinely outranks on the quality keys — lengthened
+    # and high-SFR against mid and moderate — so only availability can displace
+    # it. That is the real shape of the bug: the paper-best option was winning.
+    unlogged = _cand("Chin Up", "long_head", length="lengthened", sfr="high")
+    real = _cand("Cable Curl", "long_head", length="mid", sfr="moderate")
+
+    picks, _ = _select_grounded([unlogged, real], per_muscle=1)
+    assert picks[0][0] == "Chin Up", "without availability data the paper option wins"
+
+    picks, _ = _select_grounded(
+        [unlogged, real], per_muscle=1, verified={"Chin Up": False, "Cable Curl": True}
+    )
+    assert picks[0][0] == "Cable Curl", "a verified option must take the head"
+
+
+def test_a_head_with_no_verified_option_leads_tagged_as_trial() -> None:
+    """Blanking the head would be worse than surfacing a trial: a dead pool is
+    real information, and forearms/lower_back genuinely have nothing live.
+    """
+    a = _cand("Dead Curl A", "long_head")
+    b = _cand("Dead Curl B", "long_head")
+    picks, notes = _select_grounded(
+        [a, b], per_muscle=1, verified={"Dead Curl A": False, "Dead Curl B": False}
+    )
+    assert len(picks) == 1
+    assert notes[picks[0][0]].startswith("TRIAL")
+
+
+def test_rotation_never_swaps_a_working_lift_for_an_unproven_one() -> None:
+    """The swap path needs the same gate as the coverage pass, or the rotation
+    trigger hands a productive lift's slot to something that may not exist.
+    """
+    incumbent = _cand("Cable Curl", "long_head")
+    unproven = _cand("Nordic Curl", "long_head")
+    proven = _cand("Preacher Curl", "long_head")
+
+    picks, notes = _select_grounded(
+        [incumbent, unproven, proven],
+        per_muscle=1,
+        tenure_weeks={"Cable Curl": 9},
+        verified={"Cable Curl": True, "Nordic Curl": False, "Preacher Curl": True},
+    )
+    assert picks[0][0] == "Preacher Curl"
+    assert "swapped in" in notes["Preacher Curl"]
