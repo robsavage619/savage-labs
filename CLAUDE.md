@@ -5,7 +5,7 @@ Personal health intelligence platform. Single user (Rob). Always push to main di
 ## Pre-flight (every session, before previewing or claiming results)
 
 1. `git fetch origin && git log HEAD..origin/main --oneline` — if any commits, the worktree is stale.
-2. If stale: `git stash && git merge origin/main && git stash pop` (or `git stash drop` if conflict-free).
+2. If stale: `git stash && git merge origin/main && git stash pop` (or `git stash drop` if conflict-free). **Then `./dev-restart.sh`** — a merged fix is not a running fix, and the API serves whatever was loaded at boot. On 2026-08-19 the WHOOP cursor fix (9fc59b5) sat in `origin/main` for 3 days while the running server kept hitting the bug it fixed; `git reflog main` shows when local main actually last moved.
 3. Spot-check `frontend/app/page.tsx` and `frontend/app/layout.tsx` against the main repo before screenshotting — they're the most-edited files and the ones Rob can see.
 4. Backend tests in a worktree need `PYTHONPATH=$PWD/src` — the shared `backend/.venv` resolves `shc` to the **main repo**, so a suite can pass green against source you never changed. See [feedback_worktree_pytest_resolves_main](~/.claude/projects/-Users-robsavage-Projects-savage-health-center/memory/feedback_worktree_pytest_resolves_main.md).
 5. If the task cites a commit SHA as already-landed, confirm it: `git merge-base --is-ancestor <sha> HEAD`. Parallel sessions leave commits on sibling worktree branches that a clean `origin/main` check won't catch.

@@ -1,0 +1,14 @@
+-- 0098: track when Rob was last told a source needs reauthorization.
+--
+-- `needs_reauth` has existed since 0001 and is written correctly, but it has
+-- only ever been a PULL signal: /api/state, /api/subject and the dashboard all
+-- expose it, and nothing ever pushes it. On 2026-08-17 the WHOOP refresh token
+-- died at 07:01 (gateway 502 mid-rotation) and the flag sat TRUE for 2.5 days
+-- because nobody happened to look. Every metric in that window was stale, and a
+-- workout plan was built against a day whose pickleball session was invisible.
+--
+-- This column is the alerter's memory: it is stamped when a desktop
+-- notification fires and cleared when the source reconnects, so the job can
+-- distinguish "newly broken" (alert now) from "still broken" (re-nag on a
+-- cadence) from "fixed" (arm for next time) without re-alerting every poll.
+ALTER TABLE oauth_state ADD COLUMN IF NOT EXISTS reauth_alerted_at TIMESTAMPTZ;

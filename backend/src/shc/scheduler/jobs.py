@@ -50,7 +50,8 @@ async def _recompute_scores() -> None:
             else:
                 log.info(
                     "engine accuracy degradation detected but no new data since last "
-                    "ACWR fit — skipping re-fit (would be a no-op): %s", deg.get("message")
+                    "ACWR fit — skipping re-fit (would be a no-op): %s",
+                    deg.get("message"),
                 )
 
 
@@ -167,6 +168,82 @@ async def _auto_advance_mesocycle() -> None:
 _scheduler: AsyncIOScheduler | None = None
 
 
+# How long a source stays broken before Rob is reminded a second time. A single
+# banner is easy to miss while it is on screen and impossible to recover once it
+# is gone, and the failure this exists for went unnoticed for 2.5 days.
+REAUTH_RENAG_HOURS = 6
+
+# Where each source is reconnected. WHOOP's OAuth entry point is mounted under
+# /auth, NOT /api — the /api path 404s.
+_REAUTH_URLS = {
+    "whoop": "http://127.0.0.1:8000/auth/whoop/login",
+}
+
+
+async def _check_reauth_alerts() -> None:
+    """Push a desktop alert when a data source needs reauthorization.
+
+    `oauth_state.needs_reauth` was pull-only for its whole life: correct, and
+    invisible until someone opened the app. This closes the loop. It alerts on
+    the transition into a broken state, re-nags every REAUTH_RENAG_HOURS while
+    it stays broken, and re-arms once the source reconnects.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from shc.db.schema import write_ctx
+    from shc.notify import send_desktop_alert
+
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(hours=REAUTH_RENAG_HOURS)
+
+    async with write_ctx() as conn:
+        # Re-arm reconnected sources first, so a source that broke, was fixed,
+        # and broke again inside one window still alerts the second time.
+        conn.execute(
+            "UPDATE oauth_state SET reauth_alerted_at = NULL "
+            "WHERE needs_reauth = FALSE AND reauth_alerted_at IS NOT NULL"
+        )
+        due = conn.execute(
+            "SELECT source, last_sync_at, reauth_alerted_at FROM oauth_state "
+            "WHERE needs_reauth = TRUE "
+            "  AND (reauth_alerted_at IS NULL OR reauth_alerted_at < ?)",
+            [cutoff],
+        ).fetchall()
+
+    for source, last_sync_at, alerted_at in due:
+        stale_for = ""
+        if last_sync_at is not None:
+            last = last_sync_at if last_sync_at.tzinfo else last_sync_at.replace(tzinfo=UTC)
+            hours = (now - last).total_seconds() / 3600
+            stale_for = (
+                f" Data is {hours / 24:.1f} days stale."
+                if hours >= 24
+                else f" Data is {hours:.0f}h stale."
+            )
+
+        url = _REAUTH_URLS.get(source)
+        message = f"Reconnect: {url}" if url else "Reconnect this source in the app."
+        delivered = await send_desktop_alert(
+            title=f"{source.upper()} needs reauthorization",
+            subtitle=f"Syncs have been failing.{stale_for}",
+            message=message,
+        )
+        # Stamp regardless of delivery. A failed banner is already logged by the
+        # notifier; retrying it every 30 minutes forever would turn one broken
+        # source into a log flood without getting the message across any better.
+        async with write_ctx() as conn:
+            conn.execute(
+                "UPDATE oauth_state SET reauth_alerted_at = ? WHERE source = ?", [now, source]
+            )
+        log.warning(
+            "%s needs reauth (%s alert, delivered=%s) — %s",
+            source,
+            "first" if alerted_at is None else "repeat",
+            delivered,
+            url or "no reauth URL configured",
+        )
+
+
 def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is None:
@@ -234,5 +311,15 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         id="dupr_sync",
         replace_existing=True,
         misfire_grace_time=3600,
+    )
+    # A dead OAuth token is silent by construction: the API keeps serving the
+    # last-known numbers. Poll often enough that a break costs minutes, not days.
+    scheduler.add_job(
+        _check_reauth_alerts,
+        "interval",
+        minutes=30,
+        id="reauth_alert_check",
+        replace_existing=True,
+        misfire_grace_time=900,
     )
     log.info("registered APScheduler jobs")
