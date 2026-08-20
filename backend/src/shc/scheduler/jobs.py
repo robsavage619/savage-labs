@@ -228,13 +228,19 @@ async def _check_reauth_alerts() -> None:
             subtitle=f"Syncs have been failing.{stale_for}",
             message=message,
         )
-        # Stamp regardless of delivery. A failed banner is already logged by the
-        # notifier; retrying it every 30 minutes forever would turn one broken
-        # source into a log flood without getting the message across any better.
-        async with write_ctx() as conn:
-            conn.execute(
-                "UPDATE oauth_state SET reauth_alerted_at = ? WHERE source = ?", [now, source]
-            )
+        # Stamp ONLY on delivery, so an undelivered alert is retried on the next
+        # poll instead of being silently consumed. The first cut stamped
+        # unconditionally to avoid a log flood, which had the failure backwards:
+        # the common reason a banner does not land is that there is no GUI
+        # session to receive it right now, and that is precisely the case where
+        # it must be retried rather than dropped. A genuinely broken notifier
+        # logging every 30 min is noise attached to a real broken source, which
+        # is the condition we want loud anyway.
+        if delivered:
+            async with write_ctx() as conn:
+                conn.execute(
+                    "UPDATE oauth_state SET reauth_alerted_at = ? WHERE source = ?", [now, source]
+                )
         log.warning(
             "%s needs reauth (%s alert, delivered=%s) — %s",
             source,

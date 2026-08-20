@@ -153,8 +153,14 @@ def test_source_without_a_reauth_url_still_alerts(alert_env):
     assert "http" not in sent[0]["message"]
 
 
-def test_undelivered_alert_is_still_stamped(conn, monkeypatch):
-    """A failing notifier must not re-fire every 30 min forever."""
+def test_undelivered_alert_is_retried_not_swallowed(conn, monkeypatch):
+    """Lid closed / no GUI session -> retry next poll, never silently consume.
+
+    The common reason a banner does not land is that there is nobody at the
+    machine right now, which is exactly when dropping it loses the message for
+    good. Stamping on a failed send would mark it delivered and go quiet for the
+    full re-nag window.
+    """
 
     @asynccontextmanager
     async def _write_ctx():
@@ -169,4 +175,4 @@ def test_undelivered_alert_is_still_stamped(conn, monkeypatch):
 
     asyncio.run(jobs._check_reauth_alerts())
 
-    assert _alerted_at(conn, "whoop") is not None
+    assert _alerted_at(conn, "whoop") is None  # not stamped -> retried next poll
