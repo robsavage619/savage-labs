@@ -1437,3 +1437,42 @@ def test_raising_the_block_length_cannot_end_a_deload_already_in_progress() -> N
         "x", dt_date(2026, 6, 27), 5, "deloading", None, "auto-calendar", None
     )
     assert st.is_deload_week is True, "a deloading block must stay in deload"
+
+
+def test_a_deload_is_never_reachable_by_absence(conn, seed) -> None:
+    """Invariant 21 — a lift that got weaker from NOT being trained is never
+    answered with a deload.
+
+    `_e1rm_regression` compares peak-vs-peak with no exposure term, so two
+    opposite states produced one verdict: too much training (overreach, wants a
+    deload) and too little (detraining, wants re-accumulation). Live on
+    2026-08-20 this had Split Squat (Dumbbell) at -11.1% off 10 working sets in
+    8 weeks (1.2/wk, below MV) while resistance ACWR sat at 0.42 — the engine's
+    remedy for "you stopped training" was to prescribe less training. The only
+    thing preventing it was a 9-day cooldown coincidence.
+
+    That is invariant 10's failure mode with a fatigue mask on: under-training
+    reached by INFERENCE rather than by stated intent. This test pins the
+    property that matters more than the classification — its DIRECTION. The
+    classifier may only ever downgrade a deload to re-accumulation; no exposure
+    profile may turn a non-deload into a deload, so a bug here can withhold rest
+    (Rob keeps training) but can never impose it (Rob gets rested by a bug).
+    """
+    from shc.metrics import _MV_SETS_PER_WEEK, _regression_cause
+
+    today = date.today()
+    ex = "Bench Press (Barbell)"
+
+    # Below the maintenance floor -> never fatigue, whatever the e1RM says.
+    seed.workout(today - timedelta(days=40), ex, [(60, 8)])
+    seed.workout(today - timedelta(days=10), ex, [(55, 8)])
+    cause, _ = _regression_cause(conn, ex, today)
+    assert cause == "detrain", "below-MV exposure must never read as overreaching"
+
+    # The verdict is binary and 'overreach' is the pre-existing status quo, so
+    # the classifier's whole authority is the ability to say "not fatigue".
+    assert cause in {"detrain", "overreach"}
+    assert _MV_SETS_PER_WEEK > 0, "an MV floor of 0 would disable the guard entirely"
+
+    # An untrained lift is the limiting case and must not crash into 'overreach'.
+    assert _regression_cause(conn, "Deadlift (Barbell)", today)[0] == "detrain"

@@ -348,6 +348,11 @@ class AutoRegGates:
     hr_zone_shift_bpm: int = 0  # subtract from prescribed HR zones (propranolol days)
     kcal_multiplier: float = 1.0  # multiply HR-derived kcal estimates
     e1rm_regression_4wk_pct: float | None = None
+    # 'overreach' (trained through it — deload) or 'detrain' (barely trained it —
+    # re-accumulate). None when no regression was detected. Optional by design:
+    # ~15 call sites read deload_required and none of them need to learn a new
+    # field, they just stop seeing a deload that absence explains.
+    e1rm_regression_cause: str | None = None
     reasons: list[str] = field(default_factory=list)
 
 
@@ -798,7 +803,6 @@ def _tier(score: float | None) -> Tier | None:
 
 
 # ── Section builders ─────────────────────────────────────────────────────────
-
 
 
 def _private_daily(conn, today: date) -> tuple:
@@ -1681,6 +1685,7 @@ def _gates(
     deload_cooldown: bool = False,
     e1rm_lift: str | None = None,
     conn=None,
+    e1rm_cause: tuple[str, str] | None = None,
 ) -> AutoRegGates:
     g = AutoRegGates()
     reasons: list[str] = []
@@ -2067,7 +2072,24 @@ def _gates(
     if e1rm_regression_pct is not None and e1rm_regression_pct < -3.0:
         g.e1rm_regression_4wk_pct = e1rm_regression_pct
         lift = e1rm_lift or "primary lift"
-        if deload_cooldown:
+        # Before anything else: was there enough training for this to BE fatigue?
+        # Detraining and overreaching look identical to a peak-vs-peak comparison
+        # and need opposite prescriptions — a deload is the wrong answer to "you
+        # stopped doing it". Defaults to 'overreach' so a missing conn or an
+        # unknown lift keeps the pre-existing behaviour.
+        cause, evidence = e1rm_cause if e1rm_cause else ("overreach", "")
+        g.e1rm_regression_cause = cause
+        if cause == "detrain":
+            # NOT a deload. Prescribing less training for a lift that regressed
+            # from lack of training is the anti-progression trap (invariant 6)
+            # wearing a fatigue mask, and under-training reached by inference
+            # rather than stated intent (invariant 10).
+            reasons.append(
+                f"e1RM regression {e1rm_regression_pct:.1f}% on {lift} is DETRAINING, "
+                f"not fatigue — {evidence}. Re-accumulate: rebuild volume toward MEV "
+                "(+2 sets/wk) rather than deloading."
+            )
+        elif deload_cooldown:
             reasons.append(
                 f"e1RM regression {e1rm_regression_pct:.1f}% on {lift} noted, but a "
                 f"deload fired within {DELOAD_COOLDOWN_DAYS}d — trigger suppressed to "
@@ -2137,6 +2159,41 @@ _NOT_STRENGTH = (
 # the covered half by ~10% of e1RM; at 0.25 the worst spurious drift is ~2.5%,
 # inside the -3% deload trigger.
 _RPE_COVERAGE_SKEW = 0.25
+
+# --- Exposure floors that separate DETRAINING from OVERREACHING -------------
+# A falling e1RM has two opposite causes needing opposite prescriptions: too
+# much training (overreach -> deload) or too little (detraining -> re-accumulate).
+# The detector below compares peak-vs-peak and had no exposure term at all, so it
+# read both as "deload". That is invariant 10's failure mode — under-training
+# reached by INFERENCE rather than by stated intent — and it is why these gates
+# only ever SUPPRESS a deload; they can never cause one.
+#
+# The vault does not support the -3% trigger itself (every deload trigger it
+# carries is signal-count or RIR-relative, never a % strength delta), and it
+# ranks 1RM as the LAST and least sensitive overreaching marker
+# (`overreaching-detection.md`: psychological -> sprint velocity -> bar velocity
+# -> eccentric RFD -> 1RM). So an isolated e1RM drop is weak evidence of fatigue
+# and strong evidence of absence when the lift was barely trained.
+#
+# MV (maintenance volume) is the bar, not MEV: at or above it a drop can
+# plausibly be fatigue; below it there was never enough training to accumulate
+# any. `volume-landmarks-mev-mav-mrv.md` puts MV at 1-2 hard sets/muscle/week
+# ("as few as 1-2 hard sets/muscle/week maintains hypertrophy for up to ~3
+# months"). We take the TOP of that range: it classifies more drops as
+# detraining, which errs toward training Rob rather than resting him.
+_MV_SETS_PER_WEEK = 2.0
+
+# Weeks of consecutive zero exposure after which absence alone explains a loss.
+# `periodization-strength-phases.md` ("0 sessions/week | Detraining begins after
+# 2 weeks") and `bompa-2021-ch6-annual-plan.md` ("muscle atrophy fastest in first
+# 2 weeks"). The vault conflicts with itself here — `bompa-2021-ch6-annual-plan.md`
+# also says detraining is "evident after 4 weeks", same author. Taking 2 weeks
+# deliberately (not averaging): it is the earlier, more conservative trigger, and
+# conservative HERE means suppressing a deload, which is the safe direction.
+# Rob is 40, and `age-related-hypertrophy.md` says the maintenance dose rises
+# with age and "detraining periods should be minimized in older populations" —
+# so a gap costs him more, not less, and is more likely to be the real cause.
+_DETRAIN_GAP_DAYS = 14
 
 
 def _is_strength_lift(name: str) -> bool:
@@ -2251,6 +2308,69 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
     if p_peak <= 0:
         return None
     return round((r_peak - p_peak) / p_peak * 100.0, 2), primary_ex
+
+
+def _regression_cause(conn, lift: str, today: date, window_days: int = 56) -> tuple[str, str]:
+    """Classify a detected e1RM regression as ``detrain`` or ``overreach``.
+
+    Returns ``(cause, evidence)`` where evidence is a human-readable clause for
+    the gate reason. Overreaching is the DEFAULT: this only ever downgrades a
+    deload to re-accumulation on positive evidence of absence, never the
+    reverse, so a bug here cannot invent a deload.
+
+    Two independent vault-backed tests, either of which means absence explains
+    the loss (see :data:`_MV_SETS_PER_WEEK` / :data:`_DETRAIN_GAP_DAYS`):
+
+    * **Below maintenance volume** — fewer than MV hard sets/week for this lift
+      across the window. There was never enough training to accumulate fatigue.
+    * **A zero-exposure gap** — two or more consecutive weeks untrained inside
+      the window, the point at which the vault says detraining begins.
+
+    Counts the same rows the regression itself scores (working sets, deload days
+    excluded) so the exposure term describes the exact series that produced the
+    number — a set the detector ignored cannot count as training here.
+    """
+    since = (today - timedelta(days=window_days)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT day_d AS day, COUNT(*) AS n_sets
+        FROM workout_sets_dedup ws
+        WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL
+          AND ws.exercise = $ex AND day_d >= $s
+          AND (ws.rpe IS NULL OR ws.rpe >= 7)
+          AND day_d NOT IN (
+              SELECT date FROM workout_plans
+              WHERE json_extract_string(plan_json, '$.deload_prescribed') = 'true'
+          )
+        GROUP BY day_d ORDER BY day_d
+        """,
+        {"ex": lift, "s": since},
+    ).fetchall()
+    if not rows:
+        return "detrain", "not trained at all in the last 8 weeks"
+
+    weeks = window_days / 7.0
+    total_sets = sum(int(r[1] or 0) for r in rows)
+    sets_per_week = total_sets / weeks
+
+    # Largest zero-exposure stretch, including the tail up to today: a lift last
+    # trained 3 weeks ago is as detrained as one with a 3-week hole mid-window.
+    days = [r[0] for r in rows]
+    gaps = [(b - a).days for a, b in zip(days, days[1:], strict=False)]
+    gaps.append((today - days[-1]).days)
+    max_gap = max(gaps) if gaps else 0
+
+    if sets_per_week < _MV_SETS_PER_WEEK:
+        return "detrain", (
+            f"only {total_sets} working sets in {weeks:.0f}wk "
+            f"({sets_per_week:.1f}/wk, below the {_MV_SETS_PER_WEEK:.0f}/wk maintenance floor)"
+        )
+    if max_gap >= _DETRAIN_GAP_DAYS:
+        return "detrain", f"went {max_gap}d untrained inside the window"
+    return "overreach", (
+        f"{total_sets} working sets in {weeks:.0f}wk ({sets_per_week:.1f}/wk), "
+        f"longest gap {max_gap}d — exposure was maintained"
+    )
 
 
 def _deload_in_cooldown(conn, today: date, window: int = DELOAD_COOLDOWN_DAYS) -> bool:
@@ -2500,8 +2620,25 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
     e1rm = _e1rm_regression(conn, today)
     e1rm_pct, e1rm_lift = e1rm if e1rm else (None, None)
     deload_cooldown = _deload_in_cooldown(conn, today)
+    # Classify the regression before gating on it: a drop on a lift that was
+    # barely trained is detraining, and a deload is the opposite of the remedy.
+    e1rm_cause: tuple[str, str] | None = None
+    if e1rm_lift and e1rm_pct is not None:
+        try:
+            e1rm_cause = _regression_cause(conn, e1rm_lift, today)
+        except Exception as exc:  # noqa: BLE001 — advisory classifier, never blocks the gate
+            log.warning("e1RM regression cause unavailable for %s: %s", e1rm_lift, exc)
     gates = _gates(
-        rec, sleep, load, chk, readiness, e1rm_pct, deload_cooldown, e1rm_lift, conn=conn
+        rec,
+        sleep,
+        load,
+        chk,
+        readiness,
+        e1rm_pct,
+        deload_cooldown,
+        e1rm_lift,
+        conn=conn,
+        e1rm_cause=e1rm_cause,
     )
     recovery_missing = (
         rec.score_date is None and rec.score is None and rec.hrv_ms is None and rec.rhr is None

@@ -672,8 +672,17 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
 
     lines.append(f"\n## VOLUME TREND (8-week): {vol_trend_label}")
     if gates["e1rm_regression_4wk_pct"] is not None:
+        cause = gates.get("e1rm_regression_cause")
+        tail = ""
+        if cause == "detrain":
+            tail = (
+                " — DETRAINING, not fatigue: re-accumulate toward MEV (+2 sets/wk), do NOT deload"
+            )
+        elif cause == "overreach":
+            tail = " — exposure was maintained, so this reads as accumulated fatigue"
         lines.append(
-            f"- e1RM regression on primary lift (4wk): {gates['e1rm_regression_4wk_pct']:+.1f}%"
+            f"- e1RM regression on primary lift (4wk): "
+            f"{gates['e1rm_regression_4wk_pct']:+.1f}%{tail}"
         )
 
     # Push:pull balance commentary.
@@ -1035,7 +1044,14 @@ interface Plan {
         uncertainties.append(
             "Training prescription on a very low readiness day — minimum effective volume vs full rest."
         )
-    if gates.get("e1rm_regression_4wk_pct") is not None and gates["e1rm_regression_4wk_pct"] < -5:
+    if (
+        gates.get("e1rm_regression_4wk_pct") is not None
+        and gates["e1rm_regression_4wk_pct"] < -5
+        # Only genuinely uncertain when the cause is unresolved. `_regression_cause`
+        # answers "is this overreaching" deterministically from exposure, so asking
+        # the vault to re-litigate it would invite the opposite prescription.
+        and gates.get("e1rm_regression_cause") != "detrain"
+    ):
         uncertainties.append(
             "A primary lift's e1RM has regressed over 4 weeks — is this overreaching, and how to respond?"
         )

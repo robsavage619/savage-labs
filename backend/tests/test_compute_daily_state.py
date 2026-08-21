@@ -100,13 +100,24 @@ def test_no_beta_blocker_adjust_without_checkin(conn, seed) -> None:
 
 def test_recent_deload_plan_suppresses_via_pipeline(conn, seed) -> None:
     """A real regression that would fire a deload is suppressed end-to-end when
-    a deload was prescribed within the cooldown window."""
+    a deload was prescribed within the cooldown window.
+
+    Exposure has to be DENSE for this test to reach the cooldown branch at all.
+    The four-session fixture this used to carry (8 working sets across 8 weeks,
+    with a 36-day hole in the middle) is now classified as detraining before the
+    cooldown is ever consulted — correctly, because that is not a fatigue
+    profile. Training the lift every 4 days throughout isolates the cooldown as
+    the thing under test. See `_regression_cause` / test_e1rm_regression_cause.py.
+    """
     ex = "Bench Press (Barbell)"
-    # Strong then weak → genuine peak regression.
-    seed.workout(days_ago(50), ex, [(90, 5), (88, 5)])
-    seed.workout(days_ago(44), ex, [(90, 6), (88, 6)])
-    seed.workout(days_ago(8), ex, [(70, 5), (68, 5)])
-    seed.workout(days_ago(6), ex, [(70, 5), (68, 5)])
+    # Strong then weak → genuine peak regression, with exposure held throughout.
+    # 7 heavy + 7 light so the detector's `len(rows) // 2` split lands exactly on
+    # the transition; straddling it leaves a heavy session in the recent half,
+    # whose peak then matches the prior peak and scores a flat 0.0%.
+    for d in range(56, 28, -4):
+        seed.workout(days_ago(d), ex, [(90, 5), (88, 5)])
+    for d in range(28, 0, -4):
+        seed.workout(days_ago(d), ex, [(70, 5), (68, 5)])
     # A deload was prescribed 3 days ago → within the 9-day cooldown.
     seed.plan(days_ago(3), deload_prescribed=True)
 
