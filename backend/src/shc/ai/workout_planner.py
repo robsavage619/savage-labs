@@ -588,11 +588,28 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     try:
         from shc.training.prescriptor import next_prescriptions, pr_reanchor_due
 
-        _nrx = next_prescriptions(conn, gates, today, e1rm_by_ex, grids=grids)
+        # `extended_for` is this week's menu: a rotation candidate is by
+        # definition not in current rotation, so without the extended reach it
+        # arrives here with no number while the incumbent arrives with a bolded
+        # one — the asymmetry that kept rotation from rotating.
+        _nrx = next_prescriptions(
+            conn, gates, today, e1rm_by_ex, grids=grids, extended_for=_menu_names
+        )
     except Exception as _exc:  # noqa: BLE001 — advisory layer, never blocks context
         log.debug("next prescriptions unavailable: %s", _exc)
         _nrx = []
-    if _nrx:
+
+    def _nrx_line(n) -> str:
+        rpe_sfx = f" @RPE {n.last_rpe:g}" if n.last_rpe is not None else ""
+        return (
+            f"- {n.exercise}: **{n.next_weight_lbs:g} lb × {n.next_reps}** — "
+            f"{n.note} [last {n.last_date}: {n.last_weight_lbs:g} lb × "
+            f"{n.last_reps}{rpe_sfx} · window {n.rep_low}-{n.rep_high}]"
+        )
+
+    _anchored = [n for n in _nrx if not n.provisional]
+    _provisional = [n for n in _nrx if n.provisional]
+    if _anchored:
         lines.append(
             "\n## NEXT PRESCRIPTION (deterministic double progression — COPY these "
             "load × rep targets for any of these lifts you program; do NOT re-derive "
@@ -600,13 +617,24 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             "snapped to weights the gym can produce. Set counts come from THIS "
             "WEEK'S PRESCRIPTION, not from here."
         )
-        for n in _nrx:
-            rpe_sfx = f" @RPE {n.last_rpe:g}" if n.last_rpe is not None else ""
-            lines.append(
-                f"- {n.exercise}: **{n.next_weight_lbs:g} lb × {n.next_reps}** — "
-                f"{n.note} [last {n.last_date}: {n.last_weight_lbs:g} lb × "
-                f"{n.last_reps}{rpe_sfx} · window {n.rep_low}-{n.rep_high}]"
-            )
+        lines.extend(_nrx_line(n) for n in _anchored)
+    if _provisional:
+        # A rotation candidate used to arrive with no number at all, which made
+        # programming the incumbent the path of least resistance every single
+        # session. These lifts now arrive with one — explicitly a re-entry
+        # estimate, so the number invites the swap without posing as an anchor.
+        lines.append(
+            "\n## RE-ENTRY TARGETS — PROVISIONAL (rotation candidates: on this "
+            "week's menu, but not trained recently enough to have a live anchor or "
+            "an effort ceiling). These are ESTIMATES stepped down from the last "
+            "logged exposure, not prescriptions. Program them as freely as anything "
+            "above — a menu swap is the POINT — but write them as a work-up: first "
+            "set light, stop at RPE 8, and note that the session re-anchors the "
+            "lift. `weight_lbs: null` is also legal here if you would rather Rob "
+            "set the load by feel; the RPE-coherence check is skipped when there is "
+            "no weight."
+        )
+        lines.extend(_nrx_line(n) for n in _provisional)
     try:
         _pr_due = pr_reanchor_due(conn, today, gates)
     except Exception as _exc:  # noqa: BLE001 — advisory layer, never blocks context

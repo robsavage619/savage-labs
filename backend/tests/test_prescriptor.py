@@ -12,7 +12,13 @@ from datetime import date, datetime, timedelta
 
 from shc.training.loadable import LoadableGrids
 from shc.training.mesocycle import _iso_week_start
-from shc.training.prescriptor import _advance, next_prescriptions, pr_reanchor_due
+from shc.training.prescriptor import (
+    _FRESH_ANCHOR_DAYS,
+    _advance,
+    _reentry,
+    next_prescriptions,
+    pr_reanchor_due,
+)
 
 _EX = "Leg Extension (Machine)"
 
@@ -159,3 +165,66 @@ def test_pr_reanchor_skips_fresh_peaks_and_regressing_lifts(conn) -> None:
     _seed_weekly_e1rm(conn, regressing, [110.0, 108.0, 106.0, 104.0, 102.0, 100.0, 98.0, 96.0])
     _seed_recent_set(conn, regressing)
     assert pr_reanchor_due(conn, date.today(), {"max_intensity": "high"}) == []
+
+
+# ── Rotation candidates: the extended anchor and its re-entry rule ────────────
+#
+# A rotation candidate is by definition a lift NOT in current rotation, so at the
+# old 14-day lookback every proposed swap arrived at plan time with no number
+# while the incumbent arrived with a load × rep target. These pin the two halves
+# of the fix: reach far enough to give the candidate a number, and make that
+# number honest when it is dug up from beyond the live window.
+
+
+def test_reentry_steps_down_and_never_exceeds_the_last_exposure() -> None:
+    """The property that makes a provisional number safe without a ceiling."""
+    action, w, reps, note = _reentry(_EX, 200.0, 8, 12, 200, GRID, _no_ceiling)
+    assert action == "reentry"
+    assert w <= 200.0
+    assert reps == 8  # window bottom, not last_reps + 1
+    assert "PROVISIONAL" in note
+
+
+def test_reentry_haircut_scales_with_the_layoff_and_caps() -> None:
+    """5%/month past the fresh window, capped at 20% — a year off is not a 60% cut."""
+    fine = _grids([float(v) for v in range(100, 221, 5)], sets=40)
+    just_past = _reentry(_EX, 200.0, 8, 12, _FRESH_ANCHOR_DAYS + 1, fine, _no_ceiling)[1]
+    half_year = _reentry(_EX, 200.0, 8, 12, 182, fine, _no_ceiling)[1]
+    a_year = _reentry(_EX, 200.0, 8, 12, 365, fine, _no_ceiling)[1]
+    # Barely past the window the haircut is ~0, but the target still snaps DOWN
+    # onto a real notch — a provisional number never rounds up past the anchor.
+    assert just_past == 195.0
+    assert half_year < just_past
+    assert a_year == 160.0  # capped at 20% off, snapped to a real notch
+    assert _reentry(_EX, 200.0, 8, 12, 900, fine, _no_ceiling)[1] == 160.0
+
+
+def test_reentry_still_obeys_a_ceiling_when_one_exists() -> None:
+    """The haircut is a floor on caution, never a licence to exceed today's cap."""
+    fine = _grids([float(v) for v in range(100, 221, 5)], sets=40)
+    _, w, _, _ = _reentry(_EX, 200.0, 8, 12, 120, fine, lambda _r: 150.0)
+    assert w == 150.0
+
+
+def test_a_stale_lift_is_anchored_only_when_the_menu_names_it(conn, seed) -> None:
+    """The extended reach is opt-in per lift — it is not a blanket 365-day window."""
+    kg = 200 / 2.20462
+    seed.workout(date.today() - timedelta(days=200), _EX, [(kg, 10)], rpe=8.0)
+    assert next_prescriptions(conn, {"max_intensity": "high"}, date.today(), {}) == []
+
+    (rx,) = next_prescriptions(
+        conn, {"max_intensity": "high"}, date.today(), {}, extended_for={_EX}
+    )
+    assert rx.provisional is True
+    assert rx.action == "reentry"
+    assert rx.anchor_age_days == 200
+    assert rx.next_weight_lbs <= rx.last_weight_lbs
+
+
+def test_a_lift_inside_the_fresh_window_is_a_real_anchor_not_provisional(conn, seed) -> None:
+    """The old 14-day default left this whole band — 26 of Rob's lifts — numberless."""
+    kg = 200 / 2.20462
+    seed.workout(date.today() - timedelta(days=40), _EX, [(kg, 10)], rpe=8.0)
+    (rx,) = next_prescriptions(conn, {"max_intensity": "high"}, date.today(), {_EX: 120.0})
+    assert rx.provisional is False
+    assert (rx.action, rx.next_weight_lbs, rx.next_reps) == ("add_rep", 200.0, 11)
