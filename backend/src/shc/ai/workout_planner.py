@@ -1614,6 +1614,11 @@ def _planned_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]
     base secondary rate), reading the same ``exercise_muscle_map`` the
     prescription is built from. Exercises absent from the map contribute nothing
     (they are the planner's blind spots; the unmapped path surfaces them).
+
+    This is the COST question — what the session spends against a muscle's
+    ceiling. For the INTENT question (what it deliberately trains) use
+    :func:`_planned_primary_sets_by_muscle`; the two diverged when secondary
+    credit moved to the vault's 1:1 (`volume.SECONDARY_CREDIT`).
     """
     from shc.training.volume import ARM_SECONDARY_CREDIT, SECONDARY_CREDIT
 
@@ -2283,9 +2288,15 @@ def validate_plan(
                 if split_muscles:
                     emphasis = {m.muscle for m in rx.muscles if m.emphasis}
                     allowed_muscles = split_muscles | emphasis
+                    # PRIMARY-role sets only: this check asks what the session
+                    # deliberately trains, not what it costs. Secondary credit
+                    # moved to the vault's 1:1, so a single three-set compound
+                    # now spills 3.0 into each synergist — on the credited view
+                    # every legal plan would read as loading half a dozen
+                    # off-split muscles. Spillover is not programming.
                     off_split = sorted(
                         mus
-                        for mus, sets in _planned_sets_by_muscle(conn, plan).items()
+                        for mus, sets in _planned_primary_sets_by_muscle(conn, plan).items()
                         if sets >= 2.0 and mus not in allowed_muscles
                     )
                     if off_split:

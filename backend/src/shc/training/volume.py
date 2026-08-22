@@ -24,13 +24,27 @@ import duckdb
 
 log = logging.getLogger(__name__)
 
-# Indirect (secondary) volume credit per set. Genuine synergists worked hard by a
-# compound (glutes/hams off a squat) get the standard 0.5; the elbow flexors/
-# extensors get less, because they're rarely the limiting factor on a press/row
-# and over-crediting them off compounds suppresses the direct arm volume the
-# biceps-emphasis goal wants (panel review M1).
-SECONDARY_CREDIT = 0.5
-ARM_SECONDARY_CREDIT = 0.3
+# Indirect (secondary) volume credit per set. 1.0 is the VAULT's ratio, adopted
+# 2026-08-20: `helms-2018-qsg-program-building.md` states "count secondary at 1:1
+# ratio with primary; don't rely entirely on indirect volume for any muscle
+# group", and `helms-2018-lv2-volume-intensity-frequency.md` / `-lv4-` repeat it
+# ("a row gives credit to both lats AND biceps"). The previous 0.5 / 0.3-for-arms
+# weights had NO backing anywhere in the corpus — the only ~0.5 the vault
+# contains is an EMG ratio for hamstrings on compounds, attached to a conclusion
+# that the compound is insufficient regardless.
+#
+# The old comment here argued arms should get less because "over-crediting them
+# off compounds suppresses the direct arm volume the biceps-emphasis goal wants".
+# That concern was real and is now handled properly rather than by discounting
+# the ratio: Helms ships 1:1 WITH a companion constraint, and the two are not
+# separable. See `_DIRECT_FLOOR_*` in autoregulation.py — a muscle's FLOOR
+# (MEV/MV) is measured on DIRECT work only, while its CEILING (MRV) is measured
+# on this credited total. Floors protect stimulus, ceilings protect recovery, and
+# each is now measured on the quantity it is actually about: indirect volume
+# genuinely costs recovery, but does not reliably supply the stimulus, because on
+# a compound the synergist is by construction not the limiting factor.
+SECONDARY_CREDIT = 1.0
+ARM_SECONDARY_CREDIT = 1.0
 _ARM_MUSCLES = ("biceps", "triceps", "forearms")
 
 # Hypertrophy stimulating-rep window. Sets outside 5–30 reps don't count toward

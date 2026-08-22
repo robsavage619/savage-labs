@@ -1476,3 +1476,55 @@ def test_a_deload_is_never_reachable_by_absence(conn, seed) -> None:
 
     # An untrained lift is the limiting case and must not crash into 'overreach'.
     assert _regression_cause(conn, "Deadlift (Barbell)", today)[0] == "detrain"
+
+
+def test_a_muscle_is_never_satisfied_by_spillover_alone(conn) -> None:
+    """Invariant 22 — the direct-work floor is judged on DIRECT sets.
+
+    Secondary credit moved to the vault's 1:1 on 2026-08-20
+    (`helms-2018-qsg-program-building.md`: "count secondary at 1:1 ratio with
+    primary; don't rely entirely on indirect volume"). The ratio and the
+    constraint are not separable: taking 1:1 alone lets spillover satisfy a
+    muscle's target and stop it being trained. Measured over the 8 weeks to
+    2026-08-20, biceps — the ★ emphasis muscle — would have read 16.6 credited
+    sets/wk against a target of 12 while only 11.1 were direct, and forearms
+    read satisfied on 100% indirect work (0.0 direct).
+
+    So floors are measured on direct work and ceilings on the credited total:
+    indirect volume genuinely costs recovery (it belongs in MRV) but does not
+    reliably supply stimulus (it cannot fill MEV), because on a compound the
+    synergist is by construction not the limiting factor.
+    """
+    from shc.training.autoregulation import (
+        _DIRECT_FLOOR_MV_SETS,
+        MusclePrescription,
+        _direct_floor,
+    )
+    from shc.training import volume
+
+    # The ratio itself is the vault's, for arms as much as anything else.
+    assert volume.SECONDARY_CREDIT == 1.0
+    assert volume.ARM_SECONDARY_CREDIT == volume.SECONDARY_CREDIT, (
+        "arms no longer carry a discounted rate — the direct-work floor replaced it"
+    )
+
+    # A grow-tier muscle's floor is its own MEV: spillover cannot fill it.
+    grow = MusclePrescription(
+        muscle="biceps", current_sets=16.6, target_sets=12, delta=0, action="hold", reason=""
+    )
+    assert _direct_floor(grow, 12.0) == 12.0
+
+    # A maintenance muscle legitimately lives off spillover, but not entirely.
+    maintain = MusclePrescription(
+        muscle="forearms", current_sets=3.1, target_sets=2, delta=0, action="hold", reason=""
+    )
+    maintain.tier = "maintain"
+    assert _direct_floor(maintain, 12.0) == _DIRECT_FLOOR_MV_SETS
+    assert _DIRECT_FLOOR_MV_SETS > 0, "a floor of 0 would permit 100% indirect volume"
+
+    # A floor never exceeds the week's own ask — a protective rule that demands
+    # work the prescription never asked for is unsatisfiable, not protective.
+    tiny = MusclePrescription(
+        muscle="calves", current_sets=0.0, target_sets=1, delta=1, action="add", reason=""
+    )
+    assert _direct_floor(tiny, 12.0) <= 1.0

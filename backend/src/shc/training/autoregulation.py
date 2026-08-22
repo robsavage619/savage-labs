@@ -175,6 +175,41 @@ class Prescription:
     direct_short: list[str] = field(default_factory=list)
 
 
+# Direct-work floor (2026-08-20). Secondary credit moved to the vault's 1:1
+# (`volume.SECONDARY_CREDIT`), and Helms ships that ratio with a companion rule —
+# "don't rely entirely on indirect volume for any muscle group". Without it,
+# spillover alone can satisfy a muscle's target and stop it being trained.
+#
+# The floor is judged on DIRECT (primary-role) sets; the MRV ceiling stays judged
+# on the credited total. Indirect volume genuinely costs recovery, so it belongs
+# in the ceiling; it does not reliably supply stimulus — on a compound the
+# synergist is by construction not the limiting factor, and a set only counts as
+# volume at all within ~5 RIR (`helms-2018-lv2-volume-intensity-frequency.md`) —
+# so it cannot fill the floor.
+#
+# CHOSEN, NOT VAULT-STATED: the vault requires direct work but names no minimum.
+# A grow-tier muscle's floor is its own MEV, because MEV is the dose that muscle
+# needs and Rob's whole goal is growing it; a maintenance-tier muscle's floor is
+# MV, the 1-2 hard sets/wk `volume-landmarks-mev-mav-mrv.md` says holds size, and
+# its remaining sets legitimately do come free as spillover. Taking the bottom of
+# that 1-2 range deliberately: this floor ADDS volume demand, so the conservative
+# direction here is the smaller number.
+_DIRECT_FLOOR_MV_SETS = 1.0
+
+
+def _direct_floor(rx: MusclePrescription, mev: float | None) -> float:
+    """Minimum DIRECT (primary-role) weekly sets before a muscle counts as trained.
+
+    Never exceeds the muscle's own target — a floor above the prescription would
+    demand work the week never asked for, which is how an "protective" rule turns
+    into an unsatisfiable one.
+    """
+    if rx.tier == "maintain":
+        return min(_DIRECT_FLOOR_MV_SETS, float(rx.target_sets))
+    floor = float(mev) if mev is not None else _DIRECT_FLOOR_MV_SETS
+    return min(floor, float(rx.target_sets))
+
+
 # Number of muscles that must independently signal fatigue to trigger a deload.
 DELOAD_MUSCLE_THRESHOLD = 3
 
@@ -2445,7 +2480,15 @@ def weekly_prescription(
         log.debug("read_muscle_prescription_accuracy unavailable: %s", exc)
 
     muscle_rx: list[MusclePrescription] = []
+    # Captured for the direct-work floor below: floors are judged on DIRECT sets,
+    # ceilings on the credited total, so both landmarks have to survive the loop.
+    landmark_floor: dict[str, float] = {}
+    landmark_ceiling: dict[str, float] = {}
     for r in targeted:
+        if r.mev is not None:
+            landmark_floor[r.muscle] = float(r.mev)
+        if r.mrv is not None:
+            landmark_ceiling[r.muscle] = float(r.mrv)
         vt = targets.get(r.muscle)
         sq = signal_quality.get(r.muscle, {})
         acc_row = accuracy_by_muscle.get(r.muscle, {})
@@ -2582,9 +2625,45 @@ def weekly_prescription(
             ).fetchall()
         )
         for m in muscle_rx:
-            floor = m.target_sets
-            if m.current_sets >= floor and direct_now.get(m.muscle, 0.0) < floor:
-                direct_short.add(m.muscle)
+            direct = direct_now.get(m.muscle, 0.0)
+            floor = _direct_floor(m, landmark_floor.get(m.muscle))
+            if direct >= floor:
+                continue
+            # Only muscles that LOOK covered are "short on direct work". A muscle
+            # still below its target is simply untrained-so-far and is already
+            # emitting ADD; flagging it too would put all 17 on the banner every
+            # Monday and make the signal worthless. The distinction is the whole
+            # point of the flag: credited volume says done, direct work says no.
+            if m.current_sets < m.target_sets:
+                continue
+            direct_short.add(m.muscle)
+            # The floor BINDS, it does not merely annotate. With secondary credit
+            # at the vault's 1:1 (volume.SECONDARY_CREDIT), a muscle can reach its
+            # target on spillover alone and stop being trained: measured 2026-08-20
+            # over 8 weeks, biceps — the ★ emphasis muscle — read 16.6 credited
+            # sets/wk against a target of 12 while only 11.1 were direct, and
+            # forearms read satisfied on 100% indirect work (0.0 direct). Helms
+            # ships 1:1 WITH "don't rely entirely on indirect volume"; taking the
+            # ratio without the constraint is what suppresses the muscle.
+            #
+            # Raising the target (rather than rejecting at the validator) is what
+            # makes it SATISFIABLE: check #22 rejects a session that overshoots a
+            # muscle's target, so a direct-work requirement the target has no room
+            # for would be unmeetable by construction.
+            deficit = floor - direct
+            want = int(math.ceil(m.current_sets + deficit))
+            ceiling = landmark_ceiling.get(m.muscle)
+            if ceiling is not None:
+                want = min(want, int(ceiling))
+            if want > m.target_sets:
+                m.delta += want - m.target_sets
+                m.target_sets = want
+                m.action = "add"
+                m.reason += (
+                    f" [direct-work floor: {direct:g} of {floor:g} required direct sets — "
+                    "synergist credit is real volume but cannot supply the stimulus, "
+                    "so the target makes room for direct work]"
+                )
     except Exception as exc:  # noqa: BLE001 — gate optional, degrade to no gate
         log.debug("direct-volume lookup unavailable: %s", exc)
 

@@ -33,7 +33,13 @@ def test_region_volume_credits_each_head(conn, seed):
 
 
 def test_secondary_muscle_credit(conn, seed):
-    """Primary gets 1.0; an ARM secondary gets the reduced 0.3 (panel review M1).
+    """Primary and secondary both credit 1.0 — the vault's ratio (2026-08-20).
+
+    `helms-2018-qsg-program-building.md`: "count secondary at 1:1 ratio with
+    primary; don't rely entirely on indirect volume for any muscle group". The
+    previous 0.5 / 0.3-for-arms weights had no vault backing at all. The
+    "don't rely entirely" half is enforced separately, by the direct-work floor
+    in autoregulation.py — the ratio and the constraint ship together.
 
     'Pull-Up' maps to lats (primary) + biceps (secondary) after migration 0040
     normalizes the legacy 'back' key.
@@ -43,8 +49,8 @@ def test_secondary_muscle_credit(conn, seed):
 
     vol = weekly_muscle_volume(conn, _iso_week_start(today))
 
-    assert vol["lats"] == 3.0  # primary, full credit
-    assert vol["biceps"] == round(0.3 * 3, 1)  # arm secondary, reduced credit
+    assert vol["lats"] == 3.0  # primary
+    assert vol["biceps"] == 3.0  # arm secondary — no longer discounted
 
 
 def test_hammer_curl_credits_forearms(conn, seed):
@@ -54,8 +60,8 @@ def test_hammer_curl_credits_forearms(conn, seed):
     today = date.today()
     seed.workout(today, "Hammer Curl (Dumbbell)", [(20.0, 12)] * 4)
     vol = weekly_muscle_volume(conn, _iso_week_start(today))
-    assert vol["biceps"] == 4.0  # primary, full credit
-    assert vol["forearms"] == round(0.3 * 4, 1)  # arm secondary, reduced credit
+    assert vol["biceps"] == 4.0  # primary
+    assert vol["forearms"] == 4.0  # arm secondary at the 1:1 rate
 
 
 def test_row_credits_mid_back(conn, seed):
@@ -63,7 +69,7 @@ def test_row_credits_mid_back(conn, seed):
     today = date.today()
     seed.workout(today, "T-Bar Row", [(60.0, 10)] * 4)
     vol = weekly_muscle_volume(conn, _iso_week_start(today))
-    assert vol["mid_back"] == 2.0  # 0.5 × 4
+    assert vol["mid_back"] == 4.0  # 1:1 with primary
 
 
 def test_wrist_curl_credits_forearms_not_biceps(conn, seed):
@@ -75,13 +81,19 @@ def test_wrist_curl_credits_forearms_not_biceps(conn, seed):
     assert vol.get("biceps", 0.0) == 0.0
 
 
-def test_non_arm_secondary_keeps_half_credit(conn, seed):
+def test_arm_and_non_arm_secondaries_credit_alike(conn, seed):
+    """Arms no longer carry a separate, lower rate.
+
+    The arm discount existed to stop compounds suppressing direct biceps work for
+    the emphasis goal. That concern is now handled by the direct-work floor
+    instead of by bending the ratio — see `_direct_floor` in autoregulation.py.
+    """
     today = date.today()
     # Hip Thrust → glutes primary, hamstrings secondary (a genuine synergist).
     seed.workout(today, "Hip Thrust (Barbell)", [(100.0, 8)] * 4)
     vol = weekly_muscle_volume(conn, _iso_week_start(today))
     assert vol["glutes"] == 4.0
-    assert vol["hamstrings"] == 2.0  # 0.5 × 4, not reduced
+    assert vol["hamstrings"] == 4.0
 
 
 def test_rep_window_excludes_heavy_singles(conn, seed):
