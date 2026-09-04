@@ -1655,11 +1655,17 @@ def _planned_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]
 def _planned_primary_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]:
     """Primary-only (direct) credited sets per muscle — no secondary credit.
 
-    Used alongside :func:`_planned_sets_by_muscle` to exempt secondary-only
-    volume from caps on muscles the engine targets at 0 sets. Secondary credit
-    from a compound (e.g. squats → 0.5 hamstring credit) should not block the
-    session when hamstrings are frozen — the direct load is zero, which is what
-    the hold means.
+    This is what validator #22 caps, at every target value. ``target_sets`` is
+    derived from a FLOOR (MEV, or MV on the maintain tier), and floors are
+    judged on direct work while ceilings use the credited total — so secondary
+    credit from a compound (squats → hamstrings, presses → triceps) must not
+    count against it. Doing so turns the floor into a ceiling and locks the
+    muscle out of the direct sets the prescription is asking for.
+
+    :func:`_planned_sets_by_muscle` computes the credited total instead, which
+    is the right input for the questions that are genuinely about total volume:
+    "was this muscle trained at all" (the emphasis absence check) and an
+    MRV-style ceiling. No MRV ceiling is enforced here today.
     """
     planned: dict[str, float] = {}
     for block in plan.get("blocks", []):
@@ -2255,24 +2261,38 @@ def validate_plan(
                 # engine's HELD/DAMPENED target. protein_gate / rpe_drift hold or
                 # dampen weekly volume by lowering target_sets; if the LLM inflated
                 # a single session past that per-muscle target, reject it. A 1-set
-                # tolerance absorbs secondary-credit rounding.
-                # When the engine targets 0 sets (muscle frozen by conditioning ACWR
-                # or deload), secondary-only credit from compound movements is exempt:
-                # the intent is "don't directly train this muscle", not "block squats
-                # because hamstrings are secondary". Use primary-only sets for the
-                # target-0 check; combined sets for positive targets.
+                # tolerance absorbs rounding.
+                #
+                # The cap counts DIRECT (primary-role) sets only, at every target
+                # value. `target_sets` is derived from a FLOOR (MEV, or MV for the
+                # maintain tier) — autoregulation._direct_floor and volume.py both
+                # state the rule: floors are judged on direct sets, ceilings on the
+                # credited total. Counting secondary credit against a floor-derived
+                # number turns it into a ceiling it was never meant to be, and the
+                # muscle then gets locked out of the very work the engine asked for:
+                # at the vault's 1:1 synergist credit a 2-set chest press consumes
+                # triceps' entire MV=2 allowance, so the direct triceps sets become
+                # unpostable. Measured 2026-09-04: side_delts, rear_delts, traps,
+                # mid_back and triceps each sat at 0.0 actual sets with 20-27 days
+                # since any direct exposure, while every week's prescription duly
+                # asked for 2. The engine was asking and the validator was refusing.
+                #
+                # The cap still binds on what it is meant to catch — a session that
+                # directly inflates a held muscle past its target — because direct
+                # sets are exactly what "inflating a muscle's volume" means. This
+                # generalises the rule the target==0 branch already applied ("don't
+                # block squats because hamstrings are secondary") to every target.
+                # `planned` (credited total) is still used by the emphasis
+                # absence check below, which asks "was this muscle trained at
+                # all" — a question secondary credit does answer.
                 planned = _planned_sets_by_muscle(conn, plan)
                 planned_primary = _planned_primary_sets_by_muscle(conn, plan)
                 for m in rx.muscles:
-                    effective_got = (
-                        planned_primary.get(m.muscle, 0.0)
-                        if m.target_sets == 0
-                        else planned.get(m.muscle, 0.0)
-                    )
+                    effective_got = planned_primary.get(m.muscle, 0.0)
                     if effective_got > m.target_sets + 1.0:
                         raise GateViolation(
-                            f"Planned {effective_got:.1f} sets for {m.muscle} exceeds the engine's "
-                            f"{m.action.upper()} target of {m.target_sets} "
+                            f"Planned {effective_got:.1f} DIRECT sets for {m.muscle} exceeds the "
+                            f"engine's {m.action.upper()} target of {m.target_sets} "
                             f"(reason: {m.reason}). The weekly volume was held/dampened — "
                             "do not inflate it in a single session."
                         )

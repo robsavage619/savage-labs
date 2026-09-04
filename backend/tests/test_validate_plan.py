@@ -926,3 +926,81 @@ def test_loggable_exercise_passes_the_catalog_check(conn) -> None:
         validate_plan(plan, state=state, conn=conn)
     except GateViolation as exc:
         assert "not in the Hevy catalog" not in str(exc)
+
+
+# --- validator #22 counts DIRECT sets, never secondary credit -----------------
+#
+# Regression for 2026-09-04: `target_sets` is derived from a FLOOR (MEV, or MV on
+# the maintain tier). Counting a compound's secondary credit against it turned
+# that floor into a ceiling, and the muscle got locked out of the direct work the
+# prescription was asking for — at 1:1 synergist credit a 2-set chest press eats
+# triceps' entire MV=2 allowance. Measured effect: side_delts, rear_delts, traps,
+# mid_back and triceps each sat at 0.0 actual sets for 20-27 days while every
+# week's prescription duly asked for 2.
+
+
+def _maintain_rx(muscle="triceps", target=2):
+    """Prescription holding one maintain-tier muscle at MV, with a split that places it."""
+    from shc.training.autoregulation import MusclePrescription, Prescription
+
+    return Prescription(
+        week_start=date.today(),
+        mesocycle_id="test",
+        muscles=[
+            MusclePrescription(
+                muscle=muscle,
+                current_sets=0.0,
+                target_sets=target,
+                delta=target,
+                action="add",
+                reason="maintenance tier, below MV → top up to hold size",
+                emphasis=False,
+                tier="maintain",
+            )
+        ],
+        session_split=[
+            {
+                "session": "Upper-A",
+                "weekday": "Tue",
+                "region": "upper",
+                "cap": 10,
+                "credited_muscle_sets": 2,
+                "muscles": [
+                    {"muscle": "chest", "sets": 2, "over_cap": False},
+                    {"muscle": muscle, "sets": target, "over_cap": False},
+                ],
+            }
+        ],
+    )
+
+
+def test_secondary_credit_cannot_lock_a_muscle_out_of_its_direct_work(conn) -> None:
+    """A press's secondary triceps credit must not block the direct triceps sets.
+
+    2 press sets credit triceps 2.0 at the 1:1 synergist rate; 2 direct sets take
+    the credited total to 4.0 against a target of 2. That combined total used to
+    trip the cap, which is precisely backwards — the target IS the direct-work
+    floor the direct sets are there to satisfy.
+    """
+    p = _plan(
+        intensity="moderate",
+        exercises=[
+            _ex("Hammerstrength Decline Chest Press", 180, "8"),
+            _ex("Overhead Triceps Extension (Cable)", 90, "12"),
+        ],
+    )
+    for block in p["blocks"]:
+        for ex in block["exercises"]:
+            ex["sets"] = 2
+    assert validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_maintain_rx()) is True
+
+
+def test_direct_inflation_of_a_held_muscle_is_still_rejected(conn) -> None:
+    """The cap still binds on what it exists to catch: real direct over-volume."""
+    p = _plan(
+        intensity="moderate",
+        exercises=[_ex("Overhead Triceps Extension (Cable)", 90, "12")],
+    )
+    p["blocks"][0]["exercises"][0]["sets"] = 6
+    with pytest.raises(GateViolation, match="6.0 DIRECT sets for triceps"):
+        validate_plan(p, state=_CLEAR_STATE, conn=conn, prescription=_maintain_rx())

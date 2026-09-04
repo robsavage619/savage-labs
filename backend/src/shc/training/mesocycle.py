@@ -946,16 +946,16 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
     # were deliberately moved to the maintain tier (migration 0087). A muscle
     # held at maintenance is judged against MV, not MEV, and the table has to say
     # so or the reader re-derives the wrong conclusion every week.
-    try:
-        tiers = {
-            m: (t or "grow", int(v) if v is not None else 2)
-            for m, t, v in conn.execute(
-                "SELECT muscle_group, tier, mv_sets FROM muscle_volume_targets"
-            ).fetchall()
-        }
-    except Exception as exc:  # noqa: BLE001 — table predates 0078 in old copies
-        log.debug("tier lookup unavailable for volume table: %s", exc)
-        tiers = {}
+    #
+    # Read tier/mv from the RESOLVED targets, never from a fresh unscoped SELECT.
+    # muscle_volume_targets holds one row per (muscle, mesocycle) plus the ''
+    # global-default row, and a mesocycle-scoped row that predates 0078 carries
+    # tier=NULL. An unscoped `SELECT muscle_group, tier ...` into a dict keeps
+    # whichever row the scan happens to emit last, and `t or "grow"` then coerces
+    # that NULL to 'grow' — so this table printed GROW for six muscles the
+    # prescriptor was correctly treating as 'maintain' (2026-09-04). volume_targets()
+    # already does the scope resolution and the NULL-inherits-the-default rule.
+    tiers = {mg: (vt.tier, vt.mv) for mg, vt in targets.items()}
 
     # Rebuild vol_rows with tier + confidence columns.
     vol_rows_conf: list[str] = []
