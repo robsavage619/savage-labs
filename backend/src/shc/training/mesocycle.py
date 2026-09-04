@@ -110,6 +110,88 @@ def _iso_week_start(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
+# How many weeks of direct-work history the maintenance delivery report shows.
+_MAINTENANCE_LOOKBACK_WEEKS = 4
+
+
+def _maintenance_delivery_block(
+    conn: duckdb.DuckDBPyConnection,
+    targets: dict[str, VolumeTarget],
+    weeks: int = _MAINTENANCE_LOOKBACK_WEEKS,
+) -> list[str]:
+    """Per-week DIRECT (primary-role) sets for every maintain-tier muscle.
+
+    A maintenance muscle exists to HOLD accrued size, and holding needs its MV in
+    direct work: synergist credit counts toward the ceiling but cannot supply the
+    stimulus (see volume.py — floors are judged on direct sets, ceilings on the
+    credited total). The volume table above reports the CREDITED total, so a
+    muscle can read "at MV — hold" there while receiving no direct work at all.
+    That is detraining, and nothing in the context could previously show it:
+    measured 2026-09-04, side_delts / rear_delts / traps / mid_back / triceps had
+    each gone 20-27 days with zero direct sets while every week duly asked for 2.
+    """
+    maintain = sorted(m for m, vt in targets.items() if vt.tier == "maintain")
+    if not maintain:
+        return []
+    this_week = _iso_week_start(date.today())
+    start = this_week - timedelta(weeks=weeks - 1)
+    try:
+        rows = conn.execute(
+            """
+            SELECT em.muscle, date_trunc('week', ws.started_at::DATE) AS wk, COUNT(*)::DOUBLE
+            FROM workout_sets_dedup ws
+            JOIN exercise_muscle em
+              ON em.exercise_name = ws.exercise AND em.role = 'primary'
+            WHERE ws.started_at::DATE >= ?
+              AND NOT ws.is_warmup AND ws.weight_kg > 0
+            GROUP BY 1, 2
+            """,
+            [start.isoformat()],
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — report is advisory, never blocks
+        log.debug("maintenance delivery unavailable: %s", exc)
+        return []
+
+    direct: dict[tuple[str, date], float] = {}
+    for muscle, wk, n in rows:
+        wk_date = wk.date() if hasattr(wk, "date") else wk
+        direct[(muscle, wk_date)] = float(n)
+
+    week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
+    headers = [f"wk-{weeks - 1 - i}" if i < weeks - 1 else "this" for i in range(weeks)]
+
+    out: list[str] = []
+    for m in maintain:
+        mv = targets[m].mv
+        counts = [direct.get((m, w), 0.0) for w in week_starts]
+        # Judge on the CLOSED weeks only — the current week is still in progress,
+        # so counting it would flag every muscle as short every Monday.
+        closed = counts[:-1]
+        zeros = sum(1 for c in closed if c == 0)
+        short = sum(1 for c in closed if c < mv)
+        if zeros == len(closed) and closed:
+            status = f"⚠ {zeros} closed wk(s) at ZERO — detraining, not maintaining"
+        elif short:
+            status = f"⚠ under MV in {short} of {len(closed)} closed wk(s)"
+        else:
+            status = "holding"
+        cells = " | ".join(f"{c:g}" for c in counts)
+        out.append(f"| {m:<12} | {mv:>2} | {cells} | {status} |")
+
+    return [
+        f"## MAINTENANCE DELIVERY (direct sets/wk vs MV — last {weeks} weeks)",
+        "Maintain-tier muscles hold size only if they get their MV in DIRECT work. Synergist "
+        "credit from compounds counts toward the ceiling but cannot supply the stimulus, and "
+        "the volume table above shows the CREDITED total — so a muscle can read 'at MV — hold' "
+        "there while actually receiving nothing. A zero row is detraining. Program the direct "
+        "set; the per-muscle cap counts direct sets, so it has room for it.",
+        f"| Muscle | MV | {' | '.join(headers)} | Status |",
+        "|--------------|----|" + "|".join(["------"] * weeks) + "|--------|",
+        *out,
+        "",
+    ]
+
+
 # Intra-mesocycle effort ramp (RIR periodization). Week 1 of an accumulation
 # block starts at ~3-2 RIR (RPE 7-8) and the band climbs linearly to ~1-0.5 RIR
 # (RPE 8.5-9.5) in the final accumulation week, so fatigue arrives on schedule
@@ -994,13 +1076,17 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 0.5; * = fitted to Rob's data)",
         "GROW-tier muscles are judged against MEV and are where weekly volume belongs.",
         "MAINTAIN-tier muscles are judged against **MV**, not MEV — a maintain muscle at "
-        "or above MV is DONE, not deficient. Do not add direct volume to it; its sets come "
-        "free as spillover from grow-tier compounds. The floor column shows the relevant "
-        "floor for each muscle's own tier.",
+        "or above MV is DONE, not deficient, and is not where the weekly budget goes. But "
+        "'done' means it received its MV in DIRECT work: the Actual column is the CREDITED "
+        "total, and compound spillover counts toward the ceiling without satisfying the "
+        "floor. Check the MAINTENANCE DELIVERY table below before assuming a maintain "
+        "muscle is covered. The floor column shows the relevant floor for each muscle's "
+        "own tier.",
         "| Muscle | Tier | Actual | MAV | Floor/MRV | Status | Confidence |",
         "|--------------|----------|--------|--------|----------|---------|------------|",
         *vol_rows_conf,
         "",
+        *_maintenance_delivery_block(conn, targets),
     ]
     if prog_rows:
         lines += [
