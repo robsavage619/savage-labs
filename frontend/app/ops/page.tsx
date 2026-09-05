@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
@@ -23,34 +22,7 @@ import "@/components/console/console.css";
  *   2. Every number carries a sentence saying what it means for today.
  *   3. Colour appears only when a value is out of its useful band.
  */
-const TYPE_SYSTEMS = [
-  { id: "studio", label: "Studio" },
-  { id: "editorial", label: "Editorial" },
-  { id: "swiss", label: "Swiss" },
-] as const;
-type TypeSystem = (typeof TYPE_SYSTEMS)[number]["id"];
-
 export default function OpsPage() {
-  // Temporary while Rob picks a direction; the winner becomes the only one and
-  // the other two families come out of layout.tsx.
-  const [type, setType] = useState<TypeSystem>("studio");
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("cx_type") as TypeSystem | null;
-      if (saved && TYPE_SYSTEMS.some((t) => t.id === saved)) setType(saved);
-    } catch {
-      // localStorage unavailable — keep the default
-    }
-  }, []);
-  const pick = (t: TypeSystem) => {
-    setType(t);
-    try {
-      localStorage.setItem("cx_type", t);
-    } catch {
-      // fine
-    }
-  };
-
   const state = useQuery({ queryKey: ["daily-state"], queryFn: api.dailyState, staleTime: 5 * 60_000 });
   const plan = useQuery({ queryKey: ["workout-next"], queryFn: () => api.workoutNext(false), staleTime: 5 * 60_000 });
 
@@ -65,9 +37,15 @@ export default function OpsPage() {
 
   const blocks = plan.data?.blocks ?? [];
   const sets = blocks.flatMap((b) => b.exercises ?? []).slice(0, 6);
+  const rec = plan.data?.recommendation;
+  const planFallbackSummary = rec?.focus
+    ? `${rec.focus.split(" — ")[0]} today${
+        rec.estimated_duration_min ? `, about ${rec.estimated_duration_min} minutes` : ""
+      }${rec.target_rpe ? ` at RPE ${rec.target_rpe}` : ""}.`
+    : "The lifts written for today.";
 
   return (
-    <div className="cx" data-type={type}>
+    <div className="cx">
       <div className="cx-wrap">
         <div className="cx-top">
           <span className="cx-word">
@@ -87,24 +65,9 @@ export default function OpsPage() {
               Ops
             </span>
           </nav>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div className="cx-type" role="group" aria-label="Type system">
-              {TYPE_SYSTEMS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className="no-tactile"
-                  aria-pressed={type === t.id}
-                  onClick={() => pick(t.id)}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-            <span className="cx-when">
-              {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
-            </span>
-          </div>
+          <span className="cx-when">
+            {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+          </span>
         </div>
 
         <div className="cx-grid">
@@ -151,10 +114,12 @@ export default function OpsPage() {
                   {blocks.flatMap((b) => b.exercises ?? []).length} exercises
                 </span>
               </header>
+              {/* `summary` is the one plain sentence; `rationale` is the technical
+                  record and lives behind the disclosure. Older plans predate the
+                  summary field, so fall back to the focus line rather than
+                  dumping the engine-voice paragraph into the reading path. */}
               <p className="cx-read" style={{ marginTop: 4 }}>
-                {plan.data?.recommendation?.rationale
-                  ? plan.data.recommendation.rationale
-                  : "The lifts written for today, with what you did last time beside them."}
+                {rec?.summary ?? planFallbackSummary}
               </p>
               <table className="cx-tbl">
                 <tbody>
@@ -170,6 +135,12 @@ export default function OpsPage() {
                   ))}
                 </tbody>
               </table>
+              {rec?.rationale && (
+                <details className="cx-why">
+                  <summary>Why this plan</summary>
+                  <p className="cx-why-body">{rec.rationale}</p>
+                </details>
+              )}
             </section>
           ) : (
             <div className="cx-skel cx-sess" style={{ minHeight: 210 }} />

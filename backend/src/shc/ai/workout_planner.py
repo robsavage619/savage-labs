@@ -998,7 +998,8 @@ interface Plan {
   recommendation: {
     intensity: "high" | "moderate" | "low" | "rest";  // exact lowercase
     focus: string;
-    rationale: string;
+    summary: string;      // ONE plain-English sentence for the dashboard. See voice rules below.
+    rationale: string;    // the technical justification — volume gaps, credit, citations
     estimated_duration_min: number;
     target_rpe: number;
   };
@@ -1020,6 +1021,27 @@ interface Plan {
   vault_insights: string[]; // cite real *.md filenames only
 }
 ```
+
+### VOICE: `recommendation.summary` vs `recommendation.rationale`
+
+These are two different jobs and must not be the same sentence.
+
+`rationale` is the technical record. Keep writing it exactly as now — volume
+gaps, synergist credit, ceilings, citations, numbers. It is the audit trail.
+
+`summary` is ONE sentence a tired person reads at 6am, and it is the only
+prose on the dashboard. Rules:
+  - Say what today IS and why, in words you would speak out loud.
+  - No jargon: no ACWR, e1RM, MEV/MAV/MV, synergist credit, sigma, per-hand,
+    "gap 7/12", or any snake_case field name.
+  - No exercise list — the table underneath already shows it.
+  - Second person, active voice, one clause of cause.
+  - 25 words or fewer.
+
+GOOD: "Upper body today — you played 954 minutes of pickleball this week and
+       your legs need the break more than they need more work."
+BAD:  "Legs are the least urgent gap (quads 7/12, glutes 9/11) and the
+       maintenance-tier muscles keep getting satisfied by synergist credit."
 """)
 
     vault = load_vault_research(state, extra_signals=extra, keyword_hints=hints)

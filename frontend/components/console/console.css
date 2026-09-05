@@ -51,52 +51,30 @@
 }
 
 
-/* ── type systems ───────────────────────────────────────────────────────────
+/* ── type ───────────────────────────────────────────────────────────────────
  *
- * Three complete pairings, switched by data-type on .cx. Each sets a display
- * face (the verdict and the big numerals), a body face (the plain-English
- * reads) and a data face (labels, units, tabular figures).
+ * A display face (verdict and numerals), a body face (the plain-English reads)
+ * and a data face (labels, units, tabular figures).
  *
- * The app's existing Geist is deliberately not one of the options — it is the
- * neutral SaaS default the audit found underneath an Orbitron HUD costume, and
- * "premium" is exactly the thing it does not say.
+ * The app's existing Geist is deliberately not used here — it is the neutral
+ * SaaS default the audit found sitting underneath an Orbitron HUD costume, and
+ * "premium" is the one thing it does not say.
  */
 
-/* A · STUDIO — contemporary, characterful. Bricolage carries an optical-size
- *   and width axis, so the verdict can be set wide and tight without a second
- *   family. Reads like a 2025 design studio: confident, slightly wonky. */
-.cx[data-type="studio"] {
-  --f-display: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
-  --f-body: "Instrument Sans", system-ui, -apple-system, sans-serif;
-  --f-data: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --display-wght: 700;
-  --display-tracking: -0.03em;
-  --display-settings: "wdth" 92, "opsz" 60;
-}
-
-/* B · EDITORIAL — luxury magazine. Fraunces at high optical size with a little
- *   SOFT is genuinely beautiful at 44px, and a serif verdict on a dark ground
- *   is the least software-looking option of the three. */
-.cx[data-type="editorial"] {
-  --f-display: "Fraunces", "Newsreader", Georgia, serif;
-  --f-body: "Newsreader", Georgia, serif;
-  --f-data: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+/* EDITORIAL — luxury magazine. Fraunces at high optical size with a little SOFT
+ * is genuinely lovely at 44px, and a serif verdict on a dark ground is the least
+ * software-looking thing available. Newsreader for the reads matters more than
+ * the display face: this board's premise is that every number carries a
+ * sentence, so the body face is doing most of the actual work. */
+.cx {
+  --f-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --f-body: "Newsreader", Georgia, "Times New Roman", serif;
+  --f-data: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --display-wght: 600;
   --display-tracking: -0.018em;
   --display-settings: "opsz" 120, "SOFT" 30, "WONK" 1;
   --fs-read: 15px;
   --fs-body: 16.5px;
-}
-
-/* C · SWISS — technical precision. One superfamily at two widths; the expanded
- *   caps give the labels an instrument-panel authority without any HUD kitsch. */
-.cx[data-type="swiss"] {
-  --f-display: "Archivo", system-ui, sans-serif;
-  --f-body: "Archivo", system-ui, sans-serif;
-  --f-data: "Space Mono", ui-monospace, SFMono-Regular, monospace;
-  --display-wght: 700;
-  --display-tracking: -0.02em;
-  --display-settings: "wdth" 112;
 }
 
 .cx { font-family: var(--f-body); }
@@ -118,33 +96,6 @@
 }
 .cx-lede, .cx-read, .cx-tbl .ex { font-family: var(--f-body); }
 
-/* ── type switcher ──────────────────────────────────────────────────────── */
-.cx-type {
-  display: inline-flex;
-  gap: 2px;
-  border: 1px solid var(--c-line-soft);
-  border-radius: 999px;
-  padding: 2px;
-  background: var(--c-surface);
-}
-.cx-type button {
-  font-family: var(--f-data);
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 0;
-  background: transparent;
-  color: var(--c-faint);
-  cursor: pointer;
-  transition: color 180ms ease, background 180ms ease;
-}
-.cx-type button:hover { color: var(--c-mute); }
-.cx-type button[aria-pressed="true"] {
-  background: var(--c-surface-2);
-  color: var(--c-ink);
-}
 
 /* ── layout ─────────────────────────────────────────────────────────────── */
 
@@ -432,3 +383,41 @@
 }
 @keyframes cx-shimmer { to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .cx-skel { animation: none; } }
+
+/* ── the technical rationale ─────────────────────────────────────────────────
+ * The planner's `rationale` is the audit trail — volume gaps, synergist
+ * credit, citations. It stays available and stays out of the reading path;
+ * `summary` is what the board actually leads with. */
+.cx-why { margin-top: 14px; }
+.cx-why > summary {
+  font-family: var(--f-data);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-faint);
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  transition: color 180ms ease;
+}
+.cx-why > summary:hover { color: var(--c-dim); }
+.cx-why > summary::-webkit-details-marker { display: none; }
+.cx-why > summary::before {
+  content: "+";
+  font-size: 12px;
+  line-height: 1;
+}
+.cx-why[open] > summary::before { content: "\2013"; }
+.cx-why-body {
+  font-family: var(--f-body);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--c-dim);
+  margin-top: 10px;
+  padding-left: 15px;
+  border-left: 1px solid var(--c-line-soft);
+  max-width: 74ch;
+  text-wrap: pretty;
+}

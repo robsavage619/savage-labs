@@ -550,6 +550,10 @@ export interface WorkoutPlan {
   recommendation: {
     intensity: "high" | "moderate" | "low" | "rest";
     focus: string;
+    /** One plain-English sentence for the dashboard. Absent on plans written
+     *  before the field existed — callers must fall back, never render
+     *  `rationale` (the technical audit trail) in its place. */
+    summary?: string | null;
     rationale: string | null;
     estimated_duration_min: number | null;
     target_rpe: number | null;

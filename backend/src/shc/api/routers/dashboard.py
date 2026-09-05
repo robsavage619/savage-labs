@@ -3535,6 +3535,27 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
     elif tier == "yellow":
         rationale += " Moderate effort, 85% of working weights."
 
+    # The one plain sentence the dashboard shows. `rationale` above stays the
+    # technical record; this is what a tired person reads at 6am, so it carries
+    # no jargon and no numbers that need a lookup to mean anything.
+    if not days_since:
+        summary = "Full body today — there is no recent training history to work around."
+    elif tier == "red":
+        summary = (
+            f"{focus_group.capitalize()} today, kept deliberately light — "
+            "your recovery is low and pushing through it costs more than it buys."
+        )
+    elif tier == "yellow":
+        summary = (
+            f"{focus_group.capitalize()} today at a moderate effort — "
+            f"it has had {most_rested[1]} days off and is the freshest thing you own."
+        )
+    else:
+        summary = (
+            f"{focus_group.capitalize()} today, and you can push — "
+            f"it has rested {most_rested[1]} days and your recovery is green."
+        )
+
     return {
         "generated_at": today,
         "source": "fallback",
@@ -3547,6 +3568,7 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         "recommendation": {
             "intensity": intensity,
             "focus": focus,
+            "summary": summary,
             "rationale": rationale,
             "estimated_duration_min": 55 if tier != "red" else 35,
             "target_rpe": rpe,
