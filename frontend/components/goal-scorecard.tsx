@@ -147,7 +147,7 @@ export function GoalScorecard() {
         };
 
   return (
-    <div className="space-y-4">
+    <div className="@container space-y-4">
       <p className="shc-helptext">
         Three north-star metrics for 2026: DUPR doubles toward 5.0, key compound e1RMs holding or
         climbing, bodyweight stable for concurrent training.
@@ -162,9 +162,9 @@ export function GoalScorecard() {
           background: "var(--card-hover)",
         }}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-[190px] flex-1">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/dupr-wordmark.png"
@@ -174,7 +174,7 @@ export function GoalScorecard() {
               />
               <span className="text-[9px] uppercase tracking-widest text-[var(--text-faint)]">doubles · target 5.0</span>
             </div>
-            <div className="flex items-baseline gap-3 mt-1.5">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mt-1.5">
               <span
                 className="text-[32px] font-bold tabular-nums leading-none"
                 style={{ color: "var(--text-primary)" }}
@@ -195,7 +195,7 @@ export function GoalScorecard() {
           </div>
 
           {sparkData.length > 1 && (
-            <div className="h-[48px] w-[120px] shrink-0">
+            <div className="h-[48px] w-[120px] shrink-0 grow-0">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={sparkData} margin={{ top: 3, right: 3, left: 3, bottom: 3 }}>
                   <Line
@@ -260,14 +260,14 @@ export function GoalScorecard() {
         {/* Latest tournament context */}
         {tourneyMatches.length > 0 && latestDate && (
           <div
-            className="rounded-md px-3 py-2 flex items-center justify-between gap-2"
+            className="rounded-md px-3 py-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1"
             style={{
               background: "var(--bg-elevated)",
               border: "1px solid var(--hairline)",
             }}
           >
-            <div>
-              <div className="text-[10px] font-medium" style={{ color: "var(--text-primary)" }}>
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-medium truncate" title={shortEventName(tourneyMatches[0]?.event_name ?? null)} style={{ color: "var(--text-primary)" }}>
                 {shortEventName(tourneyMatches[0]?.event_name ?? null)}
               </div>
               <div className="text-[9.5px] text-[var(--text-faint)] mt-0.5">
@@ -279,7 +279,7 @@ export function GoalScorecard() {
                 · {tourneyMatches[0]?.venue ?? ""}
               </div>
             </div>
-            <div className="flex items-center gap-3 shrink-0 text-[11px] tabular-nums">
+            <div className="flex flex-wrap items-center gap-x-3 shrink-0 text-[11px] tabular-nums">
               <span style={{ color: "var(--positive)" }}>{tourneyWins}W</span>
               <span style={{ color: "var(--text-faint)" }}>·</span>
               <span style={{ color: "var(--negative)" }}>{tourneyLosses}L</span>
@@ -331,17 +331,17 @@ export function GoalScorecard() {
               return (
                 <div
                   key={ex.exercise}
-                  className="flex items-center justify-between px-4 py-2.5"
+                  className="flex items-center justify-between gap-2 px-3 @sm:px-4 py-2.5"
                   style={{
                     background: bg,
                     borderTop: i === 0 ? "1px solid var(--hairline)" : "1px solid var(--hairline)",
                     borderLeft: `3px solid ${border}`,
                   }}
                 >
-                  <div className="text-[12px] text-[var(--text-muted)] leading-tight flex-1 min-w-0 truncate pr-3">
+                  <div className="text-[12px] text-[var(--text-muted)] leading-tight flex-1 min-w-0 truncate pr-3" title={ex.exercise}>
                     {ex.exercise}
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-2 @sm:gap-3 shrink-0">
                     <span className="text-[16px] font-semibold tabular-nums text-[var(--text-primary)]">
                       {ex.e1rm_lbs != null ? `${ex.e1rm_lbs}` : "—"}
                       <span className="text-[10px] font-normal text-[var(--text-faint)] ml-0.5">
@@ -374,7 +374,7 @@ export function GoalScorecard() {
           }}
         >
           <Eyebrow>Body weight · concurrent training target: maintain</Eyebrow>
-          <div className="flex items-baseline gap-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <span className="text-[26px] font-bold tabular-nums text-[var(--text-primary)]">
               {bwLbs.toFixed(1)}
               <span className="text-[13px] font-normal text-[var(--text-faint)] ml-1">lbs</span>

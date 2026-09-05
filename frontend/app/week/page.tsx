@@ -16,7 +16,14 @@ import { PillarSleep } from "@/components/pillar-sleep";
 import { PillarTrainingLoad } from "@/components/pillar-training-load";
 import { PostWorkoutPanel } from "@/components/post-workout-panel";
 import { PrescriptionPanel } from "@/components/prescription-panel";
-import { StrengthPanel } from "@/components/strength-panel";
+import {
+  LastSessionCard,
+  TrainingConsistencyCard,
+  MuscleBalanceCard,
+  RecoveryTrainingCard,
+  VolumeLoadCard,
+  MostTrainedCard,
+} from "@/components/strength-panel";
 import { RecoveryTrendPane, VolumeLandmarks } from "@/components/trend-intelligence";
 import { WhoopVitals } from "@/components/whoop-vitals";
 
@@ -103,8 +110,28 @@ export default function WeekPage() {
         <Card id="performance" span={4} label="Performance curve">
           <PerformanceCurvePane />
         </Card>
-        <Card id="strength" span={4} label="Strength">
-          <StrengthPanel />
+        {/* StrengthPanel was ONE card 1,559px tall containing six independent
+            blocks — four of them under 150px. Measured heights: last session 77,
+            consistency 141, balance 127, recovery×training 111, volume load 491,
+            most trained 381. As one card the four small ones were trapped in a
+            skyscraper; as six they fill two clean rows. */}
+        <Card id="last-session" span={4} label="Last session">
+          <LastSessionCard />
+        </Card>
+        <Card id="consistency" span={2} label="Training consistency">
+          <TrainingConsistencyCard />
+        </Card>
+        <Card id="balance" span={2} label="Muscle balance">
+          <MuscleBalanceCard />
+        </Card>
+        <Card id="recovery-training" span={2} label="Recovery × training">
+          <RecoveryTrainingCard />
+        </Card>
+        <Card id="most-trained" span={2} label="Most trained">
+          <MostTrainedCard />
+        </Card>
+        <Card id="volume-load" span={4} label="Volume load">
+          <VolumeLoadCard />
         </Card>
         <Card id="volume" span={2} label="Volume vs landmarks">
           <div className="space-y-4">

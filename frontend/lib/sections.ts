@@ -64,7 +64,15 @@ export const SECTIONS: readonly Section[] = [
   { id: "patterns", label: "Patterns", surface: "week", keywords: ["day of week", "distribution", "correlation"] },
   { id: "meso", label: "Mesocycle", surface: "week", keywords: ["periodization", "deload", "block", "ctl", "atl"] },
   { id: "performance", label: "Performance curve", surface: "week", keywords: ["ctl", "atl", "tsb", "fitness", "fatigue", "form"] },
-  { id: "strength", label: "Strength", surface: "week", keywords: ["e1rm", "prs", "lifts", "heatmap", "volume"] },
+  // StrengthPanel was one 1,559px card holding six independent blocks — four
+  // of them under 150px tall, trapped in a single column. Split, so each gets
+  // its own grid footprint and its own ⌘K entry.
+  { id: "last-session", label: "Last session", surface: "week", keywords: ["yesterday", "trained", "recent"] },
+  { id: "consistency", label: "Training consistency", surface: "week", keywords: ["heatmap", "streak", "sessions", "2 years"] },
+  { id: "balance", label: "Muscle balance", surface: "week", keywords: ["push pull", "ratio", "imbalance"] },
+  { id: "recovery-training", label: "Recovery × training", surface: "week", keywords: ["train days", "rest days", "90d"] },
+  { id: "volume-load", label: "Volume load", surface: "week", keywords: ["kg lifted", "tonnage", "52 weeks", "progressive overload"] },
+  { id: "most-trained", label: "Most trained", surface: "week", keywords: ["e1rm", "prs", "top exercises", "set volume"] },
   { id: "volume", label: "Volume vs landmarks", surface: "week", keywords: ["mev", "mav", "mrv", "sets", "muscle"] },
   { id: "prescription", label: "Volume prescription", surface: "week", keywords: ["target", "sets", "muscle", "next week"] },
   { id: "cardio", label: "Cardio", surface: "week", keywords: ["zone 2", "z2", "aerobic", "sessions", "log"] },

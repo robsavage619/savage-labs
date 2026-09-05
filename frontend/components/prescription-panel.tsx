@@ -62,7 +62,7 @@ export function PrescriptionPanel() {
   });
 
   return (
-    <div className="rounded-lg border border-[var(--hairline)] p-4 space-y-3">
+    <div className="@container rounded-lg border border-[var(--hairline)] p-4 space-y-3">
       <div className="flex items-baseline justify-between">
         <Eyebrow>This week&apos;s prescription · wk of {weekLabel}</Eyebrow>
         <span className="text-[10px] text-[var(--text-faint)]">auto-regulated</span>
@@ -82,21 +82,23 @@ export function PrescriptionPanel() {
         </div>
       )}
 
-      <div className="space-y-2.5">
+      <div className="-mb-2.5 columns-1 gap-x-6 @min-[600px]:columns-2 @min-[900px]:columns-3">
         {ordered.map((m) => {
           const style = ACTION_STYLE[m.action];
           return (
-            <div key={m.muscle} className="space-y-0.5">
-              <div className="flex items-baseline justify-between text-[11.5px]">
-                <span className="text-[var(--text-muted)]">
-                  {label(m.muscle)}
+            <div key={m.muscle} className="mb-2.5 space-y-0.5 break-inside-avoid">
+              <div className="flex items-baseline justify-between gap-2 text-[11.5px]">
+                <span className="flex min-w-0 items-baseline gap-1 text-[var(--text-muted)]">
+                  <span className="truncate" title={label(m.muscle)}>
+                    {label(m.muscle)}
+                  </span>
                   {m.emphasis && (
-                    <span className="ml-1 text-[var(--accent)]" title="Emphasis muscle">
+                    <span className="shrink-0 text-[var(--accent)]" title="Emphasis muscle">
                       ★
                     </span>
                   )}
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex shrink-0 items-center gap-2">
                   <span className="tabular-nums text-[var(--text-faint)]">
                     {m.current_sets.toFixed(0)}
                   </span>

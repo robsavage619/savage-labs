@@ -56,9 +56,11 @@ function MuscleBar({
 
   return (
     <div className="space-y-1">
-      <div className="flex items-baseline justify-between text-[11.5px]">
-        <span className="capitalize text-[var(--text-muted)]">{label}</span>
-        <div className="flex items-center gap-2">
+      <div className="flex items-baseline justify-between gap-2 text-[11.5px]">
+        <span className="min-w-0 truncate capitalize text-[var(--text-muted)]" title={label}>
+          {label}
+        </span>
+        <div className="flex shrink-0 items-center gap-2">
           <span className="tabular-nums text-[var(--text-primary)]">{weekly_sets.toFixed(0)}</span>
           <span className="text-[var(--text-faint)] text-[10px]">sets</span>
           <span
@@ -73,7 +75,7 @@ function MuscleBar({
           </span>
         </div>
       </div>
-      <div className="relative h-[12px] rounded-sm overflow-hidden bg-[var(--hairline)]">
+      <div className="relative h-[12px] min-w-0 rounded-sm overflow-hidden bg-[var(--hairline)]">
         {/* Zone fill bands */}
         {mev != null && (
           <div className="absolute inset-y-0 left-0" style={{ width: pct(mev), background: "oklch(0.4 0.04 60 / 0.4)" }} />
@@ -168,7 +170,7 @@ export function MuscleVolumePanel() {
   const weekLabel = new Date(data.week_start + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
   return (
-    <div className="rounded-lg border border-[var(--hairline)] p-4 space-y-3">
+    <div className="@container rounded-lg border border-[var(--hairline)] p-4 space-y-3">
       <div className="flex items-baseline justify-between">
         <Eyebrow>Per-muscle volume · wk of {weekLabel}</Eyebrow>
         <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-faint)]">
@@ -177,16 +179,17 @@ export function MuscleVolumePanel() {
         </span>
       </div>
 
-      <div className="space-y-4">
+      <div className="-mb-4 columns-1 gap-x-6 @min-[600px]:columns-2 @min-[900px]:columns-3">
         {sorted.map((m) => (
-          <MuscleBar
-            key={m.muscle}
-            muscle={m.muscle}
-            weekly_sets={m.weekly_sets}
-            mev={m.mev}
-            mav={m.mav}
-            mrv={m.mrv}
-          />
+          <div key={m.muscle} className="mb-4 break-inside-avoid">
+            <MuscleBar
+              muscle={m.muscle}
+              weekly_sets={m.weekly_sets}
+              mev={m.mev}
+              mav={m.mav}
+              mrv={m.mrv}
+            />
+          </div>
         ))}
       </div>
 
