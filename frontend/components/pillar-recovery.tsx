@@ -4,8 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, ReferenceLine, Scatter, ComposedChart, XAxis, YAxis, Tooltip } from "recharts";
 import { api } from "@/lib/api";
 import { Eyebrow, Metric } from "@/components/ui/metric";
-import { PlainRead, LabelledRead } from "@/components/plain-read";
-import { recoveryRead, hrvRead, rhrRead } from "@/lib/reads";
+import { PlainRead } from "@/components/plain-read";
+import { recoveryRead } from "@/lib/reads";
 
 function toneFor(score: number | null | undefined) {
   if (score == null) return { color: "var(--neutral)", token: "neutral" as const };
@@ -108,12 +108,11 @@ export function PillarRecovery() {
   const score = readiness.data?.recovery_score ?? null;
   const t = toneFor(score);
 
-  // Plain-English layer. All three take the full DailyState, which this panel
-  // already holds — no extra fetch, and no second opinion on the numbers.
+  // Plain-English layer: ONE read, on the headline number. The per-channel HRV
+  // and RHR reads still exist in lib/reads.ts — they are just not rendered here,
+  // because three stacked paragraphs displaced the data they were explaining.
   const state = dailyState.data;
   const recRead = state ? recoveryRead(state) : null;
-  const hrvR = state ? hrvRead(state) : null;
-  const rhrR = state ? rhrRead(state) : null;
 
   const sparkData = trend.data?.map((p) => ({ date: p.date.slice(5), score: p.score })) ?? [];
   const first = sparkData[0]?.score ?? 0;
@@ -316,21 +315,6 @@ export function PillarRecovery() {
         </div>
       </div>
 
-      {(hrvR || rhrR) && (
-        <div className="mt-3 space-y-2 min-w-0">
-          {hrvR && (
-            <LabelledRead label={hrvR.tag ?? hrvR.label} state={hrvR.state}>
-              {hrvR.read}
-            </LabelledRead>
-          )}
-          {rhrR && (
-            <LabelledRead label={rhrR.tag ?? rhrR.label} state={rhrR.state}>
-              {rhrR.read}
-            </LabelledRead>
-          )}
-        </div>
-      )}
-
       <div className="mt-4">
         <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider mb-2" style={{ fontFamily: "var(--font-orbitron)", letterSpacing: "0.18em" }}>What&apos;s driving this</p>
         <ul className="space-y-1.5">
@@ -347,18 +331,6 @@ export function PillarRecovery() {
           ))}
         </ul>
       </div>
-
-      <details className="mt-auto pt-4 group">
-        <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
-          <span className="group-open:hidden">▸ How to read this</span>
-          <span className="hidden group-open:inline">▾ How to read this</span>
-        </summary>
-        <p className="mt-1.5 text-[10.5px] text-[var(--text-dim)] leading-snug">
-          Recovery 67+ green-lights intensity, 34–66 favors moderate work, &lt;34 means rest. HRV σ shows
-          autonomic deviation from your 28-day baseline; β-blocker days blunt the signal so trust the
-          trend over a single day.
-        </p>
-      </details>
     </div>
   );
 }

@@ -161,15 +161,6 @@ export function LabExperiments() {
           })}
         </div>
       )}
-
-      <p className="mt-4 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Each study is pre-registered — hypothesis, design, and the smallest effect worth acting on
-        are fixed before any data is seen. Your daily arm is assigned by a balanced randomized
-        schedule you can&apos;t game. &quot;Log today&quot; records adherence (and reveals today&apos;s
-        arm); &quot;Score&quot; pulls the outcome from your training data and reports an effect with a
-        95% CI, N-gated. A CONFIRMED study writes a causal prior the plan can lean on.
-      </p>
     </div>
   );
 }

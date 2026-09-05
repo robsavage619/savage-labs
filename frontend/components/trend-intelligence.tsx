@@ -63,13 +63,6 @@ export function RecoveryTrendPane() {
 
   return (
     <div className="@container space-y-6">
-      <p className="shc-helptext">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        The heatmap reveals weekly patterns — Mondays vs weekends, illness weeks, deload weeks.
-        The HRV band shows your individual normal range. The alarm strip flags days where your
-        body&apos;s three pre-illness signals (RHR rise, temp rise, HRV drop) coincide.
-      </p>
-
       {/* Stacked in a narrow column; 2-up once the card is wide enough that a
           755px stack would waste the horizontal room the grid just bought. */}
       <div className="grid grid-cols-1 @min-[680px]:grid-cols-2 gap-x-6 gap-y-6 items-start">
@@ -499,20 +492,6 @@ function MonthlyAverages({ data }: { data: { date: string; score: number; hrv: n
 export function InsightsPane() {
   return (
     <div className="@container space-y-6">
-      <p className="shc-helptext flex items-baseline gap-1.5 flex-wrap">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        <span>
-          Cards on this tab synthesise your live data with research from your
-          {" "}
-          <span className="inline-flex items-center gap-1 align-middle">
-            <ObsidianMark size={11} />
-            <span className="text-[var(--text-muted)]">Obsidian vault</span>
-          </span>
-          {" "}
-          — Israetel volume landmarks, Helms set progression, Gabbett ACWR — to turn raw numbers
-          into prescriptive signals.
-        </span>
-      </p>
       <ReadinessDecomposition />
       <VolumeLandmarks />
       <PrescriptionPanel />

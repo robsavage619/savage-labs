@@ -185,18 +185,6 @@ export function PillarTrainingLoad() {
         </div>
       </div>
 
-      <details className="mt-3 group">
-        <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
-          <span className="group-open:hidden">▸ How to read this</span>
-          <span className="hidden group-open:inline">▾ How to read this</span>
-        </summary>
-        <p className="mt-1.5 text-[10.5px] text-[var(--text-dim)] leading-snug">
-          This ACWR uses recovery score as a proxy for load — not raw tonnage. 0.8–1.3 is the adaptation sweet spot.
-          &gt; 1.5 spikes injury risk; &lt; 0.8 means undertraining.
-          Today&apos;s call combines this proxy with HRV σ. The T:C ratio in the protocol strip uses actual training volume.
-        </p>
-      </details>
-
       <div className="mt-4 pt-4 grid grid-cols-3 gap-2 @lg:gap-3 text-[11px] border-t border-[var(--hairline)] min-w-0">
         <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Train streak</p>

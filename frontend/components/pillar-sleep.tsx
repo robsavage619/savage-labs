@@ -4,8 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type SleepEntry } from "@/lib/api";
 
 import { Eyebrow, Metric } from "@/components/ui/metric";
-import { PlainRead, LabelledRead } from "@/components/plain-read";
-import { sleepRead, sleepStagesRead, consistencyRead, sleepDebtRead } from "@/lib/reads";
+import { PlainRead } from "@/components/plain-read";
+import { sleepRead } from "@/lib/reads";
 
 interface Stages {
   deep_min?: number;
@@ -90,14 +90,11 @@ export function PillarSleep() {
     staleTime: 5 * 60 * 1000,
   });
   const sleepState = stateQ.data?.sleep;
-  // Plain-English layer, off the DailyState this panel already fetches. The
-  // stage reads normalise fractions internally — deep_pct_last arrives as
-  // 0.176 while efficiency_pct_last on the same object is already 92.9.
+  // Plain-English layer, off the DailyState this panel already fetches. ONE
+  // read only — the stage/consistency/debt reads still live in lib/reads.ts,
+  // but four stacked paragraphs pushed the nightly bars below the fold.
   const dstate = stateQ.data;
   const nightRead = dstate ? sleepRead(dstate) : null;
-  const stagesR = dstate ? sleepStagesRead(dstate) : null;
-  const consistencyR = dstate ? consistencyRead(dstate) : null;
-  const debtR = dstate ? sleepDebtRead(dstate) : null;
   const spo2Last = sleepState?.spo2_avg_last ?? null;
   const effLast = sleepState?.efficiency_pct_last ?? null;
   const disturbLast = sleepState?.disturbance_count_last ?? null;
@@ -249,26 +246,6 @@ export function PillarSleep() {
         </PlainRead>
       )}
 
-      {(stagesR || consistencyR || debtR) && (
-        <div className="mt-3 space-y-2 min-w-0">
-          {stagesR && (
-            <LabelledRead label="Deep & REM" state={stagesR.state}>
-              {stagesR.read}
-            </LabelledRead>
-          )}
-          {consistencyR && (
-            <LabelledRead label="Mid σ" state={consistencyR.state}>
-              {consistencyR.read}
-            </LabelledRead>
-          )}
-          {debtR && (
-            <LabelledRead label="7d debt" state={debtR.state}>
-              {debtR.read}
-            </LabelledRead>
-          )}
-        </div>
-      )}
-
       <div className="mt-4 space-y-2">
         {isLoading || !entries.length
           ? Array.from({ length: 5 }).map((_, i) => <div key={i} className="shc-skeleton h-[16px]" />)
@@ -310,17 +287,6 @@ export function PillarSleep() {
           </span>
         )}
       </div>
-
-      <details className="mt-3 pt-3 border-t border-[var(--hairline)] group">
-        <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
-          <span className="group-open:hidden">▸ How to read this</span>
-          <span className="hidden group-open:inline">▾ How to read this</span>
-        </summary>
-        <p className="mt-1.5 text-[10.5px] text-[var(--text-dim)] leading-snug">
-          Aim 7.5h+ with 15–20% deep and 20–25% REM. Consistency &lt; 1.0σ keeps the circadian
-          clock tight. Debt &gt; 5h hits HRV and recovery within 48h — pay it back.
-        </p>
-      </details>
     </div>
   );
 }

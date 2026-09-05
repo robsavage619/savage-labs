@@ -277,17 +277,6 @@ export function WhoopVitals() {
             )}
           </div>
         )}
-
-        {/* Footer interpretation — collapsible */}
-        <details className="mt-4 pt-3 border-t border-[var(--hairline)] group">
-          <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
-            <span className="group-open:hidden">▸ How to read this</span>
-            <span className="hidden group-open:inline">▾ How to read this</span>
-          </summary>
-          <p className="mt-2 text-[10.5px] text-[var(--text-dim)] leading-snug">
-            Recovery 67+ green-lights intensity. Sleep efficiency &lt;75% or disturbances ≥12 caps intensity to MODERATE even when HRV looks good — quality matters as much as duration. HRV σ tracks autonomic balance; trend over absolute, especially on β-blocker days.
-          </p>
-        </details>
       </div>
     </div>
   );

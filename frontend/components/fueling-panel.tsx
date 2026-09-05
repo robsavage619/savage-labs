@@ -26,7 +26,6 @@ export function FuelingPanel() {
 
   const f = today.data;
   const hasDiet = f?.has_diet_data ?? false;
-  const hasBodyComp = f?.has_body_comp_data ?? false;
 
   const balance = f?.kcal_balance ?? null;
   const balanceColor =
@@ -205,14 +204,6 @@ export function FuelingPanel() {
           </div>
         </div>
       )}
-
-      <p className="mt-4 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Protein 1.6–2.2 g/kg supports hypertrophy; under 1.2 g/kg blunts MPS recovery
-        (Morton 2018 meta). Energy balance ±250 kcal of TDEE preserves lean mass while losing fat
-        (Helms et al, 2014). Body composition flows from a smart scale via Apple Health; diet flows from
-        any Health-connected logger. {!hasBodyComp && "Add a smart scale to surface body fat % and lean mass."}
-      </p>
     </div>
   );
 }

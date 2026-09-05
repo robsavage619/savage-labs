@@ -562,13 +562,6 @@ export function ClinicalOverview() {
 
   return (
     <div className="space-y-5">
-      <p className="shc-helptext">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Cardiometabolic risk markers up top, current meds with safety notes for your specific
-        conditions, lab values with reference ranges and trend lines, and care gaps where
-        follow-up is overdue.
-      </p>
-
       <CardiometabolicStrip risk={risk} />
 
       <CareGapsCard risk={risk} />

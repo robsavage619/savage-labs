@@ -41,24 +41,3 @@ export function PlainRead({
     </p>
   );
 }
-
-/** A read with its channel named — for stacks where the number sits in a
- *  separate compact tile and the sentence needs to say which tile it explains. */
-export function LabelledRead({
-  label,
-  state = "unknown",
-  children,
-}: {
-  label: string;
-  state?: ChannelState;
-  children: ReactNode;
-}) {
-  return (
-    <div className="min-w-0">
-      <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{label}</p>
-      <PlainRead state={state} className="mt-0.5">
-        {children}
-      </PlainRead>
-    </div>
-  );
-}

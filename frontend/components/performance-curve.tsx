@@ -165,13 +165,6 @@ export function PerformanceCurvePane() {
 
   return (
     <div className="@container space-y-6">
-      <p className="shc-helptext">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        CTL (fitness) builds over 42 days; ATL (fatigue) spikes and clears in 7. TSB = CTL − ATL:
-        positive means you are fresh and below your fitness peak; deeply negative means accumulated
-        fatigue is outpacing recovery. Sweet spot for performance: TSB +5 to +20.
-      </p>
-
       {/* CTL + ATL line chart */}
       <div>
         <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">

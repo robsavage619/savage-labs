@@ -181,14 +181,6 @@ export function PeriodizationStrip() {
           </div>
         </div>
       </div>
-
-      <p className="mt-3 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Phase strip shows mesocycle progression — dim cells are upcoming, the glow is this week, amber is the
-        scheduled deload. Banister CTL (42d EWMA of composite load) is fitness; ATL (7d) is fatigue;
-        TSB = CTL − ATL is form. Aim for −10 to +5 for productive training; +5 to +15 right before peak events.
-        Sustained TSB &lt; −20 is overreach territory.
-      </p>
     </div>
   );
 }

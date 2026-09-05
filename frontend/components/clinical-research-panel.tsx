@@ -231,13 +231,6 @@ export function ClinicalResearchPanel() {
           />
         </div>
       </div>
-
-      <p className="mt-5 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Six research-anchored signals layered on your standard insights. Each tile shows what it
-        measures in plain terms and its peer-reviewed range — the highlighted band is where you sit
-        today. Source citation sits next to each name (full reference on hover).
-      </p>
     </div>
   );
 }

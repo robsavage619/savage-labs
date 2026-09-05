@@ -760,12 +760,6 @@ export function CardioPanel() {
         <h2 className="shc-section-title min-w-0">Cardio &amp; Sports</h2>
         <span className="min-w-0 text-[10.5px] text-[var(--text-faint)]">last 60 days · manual + WHOOP</span>
       </div>
-      <p className="shc-helptext -mt-2">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Time in Z2 (60–70% HRmax) builds aerobic capacity. Avg HR drifting <em>down</em> at the same RPE = improving fitness.
-        Aim for ≥150 cardio min/wk with ≥45 min in Z2.
-      </p>
-
       <div className="grid grid-cols-2 @2xl:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">28d sessions</p>

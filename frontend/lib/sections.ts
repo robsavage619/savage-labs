@@ -73,10 +73,15 @@ export const SECTIONS: readonly Section[] = [
   { id: "recovery-training", label: "Recovery × training", surface: "week", keywords: ["train days", "rest days", "90d"] },
   { id: "volume-load", label: "Volume load", surface: "week", keywords: ["kg lifted", "tonnage", "52 weeks", "progressive overload"] },
   { id: "most-trained", label: "Most trained", surface: "week", keywords: ["e1rm", "prs", "top exercises", "set volume"] },
-  { id: "volume", label: "Volume vs landmarks", surface: "week", keywords: ["mev", "mav", "mrv", "sets", "muscle"] },
+  // Was one card holding two components stacked (landmarks 342px + per-muscle
+  // 641px) — the same mistake StrengthPanel made. Split.
+  { id: "volume", label: "Volume vs landmarks", surface: "week", keywords: ["mev", "mav", "mrv", "sets", "group"] },
+  { id: "per-muscle", label: "Per-muscle volume", surface: "week", keywords: ["muscle", "sets this week", "mev", "biceps", "chest"] },
   { id: "prescription", label: "Volume prescription", surface: "week", keywords: ["target", "sets", "muscle", "next week"] },
   { id: "cardio", label: "Cardio", surface: "week", keywords: ["zone 2", "z2", "aerobic", "sessions", "log"] },
-  { id: "sport", label: "Pickleball", surface: "week", keywords: ["dupr", "matches", "court", "tournament"] },
+  // Tournament history was 678px of a 1,138px card — its own thing.
+  { id: "sport", label: "Pickleball", surface: "week", keywords: ["dupr", "court", "freshness", "play"] },
+  { id: "tournaments", label: "Tournament results", surface: "week", keywords: ["matches", "dupr", "results", "partners", "scores"] },
   { id: "post", label: "Post-workout", surface: "week", keywords: ["debrief", "retrospective", "after action", "sync"] },
   { id: "goals", label: "2026 goals", surface: "week", keywords: ["scorecard", "targets", "dupr"] },
 

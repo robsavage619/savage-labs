@@ -145,13 +145,6 @@ export function AfterActionPanel() {
           </tbody>
         </table>
       </div>
-
-      <p className="mt-4 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Reads what you logged in Hevy and emits a next-session suggestion per exercise. Avg RPE ≥ target+2 cuts
-        10%; RPE ≥ target+1 cuts 5%; rep miss ≥2 cuts 5%; RPE ≤ target−2 adds 2.5%. Hover any row for the reason.
-        Logging RPE on every Hevy set unlocks the full signal — without it the suggestion falls back to plan-vs-actual reps only.
-      </p>
     </div>
   );
 }

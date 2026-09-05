@@ -193,20 +193,6 @@ export function LabPanel() {
           </section>
         </>
       )}
-
-      <p className="mt-4 pt-3 text-[10.5px] text-[var(--text-dim)] leading-snug border-t border-[var(--hairline)]">
-        <span className="text-[var(--text-muted)]">How to read this. </span>
-        Each card is a question registered in advance — the test type and threshold are fixed
-        before looking at the data, so you can&apos;t p-hack. Verdict is one of CONFIRMED (effect
-        meets threshold and direction), REFUTED (effect runs the wrong way), INCONCLUSIVE
-        (right direction but small effect), or INSUFFICIENT N (need more days). A question moves
-        to <span className="text-[var(--text-muted)]">Answered</span> after three consecutive
-        identical definitive verdicts, and is re-checked every 30 days after that — if the
-        re-check disagrees, it goes back under test. Confirmations survive Benjamini–Hochberg
-        correction across the whole catalogue; that controls for testing many hypotheses at once,
-        not for re-testing the same one as data accumulates, so read a confirmation as strong
-        evidence rather than proof.
-      </p>
     </div>
   );
 }

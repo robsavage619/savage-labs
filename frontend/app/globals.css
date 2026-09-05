@@ -741,3 +741,55 @@ button:not(:disabled):not(.no-tactile):focus-visible {
   height: 1px;
   background: var(--hairline);
 }
+
+/* ── Card explanations ───────────────────────────────────────────────────────
+ * One line under every card title saying what it tells you, with the detail on
+ * demand. Sits between the title and the data, at a readable size — the old
+ * "how to read this" links were 10px, inconsistently placed, and present on
+ * only half the cards. */
+.card-help-summary {
+  display: block;
+  font-size: var(--fs-read);
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin: 2px 0 12px;
+  text-wrap: pretty;
+  min-width: 0;
+}
+.card-help { margin: 2px 0 12px; }
+.card-help > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.card-help > summary::-webkit-details-marker { display: none; }
+.card-help > summary .card-help-summary { margin: 0; }
+.card-help-more {
+  font-family: var(--font-data);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+  border-bottom: 1px dotted var(--hairline-strong);
+  transition: color 160ms ease;
+}
+.card-help > summary:hover .card-help-more { color: var(--text-dim); }
+.card-help[open] > summary .card-help-more::after { content: " ▴"; }
+.card-help:not([open]) > summary .card-help-more::after { content: " ▾"; }
+.card-help-body {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  margin-top: 10px;
+  padding-left: 14px;
+  border-left: 1px solid var(--hairline);
+  max-width: 78ch;
+  text-wrap: pretty;
+}
+.card-help-body p + p { margin-top: 8px; }
+.card-help-body strong { color: var(--text-muted); font-weight: 550; }
