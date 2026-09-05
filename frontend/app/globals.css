@@ -711,3 +711,54 @@ button:not(:disabled):not(.no-tactile):focus-visible {
   button:not(:disabled):not(.no-tactile):active { transform: none; }
   .sl-tactile-ripple { animation: none; display: none; }
 }
+
+/* ── Board grid ──────────────────────────────────────────────────────────────
+ * Four columns at 1728px. Cards span 1–4 by information density, declared per
+ * card rather than assumed: a sparkline tile and a 104-week heatmap should not
+ * occupy the same footprint.
+ *
+ * This is what replaces the accordions. Opening 15 collapsed sections without
+ * this turned "hidden" into a 6,763px single column — a different failure, not
+ * a fixed one. The content is only reachable if the width is used. */
+.board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.board > .span-1 { grid-column: span 1; }
+.board > .span-2 { grid-column: span 2; }
+.board > .span-3 { grid-column: span 3; }
+.board > .span-4 { grid-column: span 4; }
+.board > .board-rule { grid-column: 1 / -1; }
+
+/* Every card is min-w-0 so a wide table or chart scrolls inside its own track
+   instead of blowing out the grid column. */
+.board > * { min-width: 0; }
+
+@media (max-width: 1400px) {
+  .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .board > .span-3, .board > .span-4 { grid-column: span 2; }
+}
+@media (max-width: 780px) {
+  .board { grid-template-columns: minmax(0, 1fr); }
+  .board > .span-2, .board > .span-3, .board > .span-4 { grid-column: span 1; }
+}
+
+.board-rule {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 14px 0 0;
+  font-family: var(--font-data);
+  font-size: var(--fs-label);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.board-rule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hairline);
+}

@@ -1,35 +1,56 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { SurfaceShell } from "@/components/surface-shell";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { SubjectDossier } from "@/components/subject-dossier";
-import { LabExperiments } from "@/components/lab-experiments";
-import { LabPanel } from "@/components/lab-panel";
-import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { CorrelationCards } from "@/components/correlation-cards";
-import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
-import { TrendIntelligence } from "@/components/trend-intelligence";
-import { AppShell } from "@/components/app-shell";
-import { CollapsibleSection } from "@/components/collapsible-section";
+import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { LabExperiments } from "@/components/lab-experiments";
+import { LabPanel } from "@/components/lab-panel";
+import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
+import { SubjectDossier } from "@/components/subject-dossier";
 import { SuggestedExperiments } from "@/components/suggested-experiments";
 import { api } from "@/lib/api";
-
-const LAB_SECTIONS = [
-  { id: "dossier", label: "Subject" },
-  { id: "studies", label: "Studies" },
-  { id: "findings", label: "Findings" },
-  { id: "engine", label: "Engine" },
-  { id: "clinical", label: "Clinical" },
-  { id: "stress", label: "Autonomic" },
-  { id: "correlations", label: "HRV" },
-  { id: "trends", label: "Trends" },
-] as const;
+import type { Span } from "@/lib/sections";
 
 const LAB_RUN_THROTTLE_KEY = "lab_last_run_ms";
 const LAB_RUN_THROTTLE_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+/**
+ * A board card. The anchor id comes from `sectionsFor("lab")` in
+ * lib/sections.ts. Nothing collapses — the panels that used to sit behind
+ * seven accordion headers are laid out across the width instead.
+ *
+ * A card without an `id` is a companion to the one before it (suggested
+ * studies beside the trials, behaviour impact beside the stress panel): the
+ * manifest has one anchor for the pair, and ids must stay unique.
+ */
+function BoardCard({
+  id,
+  label,
+  span,
+  children,
+}: {
+  id?: string;
+  label: string;
+  span: Span;
+  children: ReactNode;
+}) {
+  return (
+    <section id={id} className={`span-${span} scroll-mt-24`}>
+      <div className="flex items-center gap-3 px-1 pb-2">
+        <span className="shc-section-title text-[10px] tracking-[0.18em] text-[var(--text-dim)]">
+          {label}
+        </span>
+        <span className="flex-1 h-px bg-[var(--hairline)]" />
+      </div>
+      <ErrorBoundary label={label}>{children}</ErrorBoundary>
+    </section>
+  );
+}
 
 export default function LabPage() {
   const qc = useQueryClient();
@@ -64,74 +85,48 @@ export default function LabPage() {
   }, [qc]);
 
   return (
-    <AppShell sections={LAB_SECTIONS}>
-      <div className="space-y-4">
-        {/* ── SUBJECT DOSSIER ── */}
-        <section id="dossier" className="scroll-mt-20">
-          <ErrorBoundary label="Subject dossier">
-            <SubjectDossier />
-          </ErrorBoundary>
-        </section>
+    <SurfaceShell>
+      <div className="board">
+        <BoardCard id="subject" label="Subject dossier" span={4}>
+          <SubjectDossier />
+        </BoardCard>
 
-        {/* ── STUDIES (n-of-1 + suggestions) ── */}
-        <CollapsibleSection id="studies" title="Active studies · n-of-1 trials" defaultOpen>
-          <div className="space-y-4">
-            <ErrorBoundary label="Self-experiments">
-              <LabExperiments />
-            </ErrorBoundary>
-            <ErrorBoundary label="Suggested studies">
-              <SuggestedExperiments />
-            </ErrorBoundary>
-          </div>
-        </CollapsibleSection>
+        <div className="board-rule">n-of-1 program</div>
 
-        {/* ── STANDING RESEARCH PROGRAM ── */}
-        <CollapsibleSection id="findings" title="Standing research program" defaultOpen>
-          <ErrorBoundary label="Research lab">
-            <LabPanel />
-          </ErrorBoundary>
-        </CollapsibleSection>
+        <BoardCard id="trials" label="Active trials" span={2}>
+          <LabExperiments />
+        </BoardCard>
 
-        {/* ── ENGINE SELF-ASSESSMENT ── */}
-        <CollapsibleSection id="engine" title="Engine self-assessment" defaultOpen>
-          <ErrorBoundary label="Engine status">
-            <EngineStatusPanel />
-          </ErrorBoundary>
-        </CollapsibleSection>
+        <BoardCard label="Suggested studies" span={2}>
+          <SuggestedExperiments />
+        </BoardCard>
 
-        {/* ── CLINICAL RESEARCH SIGNALS ── */}
-        <CollapsibleSection id="clinical" title="Clinical research signals" defaultOpen>
-          <ErrorBoundary label="Clinical research">
-            <ClinicalResearchPanel />
-          </ErrorBoundary>
-        </CollapsibleSection>
+        <BoardCard id="findings" label="Standing research program" span={2}>
+          <LabPanel />
+        </BoardCard>
 
-        {/* ── AUTONOMIC LOAD ── */}
-        <CollapsibleSection id="stress" title="Autonomic load" defaultOpen>
-          <div className="space-y-5">
-            <ErrorBoundary label="Stress">
-              <StressPanel />
-            </ErrorBoundary>
-            <ErrorBoundary label="WHOOP behavior impact">
-              <BehaviorImpactPanel />
-            </ErrorBoundary>
-          </div>
-        </CollapsibleSection>
+        <BoardCard id="engine" label="Engine self-assessment" span={2}>
+          <EngineStatusPanel />
+        </BoardCard>
 
-        {/* ── WHAT MOVES YOUR HRV ── */}
-        <CollapsibleSection id="correlations" title="What moves your HRV" defaultOpen>
-          <ErrorBoundary label="HRV correlations">
-            <CorrelationCards />
-          </ErrorBoundary>
-        </CollapsibleSection>
+        <div className="board-rule">Physiological signals</div>
 
-        {/* ── LONGITUDINAL OBSERVATIONS ── */}
-        <CollapsibleSection id="trends" title="Longitudinal observations" defaultOpen>
-          <ErrorBoundary label="Trends">
-            <TrendIntelligence />
-          </ErrorBoundary>
-        </CollapsibleSection>
+        <BoardCard id="signals" label="Clinical research signals" span={2}>
+          <ClinicalResearchPanel />
+        </BoardCard>
+
+        <BoardCard id="autonomic" label="Autonomic load" span={2}>
+          <StressPanel />
+        </BoardCard>
+
+        <BoardCard label="WHOOP behaviour impact" span={2}>
+          <BehaviorImpactPanel />
+        </BoardCard>
+
+        <BoardCard id="correlations" label="What moves your HRV" span={2}>
+          <CorrelationCards />
+        </BoardCard>
       </div>
-    </AppShell>
+    </SurfaceShell>
   );
 }

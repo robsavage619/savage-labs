@@ -1,5 +1,16 @@
 "use client";
 
+// DEPRECATED: the `TrendIntelligence` tab wrapper (default export at the bottom of
+// this file) hides six of its seven panes behind a click. Prefer the individual
+// named exports below — each is a first-class card on the 4-column grid:
+//   RecoveryTrendPane, InsightsPane, ClinicalPane,
+//   ReadinessDecomposition, VolumeLandmarks, SleepDoseResponse, ACWRDeloadCard.
+// The Body / Patterns / Performance / Sport tabs are thin delegations — import
+// BodyPane, PatternsPane, PerformanceCurvePane and PickleballPane straight from
+// their own modules rather than going through this file. Likewise CorrelationCards,
+// PrescriptionPanel and MuscleVolumePanel, which InsightsPane merely composes.
+// The wrapper stays exported and unchanged so existing importers keep working.
+
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { WarningIcon } from "@/components/ui/icons";
@@ -43,7 +54,7 @@ function dedupeByDate<T extends { date: string }>(rows: T[]): T[] {
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function RecoveryTrendPane() {
+export function RecoveryTrendPane() {
   const trend = useQuery({ queryKey: ["recovery-trend-90"], queryFn: () => api.recoveryTrend(90) });
   const hrv = useQuery({ queryKey: ["hrv-90"], queryFn: () => api.hrvTrend(90) });
   const stats = useQuery({ queryKey: ["stats-summary"], queryFn: api.statsSummary });
@@ -470,7 +481,7 @@ function MonthlyAverages({ data }: { data: { date: string; score: number; hrv: n
 // INSIGHTS TAB
 // ──────────────────────────────────────────────────────────────────────────
 
-function InsightsPane() {
+export function InsightsPane() {
   return (
     <div className="space-y-6">
       <p className="shc-helptext flex items-baseline gap-1.5 flex-wrap">
@@ -498,7 +509,7 @@ function InsightsPane() {
   );
 }
 
-function ReadinessDecomposition() {
+export function ReadinessDecomposition() {
   const state = useQuery({ queryKey: ["daily-state"], queryFn: api.dailyState });
   const r = state.data?.readiness;
   if (!r || r.score == null) return null;
@@ -577,7 +588,7 @@ const VOLUME_LANDMARKS: Record<string, { mv: number; mev: number; mav: number; m
   core: { mv: 0, mev: 8, mav: 16, mrv: 24 },
 };
 
-function VolumeLandmarks() {
+export function VolumeLandmarks() {
   const balance = useQuery({
     queryKey: ["muscle-balance-4"],
     queryFn: () => api.trainingMuscleBalance(4),
@@ -688,7 +699,7 @@ function classifyVolume(
   return { label: "junk volume", color: "var(--negative)" };
 }
 
-function SleepDoseResponse() {
+export function SleepDoseResponse() {
   const patterns = useQuery({ queryKey: ["whoop-patterns"], queryFn: api.whoopPatterns });
   const data = patterns.data?.sleep_vs_recovery ?? [];
 
@@ -816,7 +827,7 @@ function SleepDoseResponse() {
   );
 }
 
-function ACWRDeloadCard() {
+export function ACWRDeloadCard() {
   const state = useQuery({ queryKey: ["daily-state"], queryFn: api.dailyState });
   const stats = useQuery({ queryKey: ["stats-summary"], queryFn: api.statsSummary });
   const acwr = stats.data?.acwr;
@@ -927,7 +938,7 @@ function acwrColor(r: number): string {
   return "var(--negative)";
 }
 
-function ClinicalPane() {
+export function ClinicalPane() {
   return <ClinicalOverview />;
 }
 

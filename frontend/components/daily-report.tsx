@@ -9,14 +9,6 @@ import { Markdown } from "@/components/ui/markdown";
 import { ObsidianMark, ObsidianSourceTag } from "@/components/obsidian-badge";
 import { CHART } from "@/lib/palette";
 
-const CALL_COLOR: Record<string, string> = {
-  Push:     "var(--sl-accent)",
-  Train:    "var(--positive)",
-  Maintain: "var(--text-primary)",
-  Easy:     "var(--text-muted)",
-  Rest:     "var(--negative)",
-};
-
 function Ring({ score, size = 80 }: { score: number | null; size?: number }) {
   const pct = score != null ? Math.max(0, Math.min(100, score)) / 100 : 0;
   const color =
@@ -116,18 +108,13 @@ export function DailyReport() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <Eyebrow>Daily report</Eyebrow>
-            {r?.training_call && (
-              <span
-                className="text-[11px] font-mono uppercase tracking-wider px-2.5 py-1 rounded-full"
-                style={{
-                  color: CALL_COLOR[r.training_call] ?? "var(--text-primary)",
-                  border: `1px solid ${CALL_COLOR[r.training_call] ?? "var(--hairline-strong)"}`,
-                  background: `color-mix(in oklch, ${CALL_COLOR[r.training_call] ?? "transparent"} 10%, transparent)`,
-                }}
-              >
-                {r.training_call}
-              </span>
-            )}
+            {/* The training_call badge lived here and printed a SECOND verdict —
+                "TRAIN" next to the call card's "Moderate", 400px apart, in two
+                different vocabularies, every single morning. reconciledVerdict()
+                is canonical: it reconciles the readiness score against the gates,
+                so a green score never overrides a deload. training_call comes
+                from the narrative and knows nothing about them. The verdict has
+                exactly one home and this is not it. */}
             {modeLabel && (
               <span className="text-[10px] font-mono tracking-wide px-2 py-0.5 rounded-full" style={{ color: "var(--text-muted)", background: "var(--hairline)", border: "1px solid var(--hairline-strong)" }}>
                 {modeLabel}

@@ -290,7 +290,14 @@ export function PerformanceCurvePane() {
                       : value >= -25
                       ? withAlpha(CHART.warn, 0.6)
                       : withAlpha(CHART.bad, 0.75);
-                  return <rect x={x} y={y} width={Math.max(1, width)} height={height} fill={fill} />;
+                  // Recharts hands back a NEGATIVE height for bars below the
+                  // axis (TSB goes negative whenever fatigue exceeds fitness),
+                  // and SVG rejects that — 400+ console errors per render. The
+                  // width guard was already here; height never got one. Flip
+                  // the rect and anchor it at the true top edge.
+                  const h = Math.abs(height);
+                  const top = height < 0 ? y + height : y;
+                  return <rect x={x} y={top} width={Math.max(1, width)} height={Math.max(1, h)} fill={fill} />;
                 }}
               />
               <ReferenceLine y={0} stroke="var(--hairline-strong)" strokeWidth={1} />
