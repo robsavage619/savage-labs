@@ -326,6 +326,133 @@ def refresh_outcomes(conn: duckdb.DuckDBPyConnection, exp_id: str) -> int:
     return filled
 
 
+# ── Observational classification ─────────────────────────────────────────────
+#
+# Studies whose arms describe conditions the subject cannot be told to adopt
+# ("<7h sleep", "2 pickleball sessions in 3 days") are classified from what
+# actually happened rather than assigned by arm_for_day(). Mixing the two is
+# what left four studies unanswerable for seven weeks: their arm LABELS were
+# observational while their arm ASSIGNMENT was a hash of the date, so logging
+# adherence against the hash would file an 8.4h night under "<7h sleep".
+#
+# DAY ALIGNMENT — the part that is easy to get silently wrong.
+# Every classifier returns the BEHAVIOUR day: the day the manipulation
+# happened. Outcome extractors read behaviour_day + 1. For activity that is
+# natural (you train on D, HRV responds on the morning of D+1). For sleep it is
+# not: `sleep.night_date` is the morning you woke, and `recovery.date` equals
+# it (869 of 916 rows at lag 0), so the night recorded as night_date=D is the
+# behaviour of D-1 and its "next morning" is D. Classifying sleep at night_date
+# would pair each night with the FOLLOWING night's HRV.
+
+
+def _classify_sleep_hours(conn: duckdb.DuckDBPyConnection, day: date) -> str | None:
+    """<7.0h → A, ≥8.0h → B. `day` is the behaviour day; the night ends on day+1."""
+    row = conn.execute(
+        """
+        SELECT DATE_DIFF('minute', ts_in, ts_out) / 60.0
+        FROM sleep WHERE night_date = ? AND is_nap = FALSE
+        ORDER BY DATE_DIFF('minute', ts_in, ts_out) DESC LIMIT 1
+        """,
+        [(day + timedelta(days=1)).isoformat()],
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    hours = float(row[0])
+    if hours < 7.0:
+        return "A"
+    if hours >= 8.0:
+        return "B"
+    return None  # the 7.0–8.0 middle is deliberately excluded, not forced
+
+
+def _classify_pickleball_density(conn: duckdb.DuckDBPyConnection, day: date) -> str | None:
+    """Sessions in the trailing 3 days including `day`: 1 → A, ≥2 → B, 0 → excluded."""
+    row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT date) FROM cardio_sessions
+        WHERE lower(modality) LIKE '%pickle%' AND date BETWEEN ? AND ?
+        """,
+        [(day - timedelta(days=2)).isoformat(), day.isoformat()],
+    ).fetchone()
+    n = int(row[0]) if row and row[0] is not None else 0
+    if n == 1:
+        return "A"
+    if n >= 2:
+        return "B"
+    return None
+
+
+def _classify_training_spacing(conn: duckdb.DuckDBPyConnection, day: date) -> str | None:
+    """Strength day preceded by a strength day → A (consecutive); otherwise → B
+    (spaced). Non-strength days are not members of either arm."""
+    def lifted(d: date) -> bool:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM workouts
+            WHERE CAST(started_at AS DATE) = ?
+              AND lower(COALESCE(sport_name, kind, '')) NOT LIKE '%pickle%'
+            """,
+            [d.isoformat()],
+        ).fetchone()
+        return bool(row and row[0])
+
+    if not lifted(day):
+        return None
+    return "A" if lifted(day - timedelta(days=1)) else "B"
+
+
+OBSERVATIONAL_CLASSIFIERS = {
+    "sleep_hours": _classify_sleep_hours,
+    "pickleball_sessions_3d": _classify_pickleball_density,
+    "training_spacing": _classify_training_spacing,
+}
+
+
+def backfill_observational(
+    conn: duckdb.DuckDBPyConnection, exp_id: str, *, through: date | None = None
+) -> dict[str, int]:
+    """Classify every day since `started_on` from ingested data and log it.
+
+    Only for design='observational'. Refuses randomized studies outright: their
+    arm is assigned, not observed, and writing observed arms into one would
+    silently destroy the randomisation the design exists to provide.
+    """
+    exp = load(conn, exp_id)
+    if exp is None:
+        raise ValueError(f"no experiment {exp_id!r}")
+    if exp.design != "observational":
+        raise ValueError(
+            f"{exp.slug} is design={exp.design!r}; backfill is only valid for "
+            "observational studies (a randomized arm is assigned, not observed)"
+        )
+    classify = OBSERVATIONAL_CLASSIFIERS.get(exp.manipulated)
+    if classify is None:
+        raise ValueError(f"no observational classifier for {exp.manipulated!r}")
+
+    end = through or date.today()
+    counts = {"A": 0, "B": 0, "excluded": 0}
+    day = exp.started_on
+    while day <= end:
+        arm = classify(conn, day)
+        if arm is None:
+            counts["excluded"] += 1
+        else:
+            conn.execute(
+                """
+                INSERT INTO experiment_log (experiment_id, day, assigned_arm, adhered, note)
+                VALUES (?, ?, ?, TRUE, 'observational: classified from ingested data')
+                ON CONFLICT (experiment_id, day) DO UPDATE SET
+                    assigned_arm = excluded.assigned_arm,
+                    adhered      = excluded.adhered,
+                    note         = excluded.note
+                """,
+                [exp.id, day.isoformat(), arm],
+            )
+            counts[arm] += 1
+        day += timedelta(days=1)
+    return counts
+
+
 # ── Scoring ──────────────────────────────────────────────────────────────────
 
 

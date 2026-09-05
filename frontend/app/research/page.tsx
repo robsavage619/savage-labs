@@ -187,7 +187,16 @@ export default function ResearchPage() {
           return (
             <section className="cx-card" key={e.id} style={{ gridColumn: "span 2" }}>
               <header className="cx-head">
-                <h3 className="cx-label">{human(e.manipulated)}</h3>
+                <h3 className="cx-label">
+                  {human(e.manipulated)}
+                  {/* Observational studies are classified from what actually
+                      happened; randomized ones assign the arm up front. The
+                      second is stronger evidence and the board should not let
+                      them look identical. */}
+                  <span className="cx-tag">
+                    {e.design === "observational" ? "observed" : "randomized"}
+                  </span>
+                </h3>
                 <span className="cx-status" style={{ color: TONE_VAR[v?.tone ?? "dim"] }}>
                   {v?.label ?? "Running"}
                 </span>

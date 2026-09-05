@@ -574,6 +574,10 @@ export interface ExperimentArm {
 export interface Experiment {
   id: string;
   slug: string;
+  /** 'randomized_alternating' (arm assigned up front) or 'observational' (arm
+   *  classified from ingested data). Different evidential strength — the UI
+   *  must not render the two identically. */
+  design?: string;
   hypothesis: string;
   manipulated: string;
   condition_a: string;

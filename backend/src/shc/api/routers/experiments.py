@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 """n-of-1 self-experiment API — register a study, log daily adherence, score it.
 
 Thin HTTP surface over :mod:`shc.selflab`. Reads are open; mutations are
@@ -15,6 +17,8 @@ from pydantic import BaseModel, Field
 from shc import selflab
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["experiments"])
 
@@ -156,10 +160,33 @@ async def score_all_experiments() -> list[dict]:
     Benjamini–Hochberg correction across the batch's p-values — the
     multiplicity-controlled way to re-score the whole portfolio."""
     async with write_ctx() as conn:
-        active_ids = [
-            row[0]
-            for row in conn.execute("SELECT id FROM experiments WHERE status = 'active'").fetchall()
-        ]
-        for exp_id in active_ids:
-            selflab.refresh_outcomes(conn, exp_id)
-        return selflab.score_all(conn)
+        rows = conn.execute(
+            "SELECT id, slug, design FROM experiments WHERE status = 'active'"
+        ).fetchall()
+        problems: list[dict] = []
+        for exp_id, slug, design in rows:
+            # Observational studies are classified from ingested data every run,
+            # so they stay current without anyone logging a day by hand. This is
+            # what the four suggest-* studies were missing: log_day() had exactly
+            # one caller (the manual POST below) and experiment_log accumulated a
+            # single row in seven weeks.
+            if design == "observational":
+                try:
+                    selflab.backfill_observational(conn, exp_id)
+                except ValueError as exc:
+                    problems.append({"slug": slug, "stage": "backfill", "error": str(exc)})
+                    continue
+            try:
+                selflab.refresh_outcomes(conn, exp_id)
+            except ValueError as exc:
+                # Surface it rather than swallowing. A study whose outcome metric
+                # has no extractor is unanswerable, and "unanswerable" rendered
+                # identically to "still collecting" for seven weeks precisely
+                # because this failure was silent.
+                problems.append({"slug": slug, "stage": "outcomes", "error": str(exc)})
+
+        results = selflab.score_all(conn)
+        if problems:
+            log.warning("score-all: %d study/studies could not be processed: %s", len(problems), problems)
+            results = [*results, {"unprocessable": problems}]
+        return results
