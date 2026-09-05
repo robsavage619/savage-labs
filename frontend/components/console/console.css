@@ -421,3 +421,68 @@
   max-width: 74ch;
   text-wrap: pretty;
 }
+
+/* ── board nav ──────────────────────────────────────────────────────────── */
+.cx-boards { display: flex; align-items: center; gap: 4px; }
+.cx-boards a {
+  font-family: var(--f-data);
+  font-size: var(--fs-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--c-faint);
+  padding: 5px 11px;
+  border-radius: 999px;
+  transition: color 180ms ease, background 180ms ease;
+}
+.cx-boards a:hover { color: var(--c-mute); }
+.cx-boards a[aria-current="page"] { color: var(--c-ink); background: var(--c-surface-2); }
+.cx-boards-sep { width: 1px; height: 14px; background: var(--c-line-soft); margin: 0 8px; }
+.cx-boards-old { color: var(--c-faint) !important; opacity: 0.7; }
+
+/* ── horizontal bars (volume, correlations) ─────────────────────────────── */
+.cx-bars { display: flex; flex-direction: column; gap: 7px; }
+.cx-bar {
+  display: grid;
+  grid-template-columns: 128px 1fr 66px;
+  gap: 12px;
+  align-items: center;
+}
+.cx-bar-name {
+  font-family: var(--f-data);
+  font-size: 11px;
+  color: var(--c-dim);
+  text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cx-bar-track {
+  position: relative;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--c-surface-2);
+  display: block;
+  overflow: visible;
+}
+.cx-bar-track i { position: absolute; inset: 0 auto 0 0; height: 7px; border-radius: 4px; display: block; }
+/* The minimum-effective line — the thing the number is measured against. */
+.cx-bar-track em {
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 13px;
+  background: var(--c-line);
+  display: block;
+}
+.cx-bar-n {
+  font-family: var(--f-data);
+  font-size: 11.5px;
+  text-align: right;
+  color: var(--c-mute);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 620px) {
+  .cx-bar { grid-template-columns: 92px 1fr 56px; gap: 8px; }
+  .cx-bar-name { width: auto !important; }
+}

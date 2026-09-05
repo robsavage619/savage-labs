@@ -367,3 +367,178 @@ export function allChannels(s: DailyState): ChannelRead[] {
     balanceRead(s),
   ];
 }
+
+/* ── SIGNALS BOARD ──────────────────────────────────────────────────────────
+ *
+ * Same rule as above: the implication, not the definition. These are the
+ * channels that answer "what is my body actually doing", as opposed to Ops's
+ * "what should I do about it".
+ */
+
+/**
+ * Sleep-stage percentages arrive as FRACTIONS (deep_pct_last = 0.176), while
+ * efficiency_pct_last on the same object is already a percentage (92.9). Read
+ * either without normalising and 17.6% renders as "0" and gets flagged low —
+ * which is exactly what this did before the values were checked against the
+ * live endpoint. Anything at or below 1 is a fraction.
+ */
+function asPct(v: number | null | undefined): number | null {
+  if (v == null) return null;
+  return v <= 1 ? v * 100 : v;
+}
+
+export function sleepStagesRead(s: DailyState): ChannelRead {
+  const deep = asPct(s.sleep.deep_pct_last);
+  const rem = asPct(s.sleep.rem_pct_last);
+  if (deep == null && rem == null) return NO_DATA("Deep & REM");
+  // Healthy adult reference: deep 13–23%, REM 20–25% of total sleep.
+  const deepLow = deep != null && deep < 13;
+  const remLow = rem != null && rem < 18;
+  const state: ChannelState = deepLow && remLow ? "alert" : deepLow || remLow ? "watch" : "good";
+
+  const bits: string[] = [];
+  if (deep != null) {
+    bits.push(
+      deepLow
+        ? `Deep sleep at ${deep.toFixed(0)}% is under the 13–23% range — that is the stage that does physical repair.`
+        : `Deep sleep at ${deep.toFixed(0)}% is where it should be, which is the stage doing your physical repair.`,
+    );
+  }
+  if (rem != null) {
+    bits.push(
+      remLow
+        ? `REM at ${rem.toFixed(0)}% is low; alcohol and late meals suppress it hardest.`
+        : `REM at ${rem.toFixed(0)}% is healthy.`,
+    );
+  }
+
+  return {
+    label: "Deep & REM",
+    value: deep != null ? deep.toFixed(0) : "—",
+    unit: "% deep",
+    state,
+    status: deepLow || remLow ? "low" : "healthy",
+    read: bits.join(" "),
+    pos: deep != null ? clamp01(deep / 30) : null,
+    bandLabels: ["0%", "13–23%", "30%"],
+  };
+}
+
+export function consistencyRead(s: DailyState): ChannelRead {
+  const sd = s.sleep.midpoint_stdev_h_7d;
+  if (sd == null) return NO_DATA("Sleep consistency");
+  const state: ChannelState = sd <= 0.75 ? "good" : sd <= 1.5 ? "watch" : "alert";
+  return {
+    label: "Sleep consistency",
+    value: sd.toFixed(1),
+    unit: "h swing",
+    state,
+    status: sd <= 0.75 ? "steady" : sd <= 1.5 ? "drifting" : "erratic",
+    read:
+      sd <= 0.75
+        ? "Your sleep midpoint barely moves night to night. Regularity is worth more to recovery than the occasional long night."
+        : `Your sleep midpoint swings about ${sd.toFixed(1)}h across the week. Going to bed at the same time is the cheapest recovery gain available to you.`,
+    pos: clamp01(sd / 3),
+    bandLabels: ["steady", "1.5h", "erratic"],
+  };
+}
+
+export function skinTempRead(s: DailyState): ChannelRead {
+  const d = s.recovery.skin_temp_delta;
+  if (d == null) return NO_DATA("Skin temperature");
+  const state: ChannelState = Math.abs(d) < 1.0 ? "good" : Math.abs(d) < 1.8 ? "watch" : "alert";
+  return {
+    label: "Skin temperature",
+    value: `${d > 0 ? "+" : ""}${d.toFixed(1)}`,
+    unit: "°F",
+    state,
+    status: Math.abs(d) < 1.0 ? "baseline" : d > 0 ? "raised" : "lowered",
+    // Direction matters: year-round grass allergy raises resp rate and drops
+    // HRV while temp stays flat or below baseline — that pattern is airway,
+    // not infection, and reading it as illness costs a training day.
+    read:
+      Math.abs(d) < 1.0
+        ? "Sitting at your baseline. Combined with a normal resting heart rate, nothing systemic is brewing."
+        : d > 0
+          ? `${d.toFixed(1)}°F above baseline. Raised temperature with a raised heart rate is the classic getting-sick pattern.`
+          : `${Math.abs(d).toFixed(1)}°F below baseline. Cool skin alongside a red recovery score usually points at airway irritation — allergies — rather than infection.`,
+    pos: clamp01((d + 3) / 6),
+    bandLabels: ["−3°F", "baseline", "+3°F"],
+  };
+}
+
+export function respiratoryRead(s: DailyState): ChannelRead {
+  const d = s.recovery.respiratory_rate_delta;
+  const last = s.sleep.respiratory_rate_last;
+  if (d == null && last == null) return NO_DATA("Respiratory rate");
+  const state: ChannelState = d == null ? "unknown" : Math.abs(d) < 1 ? "good" : Math.abs(d) < 2 ? "watch" : "alert";
+  return {
+    label: "Respiratory rate",
+    value: last != null ? last.toFixed(1) : "—",
+    unit: "br/min",
+    state,
+    status: d == null ? "—" : Math.abs(d) < 1 ? "normal" : "elevated",
+    read:
+      d == null
+        ? "Measured overnight, but there is no baseline to compare it against yet."
+        : Math.abs(d) < 1
+          ? "Steady against your baseline. This is usually the first number to move when something is wrong, so a flat reading is reassuring."
+          : `${Math.abs(d).toFixed(1)} breaths above your baseline. This moves before you feel anything — worth watching alongside skin temperature.`,
+    pos: d == null ? null : clamp01((d + 3) / 6),
+    bandLabels: ["−3", "baseline", "+3"],
+  };
+}
+
+export function spo2Read(s: DailyState): ChannelRead {
+  const v = s.recovery.spo2_pct;
+  if (v == null) return NO_DATA("Blood oxygen", "SpO₂");
+  const state: ChannelState = v >= 95 ? "good" : v >= 92 ? "watch" : "alert";
+  return {
+    label: "Blood oxygen",
+    tag: "SpO₂",
+    value: v.toFixed(0),
+    unit: "%",
+    state,
+    status: v >= 95 ? "normal" : "low",
+    // A wrist/bicep optical sensor is off-label for this, and a nightly average
+    // is not an ODI — so the honest read is "worth a real test", never a number
+    // to diagnose from.
+    read:
+      v >= 95
+        ? "In the normal range overnight. Worth noting a wrist sensor averages the whole night, so it can miss short dips."
+        : `Averaging ${v.toFixed(0)}% overnight, below the 95% you would expect. A wrist average is not a diagnostic — if this persists it is worth a proper sleep study rather than more watch data.`,
+    pos: clamp01((v - 88) / 10),
+    bandLabels: ["88%", "95%", "98%"],
+  };
+}
+
+export function sleepDebtRead(s: DailyState): ChannelRead {
+  const debt = s.sleep.debt_7d_h;
+  const avg = s.sleep.avg_7d;
+  if (debt == null) return NO_DATA("Sleep debt");
+  const state: ChannelState = debt <= 1 ? "good" : debt <= 4 ? "watch" : "alert";
+  return {
+    label: "Sleep debt",
+    value: debt.toFixed(1),
+    unit: "h",
+    state,
+    status: debt <= 1 ? "clear" : debt <= 4 ? "carrying" : "deep",
+    read:
+      debt <= 1
+        ? `You are square across the week, averaging ${avg?.toFixed(1) ?? "—"}h a night. Nothing to pay back.`
+        : `About ${debt.toFixed(1)}h short across the week, averaging ${avg?.toFixed(1) ?? "—"}h a night. You cannot repay this in one long lie-in — it comes back an hour at a time.`,
+    pos: clamp01(debt / 10),
+    bandLabels: ["clear", "4h", "10h"],
+  };
+}
+
+export function signalChannels(s: DailyState): ChannelRead[] {
+  return [
+    sleepStagesRead(s),
+    consistencyRead(s),
+    sleepDebtRead(s),
+    skinTempRead(s),
+    respiratoryRead(s),
+    spo2Read(s),
+  ];
+}

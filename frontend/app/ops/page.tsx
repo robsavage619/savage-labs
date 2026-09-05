@@ -1,13 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import { reconciledVerdict } from "@/lib/readiness";
 import { allChannels, boardLede } from "@/lib/console-copy";
 import { Channel } from "@/components/console/channel";
-import "@/components/console/console.css";
+import { ConsoleShell } from "@/components/console/shell";
 
 /**
  * OPS — the console board.
@@ -45,31 +44,7 @@ export default function OpsPage() {
     : "The lifts written for today.";
 
   return (
-    <div className="cx">
-      <div className="cx-wrap">
-        <div className="cx-top">
-          <span className="cx-word">
-            Savage <em>Labs</em>
-          </span>
-          <nav style={{ display: "flex", gap: 14 }}>
-            <Link href="/" className="cx-when no-tactile" style={{ textDecoration: "none" }}>
-              Now
-            </Link>
-            <Link href="/review" className="cx-when no-tactile" style={{ textDecoration: "none" }}>
-              Review
-            </Link>
-            <Link href="/lab" className="cx-when no-tactile" style={{ textDecoration: "none" }}>
-              Lab
-            </Link>
-            <span className="cx-when" style={{ color: "var(--c-accent)" }}>
-              Ops
-            </span>
-          </nav>
-          <span className="cx-when">
-            {new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
-          </span>
-        </div>
-
+    <ConsoleShell>
         <div className="cx-grid">
           {/* ── the call ── */}
           {s && verdict ? (
@@ -151,8 +126,7 @@ export default function OpsPage() {
           {s
             ? channels.map((ch) => <Channel key={ch.label} ch={ch} />)
             : Array.from({ length: 8 }, (_, i) => <div key={i} className="cx-skel" />)}
-        </div>
       </div>
-    </div>
+    </ConsoleShell>
   );
 }

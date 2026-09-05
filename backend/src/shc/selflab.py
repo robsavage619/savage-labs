@@ -22,7 +22,7 @@ the same gate-and-audit discipline as the fitted ACWR/volume bands.
 import hashlib
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from statistics import mean
 
 import duckdb
@@ -267,11 +267,41 @@ def _top_set_e1rm(conn: duckdb.DuckDBPyConnection, exercise: str, day: date) -> 
     return float(row[0]) if row and row[0] is not None else None
 
 
+def _next_morning(
+    conn: duckdb.DuckDBPyConnection, column: str, day: date
+) -> float | None:
+    """A recovery column measured the morning AFTER `day`.
+
+    The manipulation happens during a day; its effect on autonomic state shows
+    up in the next morning's reading, so day+1 is the correct join and day is
+    an off-by-one that would smear the effect across arms.
+    """
+    row = conn.execute(
+        f"SELECT {column} FROM recovery WHERE date = ? AND {column} IS NOT NULL",  # noqa: S608
+        [(day + timedelta(days=1)).isoformat()],
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
+# Outcome metrics the scorer can actually resolve. `suggest()` validates against
+# this set: until it did, the generator was proposing studies whose outcome
+# metric _outcome_value() raises on, so four of five active studies were
+# structurally incapable of ever producing a result — they accumulated for
+# seven weeks and could never have scored no matter how faithfully logged.
+SUPPORTED_OUTCOME_METRICS = frozenset(
+    {"hrv_next_morning", "recovery_score_next_day", "top_set_e1rm"}
+)
+
+
 def _outcome_value(conn: duckdb.DuckDBPyConnection, metric: str, day: date) -> float | None:
-    """Resolve one day's outcome for a metric spec. MVP supports 'top_set_e1rm:<ex>'."""
+    """Resolve one day's outcome for a metric spec."""
     kind, _, arg = metric.partition(":")
     if kind == "top_set_e1rm" and arg:
         return _top_set_e1rm(conn, arg, day)
+    if kind == "hrv_next_morning":
+        return _next_morning(conn, "hrv", day)
+    if kind == "recovery_score_next_day":
+        return _next_morning(conn, "score", day)
     raise ValueError(f"unsupported outcome metric {metric!r}")
 
 
@@ -742,6 +772,19 @@ def suggest_experiments(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     for qid, verdict in rows:
         spec = _EXPERIMENT_CANDIDATES.get(qid)
         if spec is None:
+            continue
+        # Never propose a study the scorer cannot score. Four of the five
+        # studies active on 2026-09-04 asked for `hrv_next_morning` or
+        # `recovery_score_next_day`, which _outcome_value() raised on, so they
+        # sat "active" for seven weeks with no possible path to a verdict.
+        # Suggesting is where this has to be caught: once a study is registered
+        # the only signal is silence.
+        if spec["outcome_metric"].partition(":")[0] not in SUPPORTED_OUTCOME_METRICS:
+            log.warning(
+                "skipping candidate %s: outcome metric %r has no extractor",
+                spec["slug"],
+                spec["outcome_metric"],
+            )
             continue
         slug = spec["slug"]
         if slug in registered_slugs or slug in seen_suggestion_slugs:
