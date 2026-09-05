@@ -14,12 +14,13 @@ import {
   ZAxis,
 } from "recharts";
 import { api } from "@/lib/api";
+import { CHART } from "@/lib/palette";
 import { Eyebrow } from "@/components/ui/metric";
 
 function tierColor(score: number) {
-  if (score >= 67) return "var(--positive)";
-  if (score >= 34) return "var(--neutral)";
-  return "var(--negative)";
+  if (score >= 67) return CHART.ok;
+  if (score >= 34) return CHART.warn;
+  return CHART.bad;
 }
 
 function DayOfWeekChart({ data }: { data: { day: string; avg_recovery: number; n: number }[] }) {
@@ -36,7 +37,7 @@ function DayOfWeekChart({ data }: { data: { day: string; avg_recovery: number; n
             <XAxis dataKey="day" tick={{ fontSize: 10, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} />
             <YAxis tick={{ fontSize: 9, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} domain={[0, 100]} />
             <Tooltip
-              cursor={{ fill: "oklch(1 0 0 / 0.03)" }}
+              cursor={{ fill: CHART.cursor }}
               contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", borderRadius: 8, fontSize: 11, color: "var(--text-primary)" }}
               labelStyle={{ color: "var(--text-muted)", fontSize: 10 }}
               itemStyle={{ color: "var(--text-primary)" }}
@@ -44,7 +45,7 @@ function DayOfWeekChart({ data }: { data: { day: string; avg_recovery: number; n
             />
             <Bar dataKey="avg_recovery" radius={[3, 3, 0, 0]}>
               {data.map((d, i) => (
-                <Cell key={i} fill={d.avg_recovery === max ? "var(--chart-line)" : "oklch(0.72 0.12 250 / 0.25)"} />
+                <Cell key={i} fill={d.avg_recovery === max ? CHART.line : CHART.lineDim} />
               ))}
             </Bar>
           </BarChart>
@@ -84,10 +85,10 @@ function DistributionChart({ data }: { data: { bucket: string; n: number }[] }) 
                 <span className="text-[11px] text-[var(--text-muted)]">{d.bucket}</span>
                 <span className="text-[11px] tabular-nums text-[var(--text-dim)]">{d.n} <span className="text-[var(--text-faint)]">({pct.toFixed(0)}%)</span></span>
               </div>
-              <div className="h-[6px] rounded-full overflow-hidden" style={{ background: "oklch(1 0 0 / 0.06)" }}>
+              <div className="h-[6px] rounded-full overflow-hidden" style={{ background: "var(--hairline)" }}>
                 <div
                   className="h-full rounded-full transition-all"
-                  style={{ width: `${pct}%`, background: COLORS[d.bucket] ?? "var(--chart-line)" }}
+                  style={{ width: `${pct}%`, background: COLORS[d.bucket] ?? CHART.line }}
                 />
               </div>
             </div>
@@ -213,7 +214,7 @@ export function PatternsPane() {
     return (
       <div className="space-y-4">
         {[160, 100, 180, 180].map((h, i) => (
-          <div key={i} className="rounded-[var(--r-md)] animate-pulse" style={{ height: h, background: "oklch(1 0 0 / 0.04)" }} />
+          <div key={i} className="rounded-[var(--r-md)] animate-pulse" style={{ height: h, background: "var(--hairline)" }} />
         ))}
       </div>
     );

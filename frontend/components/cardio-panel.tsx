@@ -18,6 +18,7 @@ import {
 import { api, type CardioSession } from "@/lib/api";
 import { localDate } from "@/lib/date";
 import { Eyebrow } from "@/components/ui/metric";
+import { CHART, withAlpha } from "@/lib/palette";
 
 // Returns the best-available HRmax: WHOOP-measured if present, else Tanaka.
 // `shift` subtracts a constant (used for propranolol-day adjustments).
@@ -94,11 +95,16 @@ function hrZone(
 
 // ── Story-telling charts ──────────────────────────────────────────────────────
 
+// Recharts resolves fill/stroke as SVG attributes, where var() does not apply,
+// so these come from the literal palette rather than the CSS tokens.
 const ZONE_FILL = {
-  z12: "oklch(0.62 0.16 145 / 0.85)",   // aerobic base — green
-  z3:  "oklch(0.65 0.14 80 / 0.85)",    // tempo — amber
-  z45: "oklch(0.55 0.20 25 / 0.85)",    // threshold/VO2 — red
+  z12: CHART.ok,    // aerobic base
+  z3:  CHART.warn,  // tempo
+  z45: CHART.bad,   // threshold/VO2
 };
+
+const Z2_CEILING_STROKE = withAlpha(CHART.ok, 0.55);
+const Z2_CEILING_LABEL = CHART.ok;
 
 function bucketByWeek(
   sessions: CardioSession[],
@@ -361,9 +367,9 @@ function PickleballEfficiency({
             {/* Z2 ceiling: 70% HRmax — unshifted for consistent historical baseline */}
             <ReferenceLine
               y={Math.round(resolveHrMax(measuredMax, 0, tanaka) * 0.7)}
-              stroke="oklch(0.62 0.16 145 / 0.6)"
+              stroke={Z2_CEILING_STROKE}
               strokeDasharray="3 3"
-              label={{ value: "Z2 ceiling", position: "right", fontSize: 9, fill: "oklch(0.62 0.16 145)" }}
+              label={{ value: "Z2 ceiling", position: "right", fontSize: 9, fill: Z2_CEILING_LABEL }}
             />
             <Tooltip
               contentStyle={{
@@ -490,9 +496,9 @@ function LogForm({ onLogged }: { onLogged: () => void }) {
         disabled={busy}
         className="text-[11px] font-semibold px-3 py-1.5 rounded-sm transition-colors disabled:opacity-40"
         style={{
-          background: "oklch(0.72 0.12 250 / 0.12)",
-          border: "1px solid oklch(0.72 0.12 250 / 0.3)",
-          color: "var(--chart-line)",
+          background: "var(--sl-accent-soft)",
+          border: "1px solid var(--hairline-strong)",
+          color: "var(--sl-accent)",
         }}
       >
         {busy ? "Saving…" : "+ Log"}
@@ -789,7 +795,7 @@ export function CardioPanel() {
             {summary.map((s, i) => {
               const pct = total28d.minutes > 0 ? (s.minutes / total28d.minutes) * 100 : 0;
               if (pct < 1) return null;
-              const colors = ["var(--chart-line)", "var(--positive)", "var(--neutral)", "var(--negative)", "oklch(0.55 0.05 230)"];
+              const colors = ["var(--sl-accent)", "var(--positive)", "var(--neutral)", "var(--negative)", "var(--text-faint)"];
               return (
                 <div
                   key={s.kind}

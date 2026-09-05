@@ -16,12 +16,14 @@ import {
 } from "recharts";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
+import { CHART } from "@/lib/palette";
 
+// Feeds Recharts `fill`, so every branch must return a literal.
 function freshnessColor(recovery: number | null): string {
-  if (recovery == null) return "var(--hairline-strong)";
-  if (recovery >= 67) return "oklch(0.62 0.18 145 / 0.8)";
-  if (recovery >= 34) return "oklch(0.65 0.16 80 / 0.8)";
-  return "oklch(0.55 0.22 25 / 0.8)";
+  if (recovery == null) return CHART.hairlineStrong;
+  if (recovery >= 67) return CHART.ok;
+  if (recovery >= 34) return CHART.warn;
+  return CHART.bad;
 }
 
 function HRVDeltaTooltip({
@@ -179,8 +181,8 @@ export function PickleballPane() {
                         <Cell key={i} fill={freshnessColor(entry.recovery)} />
                       ))}
                     </Bar>
-                    <ReferenceLine y={67} stroke="oklch(0.62 0.16 145 / 0.4)" strokeDasharray="3 3" />
-                    <ReferenceLine y={34} stroke="oklch(0.65 0.16 80 / 0.4)" strokeDasharray="3 3" />
+                    <ReferenceLine y={67} stroke={CHART.hairlineStrong} strokeDasharray="3 3" />
+                    <ReferenceLine y={34} stroke={CHART.hairlineStrong} strokeDasharray="3 3" />
                     <XAxis
                       dataKey="date"
                       tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
@@ -241,9 +243,7 @@ export function PickleballPane() {
                         <Cell
                           key={i}
                           fill={
-                            (entry.delta ?? 0) >= 0
-                              ? "oklch(0.62 0.18 145 / 0.75)"
-                              : "oklch(0.55 0.22 25 / 0.75)"
+                            (entry.delta ?? 0) >= 0 ? CHART.ok : CHART.bad
                           }
                         />
                       ))}
@@ -372,7 +372,7 @@ export function PickleballPane() {
                                   recovery >= 67
                                     ? "var(--positive)"
                                     : recovery >= 34
-                                    ? "oklch(0.65 0.16 80)"
+                                    ? "var(--neutral)"
                                     : "var(--negative)",
                               }}
                             >
@@ -400,9 +400,7 @@ export function PickleballPane() {
                               className="px-4 py-2 flex items-center gap-3"
                               style={{
                                 borderLeft: `3px solid ${
-                                  m.won
-                                    ? "oklch(0.62 0.18 145 / 0.6)"
-                                    : "oklch(0.55 0.22 25 / 0.5)"
+                                  m.won ? "var(--positive)" : "var(--negative)"
                                 }`,
                               }}
                             >

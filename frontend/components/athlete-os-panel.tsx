@@ -176,7 +176,7 @@ function DecisionCard({
   return (
     <div
       className="rounded-lg border p-3 h-full"
-      style={{ borderColor: "var(--hairline)", background: "oklch(1 0 0 / 0.025)" }}
+      style={{ borderColor: "var(--hairline)", background: "var(--card-hover)" }}
     >
       <p className="text-[9.5px] uppercase tracking-[0.16em] text-[var(--text-faint)]">{eyebrow}</p>
       <p className="mt-1 text-[14.5px] font-semibold leading-tight" style={{ color }}>

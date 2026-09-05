@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
+import { CHART } from "@/lib/palette";
 
 const KEY_LIFT_KEYWORDS = [
   "squat",
@@ -34,16 +35,16 @@ function trendMeta(trend: string | null): {
   if (trend === "improving")
     return {
       color: "var(--positive)",
-      bg: "oklch(0.62 0.18 145 / 0.08)",
-      border: "oklch(0.62 0.18 145 / 0.25)",
+      bg: "color-mix(in oklch, var(--positive) 8%, transparent)",
+      border: "color-mix(in oklch, var(--positive) 25%, transparent)",
       arrow: "↑",
       label: "climbing",
     };
   if (trend === "declining")
     return {
       color: "var(--negative)",
-      bg: "oklch(0.55 0.22 25 / 0.08)",
-      border: "oklch(0.55 0.22 25 / 0.25)",
+      bg: "color-mix(in oklch, var(--negative) 8%, transparent)",
+      border: "color-mix(in oklch, var(--negative) 25%, transparent)",
       arrow: "↓",
       label: "declining",
     };
@@ -157,8 +158,8 @@ export function GoalScorecard() {
         className="rounded-lg border border-l-[3px] p-4 space-y-3"
         style={{
           borderColor: "var(--hairline)",
-          borderLeftColor: "oklch(0.6 0.2 270)",
-          background: "oklch(0.6 0.2 270 / 0.04)",
+          borderLeftColor: "var(--sl-accent)",
+          background: "var(--card-hover)",
         }}
       >
         <div className="flex items-start justify-between gap-4">
@@ -176,10 +177,7 @@ export function GoalScorecard() {
             <div className="flex items-baseline gap-3 mt-1.5">
               <span
                 className="text-[32px] font-bold tabular-nums leading-none"
-                style={{
-                  color: "oklch(0.82 0.12 270)",
-                  textShadow: "0 0 20px oklch(0.6 0.2 270 / 0.4)",
-                }}
+                style={{ color: "var(--text-primary)" }}
               >
                 {current != null ? current.toFixed(3) : "—"}
               </span>
@@ -188,7 +186,7 @@ export function GoalScorecard() {
                   → {target.toFixed(1)} target
                 </span>
                 {current != null && (
-                  <span className="text-[11px] font-medium" style={{ color: "oklch(0.6 0.2 270)" }}>
+                  <span className="text-[11px] font-medium" style={{ color: "var(--sl-accent)" }}>
                     {(target - current).toFixed(3)} remaining
                   </span>
                 )}
@@ -204,13 +202,13 @@ export function GoalScorecard() {
                     type="monotone"
                     dataKey="v"
                     dot={false}
-                    stroke="oklch(0.6 0.2 270)"
+                    stroke={CHART.line}
                     strokeWidth={2}
                     isAnimationActive={false}
                   />
                   <ReferenceLine
                     y={target}
-                    stroke="oklch(0.6 0.2 270 / 0.3)"
+                    stroke={CHART.axis}
                     strokeDasharray="3 3"
                   />
                   <YAxis
@@ -248,13 +246,12 @@ export function GoalScorecard() {
                 className="h-full rounded-full transition-all duration-700"
                 style={{
                   width: `${gapClosed}%`,
-                  background:
-                    "linear-gradient(to right, oklch(0.55 0.2 270), oklch(0.7 0.18 200))",
+                  background: "var(--sl-accent)",
                   minWidth: gapClosed > 0 ? "4px" : "0px",
                 }}
               />
             </div>
-            <div className="text-[9.5px] mt-1.5 text-right" style={{ color: "oklch(0.6 0.2 270)" }}>
+            <div className="text-[9.5px] mt-1.5 text-right" style={{ color: "var(--text-dim)" }}>
               {gapClosed.toFixed(1)}% of gap closed
             </div>
           </div>
@@ -265,12 +262,12 @@ export function GoalScorecard() {
           <div
             className="rounded-md px-3 py-2 flex items-center justify-between gap-2"
             style={{
-              background: "oklch(0.6 0.2 270 / 0.07)",
-              border: "1px solid oklch(0.6 0.2 270 / 0.2)",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--hairline)",
             }}
           >
             <div>
-              <div className="text-[10px] font-medium" style={{ color: "oklch(0.75 0.1 270)" }}>
+              <div className="text-[10px] font-medium" style={{ color: "var(--text-primary)" }}>
                 {shortEventName(tourneyMatches[0]?.event_name ?? null)}
               </div>
               <div className="text-[9.5px] text-[var(--text-faint)] mt-0.5">
@@ -296,7 +293,7 @@ export function GoalScorecard() {
                         tourneyRecovery >= 67
                           ? "var(--positive)"
                           : tourneyRecovery >= 34
-                          ? "oklch(0.65 0.16 80)"
+                          ? "var(--neutral)"
                           : "var(--negative)",
                     }}
                   >

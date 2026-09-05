@@ -14,6 +14,7 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "@/lib/api";
+import { CHART, withAlpha } from "@/lib/palette";
 import { Eyebrow } from "@/components/ui/metric";
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -63,12 +64,12 @@ function PMCTooltip({
         {label}
       </div>
       {ctl != null && (
-        <div style={{ color: "oklch(0.65 0.18 240)" }}>
+        <div style={{ color: CHART.ctl }}>
           CTL&nbsp;&nbsp;<span style={{ float: "right" }}>{ctl.toFixed(1)}</span>
         </div>
       )}
       {atl != null && (
-        <div style={{ color: "oklch(0.72 0.18 55)" }}>
+        <div style={{ color: CHART.atl }}>
           ATL&nbsp;&nbsp;<span style={{ float: "right" }}>{atl.toFixed(1)}</span>
         </div>
       )}
@@ -182,11 +183,11 @@ export function PerformanceCurvePane() {
           {today && (
             <div className="flex items-center gap-3 text-[10.5px] tabular-nums text-[var(--text-dim)]">
               <span>
-                <span style={{ color: "oklch(0.65 0.18 240)" }}>CTL </span>
+                <span style={{ color: CHART.ctl }}>CTL </span>
                 {today.ctl?.toFixed(1) ?? "—"}
               </span>
               <span>
-                <span style={{ color: "oklch(0.72 0.18 55)" }}>ATL </span>
+                <span style={{ color: CHART.atl }}>ATL </span>
                 {today.atl?.toFixed(1) ?? "—"}
               </span>
               <span className="text-[var(--text-faint)]">τ {curve.data.tau.ctl_days}d / {curve.data.tau.atl_days}d</span>
@@ -198,7 +199,7 @@ export function PerformanceCurvePane() {
             <ComposedChart data={ctlSeries} margin={{ top: 4, right: 8, left: -22, bottom: 0 }} syncId="pmc">
               <Line
                 dataKey="ctl"
-                stroke="oklch(0.65 0.18 240)"
+                stroke={CHART.ctl}
                 strokeWidth={1.8}
                 dot={false}
                 isAnimationActive={false}
@@ -206,7 +207,7 @@ export function PerformanceCurvePane() {
               />
               <Line
                 dataKey="atl"
-                stroke="oklch(0.72 0.18 55)"
+                stroke={CHART.atl}
                 strokeWidth={1.5}
                 strokeDasharray="5 2"
                 dot={false}
@@ -240,11 +241,11 @@ export function PerformanceCurvePane() {
         </div>
         <div className="flex items-center gap-4 mt-1.5 text-[10px] text-[var(--text-faint)]">
           <span className="flex items-center gap-1">
-            <span className="inline-block w-4 border-b-[1.8px]" style={{ borderColor: "oklch(0.65 0.18 240)" }} />
+            <span className="inline-block w-4 border-b-[1.8px]" style={{ borderColor: CHART.ctl }} />
             CTL fitness
           </span>
           <span className="flex items-center gap-1">
-            <span className="inline-block w-4 border-b border-dashed" style={{ borderColor: "oklch(0.72 0.18 55)" }} />
+            <span className="inline-block w-4 border-b border-dashed" style={{ borderColor: CHART.atl }} />
             ATL fatigue
           </span>
         </div>
@@ -283,18 +284,18 @@ export function PerformanceCurvePane() {
                   const { x = 0, y = 0, width = 0, height = 0, value = 0 } = props;
                   const fill =
                     value >= 15
-                      ? "oklch(0.65 0.2 145 / 0.85)"
+                      ? withAlpha(CHART.ok, 0.85)
                       : value >= 0
-                      ? "oklch(0.58 0.16 145 / 0.6)"
+                      ? withAlpha(CHART.ok, 0.5)
                       : value >= -25
-                      ? "oklch(0.65 0.18 55 / 0.65)"
-                      : "oklch(0.55 0.22 25 / 0.8)";
+                      ? withAlpha(CHART.warn, 0.6)
+                      : withAlpha(CHART.bad, 0.75);
                   return <rect x={x} y={y} width={Math.max(1, width)} height={height} fill={fill} />;
                 }}
               />
               <ReferenceLine y={0} stroke="var(--hairline-strong)" strokeWidth={1} />
-              <ReferenceLine y={15} stroke="oklch(0.55 0.16 145 / 0.4)" strokeDasharray="3 3" />
-              <ReferenceLine y={-25} stroke="oklch(0.55 0.22 25 / 0.4)" strokeDasharray="3 3" />
+              <ReferenceLine y={15} stroke={withAlpha(CHART.ok, 0.35)} strokeDasharray="3 3" />
+              <ReferenceLine y={-25} stroke={withAlpha(CHART.bad, 0.35)} strokeDasharray="3 3" />
               {lastDate && (
                 <ReferenceLine
                   x={lastDate}
@@ -358,7 +359,7 @@ export function PerformanceCurvePane() {
               className="rounded-lg border p-3 text-[11.5px]"
               style={{
                 borderColor: "var(--warn)",
-                background: "oklch(0.65 0.16 80 / 0.07)",
+                background: withAlpha(CHART.warn, 0.08),
               }}
             >
               <span className="font-semibold" style={{ color: "var(--warn)" }}>Deload recommended</span>

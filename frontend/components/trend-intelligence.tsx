@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { api } from "@/lib/api";
 import { localDate } from "@/lib/date";
+import { CHART, withAlpha } from "@/lib/palette";
 import { Eyebrow } from "@/components/ui/metric";
 import { ObsidianMark } from "@/components/obsidian-badge";
 import { CorrelationCards } from "@/components/correlation-cards";
@@ -158,14 +159,14 @@ function recoveryColor(score: number): { fill: string; ring: string } {
   // Below 34 = red, 34-66 = yellow, 67+ = green. Saturation scales with magnitude.
   if (score < 34) {
     const t = Math.max(0.35, score / 34);
-    return { fill: `oklch(0.42 0.18 25 / ${0.55 + (1 - t) * 0.4})`, ring: "oklch(0.65 0.22 25)" };
+    return { fill: `oklch(0.44 0.105 25 / ${0.55 + (1 - t) * 0.4})`, ring: CHART.bad };
   }
   if (score < 67) {
     const t = (score - 34) / 33;
-    return { fill: `oklch(${0.55 + t * 0.05} 0.14 80 / ${0.45 + t * 0.25})`, ring: "oklch(0.7 0.18 80)" };
+    return { fill: `oklch(${0.56 + t * 0.05} 0.085 78 / ${0.45 + t * 0.25})`, ring: CHART.warn };
   }
   const t = Math.min(1, (score - 67) / 33);
-  return { fill: `oklch(${0.62 + t * 0.08} 0.16 145 / ${0.5 + t * 0.4})`, ring: "oklch(0.72 0.2 145)" };
+  return { fill: `oklch(${0.60 + t * 0.08} 0.085 155 / ${0.5 + t * 0.4})`, ring: CHART.ok };
 }
 
 function buildHeatmapGrid(
@@ -222,13 +223,13 @@ function HRVTooltip({ active, payload, label }: { active?: boolean; payload?: { 
       minWidth: 148,
     }}>
       <div style={{ color: "var(--text-muted)", marginBottom: 4, fontSize: 10.5, letterSpacing: "0.04em" }}>{label}</div>
-      <div style={{ color: "var(--chart-line)", fontWeight: 600 }}>HRV&nbsp;&nbsp;<span style={{ float: "right" }}>{hrv} ms</span></div>
+      <div style={{ color: CHART.line, fontWeight: 600 }}>HRV&nbsp;&nbsp;<span style={{ float: "right" }}>{hrv} ms</span></div>
       {avg != null && <div style={{ color: "var(--text-muted)" }}>28d avg&nbsp;&nbsp;<span style={{ float: "right" }}>{avg} ms</span></div>}
       {hi != null && lo != null && (
         <div style={{ color: "var(--text-dim)", marginTop: 2 }}>28d ±1σ&nbsp;&nbsp;<span style={{ float: "right" }}>{lo}–{hi}</span></div>
       )}
       {hi7 != null && lo7 != null && (
-        <div style={{ color: "oklch(0.72 0.16 200 / 0.8)", marginTop: 2 }}>7d ±0.5σ&nbsp;&nbsp;<span style={{ float: "right" }}>{lo7}–{hi7}</span></div>
+        <div style={{ color: "var(--sl-accent)", marginTop: 2 }}>7d ±0.5σ&nbsp;&nbsp;<span style={{ float: "right" }}>{lo7}–{hi7}</span></div>
       )}
     </div>
   );
@@ -293,19 +294,19 @@ function HRVTrendCard({
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={series} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
             {/* 28d ±1σ band (wide) */}
-            <Area dataKey="bandHigh" fill="var(--chart-band)" stroke="none" isAnimationActive={false} />
+            <Area dataKey="bandHigh" fill={CHART.band} stroke="none" isAnimationActive={false} />
             <Area dataKey="bandLow" fill="var(--bg)" stroke="none" isAnimationActive={false} />
             {/* 7d ±0.5σ band (tighter, more actionable) */}
             {has7dBand && (
-              <Area dataKey="band7High" fill="oklch(0.65 0.14 200 / 0.12)" stroke="none" isAnimationActive={false} />
+              <Area dataKey="band7High" fill={withAlpha(CHART.line, 0.18)} stroke="none" isAnimationActive={false} />
             )}
             {has7dBand && (
               <Area dataKey="band7Low" fill="var(--bg)" stroke="none" isAnimationActive={false} />
             )}
-            <Line dataKey="avg" stroke="var(--chart-baseline)" strokeWidth={1} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+            <Line dataKey="avg" stroke={CHART.baseline} strokeWidth={1} strokeDasharray="4 3" dot={false} isAnimationActive={false} />
             <Line
               dataKey="hrv"
-              stroke="var(--chart-line)"
+              stroke={CHART.line}
               strokeWidth={1.8}
               dot={false}
               isAnimationActive={false}
@@ -323,11 +324,11 @@ function HRVTrendCard({
       {has7dBand && (
         <div className="flex items-center gap-4 mt-1.5 text-[10px] text-[var(--text-faint)]">
           <span className="flex items-center gap-1">
-            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: "var(--chart-band)", opacity: 0.6 }} />
+            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: CHART.band, opacity: 0.6 }} />
             28d ±1σ
           </span>
           <span className="flex items-center gap-1">
-            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: "oklch(0.65 0.14 200 / 0.4)" }} />
+            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: withAlpha(CHART.line, 0.35) }} />
             7d ±0.5σ (guidance)
           </span>
         </div>
@@ -398,11 +399,11 @@ function PreIllnessStrip({
           let bg = "var(--hairline)";
           let outline = "transparent";
           if (c.both) {
-            bg = "oklch(0.5 0.22 25 / 0.85)";
-            outline = "oklch(0.7 0.22 25)";
+            bg = withAlpha(CHART.bad, 0.8);
+            outline = CHART.bad;
           } else if (c.rhrFlag || c.hrvFlag) {
-            bg = "oklch(0.6 0.16 80 / 0.5)";
-            outline = "oklch(0.7 0.18 80 / 0.7)";
+            bg = withAlpha(CHART.warn, 0.4);
+            outline = withAlpha(CHART.warn, 0.6);
           }
           return (
             <div
@@ -622,22 +623,22 @@ function VolumeLandmarks() {
                 {/* MV (under) */}
                 <div
                   className="absolute inset-y-0 left-0"
-                  style={{ width: pos(lm.mv), background: "oklch(0.4 0.04 60 / 0.5)" }}
+                  style={{ width: pos(lm.mv), background: "var(--hairline-strong)" }}
                 />
                 {/* MEV-MAV (productive) */}
                 <div
                   className="absolute inset-y-0"
-                  style={{ left: pos(lm.mev), width: `calc(${pos(lm.mav)} - ${pos(lm.mev)})`, background: "oklch(0.55 0.16 145 / 0.35)" }}
+                  style={{ left: pos(lm.mev), width: `calc(${pos(lm.mav)} - ${pos(lm.mev)})`, background: withAlpha(CHART.ok, 0.3) }}
                 />
                 {/* MAV-MRV (overreach edge) */}
                 <div
                   className="absolute inset-y-0"
-                  style={{ left: pos(lm.mav), width: `calc(${pos(lm.mrv)} - ${pos(lm.mav)})`, background: "oklch(0.6 0.16 80 / 0.4)" }}
+                  style={{ left: pos(lm.mav), width: `calc(${pos(lm.mrv)} - ${pos(lm.mav)})`, background: withAlpha(CHART.warn, 0.3) }}
                 />
                 {/* MRV+ junk */}
                 <div
                   className="absolute inset-y-0"
-                  style={{ left: pos(lm.mrv), right: 0, background: "oklch(0.5 0.22 25 / 0.5)" }}
+                  style={{ left: pos(lm.mrv), right: 0, background: withAlpha(CHART.bad, 0.4) }}
                 />
                 {/* Marker for actual */}
                 <div
@@ -681,10 +682,10 @@ function classifyVolume(
   sets: number,
   lm: { mv: number; mev: number; mav: number; mrv: number },
 ): { label: string; color: string } {
-  if (sets < lm.mev) return { label: "below MEV", color: "oklch(0.7 0.18 80)" };
-  if (sets < lm.mav) return { label: "productive", color: "oklch(0.72 0.2 145)" };
-  if (sets < lm.mrv) return { label: "overreach", color: "oklch(0.7 0.16 60)" };
-  return { label: "junk volume", color: "oklch(0.65 0.22 25)" };
+  if (sets < lm.mev) return { label: "below MEV", color: "var(--neutral)" };
+  if (sets < lm.mav) return { label: "productive", color: "var(--positive)" };
+  if (sets < lm.mrv) return { label: "overreach", color: "var(--neutral)" };
+  return { label: "junk volume", color: "var(--negative)" };
 }
 
 function SleepDoseResponse() {
@@ -759,11 +760,11 @@ function SleepDoseResponse() {
               tickLine={false}
               width={30}
             />
-            <ReferenceArea x1={7} x2={9} fill="oklch(0.6 0.16 145 / 0.08)" stroke="none" />
+            <ReferenceArea x1={7} x2={9} fill={withAlpha(CHART.ok, 0.09)} stroke="none" />
             <Line
               data={research}
               dataKey="recovery"
-              stroke="var(--chart-baseline)"
+              stroke={CHART.baseline}
               strokeWidth={1}
               strokeDasharray="4 3"
               dot={false}
@@ -773,9 +774,9 @@ function SleepDoseResponse() {
             <Line
               data={bins.filter((b) => b.recovery != null)}
               dataKey="recovery"
-              stroke="var(--chart-line)"
+              stroke={CHART.line}
               strokeWidth={1.8}
-              dot={{ r: 3, fill: "var(--chart-line)" }}
+              dot={{ r: 3, fill: CHART.line }}
               isAnimationActive={false}
               name="you"
             />
@@ -791,14 +792,14 @@ function SleepDoseResponse() {
         <span>
           <span
             className="inline-block w-3 h-[2px] align-middle mr-1"
-            style={{ background: "var(--chart-line)" }}
+            style={{ background: CHART.line }}
           />
           your data
         </span>
         <span>
           <span
             className="inline-block w-3 h-[2px] align-middle mr-1"
-            style={{ background: "var(--chart-baseline)", borderTop: "1px dashed var(--chart-baseline)" }}
+            style={{ background: CHART.baseline, borderTop: `1px dashed ${CHART.baseline}` }}
           />
           research dose-response
         </span>
@@ -844,10 +845,10 @@ function ACWRDeloadCard() {
           )}
         </div>
         <div className="relative h-[14px] rounded-sm overflow-hidden bg-[var(--hairline)]">
-          <div className="absolute inset-y-0 left-0" style={{ width: pct(0.8), background: "oklch(0.6 0.14 80 / 0.4)" }} />
-          <div className="absolute inset-y-0" style={{ left: pct(0.8), width: `calc(${pct(1.3)} - ${pct(0.8)})`, background: "oklch(0.6 0.18 145 / 0.45)" }} />
-          <div className="absolute inset-y-0" style={{ left: pct(1.3), width: `calc(${pct(1.5)} - ${pct(1.3)})`, background: "oklch(0.6 0.16 60 / 0.4)" }} />
-          <div className="absolute inset-y-0" style={{ left: pct(1.5), right: 0, background: "oklch(0.55 0.22 25 / 0.55)" }} />
+          <div className="absolute inset-y-0 left-0" style={{ width: pct(0.8), background: withAlpha(CHART.warn, 0.22) }} />
+          <div className="absolute inset-y-0" style={{ left: pct(0.8), width: `calc(${pct(1.3)} - ${pct(0.8)})`, background: withAlpha(CHART.ok, 0.35) }} />
+          <div className="absolute inset-y-0" style={{ left: pct(1.3), width: `calc(${pct(1.5)} - ${pct(1.3)})`, background: withAlpha(CHART.warn, 0.35) }} />
+          <div className="absolute inset-y-0" style={{ left: pct(1.5), right: 0, background: withAlpha(CHART.bad, 0.42) }} />
           {ratio != null && (
             <div
               className="absolute inset-y-0 w-[2.5px] bg-[var(--text-primary)]"
@@ -883,7 +884,7 @@ function ACWRDeloadCard() {
           <span
             className="text-[10.5px] px-2 py-0.5 rounded-full"
             style={{
-              background: deload ? "oklch(0.5 0.22 25 / 0.18)" : "oklch(0.6 0.18 145 / 0.18)",
+              background: deload ? withAlpha(CHART.bad, 0.16) : withAlpha(CHART.ok, 0.16),
               color: deload ? "var(--negative)" : "var(--positive)",
               border: `1px solid ${deload ? "var(--negative)" : "var(--positive)"}`,
             }}

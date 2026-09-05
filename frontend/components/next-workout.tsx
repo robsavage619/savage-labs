@@ -22,9 +22,9 @@ const toStringArray = (v: unknown): string[] =>
 // ── Tier config ──────────────────────────────────────────────────────────────
 
 const TIER = {
-  green: { color: "var(--positive)", soft: "var(--positive-soft)", border: "oklch(0.72 0.18 145 / 0.25)", icon: "▲", label: "Go hard" },
-  yellow: { color: "var(--neutral)", soft: "var(--neutral-soft)", border: "oklch(0.75 0.18 75 / 0.25)", icon: "◆", label: "Moderate effort" },
-  red: { color: "var(--negative)", soft: "var(--negative-soft)", border: "oklch(0.65 0.22 25 / 0.25)", icon: "▼", label: "Rest / active recovery" },
+  green: { color: "var(--positive)", soft: "var(--positive-soft)", border: "color-mix(in oklch, var(--positive) 25%, transparent)", icon: "▲", label: "Go hard" },
+  yellow: { color: "var(--neutral)", soft: "var(--neutral-soft)", border: "color-mix(in oklch, var(--neutral) 25%, transparent)", icon: "◆", label: "Moderate effort" },
+  red: { color: "var(--negative)", soft: "var(--negative-soft)", border: "color-mix(in oklch, var(--negative) 25%, transparent)", icon: "▼", label: "Rest / active recovery" },
 } as const;
 
 /** Local ISO date — `toISOString()` would roll over to tomorrow after 5pm PDT. */
@@ -53,7 +53,7 @@ function CompletedBanner({ ex }: { ex: PlanExecution }) {
       className="rounded-[var(--r-md)] p-4 pl-5 flex gap-3 items-start"
       style={{
         background: "var(--positive-soft)",
-        border: "1px solid oklch(0.72 0.18 145 / 0.25)",
+        border: "1px solid color-mix(in oklch, var(--positive) 25%, transparent)",
       }}
     >
       <CheckIcon size={15} className="mt-0.5 flex-shrink-0" style={{ color: "var(--positive)" }} />
@@ -134,7 +134,7 @@ function SessionStrip({ plan }: { plan: WorkoutPlan }) {
       <div className="flex items-center gap-2.5 flex-wrap">
         <span
           className="w-7 h-7 rounded-full flex items-center justify-center text-[13px] font-bold flex-shrink-0"
-          style={{ background: t.color, color: "oklch(0.1 0 0)" }}
+          style={{ background: t.color, color: "var(--bg)" }}
         >
           {t.icon}
         </span>
@@ -221,7 +221,7 @@ function WarmupSection({ items }: { items: WarmupItem[] }) {
           <div
             key={i}
             className="flex items-center gap-3 px-3 py-2 rounded-[var(--r-sm)]"
-            style={{ background: "oklch(1 0 0 / 0.025)", border: "1px solid var(--hairline)" }}
+            style={{ background: "var(--card-hover)", border: "1px solid var(--hairline)" }}
           >
             <span className="text-[10.5px] text-[var(--text-faint)] w-5 text-center tabular-nums">{i + 1}</span>
             <span className="text-[12.5px] text-[var(--text-muted)] flex-1">{item.name}</span>
@@ -243,8 +243,8 @@ function WarmupSection({ items }: { items: WarmupItem[] }) {
 // ── RPE badge ────────────────────────────────────────────────────────────────
 
 function RPEBadge({ rpe }: { rpe: number }) {
-  const color = rpe >= 9 ? "var(--negative)" : rpe >= 7.5 ? "var(--neutral)" : "var(--chart-line)";
-  const soft = rpe >= 9 ? "var(--negative-soft)" : rpe >= 7.5 ? "var(--neutral-soft)" : "oklch(0.72 0.12 250 / 0.12)";
+  const color = rpe >= 9 ? "var(--negative)" : rpe >= 7.5 ? "var(--neutral)" : "var(--sl-accent)";
+  const soft = rpe >= 9 ? "var(--negative-soft)" : rpe >= 7.5 ? "var(--neutral-soft)" : "var(--sl-accent-soft)";
   return (
     <span
       className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-semibold tabular-nums"
@@ -300,11 +300,11 @@ function ExerciseHistoryStamp({ name, prescribedLbs, modulated, executed }: { na
 
 const BLOCK_ACCENT: Record<string, { bar: string; pill: string; pillBg: string }> = {
   primary: { bar: "var(--positive)", pill: "var(--positive)", pillBg: "var(--positive-soft)" },
-  accessory: { bar: "var(--chart-line)", pill: "var(--chart-line)", pillBg: "oklch(0.72 0.12 250 / 0.12)" },
+  accessory: { bar: "var(--sl-accent)", pill: "var(--sl-accent)", pillBg: "var(--sl-accent-soft)" },
   finisher: { bar: "var(--neutral)", pill: "var(--neutral)", pillBg: "var(--neutral-soft)" },
   metabolic: { bar: "var(--neutral)", pill: "var(--neutral)", pillBg: "var(--neutral-soft)" },
-  conditioning: { bar: "oklch(0.78 0.18 75)", pill: "oklch(0.78 0.18 75)", pillBg: "var(--neutral-soft)" },
-  default: { bar: "var(--hairline-strong)", pill: "var(--text-muted)", pillBg: "oklch(1 0 0 / 0.04)" },
+  conditioning: { bar: "var(--neutral)", pill: "var(--neutral)", pillBg: "var(--neutral-soft)" },
+  default: { bar: "var(--hairline-strong)", pill: "var(--text-muted)", pillBg: "var(--card-hover)" },
 };
 
 function blockAccent(label: string | undefined) {
@@ -345,7 +345,7 @@ function ExerciseCard({
           className="absolute -top-3 left-6 px-2 py-0.5 rounded-full text-[9px] font-semibold tracking-wider uppercase"
           style={{
             background: "var(--neutral-soft)",
-            border: "1px solid oklch(0.75 0.18 75 / 0.3)",
+            border: "1px solid color-mix(in oklch, var(--neutral) 30%, transparent)",
             color: "var(--neutral)",
           }}
         >
@@ -455,7 +455,7 @@ function ClinicalCallout({ notes }: { notes: string[] }) {
     <div
       className="rounded-[var(--r-md)] p-4 pl-5"
       style={{
-        background: "oklch(1 0 0 / 0.015)",
+        background: "var(--card-hover)",
         border: "1px solid var(--hairline)",
         borderLeft: "2px solid var(--neutral)",
       }}
@@ -483,9 +483,9 @@ function VaultInsights({ insights }: { insights: string[] }) {
     <div
       className="rounded-[var(--r-md)] p-4 pl-5"
       style={{
-        background: "oklch(0.65 0.2 295 / 0.04)",
+        background: "var(--card-hover)",
         border: "1px solid var(--hairline)",
-        borderLeft: "2px solid oklch(0.65 0.2 295)",
+        borderLeft: "2px solid var(--sl-accent)",
       }}
     >
       <div className="flex items-center gap-2 mb-2.5">
@@ -495,7 +495,7 @@ function VaultInsights({ insights }: { insights: string[] }) {
       <ul className="space-y-1.5">
         {insights.map((n, i) => (
           <li key={i} className="text-[12px] text-[var(--text-dim)] leading-snug flex gap-2">
-            <span className="mt-0.5 flex-shrink-0 opacity-60" style={{ color: "oklch(0.65 0.2 295)" }}>·</span>
+            <span className="mt-0.5 flex-shrink-0 opacity-60" style={{ color: "var(--sl-accent)" }}>·</span>
             {n}
           </li>
         ))}
@@ -514,7 +514,7 @@ function CooldownRow({ text }: { text: string | unknown }) {
   return (
     <div
       className="flex gap-3 px-4 py-3 rounded-[var(--r-md)]"
-      style={{ background: "oklch(1 0 0 / 0.02)", border: "1px solid var(--hairline)" }}
+      style={{ background: "var(--card-hover)", border: "1px solid var(--hairline)" }}
     >
       <span className="text-[var(--text-faint)] text-sm mt-0.5">↓</span>
       <div>
@@ -534,7 +534,7 @@ function Skeleton() {
         <div
           key={i}
           className="rounded-[var(--r-md)] animate-pulse"
-          style={{ height: `${h * 4}px`, background: "oklch(1 0 0 / 0.04)" }}
+          style={{ height: `${h * 4}px`, background: "var(--card-hover)" }}
         />
       ))}
     </div>
@@ -631,8 +631,8 @@ export function NextWorkoutPane() {
                 className="text-[9.5px] font-semibold uppercase tracking-[0.16em] px-2 py-0.5 rounded-full"
                 style={
                   executed
-                    ? { background: "var(--positive-soft)", color: "var(--positive)", border: "1px solid oklch(0.72 0.18 145 / 0.25)" }
-                    : { background: "var(--neutral-soft)", color: "var(--neutral)", border: "1px solid oklch(0.75 0.18 75 / 0.25)" }
+                    ? { background: "var(--positive-soft)", color: "var(--positive)", border: "1px solid color-mix(in oklch, var(--positive) 25%, transparent)" }
+                    : { background: "var(--neutral-soft)", color: "var(--neutral)", border: "1px solid color-mix(in oklch, var(--neutral) 25%, transparent)" }
                 }
               >
                 {executed ? "Trained" : "Not today's"}
@@ -663,7 +663,7 @@ export function NextWorkoutPane() {
                   style={{
                     background:
                       data.source === "claude" || data.source === "claude_code"
-                        ? "var(--chart-line)"
+                        ? "var(--sl-accent)"
                         : data.source === "fallback"
                           ? "var(--text-faint)"
                           : "var(--neutral)",
@@ -715,7 +715,7 @@ export function NextWorkoutPane() {
       {push.kind === "err" && (
         <div
           className="rounded-[var(--r-sm)] px-3 py-2 text-[11px]"
-          style={{ background: "var(--negative-soft)", border: "1px solid oklch(0.65 0.22 25 / 0.25)", color: "var(--negative)" }}
+          style={{ background: "var(--negative-soft)", border: "1px solid color-mix(in oklch, var(--negative) 25%, transparent)", color: "var(--negative)" }}
         >
           Hevy push failed: {push.msg}
         </div>
@@ -723,7 +723,7 @@ export function NextWorkoutPane() {
       {push.kind === "ok" && (
         <div
           className="rounded-[var(--r-sm)] px-3 py-2 text-[11px]"
-          style={{ background: "var(--positive-soft)", border: "1px solid oklch(0.72 0.18 145 / 0.25)", color: "var(--positive)" }}
+          style={{ background: "var(--positive-soft)", border: "1px solid color-mix(in oklch, var(--positive) 25%, transparent)", color: "var(--positive)" }}
         >
           <CheckIcon size={11} className="inline mr-1 align-middle" />{push.focus} routine ready in Hevy (id {push.routineId.slice(0, 8)}…). Open the app to start.
         </div>
@@ -734,7 +734,7 @@ export function NextWorkoutPane() {
       {isError && (
         <div
           className="rounded-[var(--r-md)] p-6 text-center"
-          style={{ background: "var(--negative-soft)", border: "1px solid oklch(0.65 0.22 25 / 0.2)" }}
+          style={{ background: "var(--negative-soft)", border: "1px solid color-mix(in oklch, var(--negative) 20%, transparent)" }}
         >
           <p className="text-sm text-[var(--negative)]">Could not generate workout plan</p>
           <p className="text-[11px] text-[var(--text-dim)] mt-1">

@@ -1,50 +1,73 @@
 @import "tailwindcss";
 
 :root {
-  --font-orbitron: 'Orbitron', sans-serif;
+  /* ──────────────────────────────────────────────────────────────────────────
+   * Retrofit, 2026-09-04. The token NAMES are unchanged so all ~50 panels keep
+   * working; only the values move. The panels were already ~87% tokenized
+   * (~1,500 var() reads against 229 literals), which is why re-valuing here
+   * restyles the whole app rather than requiring a rewrite.
+   *
+   * Direction: calm premium instrument, not sci-fi HUD. Neutrals carry a
+   * slight cool (250°) bias so they read as chosen rather than inherited.
+   * Colour is spent on MEANING — a value out of its band — and nowhere else.
+   * ────────────────────────────────────────────────────────────────────────── */
 
-  /* ── Surface ────────────────────────────── */
-  --bg:           oklch(0.105 0 0);
-  --bg-elevated: oklch(0.145 0 0);
-  --card:        oklch(0.170 0 0);
-  --card-hover:  oklch(0.195 0 0);
-  --hairline:    oklch(1 0 0 / 0.07);
-  --hairline-strong: oklch(1 0 0 / 0.12);
+  /* Type. Display carries verdicts and big numerals; body carries prose; data
+     carries labels, units and anything tabular. */
+  --font-display: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+  --font-body:    "Instrument Sans", system-ui, -apple-system, sans-serif;
+  --font-data:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Orbitron is retained only so legacy `var(--font-orbitron)` reads resolve;
+     it now points at the display face rather than loading Orbitron Black. */
+  --font-orbitron: var(--font-display);
+
+  /* Type scale — six steps, no half-pixels. Replaces 25 ad-hoc sizes. */
+  --fs-label: 11px;
+  --fs-read:  13.5px;
+  --fs-body:  15px;
+  --fs-num:   30px;
+  --fs-head:  21px;
+  --fs-hero:  44px;
+
+  /* ── Surface — four steps, depth from luminosity not borders ───────────── */
+  --bg:              oklch(0.145 0.008 250);
+  --bg-elevated:     oklch(0.185 0.009 250);
+  --card:            oklch(0.185 0.009 250);
+  --card-hover:      oklch(0.215 0.010 250);
+  --hairline:        oklch(0.235 0.010 250);
+  --hairline-strong: oklch(0.285 0.012 250);
   --background: var(--bg);
 
-  /* ── Text ───────────────────────────────── */
-  --foreground:    oklch(1.0 0 0);
-  --text-primary:  oklch(1.0 0 0);
-  --text-muted:    oklch(0.68 0 0);
-  --text-dim:      oklch(0.54 0 0);
-  --text-faint:    oklch(0.42 0 0);
-  --muted:           oklch(0.22 0 0);
+  /* ── Text — four tints, actually distinguishable ───────────────────────── */
+  --foreground:    oklch(0.965 0.003 250);
+  --text-primary:  oklch(0.965 0.003 250);
+  --text-muted:    oklch(0.760 0.010 250);
+  --text-dim:      oklch(0.615 0.012 250);
+  --text-faint:    oklch(0.480 0.012 250);
+  --muted:            oklch(0.215 0.010 250);
   --muted-foreground: var(--text-muted);
 
-  /* ── Savage Labs brand accent ───────────── */
-  --sl-accent:      oklch(0.72 0.20 210);
-  --sl-accent-dim:  oklch(0.55 0.18 210);
-  --sl-accent-soft: oklch(0.72 0.20 210 / 0.12);
-  --sl-accent-glow: 0 0 8px oklch(0.72 0.20 210), 0 0 24px oklch(0.60 0.22 210 / 0.7), 0 0 48px oklch(0.50 0.22 210 / 0.35);
-  --sl-accent-teal: oklch(0.72 0.18 185);
+  /* ── Accent — one, desaturated. The glow token is now flat: nothing in a
+       calm instrument should bloom. ───────────────────────────────────────── */
+  --sl-accent:      oklch(0.760 0.115 215);
+  --sl-accent-dim:  oklch(0.560 0.080 215);
+  --sl-accent-soft: oklch(0.760 0.115 215 / 0.12);
+  --sl-accent-glow: none;
+  --sl-accent-teal: oklch(0.750 0.090 195);
 
-  /* ── Ambient (state-reactive) ───────────── */
-  /* Hue in oklch hue degrees: 145=green, 75=amber, 25=red, 210=brand. Updated by <AmbientHue>. */
-  --ambient-hue: 210;
-  --ambient-chroma: 0.14;
-  --ambient-strength: 0.14;
+  /* Ambient bloom is switched off by zeroing its strength — <AmbientHue> can
+     keep writing the hue without anything appearing. */
+  --ambient-hue: 215;
+  --ambient-chroma: 0;
+  --ambient-strength: 0;
 
-  /* ── Semantic (recovery / performance) ──── */
-  --positive: oklch(0.72 0.18 145);
-  --neutral:  oklch(0.75 0.18 75);
-  --negative: oklch(0.65 0.22 25);
+  /* ── Semantic — the only saturated colour in the system ────────────────── */
+  --positive: oklch(0.760 0.130 155);
+  --neutral:  oklch(0.800 0.135 78);
+  --negative: oklch(0.680 0.170 25);
 
-  /* Aliases. Nine components (subject-dossier, performance-curve,
-     engine-status-panel, muscle-volume-panel, prescription-panel,
-     trend-intelligence, periodization-strip, fueling-panel,
-     post-workout-panel) read these names, and none of them were ever defined
-     at :root — 21 colour reads resolving to nothing on /review and /lab.
-     Aliasing rather than renaming keeps both vocabularies valid. */
+  /* Aliases: these names are read 21 times across nine components and were
+     defined nowhere at :root, so those colours rendered as nothing. */
   --ok:        var(--positive);
   --warn:      var(--neutral);
   --bad:       var(--negative);
@@ -55,33 +78,36 @@
   --recovery-amber: var(--neutral);
   --recovery-red:   var(--negative);
 
-  --positive-soft: oklch(0.72 0.18 145 / 0.12);
-  --neutral-soft:  oklch(0.75 0.18 75 / 0.12);
-  --negative-soft: oklch(0.65 0.22 25 / 0.12);
+  --positive-soft: oklch(0.760 0.130 155 / 0.12);
+  --neutral-soft:  oklch(0.800 0.135 78 / 0.12);
+  --negative-soft: oklch(0.680 0.170 25 / 0.12);
 
-  /* ── Chart ──────────────────────────────── */
-  --chart-baseline:  oklch(0.50 0.05 250);
-  --chart-grid:      oklch(1 0 0 / 0.05);
-  --chart-line:      oklch(0.72 0.12 250);
-  --chart-line-2:    oklch(0.70 0.12 300);
-  --chart-band:      oklch(0.60 0.12 250 / 0.10);
+  /* ── Chart ─────────────────────────────────────────────────────────────── */
+  --chart-baseline: oklch(0.480 0.012 250);
+  --chart-grid:     oklch(0.235 0.010 250);
+  --chart-line:     oklch(0.760 0.115 215);
+  --chart-line-2:   oklch(0.720 0.080 265);
+  --chart-band:     oklch(0.760 0.115 215 / 0.10);
 
-  /* ── Sleep stages ───────────────────────── */
-  --stage-deep:  oklch(0.55 0.18 280);
-  --stage-rem:   oklch(0.65 0.15 250);
-  --stage-light: oklch(0.45 0.06 250);
-  --stage-awake: oklch(0.38 0 0);
+  /* ── Sleep stages — one hue, four depths. Was four unrelated hues. ─────── */
+  --stage-deep:  oklch(0.520 0.090 265);
+  --stage-rem:   oklch(0.660 0.075 235);
+  --stage-light: oklch(0.400 0.030 250);
+  --stage-awake: oklch(0.300 0.008 250);
 
-  /* ── Radii ──────────────────────────────── */
+  /* ── Radii ─────────────────────────────────────────────────────────────── */
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
   --r-xl: 18px;
 
-  /* ── Shadows ────────────────────────────── */
-  --shadow-card:       inset 0 1px 0 oklch(1 0 0 / 0.06), 0 1px 2px oklch(0 0 0 / 0.4), 0 8px 24px -12px oklch(0 0 0 / 0.5);
-  --shadow-card-hover: inset 0 1px 0 oklch(1 0 0 / 0.08), 0 2px 4px oklch(0 0 0 / 0.5), 0 14px 36px -10px oklch(0 0 0 / 0.6);
-  --shadow-pop:        0 12px 48px -12px oklch(0 0 0 / 0.6);
+  /* ── Shadows — real depth, no inset sheen ──────────────────────────────── */
+  --shadow-card:       0 1px 2px oklch(0 0 0 / 0.35), 0 8px 24px -14px oklch(0 0 0 / 0.55);
+  --shadow-card-hover: 0 2px 4px oklch(0 0 0 / 0.40), 0 14px 36px -14px oklch(0 0 0 / 0.60);
+  --shadow-pop:        0 12px 48px -14px oklch(0 0 0 / 0.65);
+  /* Read by next-workout.tsx:340 and defined nowhere until now — it resolved
+     to nothing. Flat by design: this surface should sit on the page, not above it. */
+  --shadow-flat:       none;
 }
 
 * { box-sizing: border-box; }
@@ -91,12 +117,15 @@ html, body { height: 100%; }
 html {
   background: var(--bg);
   color: var(--foreground);
-  font-family: var(--font-geist-sans, system-ui, sans-serif);
-  font-feature-settings: "ss01", "cv11", "tnum";
+  font-family: var(--font-body), var(--font-geist-sans, system-ui, sans-serif);
+  /* 420/-0.005em and the ss01/cv11 features were tuned for Geist; Instrument
+     Sans is a different family and inherits none of that. tnum stays — this is
+     a dashboard and digits must align. */
+  font-feature-settings: "tnum";
   font-variant-numeric: tabular-nums;
-  font-weight: 420;
+  font-weight: 400;
   -webkit-font-smoothing: antialiased;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.002em;
 }
 
 /* ── Ambient page glow (futuristic radial bloom) ─────────── */
@@ -104,57 +133,25 @@ body {
   position: relative;
   isolation: isolate;
 }
+/* The ambient recovery bloom and the drifting engineering grid are gone.
+ * Both animated continuously behind static content, and together they were the
+ * loudest thing on every screen — chrome outshouting the data. A calm
+ * instrument earns attention with the numbers, not the background. The body
+ * now paints one flat surface.
+ *
+ * <AmbientHue> still writes --ambient-hue; --ambient-chroma and
+ * --ambient-strength are pinned to 0 above, so it has nothing to paint. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  transition: background 1200ms ease;
-  background:
-    /* Reactive recovery wash — top-left bloom uses ambient hue */
-    radial-gradient(ellipse 80% 60% at 18% -10%,
-      oklch(0.42 var(--ambient-chroma) var(--ambient-hue) / calc(var(--ambient-strength) * 1.4)) 0%,
-      oklch(0.30 calc(var(--ambient-chroma) * 0.7) var(--ambient-hue) / calc(var(--ambient-strength) * 0.6)) 35%,
-      transparent 70%),
-    radial-gradient(ellipse 70% 55% at 92% 8%,
-      oklch(0.38 0.16 240 / 0.15) 0%,
-      oklch(0.28 0.12 240 / 0.07) 40%,
-      transparent 75%),
-    /* Reactive lower bloom — also ambient hue */
-    radial-gradient(ellipse 100% 70% at 50% 110%,
-      oklch(0.36 calc(var(--ambient-chroma) * 0.85) var(--ambient-hue) / calc(var(--ambient-strength) * 0.7)) 0%,
-      transparent 65%),
-    var(--bg);
-}
-
-/* Engineering graph-paper grid — 48px minor grid + accent dot every 4th cell */
-@keyframes shc-grid-drift {
-  0%   { background-position: 0 0, 0 0, 0 0; }
-  100% { background-position: 48px 48px, 48px 48px, 192px 192px; }
-}
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0.038;
-  background-image:
-    linear-gradient(to right, oklch(1 0 0) 1px, transparent 1px),
-    linear-gradient(to bottom, oklch(1 0 0) 1px, transparent 1px),
-    radial-gradient(circle, oklch(0.72 0.20 210 / 0.75) 1.2px, transparent 1.2px);
-  background-size: 48px 48px, 48px 48px, 192px 192px;
-  mask-image: radial-gradient(ellipse 82% 72% at 50% 38%, black 0%, transparent 80%);
-  animation: shc-grid-drift 60s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  body::after { animation: none; }
-  body::before { transition: none; }
+  background: var(--bg);
 }
 
 ::selection {
-  background: oklch(0.72 0.12 250 / 0.28);
+  background: oklch(0.760 0.115 215 / 0.24);
 }
 
 /* ── Typographic utilities ───────────────── */
@@ -164,7 +161,7 @@ body::after {
 }
 
 .metric-xl {
-  font-family: var(--font-geist-mono, monospace);
+  font-family: var(--font-data), var(--font-geist-mono, monospace);
   font-variant-numeric: tabular-nums;
   font-size: 44px;
   font-weight: 500;
@@ -172,7 +169,7 @@ body::after {
   line-height: 1;
 }
 .metric-lg {
-  font-family: var(--font-geist-mono, monospace);
+  font-family: var(--font-data), var(--font-geist-mono, monospace);
   font-variant-numeric: tabular-nums;
   font-size: 28px;
   font-weight: 500;
@@ -180,7 +177,7 @@ body::after {
   line-height: 1;
 }
 .metric-md {
-  font-family: var(--font-geist-mono, monospace);
+  font-family: var(--font-data), var(--font-geist-mono, monospace);
   font-variant-numeric: tabular-nums;
   font-size: 20px;
   font-weight: 500;
@@ -232,7 +229,7 @@ body::after {
   opacity: 0;
 }
 .shc-section-scan.in-view::after {
-  animation: shc-section-scan 900ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  opacity: 0.35;
 }
 @media (prefers-reduced-motion: reduce) {
   .shc-section-scan.in-view::after { animation: none; transform: scaleX(1); opacity: 0.4; }
@@ -254,7 +251,7 @@ body::after {
 .metric-xl,
 .metric-lg,
 .metric-md {
-  font-family: var(--font-orbitron), var(--font-geist-mono, monospace);
+  font-family: var(--font-data), var(--font-geist-mono, monospace);
 }
 
 /* ── Card primitive ──────────────────────── */
@@ -352,7 +349,7 @@ body::after {
 
 /* Classification badge next to wordmark */
 .sl-classified-badge {
-  font-family: var(--font-geist-mono, monospace);
+  font-family: var(--font-data), var(--font-geist-mono, monospace);
   font-size: 7.5px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -379,69 +376,27 @@ body::after {
   background: linear-gradient(
     90deg,
     transparent 0%,
-    oklch(0.72 0.20 210 / 0.05) 50%,
+    oklch(1 0 0 / 0.03) 50%,
     transparent 100%
   );
-  animation: sl-protocol-sweep 10s ease-in-out infinite;
   pointer-events: none;
 }
 
 /* ── Gradient utilities ──────────────────── */
 .shc-gradient-text {
   background: linear-gradient(135deg,
-    oklch(0.96 0 0) 0%,
-    oklch(0.78 0.10 260) 60%,
-    oklch(0.70 0.14 305) 100%);
+    var(--text-primary) 0%,
+    var(--sl-accent) 100%);
   -webkit-background-clip: text;
           background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.shc-glow-positive {
-  text-shadow:
-    0 0 22px oklch(0.72 0.18 145 / 0.35),
-    0 0 44px oklch(0.72 0.18 145 / 0.18);
-}
-.shc-glow-neutral {
-  text-shadow:
-    0 0 22px oklch(0.75 0.18 75 / 0.32),
-    0 0 44px oklch(0.75 0.18 75 / 0.16);
-}
-.shc-glow-negative {
-  text-shadow:
-    0 0 22px oklch(0.65 0.22 25 / 0.36),
-    0 0 44px oklch(0.65 0.22 25 / 0.18);
-}
-/* Animated gradient hairline for highlight surfaces (apply sparingly) */
-@keyframes shc-border-flow {
-  0%   { background-position: 0% 50%; }
-  100% { background-position: 200% 50%; }
-}
-.shc-border-flow {
-  position: relative;
-  background-clip: padding-box;
-}
-.shc-border-flow::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(120deg,
-    oklch(0.45 0.16 268) 0%,
-    oklch(0.55 0.18 305) 25%,
-    oklch(0.45 0.18 195) 50%,
-    oklch(0.55 0.18 305) 75%,
-    oklch(0.45 0.16 268) 100%);
-  background-size: 200% 100%;
-  animation: shc-border-flow 12s linear infinite;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
-  pointer-events: none;
-  opacity: 0.55;
-}
+.shc-glow-positive { color: var(--positive); }
+.shc-glow-neutral { color: var(--neutral); }
+.shc-glow-negative { color: var(--negative); }
+/* Was an animated gradient hairline; now a static border. */
+.shc-border-flow { border: 1px solid var(--hairline-strong); }
+
 
 /* ── Button system (3 variants) ──────────── */
 @layer components {
@@ -606,22 +561,7 @@ body::after {
 }
 
 /* LABS — neon pulse */
-@keyframes sl-labs-glow {
-  0%, 100% {
-    text-shadow:
-      0 0  6px oklch(0.80 0.22 210),
-      0 0 18px oklch(0.65 0.22 210 / 0.85),
-      0 0 40px oklch(0.55 0.22 210 / 0.50),
-      0 0 80px oklch(0.50 0.22 210 / 0.20);
-  }
-  50% {
-    text-shadow:
-      0 0 10px oklch(0.88 0.22 210),
-      0 0 28px oklch(0.70 0.22 210),
-      0 0 60px oklch(0.58 0.22 210 / 0.70),
-      0 0 110px oklch(0.50 0.22 210 / 0.30);
-  }
-}
+
 
 .sl-wordmark-labs {
   font-family: var(--font-orbitron);
@@ -631,7 +571,7 @@ body::after {
   text-transform: uppercase;
   line-height: 1;
   color: var(--sl-accent);
-  animation: sl-labs-glow 2.8s ease-in-out infinite;
+  
 }
 
 /* β superscript */

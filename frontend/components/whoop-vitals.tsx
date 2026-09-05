@@ -73,20 +73,10 @@ export function WhoopVitals() {
     <div
       className="shc-card shc-enter overflow-hidden relative"
       style={{
-        background:
-          "linear-gradient(135deg, oklch(0.155 0 0) 0%, oklch(0.115 0 0) 60%, oklch(0.135 0.02 250) 100%)",
-        borderColor: "oklch(1 0 0 / 0.10)",
+        background: "var(--card)",
+        borderColor: "var(--hairline)",
       }}
     >
-      {/* Subtle radial glow */}
-      <div
-        aria-hidden
-        className="absolute -top-24 -right-24 w-[280px] h-[280px] rounded-full pointer-events-none"
-        style={{
-          background:
-            "radial-gradient(circle, oklch(0.72 0.18 145 / 0.12) 0%, transparent 60%)",
-        }}
-      />
 
       <div className="relative px-5 pt-4 pb-5">
         {/* Header band */}
@@ -100,7 +90,7 @@ export function WhoopVitals() {
               className="text-[9.5px] tracking-[0.28em] uppercase"
               style={{
                 fontFamily: "var(--font-orbitron)",
-                color: "oklch(0.72 0 0)",
+                color: "var(--text-muted)",
               }}
             >
               Powered by
@@ -109,18 +99,17 @@ export function WhoopVitals() {
               src="/whoop-wordmark.svg"
               alt="WHOOP"
               className="h-[18px] w-auto"
-              style={{ filter: "drop-shadow(0 0 14px oklch(0.72 0.18 145 / 0.30))" }}
             />
           </div>
           <div className="flex items-center gap-3 text-[10px] tabular-nums">
             <span
               className="px-2 py-0.5 rounded-sm border"
               style={{
-                borderColor: whoop?.needs_reauth ? "var(--negative)" : "oklch(1 0 0 / 0.12)",
+                borderColor: whoop?.needs_reauth ? "var(--negative)" : "var(--hairline-strong)",
                 color: whoop?.needs_reauth ? "var(--negative)" : "var(--text-muted)",
                 background: whoop?.needs_reauth
                   ? "var(--negative-soft)"
-                  : "oklch(1 0 0 / 0.02)",
+                  : "var(--card-hover)",
               }}
             >
               {whoop?.needs_reauth ? "Reauth needed" : "Live"}
@@ -193,7 +182,7 @@ export function WhoopVitals() {
 
         {/* Sleep architecture detail row — only shown when sleep data exists */}
         {sleepH != null && (
-          <div className="mt-4 pt-3 border-t border-[oklch(1_0_0/0.06)]">
+          <div className="mt-4 pt-3 border-t border-[var(--hairline)]">
             <p
               className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-2"
               style={{ fontFamily: "var(--font-orbitron)" }}
@@ -254,9 +243,9 @@ export function WhoopVitals() {
               <span
                 className="px-2 py-0.5 rounded-sm border"
                 style={{
-                  borderColor: Math.abs(skinTempDeltaF) >= 0.9 ? "var(--negative)" : "oklch(1 0 0 / 0.10)",
+                  borderColor: Math.abs(skinTempDeltaF) >= 0.9 ? "var(--negative)" : "var(--hairline-strong)",
                   color: Math.abs(skinTempDeltaF) >= 0.9 ? "var(--negative)" : "var(--text-muted)",
-                  background: "oklch(1 0 0 / 0.02)",
+                  background: "var(--card-hover)",
                 }}
               >
                 Skin temp Δ {skinTempDeltaF >= 0 ? "+" : ""}{skinTempDeltaF.toFixed(1)}°F
@@ -266,9 +255,9 @@ export function WhoopVitals() {
               <span
                 className="px-2 py-0.5 rounded-sm border"
                 style={{
-                  borderColor: spo2Recovery < 92 ? "var(--negative)" : "oklch(1 0 0 / 0.10)",
+                  borderColor: spo2Recovery < 92 ? "var(--negative)" : "var(--hairline-strong)",
                   color: spo2Recovery < 92 ? "var(--negative)" : "var(--text-muted)",
-                  background: "oklch(1 0 0 / 0.02)",
+                  background: "var(--card-hover)",
                 }}
               >
                 SpO₂ {spo2Recovery.toFixed(1)}%
@@ -280,7 +269,7 @@ export function WhoopVitals() {
                 style={{
                   borderColor: "var(--neutral)",
                   color: "var(--neutral)",
-                  background: "var(--neutral-soft, oklch(0.5 0.05 80 / 0.15))",
+                  background: "var(--neutral-soft)",
                 }}
               >
                 <WarningIcon size={11} className="inline mr-1 align-middle" />WHOOP calibrating — score may be unreliable
@@ -290,7 +279,7 @@ export function WhoopVitals() {
         )}
 
         {/* Footer interpretation — collapsible */}
-        <details className="mt-4 pt-3 border-t border-[oklch(1_0_0/0.06)] group">
+        <details className="mt-4 pt-3 border-t border-[var(--hairline)] group">
           <summary className="text-[10.5px] cursor-pointer list-none text-[var(--text-faint)] hover:text-[var(--text-muted)] transition-colors select-none">
             <span className="group-open:hidden">▸ How to read this</span>
             <span className="hidden group-open:inline">▾ How to read this</span>

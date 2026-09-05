@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { Eyebrow, Metric, DeltaPill } from "@/components/ui/metric";
 import { Markdown } from "@/components/ui/markdown";
 import { ObsidianMark, ObsidianSourceTag } from "@/components/obsidian-badge";
+import { CHART } from "@/lib/palette";
 
 const CALL_COLOR: Record<string, string> = {
   Push:     "var(--sl-accent)",
@@ -15,16 +16,6 @@ const CALL_COLOR: Record<string, string> = {
   Easy:     "var(--text-muted)",
   Rest:     "var(--negative)",
 };
-
-// Section accent colours — cycles through a palette for visual variety
-const SECTION_ACCENTS = [
-  "var(--sl-accent)",
-  "var(--sl-accent-teal)",
-  "var(--positive)",
-  "oklch(0.72 0.18 260)",
-  "oklch(0.72 0.20 45)",
-  "var(--sl-accent)",
-];
 
 function Ring({ score, size = 80 }: { score: number | null; size?: number }) {
   const pct = score != null ? Math.max(0, Math.min(100, score)) / 100 : 0;
@@ -40,7 +31,7 @@ function Ring({ score, size = 80 }: { score: number | null; size?: number }) {
         <circle
           cx={cx} cy={cx} r={r} fill="none" stroke={color} strokeWidth={7} strokeLinecap="round"
           strokeDasharray={c} strokeDashoffset={c * (1 - pct)}
-          style={{ filter: `drop-shadow(0 0 6px ${color})`, transition: "stroke-dashoffset 700ms ease" }}
+          style={{ transition: "stroke-dashoffset 700ms ease" }}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
@@ -74,9 +65,8 @@ function Stat({
     <div
       className="flex flex-col gap-1.5 px-3.5 py-2.5 rounded-xl min-w-[100px]"
       style={{
-        border: "1px solid var(--hairline-strong)",
-        background: "oklch(0.14 0.01 220 / 0.7)",
-        backdropFilter: "blur(8px)",
+        border: "1px solid var(--hairline)",
+        background: "var(--card-hover)",
       }}
     >
       <Eyebrow>{label}</Eyebrow>
@@ -115,12 +105,11 @@ export function DailyReport() {
       id="daily-report"
       className="scroll-mt-20 rounded-2xl border"
       style={{
-        borderColor: "var(--hairline-strong)",
-        background: "linear-gradient(145deg, oklch(0.16 0.01 220) 0%, oklch(0.115 0 0) 50%, oklch(0.14 0.025 260) 100%)",
+        borderColor: "var(--hairline)",
+        background: "var(--card)",
       }}
     >
-      {/* Top border glow */}
-      <div className="h-px rounded-t-2xl" style={{ background: "linear-gradient(90deg, transparent 0%, var(--sl-accent) 35%, var(--sl-accent-teal) 65%, transparent 100%)", opacity: 0.5 }} />
+      <div className="h-px rounded-t-2xl" style={{ background: "var(--hairline-strong)" }} />
 
       <div className="p-5 space-y-5">
         {/* Header row */}
@@ -174,12 +163,12 @@ export function DailyReport() {
               <Stat label="HRV" value={rc?.hrv_ms != null ? rc.hrv_ms.toFixed(0) : "—"} unit="ms"
                 delta={rc?.hrv_sigma != null ? +rc.hrv_sigma.toFixed(1) : undefined} deltaUnit="σ"
                 tone={rc?.hrv_sigma != null && rc.hrv_sigma > 0 ? "positive" : "default"}
-                spark={<Spark data={hrv as never} dataKey="hrv" color="var(--sl-accent)" />} />
+                spark={<Spark data={hrv as never} dataKey="hrv" color={CHART.line} />} />
               <Stat label="RHR" value={rc?.rhr ?? "—"} unit="bpm" delta={rhrDelta} deltaUnit="bpm"
                 tone={rhrDelta != null && rhrDelta <= 0 ? "positive" : "default"} />
               {/* WHOOP's score, not the composite in the Ring beside it. */}
               <Stat label="WHOOP rec." value={rc?.score != null ? Math.round(rc.score) : "—"}
-                spark={<Spark data={rec as never} dataKey="score" color="var(--positive)" />} />
+                spark={<Spark data={rec as never} dataKey="score" color={CHART.ok} />} />
               <Stat label="T:C ratio" value={acwr != null ? acwr.toFixed(2) : "—"}
                 tone={acwr != null && acwr > 1.5 ? "negative" : "default"} />
             </div>
@@ -198,8 +187,8 @@ export function DailyReport() {
               onClick={() => setExpanded((x) => !x)}
               className="w-full no-tactile flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl transition-colors"
               style={{
-                border: "1px solid var(--hairline-strong)",
-                background: expanded ? "oklch(0.14 0.01 220 / 0.6)" : "oklch(0.13 0.005 220 / 0.4)",
+                border: "1px solid var(--hairline)",
+                background: expanded ? "var(--card-hover)" : "var(--bg-elevated)",
                 color: "var(--text-muted)",
               }}
             >
@@ -215,20 +204,19 @@ export function DailyReport() {
             {expanded && (
               <div className="space-y-3">
                 {r.sections.map((s, i) => {
-                  const accent = SECTION_ACCENTS[i % SECTION_ACCENTS.length];
                   return (
                     <div
                       key={i}
                       className="rounded-xl overflow-hidden"
                       style={{
-                        border: "1px solid var(--hairline-strong)",
-                        background: "oklch(0.13 0.005 220 / 0.8)",
+                        border: "1px solid var(--hairline)",
+                        background: "var(--card-hover)",
                       }}
                     >
-                      <div style={{ height: "1px", background: `linear-gradient(90deg, ${accent} 0%, ${accent} 30%, transparent 75%)` }} />
+                      <div style={{ height: "1px", background: "var(--hairline)" }} />
                       <div className="p-4 space-y-3">
                         <div className="flex items-baseline gap-3">
-                          <span className="text-[10px] font-mono tabular-nums shrink-0 leading-none" style={{ color: accent, opacity: 0.7 }}>
+                          <span className="text-[10px] font-mono tabular-nums shrink-0 leading-none" style={{ color: "var(--text-faint)" }}>
                             {String(i + 1).padStart(2, "0")}
                           </span>
                           <h3 className="text-[13px] font-semibold tracking-tight" style={{ color: "var(--text-primary)" }}>
@@ -265,7 +253,7 @@ export function DailyReport() {
         ) : (
           <div
             className="rounded-xl p-6 flex flex-col items-center gap-3 text-center"
-            style={{ border: "1px dashed var(--hairline-strong)", background: "oklch(0.13 0 0 / 0.5)" }}
+            style={{ border: "1px dashed var(--hairline-strong)", background: "var(--bg-elevated)" }}
           >
             <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>No report yet.</p>
             <p className="text-[12px] max-w-sm" style={{ color: "var(--text-faint)" }}>
