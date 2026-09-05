@@ -99,13 +99,18 @@ function MuscleBar({
           style={{ left: pct(weekly_sets), boxShadow: "0 0 0 1px var(--bg)" }}
         />
         {/* Landmark ticks */}
-        {[mev, mav, mrv].filter(Boolean).map((t) => (
-          <div
-            key={t}
-            className="absolute inset-y-0 w-px bg-[var(--bg)] opacity-60"
-            style={{ left: pct(t!) }}
-          />
-        ))}
+        {/* Keyed by which landmark it is, not by its value: abs currently has
+            mev === mav === 12, and keying on the value collided — React's
+            "two children with the same key `12`" warning, 12 times a render. */}
+        {([["mev", mev], ["mav", mav], ["mrv", mrv]] as const)
+          .filter(([, v]) => Boolean(v))
+          .map(([name, v]) => (
+            <div
+              key={name}
+              className="absolute inset-y-0 w-px bg-[var(--bg)] opacity-60"
+              style={{ left: pct(v!) }}
+            />
+          ))}
       </div>
       {(mev != null || mav != null || mrv != null) && (
         <div className="relative h-[10px] text-[8.5px] text-[var(--text-faint)] tabular-nums">

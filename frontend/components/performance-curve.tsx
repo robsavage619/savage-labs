@@ -127,7 +127,7 @@ export function PerformanceCurvePane() {
     refetchInterval: 5 * 60_000,
   });
 
-  const { ctlSeries, tsbSeries, tickInterval } = useMemo(() => {
+  const { ctlSeries, tsbSeries } = useMemo(() => {
     const pts = curve.data?.points ?? [];
     const mapped = pts.map((p) => ({
       date: p.date.slice(5),
@@ -136,11 +136,7 @@ export function PerformanceCurvePane() {
       atl: p.atl != null ? +p.atl.toFixed(1) : null,
       tsb: p.tsb != null ? +p.tsb.toFixed(1) : null,
     }));
-    return {
-      ctlSeries: mapped,
-      tsbSeries: mapped,
-      tickInterval: Math.floor(mapped.length / 6) || 1,
-    };
+    return { ctlSeries: mapped, tsbSeries: mapped };
   }, [curve.data]);
 
   const today = curve.data?.today;
@@ -151,8 +147,8 @@ export function PerformanceCurvePane() {
   if (curve.isLoading) {
     return (
       <div className="space-y-4">
-        <div className="shc-skeleton h-[160px] rounded-lg" />
-        <div className="shc-skeleton h-[80px] rounded-lg" />
+        <div className="shc-skeleton h-[150px] rounded-lg" />
+        <div className="shc-skeleton h-[96px] rounded-lg" />
       </div>
     );
   }
@@ -168,7 +164,7 @@ export function PerformanceCurvePane() {
   const lastDate = ctlSeries[ctlSeries.length - 1]?.date;
 
   return (
-    <div className="space-y-6">
+    <div className="@container space-y-6">
       <p className="shc-helptext">
         <span className="text-[var(--text-muted)]">How to read this. </span>
         CTL (fitness) builds over 42 days; ATL (fatigue) spikes and clears in 7. TSB = CTL − ATL:
@@ -178,10 +174,10 @@ export function PerformanceCurvePane() {
 
       {/* CTL + ATL line chart */}
       <div>
-        <div className="flex items-baseline justify-between mb-2">
+        <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
           <Eyebrow>CTL · ATL · 90d</Eyebrow>
           {today && (
-            <div className="flex items-center gap-3 text-[10.5px] tabular-nums text-[var(--text-dim)]">
+            <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-[10.5px] tabular-nums text-[var(--text-dim)] min-w-0">
               <span>
                 <span style={{ color: CHART.ctl }}>CTL </span>
                 {today.ctl?.toFixed(1) ?? "—"}
@@ -194,7 +190,7 @@ export function PerformanceCurvePane() {
             </div>
           )}
         </div>
-        <div className="h-[160px]">
+        <div className="h-[150px] @md:h-[170px] @2xl:h-[190px] min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={ctlSeries} margin={{ top: 4, right: 8, left: -22, bottom: 0 }} syncId="pmc">
               <Line
@@ -227,7 +223,8 @@ export function PerformanceCurvePane() {
                 tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
                 axisLine={false}
                 tickLine={false}
-                interval={tickInterval}
+                interval="preserveStartEnd"
+                minTickGap={22}
               />
               <YAxis
                 tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
@@ -239,13 +236,13 @@ export function PerformanceCurvePane() {
             </ComposedChart>
           </ResponsiveContainer>
         </div>
-        <div className="flex items-center gap-4 mt-1.5 text-[10px] text-[var(--text-faint)]">
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-4 border-b-[1.8px]" style={{ borderColor: CHART.ctl }} />
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mt-1.5 text-[10px] text-[var(--text-faint)]">
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            <span className="inline-block w-4 border-b-[1.8px] shrink-0" style={{ borderColor: CHART.ctl }} />
             CTL fitness
           </span>
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-4 border-b border-dashed" style={{ borderColor: CHART.atl }} />
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            <span className="inline-block w-4 border-b border-dashed shrink-0" style={{ borderColor: CHART.atl }} />
             ATL fatigue
           </span>
         </div>
@@ -253,11 +250,11 @@ export function PerformanceCurvePane() {
 
       {/* TSB bar chart */}
       <div>
-        <div className="flex items-baseline justify-between mb-2">
+        <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
           <Eyebrow>Form (TSB = CTL − ATL)</Eyebrow>
           {tsbStatus && tsb != null && (
             <span
-              className="text-[10.5px] px-2 py-0.5 rounded-full tabular-nums"
+              className="text-[10.5px] px-2 py-0.5 rounded-full tabular-nums whitespace-nowrap"
               style={{
                 color: tsbStatus.color,
                 border: `1px solid ${tsbStatus.color}`,
@@ -268,7 +265,7 @@ export function PerformanceCurvePane() {
             </span>
           )}
         </div>
-        <div className="h-[80px]">
+        <div className="h-[96px] @2xl:h-[110px] min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={tsbSeries} margin={{ top: 4, right: 8, left: -22, bottom: 0 }} syncId="pmc">
               <Bar
@@ -316,7 +313,8 @@ export function PerformanceCurvePane() {
                 tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
                 axisLine={false}
                 tickLine={false}
-                interval={tickInterval}
+                interval="preserveStartEnd"
+                minTickGap={22}
               />
               <YAxis
                 tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
@@ -328,7 +326,7 @@ export function PerformanceCurvePane() {
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <div className="flex justify-between text-[8.5px] text-[var(--text-faint)] mt-1 px-[30px]">
+        <div className="flex justify-between gap-2 text-[8.5px] text-[var(--text-faint)] mt-1 px-[30px] min-w-0 [&>span]:whitespace-nowrap">
           <span>−25 overreach</span>
           <span>0</span>
           <span>+15 peak</span>
@@ -337,7 +335,7 @@ export function PerformanceCurvePane() {
 
       {/* Today's stat grid */}
       {today && (
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 @sm:grid-cols-4 gap-2">
           {[
             { label: "Fitness", value: today.ctl?.toFixed(1), sub: "CTL 42d" },
             { label: "Fatigue", value: today.atl?.toFixed(1), sub: "ATL 7d" },
@@ -346,7 +344,7 @@ export function PerformanceCurvePane() {
           ].map((s) => (
             <div
               key={s.label}
-              className="rounded-lg border border-[var(--hairline)] p-3 text-center"
+              className="rounded-lg border border-[var(--hairline)] p-2.5 @md:p-3 text-center min-w-0"
             >
               <Eyebrow>{s.label}</Eyebrow>
               <div className="mt-1 text-[18px] font-medium tabular-nums text-[var(--text-primary)]">

@@ -35,7 +35,12 @@ function RecoveryArc({ score, color }: { score: number | null; color: string }) 
   const fillLargeArc = sweepAngle * pct > 180 ? 1 : 0;
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+    <svg
+      viewBox={`0 0 ${size} ${size}`}
+      className="block h-auto w-full"
+      role="img"
+      aria-label="WHOOP recovery score"
+    >
       <defs>
         <linearGradient id="arc-fill" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.4" />
@@ -155,17 +160,17 @@ export function PillarRecovery() {
   }
 
   return (
-    <div className="shc-card shc-enter p-5 min-h-[320px] flex flex-col">
-      <div className="flex items-baseline justify-between">
-        <Eyebrow>WHOOP recovery</Eyebrow>
-        <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">
+    <div className="@container shc-card shc-enter p-5 min-h-[320px] flex flex-col">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <Eyebrow className="min-w-0">WHOOP recovery</Eyebrow>
+        <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums shrink-0">
           {delta >= 0 ? "+" : ""}
           {delta.toFixed(0)} · 14d
         </span>
       </div>
 
-      <div className="flex items-center gap-5 mt-3">
-        <div className="relative flex-shrink-0">
+      <div className="flex items-center gap-4 @lg:gap-5 mt-3 min-w-0">
+        <div className="relative flex-shrink-0 w-[132px] @xs:w-[148px] @lg:w-[168px]">
           <RecoveryArc score={score != null ? Math.round(score) : null} color={t.color} />
           <div className="shc-reticle" aria-hidden />
         </div>
@@ -222,10 +227,10 @@ export function PillarRecovery() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 mt-4">
-        <div className="border-l border-[var(--hairline)] pl-3">
-          <div className="flex items-center justify-between gap-1.5">
-            <div className="flex items-center gap-1.5">
+      <div className="grid grid-cols-3 gap-2 @lg:gap-3 mt-4 min-w-0">
+        <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-1.5 gap-y-0.5 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
             <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">HRV</p>
             {betaBlocker && (
               <span
@@ -241,7 +246,7 @@ export function PillarRecovery() {
               </span>
             )}
             </div>
-            <span style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-01</span>
+            <span className="shrink-0" style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-01</span>
           </div>
           <div className="mt-0.5">
             <Metric value={hrv ? hrv.toFixed(0) : "—"} unit="ms" size="md" />
@@ -253,10 +258,10 @@ export function PillarRecovery() {
             </p>
           )}
         </div>
-        <div className="border-l border-[var(--hairline)] pl-3">
-          <div className="flex items-center justify-between gap-1.5">
+        <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-1.5 gap-y-0.5 min-w-0">
             <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">RHR</p>
-            <span style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-02</span>
+            <span className="shrink-0" style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-02</span>
           </div>
           <div className="mt-0.5">
             <Metric value={rhr ?? "—"} unit="bpm" size="md" />
@@ -267,10 +272,10 @@ export function PillarRecovery() {
             </p>
           )}
         </div>
-        <div className="border-l border-[var(--hairline)] pl-3">
-          <div className="flex items-center justify-between gap-1.5">
+        <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-1.5 gap-y-0.5 min-w-0">
             <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Skin Δ</p>
-            <span style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-03</span>
+            <span className="shrink-0" style={{ fontFamily: "var(--font-geist-mono, monospace)", fontSize: 7, color: "var(--text-faint)", letterSpacing: "0.06em" }}>CH-03</span>
           </div>
           <div className="mt-0.5">
             <Metric
@@ -300,14 +305,14 @@ export function PillarRecovery() {
         <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider mb-2" style={{ fontFamily: "var(--font-orbitron)", letterSpacing: "0.18em" }}>What&apos;s driving this</p>
         <ul className="space-y-1.5">
           {drivers.map((d) => (
-            <li key={d.label} className="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
+            <li key={d.label} className="flex items-start gap-2 text-[12px] text-[var(--text-muted)] min-w-0">
               <span
-                className="inline-block h-1.5 w-1.5 rounded-full"
+                className="inline-block h-1.5 w-1.5 shrink-0 rounded-full mt-[5px]"
                 style={{
                   background: d.tone === "positive" ? "var(--positive)" : d.tone === "negative" ? "var(--negative)" : "var(--neutral)",
                 }}
               />
-              {d.label}
+              <span className="min-w-0 leading-snug">{d.label}</span>
             </li>
           ))}
         </ul>

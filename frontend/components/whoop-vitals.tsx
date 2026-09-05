@@ -78,10 +78,10 @@ export function WhoopVitals() {
       }}
     >
 
-      <div className="relative px-5 pt-4 pb-5">
+      <div className="relative px-5 pt-4 pb-5 @container">
         {/* Header band */}
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-4">
+          <div className="flex min-w-0 items-center gap-3">
             <span
               className="inline-block h-1.5 w-1.5 rounded-full animate-pulse"
               style={{ background: "var(--positive)" }}
@@ -101,7 +101,7 @@ export function WhoopVitals() {
               className="h-[18px] w-auto"
             />
           </div>
-          <div className="flex items-center gap-3 text-[10px] tabular-nums">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[10px] tabular-nums">
             <span
               className="px-2 py-0.5 rounded-sm border"
               style={{
@@ -124,8 +124,8 @@ export function WhoopVitals() {
         </div>
 
         {/* KPI strip — Strain + Sleep only; Recovery + HRV Trend are in header HUD and Recovery pillar */}
-        <div className="grid grid-cols-2 gap-4">
-          <div>
+        <div className="grid grid-cols-1 @xs:grid-cols-2 gap-4">
+          <div className="min-w-0">
             <p
               className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
               style={{ fontFamily: "var(--font-orbitron)" }}
@@ -146,7 +146,7 @@ export function WhoopVitals() {
             </p>
           </div>
 
-          <div>
+          <div className="min-w-0">
             <p
               className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
               style={{ fontFamily: "var(--font-orbitron)" }}
@@ -189,7 +189,7 @@ export function WhoopVitals() {
             >
               Sleep Architecture
             </p>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-x-4 gap-y-2 text-[10.5px] tabular-nums">
+            <div className="grid grid-cols-2 @xs:grid-cols-3 @lg:grid-cols-6 gap-x-4 gap-y-2 text-[10.5px] tabular-nums">
               <SleepStat
                 label="Performance"
                 value={performance != null ? `${performance.toFixed(0)}%` : "—"}
@@ -238,7 +238,7 @@ export function WhoopVitals() {
 
         {/* Body / autonomic chips */}
         {(skinTempDeltaF != null || spo2Recovery != null || userCalibrating) && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] tabular-nums">
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] tabular-nums [&>span]:max-w-full">
             {skinTempDeltaF != null && (
               <span
                 className="px-2 py-0.5 rounded-sm border"
@@ -307,9 +307,9 @@ function SleepStat({
   const color =
     tone === "good" ? "var(--positive)" : tone === "bad" ? "var(--negative)" : "var(--text-muted)";
   return (
-    <div>
-      <p className="text-[9px] uppercase tracking-[0.14em] text-[var(--text-dim)]">{label}</p>
-      <p className="text-[14px] font-light leading-tight" style={{ color }}>
+    <div className="min-w-0">
+      <p className="text-[9px] uppercase tracking-[0.14em] text-[var(--text-dim)] truncate" title={label}>{label}</p>
+      <p className="text-[14px] font-light leading-tight truncate" title={unit ? `${value} ${unit}` : value} style={{ color }}>
         {value}
         {unit && <span className="text-[10px] text-[var(--text-faint)] ml-0.5">{unit}</span>}
       </p>

@@ -119,15 +119,15 @@ export function PillarTrainingLoad() {
     readiness.tone === "positive" ? "var(--positive)" : readiness.tone === "negative" ? "var(--negative)" : "var(--neutral)";
 
   return (
-    <div className="shc-card shc-enter p-5 flex flex-col">
-      <div className="flex items-baseline justify-between">
-        <Eyebrow>Training load · recovery proxy</Eyebrow>
-        <span className="text-[10.5px] text-[var(--text-dim)]">7d ÷ 28d avg recovery</span>
+    <div className="@container shc-card shc-enter p-5 flex flex-col">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <Eyebrow className="min-w-0">Training load · recovery proxy</Eyebrow>
+        <span className="text-[10.5px] text-[var(--text-dim)] min-w-0">7d ÷ 28d avg recovery</span>
       </div>
 
-      <div className="mt-3 flex items-baseline gap-3">
+      <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 min-w-0">
         <Metric value={ratio != null ? ratio.toFixed(2) : "—"} size="xl" tone={zone.tone} />
-        <span className="text-[13px]" style={{ color: zone.color }}>{zone.label}</span>
+        <span className="text-[13px] min-w-0" style={{ color: zone.color }}>{zone.label}</span>
       </div>
       <p className="text-[10.5px] text-[var(--text-dim)] mt-1 tabular-nums">
         acute {acute ? acute.toFixed(0) : "—"} · chronic {chronic ? chronic.toFixed(0) : "—"}
@@ -141,22 +141,22 @@ export function PillarTrainingLoad() {
       </div>
 
       <div
-        className="mt-4 px-3 py-2.5 rounded-lg border border-[var(--hairline)] flex items-center justify-between gap-3"
+        className="mt-4 px-3 py-2.5 rounded-lg border border-[var(--hairline)] flex flex-wrap items-center justify-between gap-x-3 gap-y-1 min-w-0"
         style={{ background: "oklch(1 0 0 / 0.025)" }}
       >
-        <div className="shrink-0">
+        <div className="min-w-0">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider mb-0.5">Today's call</p>
           <p className="text-[14px] font-semibold" style={{ color: readinessColor }}>{readiness.label}</p>
         </div>
         {readiness.detail && (
-          <p className="text-[10.5px] text-[var(--text-dim)] text-right leading-snug">{readiness.detail}</p>
+          <p className="text-[10.5px] text-[var(--text-dim)] text-left @md:text-right leading-snug min-w-0">{readiness.detail}</p>
         )}
       </div>
 
       <div className="mt-4">
-        <div className="flex items-baseline justify-between mb-1.5">
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Weekly load · 14w</p>
-          <p className="text-[10.5px] text-[var(--text-dim)]">higher = harder week</p>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 mb-1.5 min-w-0">
+          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider min-w-0">Weekly load · 14w</p>
+          <p className="text-[10.5px] text-[var(--text-dim)] min-w-0">higher = harder week</p>
         </div>
         <div className="h-[80px]">
           <ResponsiveContainer width="100%" height="100%">
@@ -185,20 +185,20 @@ export function PillarTrainingLoad() {
         </p>
       </details>
 
-      <div className="mt-4 pt-4 grid grid-cols-3 gap-3 text-[11px] border-t border-[var(--hairline)]">
-        <div className="border-l border-[var(--hairline)] pl-3">
+      <div className="mt-4 pt-4 grid grid-cols-3 gap-2 @lg:gap-3 text-[11px] border-t border-[var(--hairline)] min-w-0">
+        <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Train streak</p>
           <p className="tabular-nums text-[var(--text-primary)] mt-0.5 text-[13px]">
             {trainStreak != null ? `${trainStreak}d` : "—"}
           </p>
         </div>
-        <div className="border-l border-[var(--hairline)] pl-3">
+        <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">HRV delta</p>
           <p className="tabular-nums mt-0.5 text-[13px]" style={{ color: sigmaColor }}>
             {sigma != null ? `${sigma >= 0 ? "+" : ""}${sigma.toFixed(1)}σ` : "—"}
           </p>
         </div>
-        <div className="border-l border-[var(--hairline)] pl-3">
+        <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Recovery</p>
           <p className="tabular-nums text-[var(--text-primary)] mt-0.5 text-[13px]">
             {todayRecovery != null ? Math.round(todayRecovery) : "—"}

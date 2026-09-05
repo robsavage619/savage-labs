@@ -112,7 +112,7 @@ export function PickleballPane() {
   const noData = !data || data.sessions.length === 0;
 
   return (
-    <div className="space-y-6">
+    <div className="@container space-y-6">
       <p className="shc-helptext">
         <span className="text-[var(--text-muted)]">4.5 → 5.0 lens. </span>
         The primary rate limiter isn't power — it's reset consistency and decision-making under
@@ -121,7 +121,7 @@ export function PickleballPane() {
       </p>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 @[300px]:grid-cols-3 gap-2">
         {[
           {
             label: "Sessions",
@@ -141,12 +141,12 @@ export function PickleballPane() {
             sub: "avg recovery on play days",
           },
         ].map((s) => (
-          <div key={s.label} className="rounded-lg border border-[var(--hairline)] p-3 text-center">
-            <Eyebrow>{s.label}</Eyebrow>
+          <div key={s.label} className="min-w-0 rounded-lg border border-[var(--hairline)] p-2 @lg:p-3 text-center">
+            <Eyebrow className="truncate">{s.label}</Eyebrow>
             <div className="mt-1 text-[18px] font-medium tabular-nums text-[var(--text-primary)]">
               {s.value}
             </div>
-            <div className="text-[9.5px] text-[var(--text-faint)] mt-0.5">{s.sub}</div>
+            <div className="text-[9.5px] leading-tight text-[var(--text-faint)] mt-0.5">{s.sub}</div>
           </div>
         ))}
       </div>
@@ -165,15 +165,15 @@ export function PickleballPane() {
           {/* Play freshness (recovery on court days) */}
           {freshnessData.length > 0 && (
             <div>
-              <div className="flex items-baseline justify-between mb-2">
-                <Eyebrow>Play freshness · recovery on court days</Eyebrow>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 mb-2">
+                <Eyebrow className="min-w-0">Play freshness · recovery on court days</Eyebrow>
                 {data?.avg_recovery_on_play_days != null && (
                   <span className="text-[10.5px] tabular-nums text-[var(--text-dim)]">
                     avg {data.avg_recovery_on_play_days.toFixed(0)}
                   </span>
                 )}
               </div>
-              <div className="h-[80px]">
+              <div className="min-w-0 h-[80px] @2xl:h-[120px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={freshnessData} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
                     <Bar dataKey="recovery" isAnimationActive={false} radius={[2, 2, 0, 0]}>
@@ -188,7 +188,8 @@ export function PickleballPane() {
                       tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
                       axisLine={false}
                       tickLine={false}
-                      interval={Math.floor(freshnessData.length / 5) || 1}
+                      interval="preserveStartEnd"
+                      minTickGap={24}
                     />
                     <YAxis
                       domain={[0, 100]}
@@ -220,8 +221,8 @@ export function PickleballPane() {
           {/* HRV delta (next-day recovery after play) */}
           {hrvDeltaSeries.length > 0 && (
             <div>
-              <div className="flex items-baseline justify-between mb-2">
-                <Eyebrow>Post-play HRV delta · next-morning vs day-of</Eyebrow>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 mb-2">
+                <Eyebrow className="min-w-0">Post-play HRV delta · next-morning vs day-of</Eyebrow>
                 {avgHRVDelta != null && (
                   <span
                     className="text-[10.5px] tabular-nums"
@@ -235,7 +236,7 @@ export function PickleballPane() {
                 Positive = HRV recovered overnight (autonomic resilience improving).
                 Consistently negative = pickleball volume is accumulating faster than you recover.
               </p>
-              <div className="h-[100px]">
+              <div className="min-w-0 h-[100px] @2xl:h-[140px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={hrvDeltaSeries} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
                     <Bar dataKey="delta" isAnimationActive={false} radius={[2, 2, 0, 0]}>
@@ -254,7 +255,8 @@ export function PickleballPane() {
                       tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
                       axisLine={false}
                       tickLine={false}
-                      interval={Math.floor(hrvDeltaSeries.length / 5) || 1}
+                      interval="preserveStartEnd"
+                      minTickGap={24}
                     />
                     <YAxis
                       tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
@@ -286,8 +288,8 @@ export function PickleballPane() {
 
         return (
           <div>
-            <div className="flex items-baseline justify-between mb-2">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 mb-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <Eyebrow>Tournament results ·</Eyebrow>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -337,11 +339,11 @@ export function PickleballPane() {
                     >
                       {/* Tournament header */}
                       <div
-                        className="px-4 py-3 flex items-start justify-between gap-3"
+                        className="px-3 @lg:px-4 py-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-1"
                         style={{ background: "oklch(1 0 0 / 0.025)" }}
                       >
-                        <div className="min-w-0">
-                          <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[12px] font-medium text-[var(--text-primary)] truncate" title={eventName}>
                             {eventName}
                           </div>
                           <div className="text-[10px] text-[var(--text-faint)] mt-0.5">
@@ -397,7 +399,7 @@ export function PickleballPane() {
                           return (
                             <div
                               key={m.match_id}
-                              className="px-4 py-2 flex items-center gap-3"
+                              className="px-3 @lg:px-4 py-2 flex flex-wrap items-center gap-x-3 gap-y-1"
                               style={{
                                 borderLeft: `3px solid ${
                                   m.won ? "var(--positive)" : "var(--negative)"
@@ -420,7 +422,7 @@ export function PickleballPane() {
                               </span>
 
                               {/* Score */}
-                              <div className="flex gap-1.5 shrink-0">
+                              <div className="flex flex-wrap gap-x-1.5 shrink-0">
                                 {playedGames.map((g, gi) => (
                                   <span
                                     key={gi}
@@ -441,7 +443,10 @@ export function PickleballPane() {
                               </div>
 
                               {/* Opponents */}
-                              <div className="flex-1 min-w-0 text-[10.5px] text-[var(--text-faint)] truncate">
+                              <div
+                                className="order-1 basis-full @[520px]:order-none @[520px]:basis-0 flex-1 min-w-0 text-[10.5px] text-[var(--text-faint)] truncate"
+                                title={[opponent ? `vs ${opponent}` : "", partner ? `w/ ${partner}` : ""].filter(Boolean).join(" ")}
+                              >
                                 {opponent ? `vs ${opponent}` : ""}
                                 {partner ? (
                                   <span className="text-[9.5px] text-[var(--text-faint)] ml-1">
@@ -451,7 +456,7 @@ export function PickleballPane() {
                               </div>
 
                               {/* DUPR delta */}
-                              <div className="shrink-0 text-right">
+                              <div className="shrink-0 text-right ml-auto">
                                 {m.dupr_delta != null ? (
                                   <span
                                     className="text-[10.5px] font-medium tabular-nums"

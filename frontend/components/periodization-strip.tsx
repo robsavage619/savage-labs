@@ -53,33 +53,33 @@ export function PeriodizationStrip() {
   });
 
   return (
-    <div className="shc-card shc-enter p-5">
-      <div className="flex items-start justify-between gap-6 flex-wrap">
+    <div className="@container shc-card shc-enter p-5">
+      <div className="grid grid-cols-1 @2xl:grid-cols-2 items-start gap-x-6 gap-y-5">
         {/* LEFT: mesocycle progress */}
-        <div className="flex-1 min-w-[280px]">
-          <div className="flex items-baseline gap-3">
-            <Eyebrow>Mesocycle · {m?.status ?? "loading"}</Eyebrow>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 min-w-0">
+            <Eyebrow className="min-w-0">Mesocycle · {m?.status ?? "loading"}</Eyebrow>
             {m && (
-              <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">
+              <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums min-w-0">
                 started {m.started_on}
               </span>
             )}
           </div>
 
-          <div className="mt-2 flex items-baseline gap-2 tabular-nums">
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 tabular-nums min-w-0">
             <span className="text-[28px] font-medium leading-none text-[var(--text-primary)]">
               W{week}
             </span>
             <span className="text-[13px] text-[var(--text-muted)]">
               / {planned}
             </span>
-            <span className="text-[11.5px] text-[var(--text-dim)] ml-2">
+            <span className="text-[11.5px] text-[var(--text-dim)] @xs:ml-2 min-w-0">
               {m?.is_deload_week ? "deload now" : weeksLeft <= 1 ? "deload next" : `${weeksLeft - 1}w to deload`}
             </span>
           </div>
 
           {/* Phase strip */}
-          <div className="mt-3 flex gap-1">
+          <div className="mt-3 flex gap-1 min-w-0">
             {cells.map((cell) => {
               const bg = cell.isCurrent
                 ? cell.isDeload
@@ -100,7 +100,7 @@ export function PeriodizationStrip() {
               );
             })}
           </div>
-          <div className="mt-1 flex justify-between text-[9.5px] text-[var(--text-faint)] uppercase tracking-wider">
+          <div className="mt-1 flex justify-between gap-2 text-[9.5px] text-[var(--text-faint)] uppercase tracking-wider min-w-0">
             <span>accumulation</span>
             <span>deload</span>
           </div>
@@ -113,24 +113,24 @@ export function PeriodizationStrip() {
         </div>
 
         {/* RIGHT: TSB / form */}
-        <div className="flex-1 min-w-[320px]">
-          <div className="flex items-baseline justify-between">
-            <Eyebrow>Form · banister TSB</Eyebrow>
-            <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 min-w-0">
+            <Eyebrow className="min-w-0">Form · banister TSB</Eyebrow>
+            <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums min-w-0">
               {c?.tau ? `CTL ${c.tau.ctl_days}d · ATL ${c.tau.atl_days}d` : "loading"}
             </span>
           </div>
 
-          <div className="mt-2 grid grid-cols-3 gap-3 tabular-nums">
-            <div>
+          <div className="mt-2 grid grid-cols-3 gap-2 @xs:gap-3 tabular-nums min-w-0">
+            <div className="min-w-0">
               <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">CTL · fitness</p>
               <p className="text-[18px] font-medium text-[var(--text-primary)]">{today ? today.ctl.toFixed(1) : "—"}</p>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">ATL · fatigue</p>
               <p className="text-[18px] font-medium text-[var(--text-primary)]">{today ? today.atl.toFixed(1) : "—"}</p>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">TSB · form</p>
               <p className="text-[18px] font-medium" style={{ color: toneColor }}>
                 {today ? (today.tsb > 0 ? `+${today.tsb.toFixed(1)}` : today.tsb.toFixed(1)) : "—"}
@@ -140,7 +140,7 @@ export function PeriodizationStrip() {
           </div>
 
           {/* TSB sparkline */}
-          <div className="mt-3 h-[60px]">
+          <div className="mt-3 h-[60px] min-w-0">
             {c && c.points.length > 0 && (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={c.points} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>

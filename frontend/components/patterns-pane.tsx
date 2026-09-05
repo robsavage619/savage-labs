@@ -27,14 +27,14 @@ function DayOfWeekChart({ data }: { data: { day: string; avg_recovery: number; n
   const max = Math.max(...data.map((d) => d.avg_recovery));
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-2">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
         <Eyebrow>Avg recovery by day of week</Eyebrow>
-        <span className="text-[10px] text-[var(--text-faint)]">Mon–Sun · all-time</span>
+        <span className="text-[10px] text-[var(--text-faint)] whitespace-nowrap">Mon–Sun · all-time</span>
       </div>
-      <div className="h-[160px]">
+      <div className="h-[140px] @md:h-[160px] min-w-0">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 4, right: 4, left: -24, bottom: 0 }} barSize={28}>
-            <XAxis dataKey="day" tick={{ fontSize: 10, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} />
+          <BarChart data={data} margin={{ top: 4, right: 4, left: -24, bottom: 0 }} maxBarSize={28}>
+            <XAxis dataKey="day" tick={{ fontSize: 10, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} interval={0} minTickGap={0} />
             <YAxis tick={{ fontSize: 9, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} domain={[0, 100]} />
             <Tooltip
               cursor={{ fill: CHART.cursor }}
@@ -51,7 +51,7 @@ function DayOfWeekChart({ data }: { data: { day: string; avg_recovery: number; n
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <p className="text-[10.5px] text-[var(--text-faint)] mt-1">
+      <p className="text-[10.5px] text-[var(--text-faint)] mt-1 min-w-0">
         Best: <span className="text-[var(--text-dim)]">{data.find(d => d.avg_recovery === max)?.day}</span>
         {" · "}Worst: <span className="text-[var(--text-dim)]">{data.reduce((a, b) => a.avg_recovery < b.avg_recovery ? a : b).day}</span>
       </p>
@@ -72,18 +72,18 @@ function DistributionChart({ data }: { data: { bucket: string; n: number }[] }) 
 
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-3">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-3 min-w-0">
         <Eyebrow>Recovery distribution · all-time</Eyebrow>
-        <span className="text-[10px] text-[var(--text-faint)]">{total} days</span>
+        <span className="text-[10px] text-[var(--text-faint)] whitespace-nowrap">{total} days</span>
       </div>
       <div className="space-y-2">
         {ordered.map((d) => {
           const pct = total ? (d.n / total) * 100 : 0;
           return (
             <div key={d.bucket}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] text-[var(--text-muted)]">{d.bucket}</span>
-                <span className="text-[11px] tabular-nums text-[var(--text-dim)]">{d.n} <span className="text-[var(--text-faint)]">({pct.toFixed(0)}%)</span></span>
+              <div className="flex items-center justify-between gap-2 mb-1 min-w-0">
+                <span className="text-[11px] text-[var(--text-muted)] min-w-0">{d.bucket}</span>
+                <span className="text-[11px] tabular-nums text-[var(--text-dim)] whitespace-nowrap shrink-0">{d.n} <span className="text-[var(--text-faint)]">({pct.toFixed(0)}%)</span></span>
               </div>
               <div className="h-[6px] rounded-full overflow-hidden" style={{ background: "var(--hairline)" }}>
                 <div
@@ -103,17 +103,18 @@ function SleepScatterChart({ data }: { data: { date: string; recovery: number; s
   const points = data.filter(d => d.sleep_h != null && d.sleep_h > 2 && d.sleep_h < 14);
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-2">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
         <Eyebrow>Sleep hours vs recovery · 90d</Eyebrow>
-        <span className="text-[10px] text-[var(--text-faint)]">{points.length} nights</span>
+        <span className="text-[10px] text-[var(--text-faint)] whitespace-nowrap">{points.length} nights</span>
       </div>
-      <div className="h-[180px]">
+      <div className="h-[160px] @md:h-[180px] min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
             <XAxis
               type="number" dataKey="sleep_h" name="Sleep"
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false}
-              domain={[4, 10]} label={{ value: "hrs", position: "insideRight", offset: 4, fontSize: 9, fill: "var(--text-faint)" }}
+              domain={[4, 10]} interval="preserveStartEnd" minTickGap={14}
+              label={{ value: "hrs", position: "insideRight", offset: 4, fontSize: 9, fill: "var(--text-faint)" }}
             />
             <YAxis
               type="number" dataKey="recovery" name="Recovery"
@@ -157,16 +158,17 @@ function HrvScatterChart({ data }: { data: { date: string; recovery: number | nu
   const points = data.filter((d): d is { date: string; recovery: number; hrv: number } => d.hrv != null && d.hrv > 0 && d.recovery != null);
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-2">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
         <Eyebrow>HRV vs recovery · 90d</Eyebrow>
-        <span className="text-[10px] text-[var(--text-faint)]">{points.length} days</span>
+        <span className="text-[10px] text-[var(--text-faint)] whitespace-nowrap">{points.length} days</span>
       </div>
-      <div className="h-[180px]">
+      <div className="h-[160px] @md:h-[180px] min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
             <XAxis
               type="number" dataKey="hrv" name="HRV"
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false}
+              interval="preserveStartEnd" minTickGap={14}
               label={{ value: "ms", position: "insideRight", offset: 4, fontSize: 9, fill: "var(--text-faint)" }}
             />
             <YAxis
@@ -195,7 +197,7 @@ function HrvScatterChart({ data }: { data: { date: string; recovery: number | nu
           </ScatterChart>
         </ResponsiveContainer>
       </div>
-      <p className="text-[10.5px] text-[var(--text-faint)] mt-1">
+      <p className="text-[10.5px] text-[var(--text-faint)] mt-1 min-w-0">
         Higher HRV correlates with better recovery.
         <span className="ml-1.5 text-[var(--text-faint)]">β-blocker days inflate HRV artificially — use trend not absolute.</span>
       </p>
@@ -213,7 +215,7 @@ export function PatternsPane() {
   if (isLoading || !data) {
     return (
       <div className="space-y-4">
-        {[160, 100, 180, 180].map((h, i) => (
+        {[140, 100, 160, 160].map((h, i) => (
           <div key={i} className="rounded-[var(--r-md)] animate-pulse" style={{ height: h, background: "var(--hairline)" }} />
         ))}
       </div>
@@ -221,7 +223,7 @@ export function PatternsPane() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="@container space-y-6">
       <p className="shc-helptext">
         <span className="text-[var(--text-muted)]">How to read this. </span>
         Patterns surface long-running tendencies — which day of week you recover best,
@@ -230,9 +232,13 @@ export function PatternsPane() {
       </p>
       <DayOfWeekChart data={data.by_day_of_week} />
       <DistributionChart data={data.distribution} />
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <SleepScatterChart data={data.sleep_vs_recovery} />
-        <HrvScatterChart data={data.sleep_vs_recovery} />
+      <div className="grid grid-cols-1 @min-[680px]:grid-cols-2 gap-6 items-start">
+        <div className="@container min-w-0">
+          <SleepScatterChart data={data.sleep_vs_recovery} />
+        </div>
+        <div className="@container min-w-0">
+          <HrvScatterChart data={data.sleep_vs_recovery} />
+        </div>
       </div>
     </div>
   );

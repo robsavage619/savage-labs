@@ -63,7 +63,7 @@ export function RecoveryTrendPane() {
   const hrvRows = useMemo(() => dedupeByDate(hrv.data ?? []), [hrv.data]);
 
   return (
-    <div className="space-y-6">
+    <div className="@container space-y-6">
       <p className="shc-helptext">
         <span className="text-[var(--text-muted)]">How to read this. </span>
         The heatmap reveals weekly patterns — Mondays vs weekends, illness weeks, deload weeks.
@@ -71,10 +71,14 @@ export function RecoveryTrendPane() {
         body's three pre-illness signals (RHR rise, temp rise, HRV drop) coincide.
       </p>
 
-      <RecoveryHeatmap data={trendRows} />
-      <HRVTrendCard data={hrvRows} baseline={stats.data?.hrv.baseline_28d ?? null} />
-      <PreIllnessStrip data={trendRows} hrv={hrvRows} />
-      <MonthlyAverages data={trendRows} />
+      {/* Stacked in a narrow column; 2-up once the card is wide enough that a
+          755px stack would waste the horizontal room the grid just bought. */}
+      <div className="grid grid-cols-1 @min-[680px]:grid-cols-2 gap-x-6 gap-y-6 items-start">
+        <RecoveryHeatmap data={trendRows} />
+        <HRVTrendCard data={hrvRows} baseline={stats.data?.hrv.baseline_28d ?? null} />
+        <PreIllnessStrip data={trendRows} hrv={hrvRows} />
+        <MonthlyAverages data={trendRows} />
+      </div>
     </div>
   );
 }
@@ -92,30 +96,36 @@ function RecoveryHeatmap({
   const todayCell = data.find((d) => d.date === today);
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between mb-2">
+    <div className="@container min-w-0">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
         <Eyebrow>Recovery · 90d heatmap</Eyebrow>
-        <div className="flex items-center gap-3 text-[10px] text-[var(--text-faint)]">
+        <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[10px] text-[var(--text-faint)] min-w-0">
           {todayCell && (
-            <span className="tabular-nums">
+            <span className="tabular-nums whitespace-nowrap">
               today <span className="text-[var(--text-muted)]">{todayCell.score.toFixed(0)}</span>
             </span>
           )}
           <HeatmapLegend />
         </div>
       </div>
-      <div className="flex gap-[3px] items-start">
+      {/* 13 fluid columns: the cells shrink with the card rather than forcing a
+          fixed width on it. min-w-0 everywhere so a column can go below its
+          intrinsic size instead of pushing the card past its grid track. */}
+      <div className="flex gap-[3px] items-start min-w-0">
         {/* Weekday labels */}
-        <div className="flex flex-col gap-[3px] pr-1.5 pt-[1px]">
+        <div className="flex flex-col gap-[2px] @md:gap-[3px] pr-1.5 pt-[1px] shrink-0">
           {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
-            <span key={i} className="text-[8.5px] text-[var(--text-faint)] h-[14px] leading-[14px]">
+            <span
+              key={i}
+              className="text-[8.5px] text-[var(--text-faint)] h-[12px] @md:h-[14px] leading-[12px] @md:leading-[14px]"
+            >
               {d}
             </span>
           ))}
         </div>
-        <div className="flex gap-[3px] flex-1">
+        <div className="flex gap-[2px] @md:gap-[3px] flex-1 min-w-0">
           {grid.map((week, wi) => (
-            <div key={wi} className="flex flex-col gap-[3px] flex-1">
+            <div key={wi} className="flex flex-col gap-[2px] @md:gap-[3px] flex-1 min-w-0">
               {week.map((cell, di) => (
                 <HeatmapCell key={di} cell={cell} />
               ))}
@@ -131,7 +141,7 @@ function HeatmapCell({ cell }: { cell: { date: string; score: number } | null })
   if (!cell) {
     return (
       <div
-        className="h-[14px] w-full rounded-[2px]"
+        className="h-[12px] @md:h-[14px] w-full rounded-[2px]"
         style={{ background: "transparent", border: "1px dashed var(--hairline)" }}
       />
     );
@@ -141,7 +151,7 @@ function HeatmapCell({ cell }: { cell: { date: string; score: number } | null })
   return (
     <div
       title={`${cell.date} · recovery ${cell.score.toFixed(0)}`}
-      className="h-[14px] w-full rounded-[2px] transition-transform hover:scale-110"
+      className="h-[12px] @md:h-[14px] w-full rounded-[2px] transition-transform hover:scale-110"
       style={{
         background: fill,
         boxShadow: sub34 ? `inset 0 0 0 1px ${ring}` : undefined,
@@ -152,12 +162,12 @@ function HeatmapCell({ cell }: { cell: { date: string; score: number } | null })
 
 function HeatmapLegend() {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 shrink-0">
       <span className="text-[var(--text-faint)]">low</span>
       {[10, 30, 50, 70, 90].map((s) => (
         <div
           key={s}
-          className="h-[10px] w-[10px] rounded-[2px]"
+          className="h-[10px] w-[10px] rounded-[2px] shrink-0"
           style={{ background: recoveryColor(s).fill }}
         />
       ))}
@@ -281,10 +291,10 @@ function HRVTrendCard({
   const has7dBand = data.some((p) => p.hrv_7d_avg != null);
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between mb-2">
+    <div className="@container min-w-0">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
         <Eyebrow>HRV · 90d with ±1σ band</Eyebrow>
-        <div className="flex items-center gap-3 text-[10.5px] tabular-nums">
+        <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap text-[10.5px] tabular-nums min-w-0 [&>span]:whitespace-nowrap">
           {belowStreak >= 3 && (
             <span style={{ color: "var(--warn)" }}>
               ↓ {belowStreak}d below 7d band
@@ -301,7 +311,7 @@ function HRVTrendCard({
           )}
         </div>
       </div>
-      <div className="h-[180px]">
+      <div className="h-[160px] @md:h-[180px] min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={series} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
             {/* 28d ±1σ band (wide) */}
@@ -326,20 +336,20 @@ function HRVTrendCard({
             {series.length > 0 && (
               <ReferenceLine x={series[series.length - 1].date} stroke="var(--accent)" strokeWidth={1.2} strokeDasharray="2 2" />
             )}
-            <XAxis dataKey="date" tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} interval={Math.floor(series.length / 6) || 1} />
+            <XAxis dataKey="date" tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={22} />
             <YAxis tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false} width={30} />
             <Tooltip content={<HRVTooltip />} cursor={{ stroke: "var(--hairline-strong)", strokeWidth: 1 }} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
       {has7dBand && (
-        <div className="flex items-center gap-4 mt-1.5 text-[10px] text-[var(--text-faint)]">
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: CHART.band, opacity: 0.6 }} />
+        <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mt-1.5 text-[10px] text-[var(--text-faint)] min-w-0">
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            <span className="inline-block w-4 h-2 rounded-sm shrink-0" style={{ background: CHART.band, opacity: 0.6 }} />
             28d ±1σ
           </span>
-          <span className="flex items-center gap-1">
-            <span className="inline-block w-4 h-2 rounded-sm" style={{ background: withAlpha(CHART.line, 0.35) }} />
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            <span className="inline-block w-4 h-2 rounded-sm shrink-0" style={{ background: withAlpha(CHART.line, 0.35) }} />
             7d ±0.5σ (guidance)
           </span>
         </div>
@@ -395,17 +405,19 @@ function PreIllnessStrip({
   const flagged = cells.filter((c) => c.both).length;
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between mb-2">
+    <div className="@container min-w-0">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
         <Eyebrow>Pre-illness alarm · 30d</Eyebrow>
-        <span className="text-[10px] text-[var(--text-faint)]">
+        <span className="text-[10px] text-[var(--text-faint)] min-w-0">
           rule: RHR Δ ≥ +5 bpm AND HRV ≤ -1σ
           {flagged > 0 && (
             <span className="text-[var(--negative)] ml-2 tabular-nums">{flagged} hit</span>
           )}
         </span>
       </div>
-      <div className="flex gap-[3px]">
+      {/* 30 fluid cells — the gap shrinks first so the cells stay legible in a
+          narrow column instead of the strip demanding a fixed width. */}
+      <div className="flex gap-[1.5px] @md:gap-[3px] min-w-0">
         {cells.map((c) => {
           let bg = "var(--hairline)";
           let outline = "transparent";
@@ -420,13 +432,13 @@ function PreIllnessStrip({
             <div
               key={c.date}
               title={`${c.date}\n${c.rhrDelta != null ? `RHR Δ ${c.rhrDelta >= 0 ? "+" : ""}${c.rhrDelta.toFixed(1)} bpm` : "no RHR"}\n${c.sigma != null ? `HRV ${c.sigma >= 0 ? "+" : ""}${c.sigma.toFixed(2)}σ` : "no HRV"}${c.both ? "\nboth flags hit" : ""}`}
-              className="h-[24px] flex-1 rounded-[2px] transition-transform hover:scale-y-110"
+              className="h-[24px] flex-1 min-w-0 rounded-[2px] transition-transform hover:scale-y-110"
               style={{ background: bg, boxShadow: `inset 0 0 0 1px ${outline}` }}
             />
           );
         })}
       </div>
-      <div className="flex justify-between mt-1 text-[9.5px] text-[var(--text-faint)] tabular-nums">
+      <div className="flex justify-between gap-2 mt-1 text-[9.5px] text-[var(--text-faint)] tabular-nums min-w-0 [&>span]:whitespace-nowrap">
         <span>{cells[0]?.date.slice(5)}</span>
         <span>{cells[cells.length - 1]?.date.slice(5)}</span>
       </div>
@@ -443,15 +455,18 @@ function MonthlyAverages({ data }: { data: { date: string; score: number; hrv: n
     if (p.hrv != null) byMonth[k].hrvs.push(p.hrv);
   });
   return (
-    <div>
+    <div className="@container min-w-0">
       <Eyebrow>Monthly averages</Eyebrow>
+      {/* The table scrolls inside its own track so the CARD never blows out its
+          grid column when "September 2026" runs long. */}
       <div className="mt-2 rounded-lg border border-[var(--hairline)] overflow-hidden">
-        <table className="w-full text-[12px] tabular-nums">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[248px] text-[12px] tabular-nums">
           <thead className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
             <tr className="border-b border-[var(--hairline)]">
-              <th className="px-3 py-2 text-left font-normal">Month</th>
-              <th className="px-3 py-2 text-right font-normal">Recovery</th>
-              <th className="px-3 py-2 text-right font-normal">HRV</th>
+              <th className="px-3 py-2 text-left font-normal whitespace-nowrap">Month</th>
+              <th className="px-3 py-2 text-right font-normal whitespace-nowrap">Recovery</th>
+              <th className="px-3 py-2 text-right font-normal whitespace-nowrap">HRV</th>
             </tr>
           </thead>
           <tbody>
@@ -464,14 +479,15 @@ function MonthlyAverages({ data }: { data: { date: string; score: number; hrv: n
                 const label = new Date(k + "-01T12:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" });
                 return (
                   <tr key={k} className="border-b border-[var(--hairline)] last:border-b-0 hover:bg-[oklch(1_0_0/0.02)]">
-                    <td className="px-3 py-2 text-[var(--text-muted)]">{label}</td>
-                    <td className="px-3 py-2 text-right">{avgRec ? avgRec.toFixed(0) : "—"}</td>
-                    <td className="px-3 py-2 text-right">{avgHrv ? avgHrv.toFixed(1) : "—"}<span className="text-[var(--text-faint)] ml-1">ms</span></td>
+                    <td className="px-3 py-2 text-[var(--text-muted)] whitespace-nowrap">{label}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">{avgRec ? avgRec.toFixed(0) : "—"}</td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">{avgHrv ? avgHrv.toFixed(1) : "—"}<span className="text-[var(--text-faint)] ml-1">ms</span></td>
                   </tr>
                 );
               })}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -483,7 +499,7 @@ function MonthlyAverages({ data }: { data: { date: string; score: number; hrv: n
 
 export function InsightsPane() {
   return (
-    <div className="space-y-6">
+    <div className="@container space-y-6">
       <p className="shc-helptext flex items-baseline gap-1.5 flex-wrap">
         <span className="text-[var(--text-muted)]">How to read this. </span>
         <span>
@@ -524,10 +540,10 @@ export function ReadinessDecomposition() {
     tier === "green" ? "var(--positive)" : tier === "red" ? "var(--negative)" : "var(--warn)";
 
   return (
-    <div className="rounded-lg border border-[var(--hairline)] p-4 space-y-3">
-      <div className="flex items-baseline justify-between">
+    <div className="@container rounded-lg border border-[var(--hairline)] p-3 @md:p-4 space-y-3 min-w-0">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap min-w-0">
         <Eyebrow>Why is today {tier}?</Eyebrow>
-        <span className="tabular-nums text-[15px] font-medium" style={{ color: tierColor }}>
+        <span className="tabular-nums text-[15px] font-medium whitespace-nowrap" style={{ color: tierColor }}>
           {r.score.toFixed(0)}/100
         </span>
       </div>
@@ -536,14 +552,14 @@ export function ReadinessDecomposition() {
           const contribution = c.weight * c.value;
           return (
             <div key={c.key} className="space-y-0.5">
-              <div className="flex items-baseline justify-between text-[11px]">
-                <span className="text-[var(--text-muted)]">
+              <div className="flex items-baseline justify-between gap-2 text-[11px] min-w-0">
+                <span className="text-[var(--text-muted)] min-w-0">
                   {c.label}{" "}
                   <span className="text-[var(--text-faint)] tabular-nums">
                     × {(c.weight * 100).toFixed(0)}%
                   </span>
                 </span>
-                <span className="tabular-nums">
+                <span className="tabular-nums whitespace-nowrap shrink-0">
                   <span className="text-[var(--text-primary)]">{contribution.toFixed(1)}</span>
                   <span className="text-[var(--text-faint)] text-[10px]"> · raw {c.value.toFixed(0)}</span>
                 </span>
@@ -597,10 +613,10 @@ export function VolumeLandmarks() {
   const groups = balance.data.groups.filter((g) => VOLUME_LANDMARKS[g.group]);
 
   return (
-    <div className="rounded-lg border border-[var(--hairline)] p-4 space-y-3">
-      <div className="flex items-baseline justify-between">
+    <div className="@container rounded-lg border border-[var(--hairline)] p-3 @md:p-4 space-y-3 min-w-0">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap min-w-0">
         <Eyebrow>Volume landmarks · weekly sets vs MEV/MAV/MRV</Eyebrow>
-        <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-faint)]">
+        <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-faint)] whitespace-nowrap">
           <ObsidianMark size={10} />
           Israetel · RP
         </span>
@@ -613,13 +629,13 @@ export function VolumeLandmarks() {
           const status = classifyVolume(g.weekly_sets, lm);
           return (
             <div key={g.group} className="space-y-1">
-              <div className="flex items-baseline justify-between text-[11.5px]">
-                <span className="capitalize text-[var(--text-muted)]">{g.group}</span>
-                <span className="tabular-nums">
+              <div className="flex items-baseline justify-between gap-2 text-[11.5px] min-w-0">
+                <span className="capitalize text-[var(--text-muted)] min-w-0">{g.group}</span>
+                <span className="tabular-nums whitespace-nowrap shrink-0">
                   <span className="text-[var(--text-primary)]">{g.weekly_sets.toFixed(1)}</span>
                   <span className="text-[var(--text-faint)] text-[10px] ml-1">sets/wk</span>
                   <span
-                    className="ml-2 text-[10px] px-1.5 py-[1px] rounded-sm"
+                    className="ml-2 text-[10px] px-1.5 py-[1px] rounded-sm whitespace-nowrap"
                     style={{
                       background: `${status.color} / 0.15`,
                       color: status.color,
@@ -657,22 +673,26 @@ export function VolumeLandmarks() {
                   style={{ left: pos(g.weekly_sets), boxShadow: "0 0 0 1px var(--bg)" }}
                 />
                 {/* Landmark ticks */}
-                {[lm.mev, lm.mav, lm.mrv].map((t) => (
+                {/* Keyed by landmark identity, not value — abs has mev === mav
+                    === 12 today, and keying on the number collided. */}
+                {([["mev", lm.mev], ["mav", lm.mav], ["mrv", lm.mrv]] as const).map(([name, t]) => (
                   <div
-                    key={t}
+                    key={name}
                     className="absolute inset-y-0 w-px bg-[var(--bg)] opacity-50"
                     style={{ left: pos(t) }}
                   />
                 ))}
               </div>
+              {/* Captions are absolutely positioned by percentage, so they must never
+                  wrap — a wrapped "MEV 30" would grow the row and shove the bar. */}
               <div className="relative h-[10px] text-[8.5px] text-[var(--text-faint)] tabular-nums">
-                <span className="absolute" style={{ left: pos(lm.mev), transform: "translateX(-50%)" }}>
+                <span className="absolute whitespace-nowrap" style={{ left: pos(lm.mev), transform: "translateX(-50%)" }}>
                   MEV {lm.mev}
                 </span>
-                <span className="absolute" style={{ left: pos(lm.mav), transform: "translateX(-50%)" }}>
+                <span className="absolute whitespace-nowrap" style={{ left: pos(lm.mav), transform: "translateX(-50%)" }}>
                   MAV {lm.mav}
                 </span>
-                <span className="absolute" style={{ left: pos(lm.mrv), transform: "translateX(-50%)" }}>
+                <span className="absolute whitespace-nowrap" style={{ left: pos(lm.mrv), transform: "translateX(-50%)" }}>
                   MRV {lm.mrv}
                 </span>
               </div>
@@ -743,15 +763,15 @@ export function SleepDoseResponse() {
     .reduce((best, cur) => (cur.recovery! > (best?.recovery ?? -1) ? cur : best), null as typeof bins[0] | null);
 
   return (
-    <div className="rounded-lg border border-[var(--hairline)] p-4 space-y-3">
-      <div className="flex items-baseline justify-between">
+    <div className="@container rounded-lg border border-[var(--hairline)] p-3 @md:p-4 space-y-3 min-w-0">
+      <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap min-w-0">
         <Eyebrow>Sleep dose-response · your data + research</Eyebrow>
-        <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-faint)]">
+        <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--text-faint)] whitespace-nowrap">
           <ObsidianMark size={10} />
           Walker · Watson · Roenneberg
         </span>
       </div>
-      <div className="h-[180px]">
+      <div className="h-[160px] @md:h-[180px] min-w-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart margin={{ top: 8, right: 8, left: -22, bottom: 0 }}>
             <XAxis
@@ -762,6 +782,8 @@ export function SleepDoseResponse() {
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
               axisLine={false}
               tickLine={false}
+              interval="preserveStartEnd"
+              minTickGap={10}
               label={{ value: "sleep hours", position: "insideBottom", offset: -2, fontSize: 9, fill: "var(--text-faint)" }}
             />
             <YAxis
@@ -799,7 +821,7 @@ export function SleepDoseResponse() {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="flex flex-wrap gap-3 text-[10.5px] text-[var(--text-muted)]">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10.5px] text-[var(--text-muted)] min-w-0 [&>span]:whitespace-nowrap">
         <span>
           <span
             className="inline-block w-3 h-[2px] align-middle mr-1"
@@ -817,7 +839,7 @@ export function SleepDoseResponse() {
         <span className="text-[var(--text-faint)]">7–9h band shaded</span>
       </div>
       {sweetSpot && (
-        <div className="text-[11px] text-[var(--text-muted)] pt-1 border-t border-[var(--hairline)]">
+        <div className="text-[11px] text-[var(--text-muted)] pt-1 border-t border-[var(--hairline)] min-w-0">
           Your sweet spot: <span className="text-[var(--text-primary)] tabular-nums">{sweetSpot.range}h</span> →
           avg recovery <span className="text-[var(--text-primary)] tabular-nums">{sweetSpot.recovery!.toFixed(0)}</span>{" "}
           <span className="text-[var(--text-faint)]">(n={sweetSpot.n})</span>
@@ -845,12 +867,12 @@ export function ACWRDeloadCard() {
   const pct = (v: number) => `${Math.min(100, (v / max) * 100)}%`;
 
   return (
-    <div className="rounded-lg border border-[var(--hairline)] p-4 grid md:grid-cols-2 gap-4">
-      <div className="space-y-2">
-        <div className="flex items-baseline justify-between">
+    <div className="@container rounded-lg border border-[var(--hairline)] p-3 @md:p-4 grid grid-cols-1 @min-[560px]:grid-cols-2 gap-4 items-start min-w-0">
+      <div className="space-y-2 min-w-0">
+        <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap min-w-0">
           <Eyebrow>ACWR · Gabbett zones</Eyebrow>
           {ratio != null && (
-            <span className="tabular-nums text-[14px] font-medium" style={{ color: acwrColor(ratio) }}>
+            <span className="tabular-nums text-[14px] font-medium whitespace-nowrap" style={{ color: acwrColor(ratio) }}>
               {ratio.toFixed(2)}
             </span>
           )}
@@ -874,12 +896,12 @@ export function ACWRDeloadCard() {
             </span>
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-2 text-[10.5px] tabular-nums pt-1">
-          <div>
+        <div className="grid grid-cols-2 gap-2 text-[10.5px] tabular-nums pt-1 min-w-0">
+          <div className="min-w-0">
             <span className="text-[var(--text-faint)]">acute 7d </span>
             <span className="text-[var(--text-primary)]">{acute?.toFixed(1) ?? "—"}</span>
           </div>
-          <div>
+          <div className="min-w-0">
             <span className="text-[var(--text-faint)]">chronic 28d </span>
             <span className="text-[var(--text-primary)]">{chronic?.toFixed(1) ?? "—"}</span>
           </div>
@@ -889,11 +911,11 @@ export function ACWRDeloadCard() {
         </p>
       </div>
 
-      <div className="space-y-2">
-        <div className="flex items-baseline justify-between">
+      <div className="space-y-2 min-w-0">
+        <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap min-w-0">
           <Eyebrow>Deload status</Eyebrow>
           <span
-            className="text-[10.5px] px-2 py-0.5 rounded-full"
+            className="text-[10.5px] px-2 py-0.5 rounded-full whitespace-nowrap"
             style={{
               background: deload ? withAlpha(CHART.bad, 0.16) : withAlpha(CHART.ok, 0.16),
               color: deload ? "var(--negative)" : "var(--positive)",
@@ -915,9 +937,9 @@ export function ACWRDeloadCard() {
         {gates.reasons.length > 0 && (
           <ul className="space-y-1 text-[10.5px] text-[var(--text-muted)]">
             {gates.reasons.slice(0, 4).map((r, i) => (
-              <li key={i} className="flex gap-1.5">
-                <span className="text-[var(--text-faint)]">•</span>
-                <span>{r}</span>
+              <li key={i} className="flex gap-1.5 min-w-0">
+                <span className="text-[var(--text-faint)] shrink-0">•</span>
+                <span className="min-w-0 break-words">{r}</span>
               </li>
             ))}
           </ul>

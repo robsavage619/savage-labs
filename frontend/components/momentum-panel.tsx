@@ -45,17 +45,24 @@ function MomentumTile({
 }) {
   return (
     <div
-      className="rounded-[var(--r-md)] border p-4"
+      className="rounded-[var(--r-md)] border p-3.5 min-w-0 flex flex-col @2xl:flex-row @2xl:items-baseline @2xl:gap-4"
       style={{ borderColor: "var(--hairline)", background: "oklch(1 0 0 / 0.02)" }}
     >
-      <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">{label}</p>
-      <div className="mt-2 flex items-baseline gap-2.5 flex-wrap">
+      <p className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)] min-w-0 @2xl:shrink-0">
+        {label}
+      </p>
+      <div className="mt-1.5 @2xl:mt-0 flex items-baseline gap-2.5 flex-wrap min-w-0">
         <span className="text-[30px] font-light tabular-nums leading-none text-[var(--text-primary)]">
           {value}
         </span>
         <DeltaBadge d={d} unit={unit} />
       </div>
-      <p className="mt-2 text-[11px] text-[var(--text-faint)] leading-snug">{caption}</p>
+      <p
+        className="mt-1.5 @2xl:mt-0 @2xl:ml-auto @2xl:text-right text-[11px] text-[var(--text-faint)] leading-snug min-w-0 @2xl:truncate"
+        title={caption}
+      >
+        {caption}
+      </p>
     </div>
   );
 }
@@ -67,22 +74,22 @@ export function MomentumPanel() {
   const lw: MomentumWeek = q.data?.last_week ?? empty;
 
   return (
-    <div className="shc-card shc-enter p-5">
-      <div className="flex items-baseline justify-between">
-        <Eyebrow>Momentum</Eyebrow>
-        <span className="text-[10.5px] text-[var(--text-dim)] uppercase tracking-wider">
+    <div className="@container shc-card shc-enter p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <Eyebrow className="min-w-0">Momentum</Eyebrow>
+        <span className="text-[10.5px] text-[var(--text-dim)] uppercase tracking-wider min-w-0">
           last 7 days vs the 7 before
         </span>
       </div>
 
       {q.isLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+        <div className="grid grid-cols-1 @sm:grid-cols-3 gap-3 mt-4">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="shc-skeleton h-[104px]" />
+            <div key={i} className="shc-skeleton h-[92px] @2xl:h-[56px]" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+        <div className="grid grid-cols-1 @sm:grid-cols-3 gap-3 mt-4">
           <MomentumTile
             label="Recovery avg"
             value={tw.recovery_avg != null ? String(tw.recovery_avg) : "—"}

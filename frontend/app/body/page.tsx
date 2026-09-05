@@ -47,6 +47,10 @@ export default function BodyPage() {
   return (
     <SurfaceShell>
       <div className="board">
+        {/* An even 2+2. Fuelling cannot go narrower — its macro row is a
+            five-column grid, and at span-1 those tracks fall to ~70px — and
+            the photo strip is flex-wrap, so it reflows to whatever width it
+            is handed and stays close to Fuelling in height at 800px. */}
         <div className="board-rule">Intake &amp; physique</div>
 
         <BoardCard id="fueling" label="Fuelling" span={2}>
@@ -59,6 +63,8 @@ export default function BodyPage() {
 
         <div className="board-rule">The body itself</div>
 
+        {/* Full width: a two-up chart pane. Halving it stacks the charts and
+            doubles the height for no gain. */}
         <BoardCard id="composition" label="Body composition" span={4}>
           <BodyPane />
         </BoardCard>

@@ -201,10 +201,10 @@ function WeeklyZoneVolume({
   const maxBar = Math.max(...data.map((d) => d.total), 200);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-baseline justify-between">
-        <Eyebrow>Weekly volume by zone · 12w</Eyebrow>
-        <span className="text-[10.5px] tabular-nums" style={{ color: polarizedColor }}>
+    <div className="min-w-0 space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+        <Eyebrow className="min-w-0">Weekly volume by zone · 12w</Eyebrow>
+        <span className="min-w-0 text-[10.5px] tabular-nums" style={{ color: polarizedColor }}>
           {polarizedPctLow.toFixed(0)}% low / {(100 - polarizedPctLow).toFixed(0)}% high
           <span className="text-[var(--text-faint)] ml-1 inline-flex items-center gap-0.5">· {polarizedStatus}{polarizedStatus === "polarized" && <CheckIcon size={10} />}</span>
         </span>
@@ -218,7 +218,10 @@ function WeeklyZoneVolume({
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
               axisLine={false}
               tickLine={false}
-              interval={1}
+              // Thin the ticks off the measured plot width instead of a fixed
+              // stride — a span-1 column has room for ~4 labels, span-3 for 12.
+              interval="preserveStartEnd"
+              minTickGap={18}
             />
             <YAxis
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
@@ -232,7 +235,7 @@ function WeeklyZoneVolume({
               y={150}
               stroke="var(--chart-baseline)"
               strokeDasharray="3 3"
-              label={{ value: "150 min/wk", position: "right", fontSize: 9, fill: "var(--text-faint)" }}
+              label={{ value: "150 min/wk", position: "insideTopRight", fontSize: 9, fill: "var(--text-faint)" }}
             />
             <Tooltip
               contentStyle={{
@@ -326,9 +329,9 @@ function PickleballEfficiency({
 
   if (points.length < 3) {
     return (
-      <div className="space-y-2">
+      <div className="min-w-0 space-y-2">
         <Eyebrow>Pickleball HR efficiency</Eyebrow>
-        <div className="h-[160px] flex items-center justify-center text-[11px] text-[var(--text-faint)]">
+        <div className="h-[160px] flex items-center justify-center text-center text-[11px] text-[var(--text-faint)]">
           Need ≥3 pickleball sessions with HR.
         </div>
       </div>
@@ -336,11 +339,11 @@ function PickleballEfficiency({
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-baseline justify-between">
-        <Eyebrow>Pickleball HR efficiency · last {points.length}</Eyebrow>
+    <div className="min-w-0 space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+        <Eyebrow className="min-w-0">Pickleball HR efficiency · last {points.length}</Eyebrow>
         {trendLabel && (
-          <span className="text-[10.5px] tabular-nums" style={{ color: trendColor }}>
+          <span className="min-w-0 text-[10.5px] tabular-nums" style={{ color: trendColor }}>
             {trendLabel}
           </span>
         )}
@@ -354,7 +357,8 @@ function PickleballEfficiency({
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
               axisLine={false}
               tickLine={false}
-              interval={Math.max(0, Math.floor(points.length / 6))}
+              interval="preserveStartEnd"
+              minTickGap={26}
             />
             <YAxis
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
@@ -369,7 +373,7 @@ function PickleballEfficiency({
               y={Math.round(resolveHrMax(measuredMax, 0, tanaka) * 0.7)}
               stroke={Z2_CEILING_STROKE}
               strokeDasharray="3 3"
-              label={{ value: "Z2 ceiling", position: "right", fontSize: 9, fill: Z2_CEILING_LABEL }}
+              label={{ value: "Z2 ceiling", position: "insideTopRight", fontSize: 9, fill: Z2_CEILING_LABEL }}
             />
             <Tooltip
               contentStyle={{
@@ -547,14 +551,15 @@ function TrendKpi({
     tone === "positive" ? "var(--positive)" : tone === "negative" ? "var(--negative)" : "var(--text-faint)";
   const arrow = delta == null ? "·" : Math.abs(delta) < 0.5 ? "→" : delta > 0 ? "↑" : "↓";
   return (
-    <div>
+    <div className="min-w-0">
       <p
-        className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1"
+        className="text-[9px] uppercase tracking-[0.18em] text-[var(--text-dim)] mb-1 truncate"
+        title={label}
         style={{ fontFamily: "var(--font-orbitron)" }}
       >
         {label}
       </p>
-      <div className="flex items-baseline gap-1.5">
+      <div className="flex items-baseline gap-1.5 min-w-0">
         <span
           className="text-[22px] leading-none font-light tabular-nums text-[var(--text-primary)]"
           style={{ fontFamily: "var(--font-orbitron)" }}
@@ -563,7 +568,7 @@ function TrendKpi({
         </span>
         {unit && <span className="text-[10px] text-[var(--text-faint)]">{unit}</span>}
       </div>
-      <p className="text-[10px] tabular-nums mt-1" style={{ color }}>
+      <p className="text-[10px] tabular-nums mt-1 leading-tight" style={{ color }}>
         {delta == null
           ? <span className="text-[var(--text-faint)]">no prior data</span>
           : <>{arrow} {Math.abs(delta) < 0.5 ? "flat" : `${delta > 0 ? "+" : ""}${delta.toFixed(deltaUnit === "%" ? 0 : 1)}${deltaUnit}`} <span className="text-[var(--text-faint)]">vs prior 14d</span></>}
@@ -602,7 +607,7 @@ function SessionRow({
       <td className="px-3 py-2 text-[var(--text-muted)] tabular-nums whitespace-nowrap">
         <span className="text-[var(--text-faint)] text-[10px] mr-1">{ago}</span>
       </td>
-      <td className="px-3 py-2 text-[var(--text-primary)] font-medium">
+      <td className="px-3 py-2 text-[var(--text-primary)] font-medium whitespace-nowrap">
         <span className="mr-1.5"><ModalityIcon modality={m} /></span>
         {MODALITY_LABEL[m]}
       </td>
@@ -746,10 +751,10 @@ export function CardioPanel() {
   }, [data]);
 
   return (
-    <div className="shc-card shc-enter p-5 space-y-4">
-      <div className="flex items-baseline justify-between">
-        <h2 className="shc-section-title">Cardio &amp; Sports</h2>
-        <span className="text-[10.5px] text-[var(--text-faint)]">last 60 days · manual + WHOOP</span>
+    <div className="shc-card shc-enter p-5 space-y-4 @container">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h2 className="shc-section-title min-w-0">Cardio &amp; Sports</h2>
+        <span className="min-w-0 text-[10.5px] text-[var(--text-faint)]">last 60 days · manual + WHOOP</span>
       </div>
       <p className="shc-helptext -mt-2">
         <span className="text-[var(--text-muted)]">How to read this. </span>
@@ -757,22 +762,22 @@ export function CardioPanel() {
         Aim for ≥150 cardio min/wk with ≥45 min in Z2.
       </p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
-        <div>
+      <div className="grid grid-cols-2 @2xl:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
+        <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">28d sessions</p>
           <div className="flex items-baseline gap-1.5">
             <span className="text-[22px] font-light tabular-nums leading-none text-[var(--text-primary)]">{total28d.sessions}</span>
             <span className="text-[11px] text-[var(--text-faint)]">{summary.length} sports</span>
           </div>
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">28d minutes</p>
           <div className="flex items-baseline gap-1.5">
             <span className="text-[22px] font-light tabular-nums leading-none text-[var(--text-primary)]">{total28d.minutes}</span>
             <span className="text-[11px] text-[var(--text-faint)]">{(total28d.minutes / 4).toFixed(0)}/wk</span>
           </div>
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">Top sport</p>
           {summary[0] ? (
             <div className="flex items-baseline gap-1.5">
@@ -789,7 +794,7 @@ export function CardioPanel() {
             </p>
           )}
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">Mix</p>
           <div className="flex h-3 rounded-sm overflow-hidden mt-1.5 bg-[oklch(1_0_0/0.04)]">
             {summary.map((s, i) => {
@@ -812,7 +817,7 @@ export function CardioPanel() {
       </div>
 
       {/* ── Trend KPIs · last 14d vs prior 14d ─────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
+      <div className="grid grid-cols-2 @2xl:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
         <TrendKpi
           label="Cardio · min/wk"
           value={trends.minPerWeek > 0 ? Math.round(trends.minPerWeek).toString() : "—"}
@@ -845,7 +850,7 @@ export function CardioPanel() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-4 border-b border-[var(--hairline)]">
+      <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-6 pb-4 border-b border-[var(--hairline)]">
         <WeeklyZoneVolume sessions={data?.sessions ?? []} hrShift={hrShift} measuredMax={measuredMax} tanaka={tanaka} bounds={zoneBounds} />
         <PickleballEfficiency sessions={data?.sessions ?? []} measuredMax={measuredMax} tanaka={tanaka} />
       </div>
@@ -853,36 +858,40 @@ export function CardioPanel() {
       <LogForm onLogged={refresh} />
 
       <div className="rounded-[var(--r-md)] overflow-hidden" style={{ border: "1px solid var(--hairline)" }}>
-        <table className="w-full text-[12px]">
-          <thead>
-            <tr className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider" style={{ borderBottom: "1px solid var(--hairline)" }}>
-              <th className="px-3 py-2 text-left font-normal w-24">Date</th>
-              <th className="px-3 py-2 text-left font-normal">Sport</th>
-              <th className="px-3 py-2 text-right font-normal w-16">Time</th>
-              <th className="px-3 py-2 text-right font-normal w-20">Avg HR</th>
-              <th className="px-3 py-2 text-right font-normal w-12">RPE</th>
-              <th className="px-3 py-2 text-right font-normal w-16">kcal</th>
-              <th className="w-6" />
-            </tr>
-          </thead>
-          <tbody>
-            {isLoading ? (
-              [...Array(3)].map((_, i) => (
-                <tr key={i}>
-                  <td colSpan={7} className="px-3 py-2"><div className="h-5 shc-skeleton rounded" /></td>
-                </tr>
-              ))
-            ) : sessions.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-[11px] text-[var(--text-faint)]">
-                  No sessions yet. Log your first one above — pickleball, walks, biking, anything.
-                </td>
+        {/* The 7-column session log is the widest thing in this card. It scrolls
+            inside its own track so a span-1 column never gets blown out. */}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[540px] text-[12px]">
+            <thead>
+              <tr className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider" style={{ borderBottom: "1px solid var(--hairline)" }}>
+                <th className="px-3 py-2 text-left font-normal w-24">Date</th>
+                <th className="px-3 py-2 text-left font-normal">Sport</th>
+                <th className="px-3 py-2 text-right font-normal w-16">Time</th>
+                <th className="px-3 py-2 text-right font-normal w-20">Avg HR</th>
+                <th className="px-3 py-2 text-right font-normal w-12">RPE</th>
+                <th className="px-3 py-2 text-right font-normal w-16">kcal</th>
+                <th className="w-6" />
               </tr>
-            ) : (
-              (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} bodyWeightKg={bodyWeightKg} age={age} bounds={zoneBounds} onDelete={handleDelete} onHide={handleHide} />)
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                [...Array(3)].map((_, i) => (
+                  <tr key={i}>
+                    <td colSpan={7} className="px-3 py-2"><div className="h-5 shc-skeleton rounded" /></td>
+                  </tr>
+                ))
+              ) : sessions.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-6 text-center text-[11px] text-[var(--text-faint)]">
+                    No sessions yet. Log your first one above — pickleball, walks, biking, anything.
+                  </td>
+                </tr>
+              ) : (
+                (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} bodyWeightKg={bodyWeightKg} age={age} bounds={zoneBounds} onDelete={handleDelete} onHide={handleHide} />)
+              )}
+            </tbody>
+          </table>
+        </div>
         {sessions.length > 8 && (
           <button
             type="button"

@@ -53,12 +53,12 @@ function SleepRow({ entry }: { entry: SleepEntry }) {
   const wk = d.toLocaleDateString("en-US", { weekday: "short" });
   const md = d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" });
   return (
-    <div className="flex items-center gap-3 group">
+    <div className="flex items-center gap-3 group min-w-0">
       <span className="text-[10.5px] text-[var(--text-dim)] w-14 tabular-nums shrink-0">
         <span className="text-[var(--text-muted)]">{wk}</span>{" "}
         <span className="text-[var(--text-faint)]">{md}</span>
       </span>
-      <div className="flex h-[8px] flex-1 rounded-full overflow-hidden gap-px bg-[oklch(1_0_0/0.04)]">
+      <div className="flex h-[8px] flex-1 min-w-0 rounded-full overflow-hidden gap-px bg-[oklch(1_0_0/0.04)]">
         {segs.map((s) => (
           <div
             key={s.k}
@@ -68,7 +68,7 @@ function SleepRow({ entry }: { entry: SleepEntry }) {
           />
         ))}
       </div>
-      <span className="text-[11.5px] text-[var(--text-muted)] tabular-nums w-10 text-right">
+      <span className="text-[11.5px] text-[var(--text-muted)] tabular-nums w-10 shrink-0 text-right">
         {(total / 60).toFixed(1)}h
       </span>
     </div>
@@ -126,26 +126,28 @@ export function PillarSleep() {
     consistency == null ? "neutral" : consistency < 0.8 ? "positive" : consistency < 1.3 ? "neutral" : "negative";
 
   return (
-    <div className="shc-card shc-enter p-5 min-h-[320px] flex flex-col">
-      <div className="flex items-baseline justify-between">
-        <Eyebrow>Sleep architecture</Eyebrow>
+    <div className="@container shc-card shc-enter p-5 min-h-[320px] flex flex-col">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <Eyebrow className="min-w-0">Sleep architecture</Eyebrow>
         {/* Not every tile is a 7-night aggregate: efficiency/SpO₂ and wakes are
             single-night values from DailyState. Headed "last 7 nights" alone, a
             wakes count of 14 read as a week's total instead of one bad night. */}
-        <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">
+        <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums min-w-0">
           last 7 nights · <span className="text-[var(--text-faint)]">1n = last night</span>
         </span>
       </div>
 
       {/* Six fixed columns overflow their card once the pillar drops below
-          ~320px (measured 312 into 299 at a 1100px window). Wrap to three rows
-          of two rather than clipping the last stat. */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 min-w-0">
-        <div>
+          ~320px (measured 312 into 299 at a 1100px window). The earlier fix used
+          `sm:grid-cols-6`, but `sm:` is a VIEWPORT breakpoint — at a 1728px
+          window it still forced six columns into a 350px grid column. `@lg:`
+          measures this card instead, so the split follows the track. */}
+      <div className="grid grid-cols-3 @lg:grid-cols-6 gap-2 mt-3 min-w-0">
+        <div className="min-w-0">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Avg</p>
           <Metric value={avgHours ? avgHours.toFixed(1) : "—"} unit="h" size="md" />
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Deep</p>
           <Metric
             value={avgDeepPct ? avgDeepPct.toFixed(0) : "—"}
@@ -154,7 +156,7 @@ export function PillarSleep() {
             tone={avgDeepPct >= 15 && avgDeepPct <= 25 ? "positive" : avgDeepPct ? "neutral" : "neutral"}
           />
         </div>
-        <div>
+        <div className="min-w-0">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">REM</p>
           <Metric
             value={avgRemPct ? avgRemPct.toFixed(0) : "—"}
@@ -163,7 +165,7 @@ export function PillarSleep() {
             tone={avgRemPct >= 20 && avgRemPct <= 28 ? "positive" : avgRemPct ? "neutral" : "neutral"}
           />
         </div>
-        <div title="Sleep efficiency = time asleep / time in bed. >85% is the target. Falls back to overnight SpO₂ when efficiency data is unavailable.">
+        <div className="min-w-0" title="Sleep efficiency = time asleep / time in bed. >85% is the target. Falls back to overnight SpO₂ when efficiency data is unavailable.">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
             {effLast != null ? "Eff." : spo2Last != null ? "SpO₂" : "Eff."}{" "}
             <span className="text-[var(--text-faint)]">1n</span>
@@ -189,7 +191,7 @@ export function PillarSleep() {
             }
           />
         </div>
-        <div title="Mid-sleep awakenings — Whoop disturbance count for last night.">
+        <div className="min-w-0" title="Mid-sleep awakenings — Whoop disturbance count for last night.">
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
             Wakes <span className="text-[var(--text-faint)]">1n</span>
           </p>
@@ -237,7 +239,7 @@ export function PillarSleep() {
           : entries.slice(-7).map((e, i) => <SleepRow key={`${e.date}-${i}`} entry={e} />)}
       </div>
 
-      <div className="flex gap-3 mt-3 text-[9.5px] text-[var(--text-faint)] uppercase tracking-wider">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 text-[9.5px] text-[var(--text-faint)] uppercase tracking-wider">
         {(["deep", "rem", "light", "awake"] as const).map((k) => (
           <span key={k} className="flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-sm" style={{ background: STAGE_COLOR[k] }} />
@@ -246,7 +248,7 @@ export function PillarSleep() {
         ))}
       </div>
 
-      <div className="mt-auto pt-3 flex items-baseline justify-between text-[11.5px] text-[var(--text-muted)] gap-3 flex-wrap">
+      <div className="mt-auto pt-3 flex items-baseline justify-between text-[11.5px] text-[var(--text-muted)] gap-x-3 gap-y-1 flex-wrap min-w-0">
         {awakeLast != null && (
           <span className="tabular-nums">
             <span className="text-[var(--text-dim)]">Awake </span>

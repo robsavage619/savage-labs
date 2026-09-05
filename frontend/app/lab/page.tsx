@@ -87,10 +87,16 @@ export default function LabPage() {
   return (
     <SurfaceShell>
       <div className="board">
+        {/* A three-column header strip. It is short and inherently wide, so a
+            full-width row costs nothing and splitting it would crush the
+            internal grid-cols-3 into ~130px tracks. */}
         <BoardCard id="subject" label="Subject dossier" span={4}>
           <SubjectDossier />
         </BoardCard>
 
+        {/* Four list panels of comparable density — no chart, no table wide
+            enough to need three columns — so an even 2+2 on each row, with
+            each companion card kept beside the anchored card it belongs to. */}
         <div className="board-rule">n-of-1 program</div>
 
         <BoardCard id="trials" label="Active trials" span={2}>
@@ -109,10 +115,19 @@ export default function LabPage() {
           <EngineStatusPanel />
         </BoardCard>
 
+        {/* Ordered so each companion pair lands SIDE BY SIDE rather than
+            stacked across a row break: the derived-signal panels take the
+            first row, then autonomic load with the behaviour impact that
+            annotates it. Both pairs are middling-height list panels, so an
+            even 2+2 split is the right footprint for all four. */}
         <div className="board-rule">Physiological signals</div>
 
         <BoardCard id="signals" label="Clinical research signals" span={2}>
           <ClinicalResearchPanel />
+        </BoardCard>
+
+        <BoardCard id="correlations" label="What moves your HRV" span={2}>
+          <CorrelationCards />
         </BoardCard>
 
         <BoardCard id="autonomic" label="Autonomic load" span={2}>
@@ -121,10 +136,6 @@ export default function LabPage() {
 
         <BoardCard label="WHOOP behaviour impact" span={2}>
           <BehaviorImpactPanel />
-        </BoardCard>
-
-        <BoardCard id="correlations" label="What moves your HRV" span={2}>
-          <CorrelationCards />
         </BoardCard>
       </div>
     </SurfaceShell>

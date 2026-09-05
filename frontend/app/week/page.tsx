@@ -41,21 +41,39 @@ function Card({ id, span, label, children }: { id: string; span: Span; label: st
 /**
  * WEEK — what changed, and how training is going.
  *
- * Reads top-down as the weekly review actually runs: the delta first, then the
- * three signal pillars that explain it, then the longitudinal trend, then
- * training (block → performance → strength → volume), then output (cardio,
- * sport), then the debrief and the scorecard.
+ * Reads top-down as the weekly review actually runs: the delta and the block
+ * position first, then the three signal pillars that explain them, then the
+ * longitudinal trend, then training (performance → strength → volume), then
+ * output (cardio, sport), then the debrief and the scorecard.
+ *
+ * SPANS ARE MEASURED, NOT GUESSED. Every row below pairs cards whose rendered
+ * heights are within ~2x of each other, and every row fills all four columns —
+ * grid auto-placement follows source order, so the order IS the layout. The
+ * two rules that produced this arrangement:
+ *
+ *   - a card's height is a function of its width, so a dense panel starved of
+ *     columns just grows downward (Pickleball at span-1 rendered 392x1339 —
+ *     a quarter-column pillar of unreadable text);
+ *   - a short card at span-4 owns a whole row for nothing (Momentum rendered
+ *     1616x184), so it gets a partner of similar height instead.
  */
 export default function WeekPage() {
   return (
     <SurfaceShell>
       <div className="board">
-        {/* ── What changed ─────────────────────────────────────────────── */}
-        <Card id="momentum" span={4} label="Momentum">
+        {/* ── Where the week stands ────────────────────────────────────────
+            Two short strips, paired: the delta (184px) and the block position
+            (265px). Neither has the content to justify a row of its own. */}
+        <Card id="momentum" span={2} label="Momentum">
           <MomentumPanel />
         </Card>
+        <Card id="meso" span={2} label="Mesocycle">
+          <PeriodizationStrip />
+        </Card>
 
-        {/* ── Signals ──────────────────────────────────────────────────── */}
+        {/* ── Signals ──────────────────────────────────────────────────────
+            Four pillar tiles, 350–469px tall — the tightest row on the board,
+            and the one case where span-1 is the right size. */}
         <div className="board-rule">Signals</div>
         <Card id="recovery" span={1} label="Recovery">
           <PillarRecovery />
@@ -69,6 +87,7 @@ export default function WeekPage() {
         <Card id="vitals" span={1} label="WHOOP vitals">
           <WhoopVitals />
         </Card>
+        {/* Two longitudinal panes, 755px and 668px — an even row. */}
         <Card id="recovery-trend" span={2} label="Recovery trend">
           <RecoveryTrendPane />
         </Card>
@@ -76,12 +95,12 @@ export default function WeekPage() {
           <PatternsPane />
         </Card>
 
-        {/* ── Training ─────────────────────────────────────────────────── */}
+        {/* ── Training ─────────────────────────────────────────────────────
+            Two full-width panels (a time-series curve and the strength
+            heatmap, both of which read better the wider they get), then the
+            tall dose pair: volume 1552px beside prescription 999px. */}
         <div className="board-rule">Training</div>
-        <Card id="meso" span={2} label="Mesocycle">
-          <PeriodizationStrip />
-        </Card>
-        <Card id="performance" span={2} label="Performance curve">
+        <Card id="performance" span={4} label="Performance curve">
           <PerformanceCurvePane />
         </Card>
         <Card id="strength" span={4} label="Strength">
@@ -97,16 +116,19 @@ export default function WeekPage() {
           <PrescriptionPanel />
         </Card>
 
-        {/* ── Output ───────────────────────────────────────────────────── */}
+        {/* ── Output ───────────────────────────────────────────────────────
+            Both panels are dense; splitting the row evenly is what makes the
+            Pickleball pane readable at all (it was 392px wide, 1339px tall). */}
         <div className="board-rule">Output</div>
-        <Card id="cardio" span={3} label="Cardio">
+        <Card id="cardio" span={2} label="Cardio">
           <CardioPanel />
         </Card>
-        <Card id="sport" span={1} label="Pickleball">
+        <Card id="sport" span={2} label="Pickleball">
           <PickleballPane />
         </Card>
 
-        {/* ── Debrief ──────────────────────────────────────────────────── */}
+        {/* ── Debrief ──────────────────────────────────────────────────────
+            552px and 571px — already the flattest row on the page. */}
         <div className="board-rule">Debrief</div>
         <Card id="post" span={2} label="Post-workout debrief">
           <div className="space-y-4">
