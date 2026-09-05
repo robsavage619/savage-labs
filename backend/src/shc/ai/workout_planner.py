@@ -2615,8 +2615,13 @@ def build_midday_context(conn) -> str:
     )
     lines.append("  lagging/emphasis muscle (biceps, glutes) or any muscle below MAV for the week.")
     lines.append(
-        "- Z2 cardio (130–145 bpm): aerobic base + the fat-loss side of recomp, low recovery cost"
+        "- Easy aerobic cardio: use conversational pace and perceived effort; do not invent a bpm target."
     )
+    if state["readiness"].get("beta_blocker_adjusted"):
+        lines.append(
+            "- Beta-blocker taken today: HR response is altered. Use talk-test/perceived effort "
+            "or an individually established clinician-guided target, not a fixed bpm shift."
+        )
     lines.append(
         "- Conditioning/HIIT: work capacity and conditioning — keep it from cutting into lifting recovery"
     )
@@ -2634,7 +2639,7 @@ def build_midday_context(conn) -> str:
   "duration_min": 60,
   "intensity": "high | moderate | low | passive",
   "activities": [
-    {"name": "<activity>", "duration_min": <n>, "notes": "<execution cues, targets, why>"}
+    {"name": "<activity>", "kind": "strength | cardio | mobility | recovery", "duration_min": <n>, "notes": "<execution cues, targets, why>"}
   ],
   "rationale": "<2-3 sentences: why this today, referencing morning session + recovery state>",
   "performance_goal": "<1 sentence: how this advances the muscle-building goal>"
@@ -2642,6 +2647,20 @@ def build_midday_context(conn) -> str:
 ```""")
     lines.append("")
     lines.append("Rules:")
+    lines.append(
+        "- Server enforces today's DailyState gates, clinical restrictions, and activity kinds. "
+        "Never label exercise as passive recovery. Activity minutes must fit duration_min (≤60)."
+    )
+    lines.append(
+        "- Strength requires a top-level strength_plan using the full /api/workout/plan plan "
+        "schema (see /api/workout/context), with matching intensity. All load, muscle, volume, "
+        "and citation validators apply. Notes alone cannot prescribe lifting."
+    )
+    lines.append(
+        f"- Canonical readiness: {state['readiness']['tier']}; accessory lifting requires GREEN, "
+        "known ACWR ≤1.3, no deload, and ≥4 hours since the earlier lift. "
+        "The WHOOP score alone does not clear lifting."
+    )
     lines.append("- Total activity duration_min must sum to ≤ 60 (leave 5 min for transition).")
     lines.append(
         "- Accessory lift (2-a-day strength): ONLY valid when ACWR ≤ 1.3 AND recovery GREEN AND no deload."

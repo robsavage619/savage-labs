@@ -5,10 +5,10 @@ import logging
 import statistics
 import uuid
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shc.ai.briefing import build_daily_context, store_briefing
 from shc.ai.workout_planner import (
@@ -4359,18 +4359,95 @@ async def internal_checkpoint() -> dict:
 # ── Midday session endpoints ──────────────────────────────────────────────────
 
 
+class MiddayActivity(BaseModel):
+    """Machine-readable activity type; lifting uses the existing plan validator."""
+
+    name: str
+    kind: Literal["strength", "cardio", "mobility", "recovery"]
+    duration_min: int = Field(gt=0, le=60)
+    notes: str
+
+
 class MiddaySessionSubmission(BaseModel):
     session_type: str  # 'workout' | 'recovery' | 'mixed'
     title: str
-    duration_min: int
+    duration_min: int = Field(gt=0, le=60)
     intensity: str  # 'high' | 'moderate' | 'low' | 'passive'
-    activities: list[dict]
+    activities: list[MiddayActivity]
+    strength_plan: dict[str, Any] | None = None
     rationale: str
     performance_goal: str
 
 
 _VALID_SESSION_TYPES = {"workout", "recovery", "mixed"}
 _VALID_INTENSITIES = {"high", "moderate", "low", "passive"}
+
+
+def _validate_midday(body: MiddaySessionSubmission, state: dict, conn: Any) -> None:
+    """Enforce today's gates before persisting any midday recommendation."""
+    from shc.ai.vault import valid_citation_filenames
+    from shc.ai.workout_planner import _clinical_volume_cap, e1rm_by_exercise
+
+    gates = state["gates"]
+    order = {"passive": 0, "rest": 0, "low": 1, "moderate": 2, "high": 3}
+    kinds = {a.kind for a in body.activities}
+    active = bool(kinds - {"recovery"})
+    if order[body.intensity] > order[gates["max_intensity"]]:
+        raise GateViolation("Midday intensity exceeds today's DailyState gate")
+    if active and (body.intensity == "passive" or gates["max_intensity"] == "rest"):
+        raise GateViolation("Active exercise cannot be prescribed as passive recovery")
+    if kinds & {"strength", "cardio"} and body.session_type == "recovery":
+        raise GateViolation("Training activities require workout or mixed session_type")
+    if gates["deload_required"] and ("strength" in kinds or order[body.intensity] > 1):
+        raise GateViolation("Midday deload sessions must be low intensity without extra lifting")
+    acwr = state["training_load"].get("acwr")
+    if acwr is not None and acwr > 1.5 and (active or body.intensity != "passive"):
+        raise GateViolation("ACWR > 1.5: midday must be passive recovery")
+    if acwr is not None and acwr > 1.3 and ("strength" in kinds or order[body.intensity] > 1):
+        raise GateViolation("ACWR > 1.3: midday must be low intensity without lifting")
+    if "cardio" in kinds and (
+        "legs" in gates.get("forbid_muscle_groups", [])
+        or set(gates.get("forbid_muscles", [])) & {"quads", "hamstrings", "glutes", "calves"}
+    ):
+        raise GateViolation("Lower-body recovery gate blocks midday cardio")
+    clinical_cap, clinical_reason = _clinical_volume_cap(conn)
+    if (clinical_cap == 0 and active) or (clinical_cap is not None and body.intensity == "high"):
+        raise GateViolation(f"Midday clinical restriction: {clinical_reason}")
+    if "strength" not in kinds:
+        if body.strength_plan is not None:
+            raise ValueError("strength_plan requires a strength activity")
+        return
+    if body.strength_plan is None:
+        raise ValueError("Strength activities require a structured strength_plan")
+    recent = conn.execute(
+        "SELECT DISTINCT ws.exercise, w.started_at > now() - INTERVAL '4 hours' "
+        "FROM workouts w JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.started_at::DATE = current_date AND NOT ws.is_warmup"
+    ).fetchall()
+    if any(row[1] for row in recent):
+        raise GateViolation("Allow at least four hours between lifting sessions")
+    if acwr is None or acwr > 1.3 or state["readiness"]["tier"] != "green":
+        raise GateViolation("Midday lifting requires verified green readiness and ACWR ≤ 1.3")
+    plan = body.strength_plan
+    morning_groups = {_mg(row[0]) for row in recent}
+    if any(
+        _mg(ex.get("name", "")) in morning_groups
+        for block in plan.get("blocks", [])
+        for ex in block.get("exercises", [])
+    ):
+        raise GateViolation("Midday lifting must target different groups from today's earlier lift")
+    if plan.get("recommendation", {}).get("intensity") != body.intensity:
+        raise ValueError("strength_plan intensity must match the midday session")
+    sets = sum(ex.get("sets", 0) for b in plan.get("blocks", []) for ex in b.get("exercises", []))
+    if sets > 10:
+        raise GateViolation("Midday lifting is capped at 10 working sets")
+    validate_plan(
+        plan,
+        state=state,
+        conn=conn,
+        e1rm_ceilings=e1rm_by_exercise(conn, date.today()),
+        allowed_citations=valid_citation_filenames(),
+    )
 
 
 @router.get("/midday/context")
@@ -4395,19 +4472,26 @@ async def submit_midday_session(body: MiddaySessionSubmission) -> dict:
         raise HTTPException(422, f"intensity must be one of {sorted(_VALID_INTENSITIES)}")
     if not body.activities:
         raise HTTPException(422, "activities list cannot be empty")
-    total_min = sum(a.get("duration_min", 0) for a in body.activities)
-    if total_min > 65:
-        raise HTTPException(422, f"Total activity duration {total_min} min exceeds 65-min cap")
+    total_min = sum(a.duration_min for a in body.activities)
+    if total_min > body.duration_min:
+        raise HTTPException(422, "Activity durations exceed the session duration")
 
     rec = {
         "title": body.title,
         "duration_min": body.duration_min,
         "intensity": body.intensity,
-        "activities": body.activities,
+        "activities": [a.model_dump() for a in body.activities],
+        "strength_plan": body.strength_plan,
         "rationale": body.rationale,
         "performance_goal": body.performance_goal,
     }
     async with write_ctx() as conn:
+        try:
+            _validate_midday(body, compute_daily_state(conn), conn)
+        except GateViolation as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         conn.execute(
             """
             INSERT INTO midday_sessions (session_date, session_type, recommendation, source, generated_at)

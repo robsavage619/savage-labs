@@ -1746,8 +1746,9 @@ def _gates(
 
     # Hard rest gates.
     if whoop_stale:
+        g.max_intensity = "moderate"
         reasons.append(
-            "WHOOP not synced >2d — HRV/skin-temp/SpO₂ safety caps are BLIND "
+            "WHOOP not synced >2d — intensity capped MODERATE; HRV/skin-temp/SpO₂ safety caps are BLIND "
             "(verify recovery manually)"
         )
     else:
