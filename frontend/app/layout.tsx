@@ -22,11 +22,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             .eyebrow (500), .shc-section-title (600), .metric-* (500) and the
             header HUD (500/700) all rendered synthesized or silently Black. */}
         <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;900&display=swap" rel="stylesheet" />
-        {/* Console type — Editorial. Fraunces carries the verdict and the numerals
-            (opsz/SOFT/WONK axes), Newsreader sets the plain-English reads, Plex
-            Mono the labels and tabular figures. */}
+        {/* Console type systems — switchable on the console boards while Rob
+            settles on one. Editorial was tried as the sole option and rejected
+            on sight at length; a screenshot is not enough to judge a typeface. */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,SOFT,WONK,wght@9..144,0..100,0..1,400..800&family=Newsreader:opsz,wght@6..72,400..600&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&family=Archivo:wdth,wght@62..125,400..700&family=Space+Mono:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
           rel="stylesheet"
         />
       </head>

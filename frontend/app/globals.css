@@ -38,6 +38,19 @@
   --positive: oklch(0.72 0.18 145);
   --neutral:  oklch(0.75 0.18 75);
   --negative: oklch(0.65 0.22 25);
+
+  /* Aliases. Nine components (subject-dossier, performance-curve,
+     engine-status-panel, muscle-volume-panel, prescription-panel,
+     trend-intelligence, periodization-strip, fueling-panel,
+     post-workout-panel) read these names, and none of them were ever defined
+     at :root — 21 colour reads resolving to nothing on /review and /lab.
+     Aliasing rather than renaming keeps both vocabularies valid. */
+  --ok:        var(--positive);
+  --warn:      var(--neutral);
+  --bad:       var(--negative);
+  --surface-1: var(--bg-elevated);
+  --panel:     var(--card);
+  --accent:    var(--sl-accent);
   --recovery-green: var(--positive);
   --recovery-amber: var(--neutral);
   --recovery-red:   var(--negative);

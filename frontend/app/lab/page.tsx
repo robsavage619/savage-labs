@@ -74,7 +74,7 @@ export default function LabPage() {
         </section>
 
         {/* ── STUDIES (n-of-1 + suggestions) ── */}
-        <CollapsibleSection id="studies" title="Active studies · n-of-1 trials">
+        <CollapsibleSection id="studies" title="Active studies · n-of-1 trials" defaultOpen>
           <div className="space-y-4">
             <ErrorBoundary label="Self-experiments">
               <LabExperiments />
@@ -86,28 +86,28 @@ export default function LabPage() {
         </CollapsibleSection>
 
         {/* ── STANDING RESEARCH PROGRAM ── */}
-        <CollapsibleSection id="findings" title="Standing research program">
+        <CollapsibleSection id="findings" title="Standing research program" defaultOpen>
           <ErrorBoundary label="Research lab">
             <LabPanel />
           </ErrorBoundary>
         </CollapsibleSection>
 
         {/* ── ENGINE SELF-ASSESSMENT ── */}
-        <CollapsibleSection id="engine" title="Engine self-assessment">
+        <CollapsibleSection id="engine" title="Engine self-assessment" defaultOpen>
           <ErrorBoundary label="Engine status">
             <EngineStatusPanel />
           </ErrorBoundary>
         </CollapsibleSection>
 
         {/* ── CLINICAL RESEARCH SIGNALS ── */}
-        <CollapsibleSection id="clinical" title="Clinical research signals">
+        <CollapsibleSection id="clinical" title="Clinical research signals" defaultOpen>
           <ErrorBoundary label="Clinical research">
             <ClinicalResearchPanel />
           </ErrorBoundary>
         </CollapsibleSection>
 
         {/* ── AUTONOMIC LOAD ── */}
-        <CollapsibleSection id="stress" title="Autonomic load">
+        <CollapsibleSection id="stress" title="Autonomic load" defaultOpen>
           <div className="space-y-5">
             <ErrorBoundary label="Stress">
               <StressPanel />
@@ -119,14 +119,14 @@ export default function LabPage() {
         </CollapsibleSection>
 
         {/* ── WHAT MOVES YOUR HRV ── */}
-        <CollapsibleSection id="correlations" title="What moves your HRV">
+        <CollapsibleSection id="correlations" title="What moves your HRV" defaultOpen>
           <ErrorBoundary label="HRV correlations">
             <CorrelationCards />
           </ErrorBoundary>
         </CollapsibleSection>
 
         {/* ── LONGITUDINAL OBSERVATIONS ── */}
-        <CollapsibleSection id="trends" title="Longitudinal observations">
+        <CollapsibleSection id="trends" title="Longitudinal observations" defaultOpen>
           <ErrorBoundary label="Trends">
             <TrendIntelligence />
           </ErrorBoundary>

@@ -6,12 +6,29 @@ import { api } from "@/lib/api";
 import { recoveryRead, hrvRead, rhrRead, sleepRead, signalChannels } from "@/lib/console-copy";
 import { Channel } from "@/components/console/channel";
 import { ConsoleShell } from "@/components/console/shell";
+import { AfterActionPanel } from "@/components/after-action-panel";
+import { CardioPanel } from "@/components/cardio-panel";
+import { ErrorBoundary } from "@/components/error-boundary";
+import { FuelingPanel } from "@/components/fueling-panel";
+import { GoalScorecard } from "@/components/goal-scorecard";
+import { MomentumPanel } from "@/components/momentum-panel";
+import { PeriodizationStrip } from "@/components/periodization-strip";
+import { PillarRecovery } from "@/components/pillar-recovery";
+import { PillarSleep } from "@/components/pillar-sleep";
+import { PillarTrainingLoad } from "@/components/pillar-training-load";
+import { PostWorkoutPanel } from "@/components/post-workout-panel";
+import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
+import { StrengthPanel } from "@/components/strength-panel";
+import { WhoopVitals } from "@/components/whoop-vitals";
 
 /**
  * SIGNALS — what the body is doing, as opposed to Ops's what to do about it.
  *
  * This is the content that used to sit behind eight collapsed accordions on
  * /review plus a "Raw WHOOP vitals" section. Nothing here collapses.
+ *
+ * The console channels up top are a summary read, not a replacement: every
+ * original panel is hosted below, expanded, with its controls intact.
  */
 export default function SignalsPage() {
   const state = useQuery({ queryKey: ["daily-state"], queryFn: api.dailyState, staleTime: 5 * 60_000 });
@@ -90,6 +107,59 @@ export default function SignalsPage() {
         ) : (
           <div className="cx-skel" style={{ gridColumn: "1 / -1", minHeight: 220 }} />
         )}
+
+        <div className="cx-legacy">
+          <div className="cx-rule" style={{ marginTop: 0 }}>
+            What changed
+          </div>
+          <ErrorBoundary label="Momentum">
+            <MomentumPanel />
+          </ErrorBoundary>
+
+          <div className="cx-rule">Recovery, sleep &amp; load</div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <ErrorBoundary label="Recovery">
+              <PillarRecovery />
+            </ErrorBoundary>
+            <ErrorBoundary label="Sleep">
+              <PillarSleep />
+            </ErrorBoundary>
+            <ErrorBoundary label="Training load">
+              <PillarTrainingLoad />
+            </ErrorBoundary>
+          </div>
+          <ErrorBoundary label="WHOOP vitals">
+            <WhoopVitals />
+          </ErrorBoundary>
+
+          <div className="cx-rule">Training history</div>
+          <ErrorBoundary label="Periodization">
+            <PeriodizationStrip />
+          </ErrorBoundary>
+          <ErrorBoundary label="Strength">
+            <StrengthPanel />
+          </ErrorBoundary>
+          <ErrorBoundary label="Cardio">
+            <CardioPanel />
+          </ErrorBoundary>
+          <ErrorBoundary label="Post-workout debrief">
+            <PostWorkoutPanel />
+          </ErrorBoundary>
+          <ErrorBoundary label="After action">
+            <AfterActionPanel />
+          </ErrorBoundary>
+          <ErrorBoundary label="Goal scorecard">
+            <GoalScorecard />
+          </ErrorBoundary>
+
+          <div className="cx-rule">Body</div>
+          <ErrorBoundary label="Fueling">
+            <FuelingPanel />
+          </ErrorBoundary>
+          <ErrorBoundary label="Progress photos">
+            <ProgressPhotoPanel />
+          </ErrorBoundary>
+        </div>
       </div>
     </ConsoleShell>
   );

@@ -12,6 +12,10 @@ export function RouteToggle() {
     { href: "/", label: "Now" },
     { href: "/review", label: "Review" },
     { href: "/lab", label: "Lab" },
+    // The console boards. Without this entry they were reachable only by
+    // typing the URL — the shell here had no link forward, so the new UI was
+    // invisible from every page Rob actually lands on.
+    { href: "/ops", label: "Console" },
   ] as const;
 
   return (

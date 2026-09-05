@@ -7,6 +7,11 @@ import { reconciledVerdict } from "@/lib/readiness";
 import { allChannels, boardLede } from "@/lib/console-copy";
 import { Channel } from "@/components/console/channel";
 import { ConsoleShell } from "@/components/console/shell";
+import { NextWorkoutPane } from "@/components/next-workout";
+import { CheckinCard } from "@/components/checkin-card";
+import { MiddaySessionCard } from "@/components/midday-session-card";
+import { DailyReport } from "@/components/daily-report";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 /**
  * OPS — the console board.
@@ -120,6 +125,17 @@ export default function OpsPage() {
           ) : (
             <div className="cx-skel cx-sess" style={{ minHeight: 210 }} />
           )}
+
+          {/* The console's session table is a READ. Every control lives in the
+              original pane — push to Hevy, regenerate, discard, copy prompt —
+              and omitting it is what left Rob unable to push a routine. */}
+          <div className="cx-rule">Session controls &amp; full plan</div>
+          <div className="cx-legacy">
+            <ErrorBoundary label="Next workout"><NextWorkoutPane /></ErrorBoundary>
+            <ErrorBoundary label="Midday session"><MiddaySessionCard /></ErrorBoundary>
+            <ErrorBoundary label="Daily report"><DailyReport /></ErrorBoundary>
+            <ErrorBoundary label="Check-in"><CheckinCard /></ErrorBoundary>
+          </div>
 
           <div className="cx-rule">Signals</div>
 

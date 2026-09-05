@@ -61,20 +61,39 @@
  * "premium" is the one thing it does not say.
  */
 
-/* EDITORIAL — luxury magazine. Fraunces at high optical size with a little SOFT
- * is genuinely lovely at 44px, and a serif verdict on a dark ground is the least
- * software-looking thing available. Newsreader for the reads matters more than
- * the display face: this board's premise is that every number carries a
- * sentence, so the body face is doing most of the actual work. */
-.cx {
-  --f-display: "Fraunces", Georgia, "Times New Roman", serif;
-  --f-body: "Newsreader", Georgia, "Times New Roman", serif;
-  --f-data: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --display-wght: 600;
-  --display-tracking: -0.018em;
-  --display-settings: "opsz" 120, "SOFT" 30, "WONK" 1;
-  --fs-read: 15px;
-  --fs-body: 16.5px;
+/* A · STUDIO (default) — contemporary and characterful without being loud.
+ * Bricolage carries optical-size and width axes, so the verdict sets wide and
+ * tight from one family. */
+.cx, .cx[data-type="studio"] {
+  --f-display: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+  --f-body: "Instrument Sans", system-ui, -apple-system, sans-serif;
+  --f-data: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --display-wght: 700;
+  --display-tracking: -0.03em;
+  --display-settings: "wdth" 92, "opsz" 60;
+}
+
+/* B · SWISS — technical precision. One superfamily at two widths; the expanded
+ * caps give labels instrument-panel authority with no HUD kitsch. */
+.cx[data-type="swiss"] {
+  --f-display: "Archivo", system-ui, sans-serif;
+  --f-body: "Archivo", system-ui, sans-serif;
+  --f-data: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+  --display-wght: 700;
+  --display-tracking: -0.02em;
+  --display-settings: "wdth" 112;
+}
+
+/* C · PLAIN — no display face at all. System sans throughout, mono for data.
+ * The control condition: if neither of the above beats this, the typeface was
+ * never the problem. */
+.cx[data-type="plain"] {
+  --f-display: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-data: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --display-wght: 650;
+  --display-tracking: -0.02em;
+  --display-settings: normal;
 }
 
 .cx { font-family: var(--f-body); }
@@ -486,3 +505,32 @@
   .cx-bar { grid-template-columns: 92px 1fr 56px; gap: 8px; }
   .cx-bar-name { width: auto !important; }
 }
+
+/* ── type switcher ──────────────────────────────────────────────────────── */
+.cx-type { display: inline-flex; gap: 2px; border: 1px solid var(--c-line-soft);
+  border-radius: 999px; padding: 2px; background: var(--c-surface); }
+.cx-type button {
+  font-family: var(--f-data); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; padding: 5px 10px; border-radius: 999px; border: 0;
+  background: transparent; color: var(--c-faint); cursor: pointer;
+  transition: color 180ms ease, background 180ms ease;
+}
+.cx-type button:hover { color: var(--c-mute); }
+.cx-type button[aria-pressed="true"] { background: var(--c-surface-2); color: var(--c-ink); }
+
+/* ── legacy panel host ───────────────────────────────────────────────────────
+ * The original ~50 panels are complete and carry every control; the console's
+ * cards are not a replacement for them and never were. They are hosted here
+ * verbatim rather than rewritten, so nothing is lost while the restyle happens
+ * incrementally. Reset the console's type inheritance so they render as
+ * themselves instead of half-converted.
+ *
+ * The skin mismatch is deliberate and temporary. Content back first. */
+.cx-legacy {
+  grid-column: 1 / -1;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.cx-legacy .cx-label { font-family: var(--f-data); }

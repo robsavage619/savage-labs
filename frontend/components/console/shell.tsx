@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -20,11 +20,35 @@ const BOARDS = [
   { href: "/research", label: "Research" },
 ] as const;
 
+const TYPES = [
+  { id: "studio", label: "Studio" },
+  { id: "swiss", label: "Swiss" },
+  { id: "plain", label: "Plain" },
+] as const;
+type TypeId = (typeof TYPES)[number]["id"];
+
 export function ConsoleShell({ children }: { children: ReactNode }) {
   const path = usePathname();
+  const [type, setType] = useState<TypeId>("studio");
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("cx_type") as TypeId | null;
+      if (v && TYPES.some((t) => t.id === v)) setType(v);
+    } catch {
+      // localStorage unavailable — keep the default
+    }
+  }, []);
+  const pick = (t: TypeId) => {
+    setType(t);
+    try {
+      localStorage.setItem("cx_type", t);
+    } catch {
+      // fine
+    }
+  };
 
   return (
-    <div className="cx">
+    <div className="cx" data-type={type}>
       <div className="cx-wrap">
         <div className="cx-top">
           <span className="cx-word">
@@ -48,13 +72,21 @@ export function ConsoleShell({ children }: { children: ReactNode }) {
             </Link>
           </nav>
 
-          <span className="cx-when">
-            {new Date().toLocaleDateString("en-US", {
-              weekday: "short",
-              month: "short",
-              day: "numeric",
-            })}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div className="cx-type" role="group" aria-label="Type system">
+              {TYPES.map((t) => (
+                <button key={t.id} type="button" className="no-tactile"
+                  aria-pressed={type === t.id} onClick={() => pick(t.id)}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <span className="cx-when">
+              {new Date().toLocaleDateString("en-US", {
+                weekday: "short", month: "short", day: "numeric",
+              })}
+            </span>
+          </div>
         </div>
 
         {children}

@@ -4,6 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import { ConsoleShell } from "@/components/console/shell";
+import { SubjectDossier } from "@/components/subject-dossier";
+import { LabPanel } from "@/components/lab-panel";
+import { LabExperiments } from "@/components/lab-experiments";
+import { SuggestedExperiments } from "@/components/suggested-experiments";
+import { EngineStatusPanel } from "@/components/engine-status-panel";
+import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
+import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
+import { TrendIntelligence } from "@/components/trend-intelligence";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 /**
  * RESEARCH — what the system has learned about this particular body.
@@ -56,8 +65,11 @@ function trialRead(
     return `Nothing logged on either side yet. It needs ${need} days of each before the answer means anything.`;
   }
 
-  const short = Math.max(need - a, need - b);
-  return `${a} days on, ${b} days off — ${pct}% of the way there. About ${short} more ${short === 1 ? "day" : "days"} on the thinner side before this can be called.`;
+  // Math.max over both arms can go negative when one arm is already full;
+  // clamp so the sentence never promises "-13 more days".
+  const short = Math.max(1, Math.min(need - a, need - b) > 0 ? Math.min(need - a, need - b) : Math.max(need - a, need - b));
+  const unit = short === 1 ? "day" : "days";
+  return `${a} days on, ${b} days off — ${pct}% of the way there. About ${short} more ${unit} on the thinner side before this can be called.`;
 }
 
 export default function ResearchPage() {
@@ -72,12 +84,21 @@ export default function ResearchPage() {
   const totalLandmarks = L?.volume_landmarks?.length ?? 0;
 
   const confirmed = (findings.data ?? []).filter((f) => f.verdict === "confirmed");
-  const other = (findings.data ?? []).filter((f) => f.verdict !== "confirmed").slice(0, 4);
+  // No cap. Truncating findings with .slice(0,4) is how the last attempt
+  // silently deleted most of the research content.
+  const other = (findings.data ?? []).filter((f) => f.verdict !== "confirmed");
+
+  // An abandoned study rendered as "Still collecting" is exactly the confusion
+  // this board exists to remove — it was indistinguishable from honest waiting
+  // for seven weeks. Retired studies are listed separately, with the reason.
+  const allTrials = experiments.data ?? [];
+  const activeTrials = allTrials.filter((e) => e.status === "active");
+  const retiredTrials = allTrials.filter((e) => e.status !== "active");
 
   const ranked = [...(correlations.data ?? [])]
     .filter((c) => c.hrv_delta != null)
     .sort((a, b) => Math.abs(b.hrv_delta ?? 0) - Math.abs(a.hrv_delta ?? 0))
-    .slice(0, 6);
+    ;
 
   return (
     <ConsoleShell>
@@ -170,7 +191,7 @@ export default function ResearchPage() {
 
         {/* ── n-of-1 trials ── */}
         <div className="cx-rule">Trials running on you</div>
-        {(experiments.data ?? []).length === 0 && (
+        {activeTrials.length === 0 && (
           <section className="cx-card" style={{ gridColumn: "span 2" }}>
             <h3 className="cx-label">No trials registered</h3>
             <p className="cx-read">
@@ -179,7 +200,7 @@ export default function ResearchPage() {
             </p>
           </section>
         )}
-        {(experiments.data ?? []).slice(0, 4).map((e) => {
+        {activeTrials.map((e) => {
           const a = e.arms.A?.adhered ?? 0;
           const b = e.arms.B?.adhered ?? 0;
           const pct = Math.min(100, Math.round((Math.min(a, b) / Math.max(1, e.min_per_arm)) * 100));
@@ -233,6 +254,24 @@ export default function ResearchPage() {
           );
         })}
 
+        {retiredTrials.length > 0 && (
+          <section className="cx-card" style={{ gridColumn: "1 / -1" }}>
+            <header className="cx-head">
+              <h3 className="cx-label">Retired</h3>
+              <span className="cx-status" style={{ color: "var(--c-dim)" }}>
+                {retiredTrials.length} not running
+              </span>
+            </header>
+            <p className="cx-read" style={{ marginTop: 2 }}>
+              {retiredTrials
+                .map((e) => `${human(e.manipulated)} (${e.status})`)
+                .join(" · ")}
+              . These are stopped, not waiting — the contrast they needed never
+              appeared often enough in your data to answer them.
+            </p>
+          </section>
+        )}
+
         {/* ── findings ── */}
         <div className="cx-rule">What has actually been shown</div>
         {confirmed.length === 0 && other.length === 0 && (
@@ -266,6 +305,23 @@ export default function ResearchPage() {
             </section>
           );
         })}
+
+        {/* ── the original panels, in full ──
+            These carry the RUN ALL control, the vault citations, the test types
+            and re-check dates, the seven trend tabs, and the clinical and
+            autonomic content — all of which the first console pass dropped. */}
+        <div className="cx-rule">Full detail</div>
+        <div className="cx-legacy">
+          <ErrorBoundary label="Subject dossier"><SubjectDossier /></ErrorBoundary>
+          <ErrorBoundary label="Research lab"><LabPanel /></ErrorBoundary>
+          <ErrorBoundary label="Self-experiments"><LabExperiments /></ErrorBoundary>
+          <ErrorBoundary label="Suggested studies"><SuggestedExperiments /></ErrorBoundary>
+          <ErrorBoundary label="Engine status"><EngineStatusPanel /></ErrorBoundary>
+          <ErrorBoundary label="Clinical research"><ClinicalResearchPanel /></ErrorBoundary>
+          <ErrorBoundary label="Stress"><StressPanel /></ErrorBoundary>
+          <ErrorBoundary label="Behavior impact"><BehaviorImpactPanel /></ErrorBoundary>
+          <ErrorBoundary label="Trends"><TrendIntelligence /></ErrorBoundary>
+        </div>
 
         {/* ── correlations ── */}
         <div className="cx-rule">What moves your HRV</div>
