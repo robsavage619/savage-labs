@@ -169,12 +169,3 @@ export function SectionTitle({ children, hint }: { children: ReactNode; hint?: R
     </div>
   );
 }
-
-export function HowToRead({ children }: { children: ReactNode }) {
-  return (
-    <p className="shc-helptext mt-1.5 mb-3">
-      <span className="text-[var(--text-muted)] mr-1">How to read this.</span>
-      {children}
-    </p>
-  );
-}
