@@ -2,7 +2,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api, type SubjectProfile } from "@/lib/api";
-import { Eyebrow } from "@/components/ui/metric";
 
 function enrolledLabel(profile: SubjectProfile): string {
   if (!profile.enrolled_on) return "—";

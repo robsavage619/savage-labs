@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, ReferenceLine, Scatter, ComposedChart, XAxis, YAxis, Tooltip } from "recharts";
 import { api } from "@/lib/api";
 import { Eyebrow, Metric } from "@/components/ui/metric";
+import { PlainRead, LabelledRead } from "@/components/plain-read";
+import { recoveryRead, hrvRead, rhrRead } from "@/lib/reads";
 
 function toneFor(score: number | null | undefined) {
   if (score == null) return { color: "var(--neutral)", token: "neutral" as const };
@@ -106,6 +108,13 @@ export function PillarRecovery() {
   const score = readiness.data?.recovery_score ?? null;
   const t = toneFor(score);
 
+  // Plain-English layer. All three take the full DailyState, which this panel
+  // already holds — no extra fetch, and no second opinion on the numbers.
+  const state = dailyState.data;
+  const recRead = state ? recoveryRead(state) : null;
+  const hrvR = state ? hrvRead(state) : null;
+  const rhrR = state ? rhrRead(state) : null;
+
   const sparkData = trend.data?.map((p) => ({ date: p.date.slice(5), score: p.score })) ?? [];
   const first = sparkData[0]?.score ?? 0;
   const last = sparkData.at(-1)?.score ?? 0;
@@ -169,7 +178,7 @@ export function PillarRecovery() {
         </span>
       </div>
 
-      <div className="flex items-center gap-4 @lg:gap-5 mt-3 min-w-0">
+      <div className="flex items-center gap-3 @lg:gap-5 mt-3 min-w-0 flex-wrap">
         <div className="relative flex-shrink-0 w-[132px] @xs:w-[148px] @lg:w-[168px]">
           <RecoveryArc score={score != null ? Math.round(score) : null} color={t.color} />
           <div className="shc-reticle" aria-hidden />
@@ -226,6 +235,12 @@ export function PillarRecovery() {
           <p className="text-[10.5px] text-[var(--text-dim)] mt-1 tracking-wider uppercase">14d trend</p>
         </div>
       </div>
+
+      {recRead && (
+        <PlainRead state={recRead.state} className="mt-3">
+          {recRead.read}
+        </PlainRead>
+      )}
 
       <div className="grid grid-cols-3 gap-2 @lg:gap-3 mt-4 min-w-0">
         <div className="min-w-0 border-l border-[var(--hairline)] pl-2 @lg:pl-3">
@@ -300,6 +315,21 @@ export function PillarRecovery() {
           </p>
         </div>
       </div>
+
+      {(hrvR || rhrR) && (
+        <div className="mt-3 space-y-2 min-w-0">
+          {hrvR && (
+            <LabelledRead label={hrvR.tag ?? hrvR.label} state={hrvR.state}>
+              {hrvR.read}
+            </LabelledRead>
+          )}
+          {rhrR && (
+            <LabelledRead label={rhrR.tag ?? rhrR.label} state={rhrR.state}>
+              {rhrR.read}
+            </LabelledRead>
+          )}
+        </div>
+      )}
 
       <div className="mt-4">
         <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider mb-2" style={{ fontFamily: "var(--font-orbitron)", letterSpacing: "0.18em" }}>What&apos;s driving this</p>

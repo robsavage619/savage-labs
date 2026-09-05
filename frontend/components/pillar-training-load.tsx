@@ -7,6 +7,8 @@ import { api } from "@/lib/api";
 import { reconciledVerdict } from "@/lib/readiness";
 import { localDate } from "@/lib/date";
 import { Eyebrow, Metric } from "@/components/ui/metric";
+import { PlainRead } from "@/components/plain-read";
+import { loadRead } from "@/lib/reads";
 
 function acwrZone(ratio: number | null | undefined): { label: string; tone: "positive" | "neutral" | "negative"; color: string } {
   if (ratio == null) return { label: "Awaiting load data", tone: "neutral", color: "var(--neutral)" };
@@ -87,6 +89,10 @@ export function PillarTrainingLoad() {
         return { label: v.label, tone: v.tone, detail };
       })()
     : AWAITING_VERDICT;
+  // Plain-English layer. loadRead reads the engine's own acute/chronic loads
+  // out of DailyState, which is a different quantity from the recovery-proxy
+  // ACWR this panel plots — it says what the ratio means, it does not restate it.
+  const loadR = stateQ.data ? loadRead(stateQ.data) : null;
   const todayRecovery = trend.data?.length ? trend.data[trend.data.length - 1].score : null;
 
   const trainStreak = useMemo(() => {
@@ -132,6 +138,12 @@ export function PillarTrainingLoad() {
       <p className="text-[10.5px] text-[var(--text-dim)] mt-1 tabular-nums">
         acute {acute ? acute.toFixed(0) : "—"} · chronic {chronic ? chronic.toFixed(0) : "—"}
       </p>
+
+      {loadR && (
+        <PlainRead state={loadR.state} className="mt-2">
+          {loadR.read}
+        </PlainRead>
+      )}
 
       <div className="mt-3">
         <Gauge ratio={ratio ?? 1} color={zone.color} />

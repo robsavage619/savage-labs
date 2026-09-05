@@ -104,7 +104,7 @@ export function CheckinCard() {
   return (
     <div className="shc-card shc-enter p-4 space-y-4">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>Today's check-in</Eyebrow>
+        <Eyebrow>Today&apos;s check-in</Eyebrow>
         {submit.isPending ? (
           <span className="text-[10px] text-[var(--text-faint)]">saving…</span>
         ) : submit.isSuccess ? (
@@ -252,7 +252,7 @@ function CheckinLogged({
   return (
     <div className="shc-card shc-enter p-4 space-y-3">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>Today's check-in</Eyebrow>
+        <Eyebrow>Today&apos;s check-in</Eyebrow>
         <button
           type="button"
           onClick={onEdit}

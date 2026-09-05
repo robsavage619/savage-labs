@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -57,6 +57,10 @@ function HRVDeltaTooltip({
   );
 }
 
+// Tournaments rendered before the "View all N tournaments" toggle is used.
+// Nothing is dropped — the toggle expands to the full history.
+const TOURNEY_PREVIEW = 2;
+
 function shortEvent(name: string | null): string {
   if (!name) return "Unknown event";
   return name.split(" by ")[0].split(" - ")[0].replace(/^\d{4}\s+/, "").trim();
@@ -74,6 +78,8 @@ export function PickleballPane() {
     queryFn: () => api.pickleballMatches(),
     refetchInterval: 60 * 60_000,
   });
+
+  const [showAllTourneys, setShowAllTourneys] = useState(false);
 
   const data = trend.data;
 
@@ -161,10 +167,13 @@ export function PickleballPane() {
           </p>
         </div>
       ) : (
-        <>
+        // Both charts are ~150–210px tall and neither needs the full 800px of a
+        // span-2 column, so they sit side by side once the container clears
+        // 640px. At span-1 (392px) they stack as before.
+        <div className="grid grid-cols-1 @[640px]:grid-cols-2 gap-x-6 gap-y-6 items-start">
           {/* Play freshness (recovery on court days) */}
           {freshnessData.length > 0 && (
-            <div>
+            <div className="min-w-0">
               <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 mb-2">
                 <Eyebrow className="min-w-0">Play freshness · recovery on court days</Eyebrow>
                 {data?.avg_recovery_on_play_days != null && (
@@ -173,7 +182,7 @@ export function PickleballPane() {
                   </span>
                 )}
               </div>
-              <div className="min-w-0 h-[80px] @2xl:h-[120px]">
+              <div className="min-w-0 overflow-hidden h-[80px] @2xl:h-[120px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={freshnessData} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
                     <Bar dataKey="recovery" isAnimationActive={false} radius={[2, 2, 0, 0]}>
@@ -220,7 +229,7 @@ export function PickleballPane() {
 
           {/* HRV delta (next-day recovery after play) */}
           {hrvDeltaSeries.length > 0 && (
-            <div>
+            <div className="min-w-0">
               <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 mb-2">
                 <Eyebrow className="min-w-0">Post-play HRV delta · next-morning vs day-of</Eyebrow>
                 {avgHRVDelta != null && (
@@ -236,7 +245,7 @@ export function PickleballPane() {
                 Positive = HRV recovered overnight (autonomic resilience improving).
                 Consistently negative = pickleball volume is accumulating faster than you recover.
               </p>
-              <div className="min-w-0 h-[100px] @2xl:h-[140px]">
+              <div className="min-w-0 overflow-hidden h-[100px] @2xl:h-[140px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={hrvDeltaSeries} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
                     <Bar dataKey="delta" isAnimationActive={false} radius={[2, 2, 0, 0]}>
@@ -270,7 +279,7 @@ export function PickleballPane() {
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* Match history — grouped by tournament day */}
@@ -285,6 +294,7 @@ export function PickleballPane() {
           byDate.get(key)!.push(m);
         }
         const tourneys = [...byDate.entries()].reverse(); // newest tourney first
+        const visibleTourneys = showAllTourneys ? tourneys : tourneys.slice(0, TOURNEY_PREVIEW);
 
         return (
           <div>
@@ -321,7 +331,7 @@ export function PickleballPane() {
               </div>
             ) : (
               <div className="space-y-3">
-                {tourneys.map(([eventDate, tMatches]) => {
+                {visibleTourneys.map(([eventDate, tMatches]) => {
                   const wins = tMatches.filter((m) => m.won).length;
                   const losses = tMatches.filter((m) => !m.won).length;
                   const recovery = tMatches[0]?.recovery_score;
@@ -406,14 +416,17 @@ export function PickleballPane() {
                                 }`,
                               }}
                             >
-                              {/* Match number */}
-                              <span className="text-[9.5px] text-[var(--text-faint)] w-4 shrink-0">
+                              {/* Match number — w-4 (16px) could not hold "G10"
+                                  at 9.5px, and w-7 (28px) could not hold a bold
+                                  10px "LOSS"; both spilled a few px into the
+                                  score column on long tournament days. */}
+                              <span className="text-[9.5px] text-[var(--text-faint)] w-5 shrink-0 whitespace-nowrap">
                                 G{idx + 1}
                               </span>
 
                               {/* Result badge */}
                               <span
-                                className="text-[10px] font-bold w-7 shrink-0"
+                                className="text-[10px] font-bold w-9 shrink-0 whitespace-nowrap"
                                 style={{
                                   color: m.won ? "var(--positive)" : "var(--negative)",
                                 }}
@@ -483,6 +496,18 @@ export function PickleballPane() {
                     </div>
                   );
                 })}
+                {tourneys.length > TOURNEY_PREVIEW && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllTourneys((v) => !v)}
+                    className="w-full rounded-lg border border-[var(--hairline)] py-2 text-center text-[10.5px] uppercase text-[var(--text-dim)] hover:text-[var(--text-muted)] hover:border-[var(--hairline-strong)] transition-colors"
+                    style={{ fontFamily: "var(--font-orbitron)", letterSpacing: "0.18em" }}
+                  >
+                    {showAllTourneys
+                      ? "Show recent only"
+                      : `View all ${tourneys.length} tournaments · ${allMatches.length} matches`}
+                  </button>
+                )}
               </div>
             )}
           </div>

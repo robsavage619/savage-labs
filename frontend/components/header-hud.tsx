@@ -136,17 +136,6 @@ function HudStat({ label, value, color }: { label: string; value: string; color?
   );
 }
 
-function Divider() {
-  return (
-    <div style={{
-      width: 1,
-      height: 28,
-      background: "var(--hairline)",
-      flexShrink: 0,
-    }} />
-  );
-}
-
 function recoveryColor(score: number | null): string {
   if (score == null) return "var(--text-primary)";
   if (score >= 67) return "var(--positive)";

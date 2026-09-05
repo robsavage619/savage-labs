@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type SleepEntry } from "@/lib/api";
 
 import { Eyebrow, Metric } from "@/components/ui/metric";
+import { PlainRead, LabelledRead } from "@/components/plain-read";
+import { sleepRead, sleepStagesRead, consistencyRead, sleepDebtRead } from "@/lib/reads";
 
 interface Stages {
   deep_min?: number;
@@ -88,6 +90,14 @@ export function PillarSleep() {
     staleTime: 5 * 60 * 1000,
   });
   const sleepState = stateQ.data?.sleep;
+  // Plain-English layer, off the DailyState this panel already fetches. The
+  // stage reads normalise fractions internally — deep_pct_last arrives as
+  // 0.176 while efficiency_pct_last on the same object is already 92.9.
+  const dstate = stateQ.data;
+  const nightRead = dstate ? sleepRead(dstate) : null;
+  const stagesR = dstate ? sleepStagesRead(dstate) : null;
+  const consistencyR = dstate ? consistencyRead(dstate) : null;
+  const debtR = dstate ? sleepDebtRead(dstate) : null;
   const spo2Last = sleepState?.spo2_avg_last ?? null;
   const effLast = sleepState?.efficiency_pct_last ?? null;
   const disturbLast = sleepState?.disturbance_count_last ?? null;
@@ -232,6 +242,32 @@ export function PillarSleep() {
           )}
         </div>
       </div>
+
+      {nightRead && (
+        <PlainRead state={nightRead.state} className="mt-3">
+          {nightRead.read}
+        </PlainRead>
+      )}
+
+      {(stagesR || consistencyR || debtR) && (
+        <div className="mt-3 space-y-2 min-w-0">
+          {stagesR && (
+            <LabelledRead label="Deep & REM" state={stagesR.state}>
+              {stagesR.read}
+            </LabelledRead>
+          )}
+          {consistencyR && (
+            <LabelledRead label="Mid σ" state={consistencyR.state}>
+              {consistencyR.read}
+            </LabelledRead>
+          )}
+          {debtR && (
+            <LabelledRead label="7d debt" state={debtR.state}>
+              {debtR.read}
+            </LabelledRead>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 space-y-2">
         {isLoading || !entries.length

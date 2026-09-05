@@ -13,7 +13,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { WarningIcon } from "@/components/ui/icons";
 import {
   Area,
   ComposedChart,
@@ -68,7 +67,7 @@ export function RecoveryTrendPane() {
         <span className="text-[var(--text-muted)]">How to read this. </span>
         The heatmap reveals weekly patterns — Mondays vs weekends, illness weeks, deload weeks.
         The HRV band shows your individual normal range. The alarm strip flags days where your
-        body's three pre-illness signals (RHR rise, temp rise, HRV drop) coincide.
+        body&apos;s three pre-illness signals (RHR rise, temp rise, HRV drop) coincide.
       </p>
 
       {/* Stacked in a narrow column; 2-up once the card is wide enough that a

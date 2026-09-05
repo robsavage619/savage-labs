@@ -394,7 +394,7 @@ export function PerformanceCurvePane() {
       <p className="text-[10px] text-[var(--text-faint)] leading-relaxed pt-2 border-t border-[var(--hairline)]">
         Banister fitness-fatigue model. Load = WHOOP strain + scaled Hevy volume. CTL (42d EWMA) rises
         with consistent training; ATL (7d EWMA) spikes with hard sessions. TSB = CTL − ATL — deeply
-        negative means digging a hole; +5 to +25 is the "race-ready" window.
+        negative means digging a hole; +5 to +25 is the &quot;race-ready&quot; window.
       </p>
     </div>
   );

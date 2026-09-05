@@ -118,7 +118,7 @@ export default function WeekPage() {
         <Card id="last-session" span={4} label="Last session">
           <LastSessionCard />
         </Card>
-        <Card id="consistency" span={2} label="Training consistency">
+        <Card id="consistency" span={4} label="Training consistency">
           <TrainingConsistencyCard />
         </Card>
         <Card id="balance" span={2} label="Muscle balance">

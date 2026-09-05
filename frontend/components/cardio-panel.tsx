@@ -209,7 +209,7 @@ function WeeklyZoneVolume({
           <span className="text-[var(--text-faint)] ml-1 inline-flex items-center gap-0.5">· {polarizedStatus}{polarizedStatus === "polarized" && <CheckIcon size={10} />}</span>
         </span>
       </div>
-      <div className="h-[160px]">
+      <div className="h-[160px] min-w-0 overflow-hidden">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
             <CartesianGrid stroke="var(--hairline)" strokeDasharray="2 4" vertical={false} />
@@ -331,7 +331,7 @@ function PickleballEfficiency({
     return (
       <div className="min-w-0 space-y-2">
         <Eyebrow>Pickleball HR efficiency</Eyebrow>
-        <div className="h-[160px] flex items-center justify-center text-center text-[11px] text-[var(--text-faint)]">
+        <div className="h-[160px] min-w-0 flex items-center justify-center text-center text-[11px] text-[var(--text-faint)]">
           Need ≥3 pickleball sessions with HR.
         </div>
       </div>
@@ -348,7 +348,7 @@ function PickleballEfficiency({
           </span>
         )}
       </div>
-      <div className="h-[160px]">
+      <div className="h-[160px] min-w-0 overflow-hidden">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={points} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
             <CartesianGrid stroke="var(--hairline)" strokeDasharray="2 4" vertical={false} />
@@ -517,6 +517,10 @@ function estimateKcal(avgHr: number, durationMin: number, bodyWeightKg: number, 
   const kcalPerMin = (-55.0969 + 0.6309 * avgHr + 0.1988 * bodyWeightKg + 0.2017 * age) / 4.184;
   return Math.round(Math.max(0, kcalPerMin) * durationMin * kcalMultiplier);
 }
+
+// Rows the log shows before the existing "View all N sessions" toggle is used.
+// Nothing is dropped — the toggle below the table still reveals every session.
+const SESSION_PREVIEW_ROWS = 5;
 
 const HIDDEN_KEY = "shc:cardio:hidden";
 function loadHidden(): Set<string> {
@@ -765,14 +769,14 @@ export function CardioPanel() {
       <div className="grid grid-cols-2 @2xl:grid-cols-4 gap-4 pb-4 border-b border-[var(--hairline)]">
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">28d sessions</p>
-          <div className="flex items-baseline gap-1.5">
+          <div className="flex items-baseline gap-1.5 min-w-0">
             <span className="text-[22px] font-light tabular-nums leading-none text-[var(--text-primary)]">{total28d.sessions}</span>
             <span className="text-[11px] text-[var(--text-faint)]">{summary.length} sports</span>
           </div>
         </div>
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">28d minutes</p>
-          <div className="flex items-baseline gap-1.5">
+          <div className="flex items-baseline gap-1.5 min-w-0">
             <span className="text-[22px] font-light tabular-nums leading-none text-[var(--text-primary)]">{total28d.minutes}</span>
             <span className="text-[11px] text-[var(--text-faint)]">{(total28d.minutes / 4).toFixed(0)}/wk</span>
           </div>
@@ -780,7 +784,7 @@ export function CardioPanel() {
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-0.5">Top sport</p>
           {summary[0] ? (
-            <div className="flex items-baseline gap-1.5">
+            <div className="flex items-baseline gap-1.5 min-w-0">
               <span className="text-[16px] font-medium leading-none text-[var(--text-primary)]">
                 <ModalityIcon modality={modalityKey(summary[0].kind)} size={16} />{" "}{MODALITY_LABEL[modalityKey(summary[0].kind)] ?? summary[0].kind}
               </span>
@@ -850,7 +854,12 @@ export function CardioPanel() {
         />
       </div>
 
-      <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-6 pb-4 border-b border-[var(--hairline)]">
+      {/* @3xl (768px) never matched: the card is 800px wide but p-5 + borders
+          leave a 758px CONTENT box, and container queries measure the content
+          box. The two charts therefore stacked at span-2 and cost ~240px of
+          height for nothing. 700px is inside the span-2 box and still outside
+          the span-1 one (350px), so span-1 keeps stacking. */}
+      <div className="grid grid-cols-1 @[700px]:grid-cols-2 gap-6 pb-4 border-b border-[var(--hairline)]">
         <WeeklyZoneVolume sessions={data?.sessions ?? []} hrShift={hrShift} measuredMax={measuredMax} tanaka={tanaka} bounds={zoneBounds} />
         <PickleballEfficiency sessions={data?.sessions ?? []} measuredMax={measuredMax} tanaka={tanaka} />
       </div>
@@ -887,12 +896,12 @@ export function CardioPanel() {
                   </td>
                 </tr>
               ) : (
-                (showAll ? sessions : sessions.slice(0, 8)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} bodyWeightKg={bodyWeightKg} age={age} bounds={zoneBounds} onDelete={handleDelete} onHide={handleHide} />)
+                (showAll ? sessions : sessions.slice(0, SESSION_PREVIEW_ROWS)).map((s) => <SessionRow key={s.id} s={s} hrShift={hrShift} kcalMultiplier={kcalMultiplier} measuredMax={measuredMax} bodyWeightKg={bodyWeightKg} age={age} bounds={zoneBounds} onDelete={handleDelete} onHide={handleHide} />)
               )}
             </tbody>
           </table>
         </div>
-        {sessions.length > 8 && (
+        {sessions.length > SESSION_PREVIEW_ROWS && (
           <button
             type="button"
             onClick={() => setShowAll((v) => !v)}

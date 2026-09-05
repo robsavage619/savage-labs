@@ -148,7 +148,7 @@ export function BodyDiagram({
           <div className="text-[11px] text-[var(--text-muted)] leading-relaxed">
             Tap a muscle to cycle:{" "}
             <span className="text-[var(--text-primary)]">none → mild → moderate → acute</span>.
-            Acute soreness will forbid that muscle group in tomorrow's plan.
+            Acute soreness will forbid that muscle group in tomorrow&apos;s plan.
           </div>
           <div className="space-y-1">
             {flaggedEntries.map(([k, s]) => (

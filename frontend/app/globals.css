@@ -364,24 +364,6 @@ body::before {
 }
 
 /* Protocol strip scan sweep */
-@keyframes sl-protocol-sweep {
-  0%   { transform: translateX(-110%); opacity: 0; }
-  10%  { opacity: 1; }
-  90%  { opacity: 0.7; }
-  100% { transform: translateX(110%); opacity: 0; }
-}
-.sl-protocol-scan {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    oklch(1 0 0 / 0.03) 50%,
-    transparent 100%
-  );
-  pointer-events: none;
-}
-
 /* ── Gradient utilities ──────────────────── */
 .shc-gradient-text {
   background: linear-gradient(135deg,
@@ -395,9 +377,6 @@ body::before {
 .shc-glow-neutral { color: var(--neutral); }
 .shc-glow-negative { color: var(--negative); }
 /* Was an animated gradient hairline; now a static border. */
-.shc-border-flow { border: 1px solid var(--hairline-strong); }
-
-
 /* ── Button system (3 variants) ──────────── */
 @layer components {
   .btn {

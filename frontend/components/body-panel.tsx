@@ -11,7 +11,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
-  Area,
 } from "recharts";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
@@ -28,11 +27,15 @@ function rollingAvg(data: { lbs: number }[], window: number) {
 const CHECKIN_COLOR = "var(--sl-accent)";
 const APPLE_COLOR = "oklch(1 0 0 / 0.06)";
 
-const WtTooltip = ({ active, payload, label }: any) => {
+const WtTooltip = ({ active, payload, label }: {
+  active?: boolean;
+  payload?: { dataKey: string; value: number | null; payload?: { source?: string } }[];
+  label?: string;
+}) => {
   if (!active || !payload?.length) return null;
-  const lbs = payload.find((p: any) => p.dataKey === "lbs")?.value;
-  const avg = payload.find((p: any) => p.dataKey === "avg")?.value;
-  const source = payload.find((p: any) => p.dataKey === "lbs")?.payload?.source;
+  const lbs = payload.find((p) => p.dataKey === "lbs")?.value;
+  const avg = payload.find((p) => p.dataKey === "avg")?.value;
+  const source = payload.find((p) => p.dataKey === "lbs")?.payload?.source;
   return (
     <div className="rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: "var(--card-hover)", borderColor: "var(--hairline-strong)", minWidth: 140 }}>
       <p className="text-[var(--text-dim)] mb-1">{label}</p>
@@ -48,7 +51,13 @@ const WtTooltip = ({ active, payload, label }: any) => {
 };
 
 // Custom bar shape — accent color for checkin points, dim for Apple Health.
-const WeightBar = (props: any) => {
+const WeightBar = (props: {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  source?: string;
+}) => {
   const { x, y, width, height, source } = props;
   if (!height || height <= 0) return null;
   return (
@@ -158,7 +167,7 @@ function VO2MaxPanel() {
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>VO₂ max · {(latest as any)?.source === "apple_watch" ? "Apple Watch" : "estimated from WHOOP RHR"}</Eyebrow>
+        <Eyebrow>VO₂ max · {latest?.source === "apple_watch" ? "Apple Watch" : "estimated from WHOOP RHR"}</Eyebrow>
         {latest && zone && (
           <span className="text-[10.5px] font-medium" style={{ color: zone.color }}>{zone.label} for age (39)</span>
         )}
@@ -203,7 +212,7 @@ function VO2MaxPanel() {
             </p>
           )}
           <p className="text-[10px] text-[var(--text-faint)] leading-snug">
-            {latest && (latest as any).source === "apple_watch"
+            {latest && latest.source === "apple_watch"
               ? "Direct Apple Watch measurement (cardiorespiratory fitness test)."
               : "Uth-Sørensen: 15.3 × HRmax/RHR · HRmax = 208 − (0.7 × age) = 180.7 (Tanaka). Propranolol PRN suppresses RHR → floor estimate on dosing days."}
           </p>
@@ -245,7 +254,11 @@ function StepsPanel() {
   const avg = data.length ? Math.round(data.reduce((s, d) => s + d.steps, 0) / data.length) : 0;
   const formatted = data.map(d => ({ label: d.date.slice(5), steps: d.steps }));
 
-  const StepTooltip = ({ active, payload, label }: any) => {
+  const StepTooltip = ({ active, payload, label }: {
+    active?: boolean;
+    payload?: { value: number | null }[];
+    label?: string;
+  }) => {
     if (!active || !payload?.length) return null;
     return (
       <div className="rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: "var(--card-hover)", borderColor: "var(--hairline-strong)" }}>

@@ -11,7 +11,6 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  ReferenceLine,
 } from "recharts";
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";

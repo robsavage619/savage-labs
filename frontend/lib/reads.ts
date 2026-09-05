@@ -1,7 +1,11 @@
 import type { DailyState } from "@/lib/api";
 
 /**
- * Plain-English reads for the console channels.
+ * Plain-English reads for the dashboard channels.
+ *
+ * Pure `DailyState -> ChannelRead` functions. They carry no layout and no
+ * console-specific assumptions: any panel that already holds a DailyState can
+ * render the sentence that says what its number MEANS FOR TODAY.
  *
  * The rule these all follow: say the IMPLICATION, not the definition. Rob built
  * this engine — he knows what ACWR is. What "0.92" does not tell him is
