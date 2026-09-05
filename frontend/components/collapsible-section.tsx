@@ -10,12 +10,20 @@ import { useEffect, useState, type ReactNode } from "react";
  */
 export function CollapsibleSection({
   id,
+  cluster,
   title,
   hint,
   defaultOpen = false,
   children,
 }: {
   id: string;
+  /**
+   * The SectionNav entry this section belongs under. The nav lists clusters
+   * ("training", "body"), not individual sections, so matching on id alone
+   * meant the deep-link expansion could never fire on /review — the two id
+   * sets had zero overlap and every nav click scrolled to an inert divider.
+   */
+  cluster?: string;
   title: string;
   hint?: string;
   defaultOpen?: boolean;
@@ -25,12 +33,13 @@ export function CollapsibleSection({
 
   useEffect(() => {
     const openIfTargeted = () => {
-      if (window.location.hash === `#${id}`) setOpen(true);
+      const hash = window.location.hash.slice(1);
+      if (hash === id || (cluster != null && hash === cluster)) setOpen(true);
     };
     openIfTargeted();
     window.addEventListener("hashchange", openIfTargeted);
     return () => window.removeEventListener("hashchange", openIfTargeted);
-  }, [id]);
+  }, [id, cluster]);
 
   return (
     <section id={id} className="scroll-mt-20">

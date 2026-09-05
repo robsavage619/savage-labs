@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { api, type DailyState, type Experiment, type WorkoutPlan } from "@/lib/api";
+import { api, type DailyState, type DailyStateGates, type Experiment, type WorkoutPlan } from "@/lib/api";
 import { reconciledVerdict, type VerdictTone } from "@/lib/readiness";
 import { Eyebrow } from "@/components/ui/metric";
 
@@ -78,6 +78,22 @@ function goalPressure(state: DailyState | undefined): { label: string; detail: s
   };
 }
 
+/** Verdicts are stored as an enum (migration 0063: CONFIRMED|REFUTED|
+ *  INCONCLUSIVE|INSUFFICIENT_N) and were being printed straight into the
+ *  headline slot, so the card read "INSUFFICIENT_N" — a debug string in the
+ *  hero position, which looks like a fault even when the trial is running fine. */
+const VERDICT_COPY: Record<string, { label: string; tone: VerdictTone }> = {
+  CONFIRMED: { label: "Effect confirmed", tone: "positive" },
+  REFUTED: { label: "Effect ruled out", tone: "neutral" },
+  INCONCLUSIVE: { label: "No clear effect yet", tone: "neutral" },
+  INSUFFICIENT_N: { label: "Still collecting data", tone: "neutral" },
+};
+
+/** "hrv_next_morning" → "hrv next morning". Metric keys are snake_case columns. */
+function humanizeMetric(key: string): string {
+  return key.replace(/_/g, " ").trim();
+}
+
 function activeExperiment(experiments: Experiment[] | undefined): { label: string; detail: string; tone: VerdictTone } {
   const active = experiments?.find((e) => e.status === "active") ?? experiments?.[0];
   if (!active) {
@@ -91,10 +107,13 @@ function activeExperiment(experiments: Experiment[] | undefined): { label: strin
   const b = active.arms.B?.adhered ?? 0;
   const done = Math.min(a, b);
   const pct = Math.min(100, Math.round((done / Math.max(1, active.min_per_arm)) * 100));
+  const verdict = active.result?.verdict ? VERDICT_COPY[active.result.verdict] : undefined;
   return {
-    label: active.result?.verdict ?? "Experiment running",
-    detail: `${active.manipulated}: ${pct}% to minimum balanced N for ${shorten(active.outcome_metric, 40)}.`,
-    tone: active.result?.verdict === "CONFIRMED" ? "positive" : "neutral",
+    label: verdict?.label ?? "Trial running",
+    detail: `Testing ${humanizeMetric(active.manipulated)} against ${humanizeMetric(
+      shorten(active.outcome_metric, 40),
+    )} — ${pct}% of the balanced sample collected.`,
+    tone: verdict?.tone ?? "neutral",
   };
 }
 
@@ -168,6 +187,60 @@ function DecisionCard({
   );
 }
 
+/**
+ * The safety gates, which the engine computes every day and no surface showed.
+ *
+ * `forbid_muscles` / `forbid_muscle_groups` decide what you are not allowed to
+ * train today, and until now the only way to discover a lockout was to have the
+ * planner reject an exercise. A constraint you can't see is a constraint you
+ * argue with.
+ */
+function GateStrip({ gates }: { gates: DailyStateGates }) {
+  const groups = gates.forbid_muscle_groups ?? [];
+  const muscles = gates.forbid_muscles ?? [];
+  const capped = gates.max_intensity !== "high";
+  if (groups.length === 0 && muscles.length === 0 && !capped && !gates.deload_required) return null;
+
+  const chip = (text: string, tone: "hard" | "soft") => (
+    <span
+      key={`${tone}-${text}`}
+      className="text-[10.5px] px-2 py-0.5 rounded-full whitespace-nowrap"
+      style={{
+        color: tone === "hard" ? "var(--negative)" : "var(--neutral)",
+        border: `1px solid color-mix(in oklch, ${tone === "hard" ? "var(--negative)" : "var(--neutral)"} 35%, transparent)`,
+        background: `color-mix(in oklch, ${tone === "hard" ? "var(--negative)" : "var(--neutral)"} 10%, transparent)`,
+      }}
+    >
+      {text.replace(/_/g, " ")}
+    </span>
+  );
+
+  return (
+    <div
+      className="mt-3 rounded-lg border p-3 flex flex-wrap items-center gap-x-3 gap-y-2"
+      style={{
+        borderColor: "color-mix(in oklch, var(--negative) 28%, transparent)",
+        background: "color-mix(in oklch, var(--negative) 6%, transparent)",
+      }}
+    >
+      <span className="text-[9.5px] uppercase tracking-[0.16em] text-[var(--text-faint)] shrink-0">
+        Locked today
+      </span>
+      <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+        {groups.map((g) => chip(g, "hard"))}
+        {muscles.map((m) => chip(m, "soft"))}
+        {capped && chip(`ceiling: ${gates.max_intensity}`, "soft")}
+        {gates.deload_required && chip("deload", "hard")}
+      </div>
+      {gates.reasons?.[0] && (
+        <span className="text-[11px] leading-snug text-[var(--text-muted)] basis-full">
+          {gates.deload_reason ?? gates.reasons[0]}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function AthleteOSPanel() {
   const state = useQuery({ queryKey: ["daily-state"], queryFn: api.dailyState, staleTime: 5 * 60_000 });
   const plan = useQuery({ queryKey: ["workout-next"], queryFn: () => api.workoutNext(false), staleTime: 5 * 60_000 });
@@ -199,6 +272,8 @@ export function AthleteOSPanel() {
           <SignalPill label="Cardio" value={freshnessLabel(freshness?.cardio_age_days)} />
         </div>
       </div>
+
+      {state.data && <GateStrip gates={state.data.gates} />}
 
       {/* The command spans the row on phones; the three context cards pair up
           beneath it. Four equal full-width cards put the session ~1,100px down. */}

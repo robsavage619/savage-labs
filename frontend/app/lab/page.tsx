@@ -23,6 +23,7 @@ const LAB_SECTIONS = [
   { id: "findings", label: "Findings" },
   { id: "engine", label: "Engine" },
   { id: "clinical", label: "Clinical" },
+  { id: "stress", label: "Autonomic" },
   { id: "correlations", label: "HRV" },
   { id: "trends", label: "Trends" },
 ] as const;

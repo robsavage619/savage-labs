@@ -16,19 +16,21 @@ function acwrZone(ratio: number | null | undefined): { label: string; tone: "pos
   return { label: "Undertraining", tone: "negative", color: "var(--negative)" };
 }
 
-function readinessSignal(
-  sigma: number | null,
-  ratio: number | null,
-): { label: string; tone: "positive" | "neutral" | "negative"; detail: string } {
-  if (sigma == null && ratio == null) return { label: "—", tone: "neutral", detail: "Awaiting biometric data" };
-  if (ratio != null && ratio > 1.5) return { label: "Rest", tone: "negative", detail: "Load ratio critical — deload or rest" };
-  if (ratio != null && ratio > 1.3) return { label: "Easy", tone: "neutral", detail: "Overreach zone · avoid hard efforts" };
-  if (sigma != null && sigma >= 1.0) return { label: "Push", tone: "positive", detail: `HRV +${sigma.toFixed(1)}σ · prime for intensity` };
-  if (sigma != null && sigma >= 0.0) return { label: "Train", tone: "positive", detail: "HRV neutral · normal session" };
-  if (sigma != null && sigma < -1.5) return { label: "Easy", tone: "negative", detail: `HRV −${Math.abs(sigma).toFixed(1)}σ · nervous system suppressed` };
-  if (sigma != null && sigma < -0.5) return { label: "Maintain", tone: "neutral", detail: `HRV −${Math.abs(sigma).toFixed(1)}σ · keep intensity moderate` };
-  return { label: "Train", tone: "positive", detail: "Conditions nominal" };
-}
+/**
+ * The verdict has exactly one source: reconciledVerdict() over DailyState.
+ *
+ * This panel used to carry its own readinessSignal(sigma, ratio) that derived a
+ * Push/Train/Easy/Maintain/Rest call in the browser — a third vocabulary
+ * alongside reconciledVerdict()'s "Moderate / Push it / Train hard" and the
+ * backend's training_call, and a direct breach of "DailyState is the single
+ * source of truth ... never recompute these client-side." When state is
+ * missing we now say so instead of guessing.
+ */
+const AWAITING_VERDICT = {
+  label: "—",
+  tone: "neutral" as const,
+  detail: "Awaiting daily state",
+};
 
 function Gauge({ ratio, color }: { ratio: number; color: string }) {
   const clamped = Math.max(0, Math.min(2, ratio));
@@ -84,7 +86,7 @@ export function PillarTrainingLoad() {
             : "Awaiting biometric data";
         return { label: v.label, tone: v.tone, detail };
       })()
-    : readinessSignal(sigma, ratio);
+    : AWAITING_VERDICT;
   const todayRecovery = trend.data?.length ? trend.data[trend.data.length - 1].score : null;
 
   const trainStreak = useMemo(() => {

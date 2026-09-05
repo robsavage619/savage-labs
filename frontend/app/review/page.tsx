@@ -61,7 +61,7 @@ export default function ReviewPage() {
               <PillarTrainingLoad />
             </ErrorBoundary>
           </div>
-          <CollapsibleSection id="whoop" title="Raw WHOOP vitals">
+          <CollapsibleSection id="whoop" cluster="signals" title="Raw WHOOP vitals">
             <ErrorBoundary label="WHOOP vitals">
               <WhoopVitals />
             </ErrorBoundary>
@@ -70,22 +70,22 @@ export default function ReviewPage() {
 
         {/* ── TRAINING ── */}
         <ClusterHeader id="training">Training</ClusterHeader>
-        <CollapsibleSection id="meso" title="Mesocycle">
+        <CollapsibleSection id="meso" cluster="training" title="Mesocycle">
           <ErrorBoundary label="Periodization">
             <PeriodizationStrip />
           </ErrorBoundary>
         </CollapsibleSection>
-        <CollapsibleSection id="strength" title="Strength">
+        <CollapsibleSection id="strength" cluster="training" title="Strength">
           <ErrorBoundary label="Strength">
             <StrengthPanel />
           </ErrorBoundary>
         </CollapsibleSection>
-        <CollapsibleSection id="cardio" title="Cardio & sports">
+        <CollapsibleSection id="cardio" cluster="training" title="Cardio & sports">
           <ErrorBoundary label="Cardio">
             <CardioPanel />
           </ErrorBoundary>
         </CollapsibleSection>
-        <CollapsibleSection id="post" title="Post-workout">
+        <CollapsibleSection id="post" cluster="training" title="Post-workout">
           <div className="space-y-4">
             <ErrorBoundary label="Post-workout debrief">
               <PostWorkoutPanel />
@@ -95,7 +95,7 @@ export default function ReviewPage() {
             </ErrorBoundary>
           </div>
         </CollapsibleSection>
-        <CollapsibleSection id="goals" title="2026 Goal scorecard">
+        <CollapsibleSection id="goals" cluster="training" title="2026 Goal scorecard">
           <ErrorBoundary label="Goal scorecard">
             <GoalScorecard />
           </ErrorBoundary>
@@ -103,12 +103,12 @@ export default function ReviewPage() {
 
         {/* ── BODY ── */}
         <ClusterHeader id="body">Body</ClusterHeader>
-        <CollapsibleSection id="fueling" title="Fueling">
+        <CollapsibleSection id="fueling" cluster="body" title="Fueling">
           <ErrorBoundary label="Fueling">
             <FuelingPanel />
           </ErrorBoundary>
         </CollapsibleSection>
-        <CollapsibleSection id="physique" title="Progress photos">
+        <CollapsibleSection id="physique" cluster="body" title="Progress photos">
           <ErrorBoundary label="Progress photos">
             <ProgressPhotoPanel />
           </ErrorBoundary>

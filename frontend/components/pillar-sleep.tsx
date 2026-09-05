@@ -137,7 +137,10 @@ export function PillarSleep() {
         </span>
       </div>
 
-      <div className="grid grid-cols-6 gap-2 mt-3">
+      {/* Six fixed columns overflow their card once the pillar drops below
+          ~320px (measured 312 into 299 at a 1100px window). Wrap to three rows
+          of two rather than clipping the last stat. */}
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 min-w-0">
         <div>
           <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Avg</p>
           <Metric value={avgHours ? avgHours.toFixed(1) : "—"} unit="h" size="md" />

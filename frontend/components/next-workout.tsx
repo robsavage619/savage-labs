@@ -591,6 +591,32 @@ export function NextWorkoutPane() {
   const carried = planDate != null && planDate < localToday();
   const title = executed ? "Completed" : carried ? "Last Plan" : "Today's Plan";
 
+  const planBody = data ? (
+    <>
+      <SessionStrip plan={data} />
+      <WarmupSection items={data.warmup ?? []} />
+      {(data.blocks ?? []).map((block, i) => (
+        <ExerciseBlock
+          key={i}
+          block={block}
+          onPick={setPicked}
+          modulated={data.recommendation?.intensity === "low" || data.recommendation?.intensity === "rest"}
+          executed={executed}
+        />
+      ))}
+      <CooldownRow text={data.cooldown ?? ""} />
+      <CollapsibleSection id="why" title="Why this session">
+        <div className="space-y-4">
+          <SessionRationale plan={data} />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ClinicalCallout notes={toStringArray(data.clinical_notes)} />
+            <VaultInsights insights={toStringArray(data.vault_insights)} />
+          </div>
+        </div>
+      </CollapsibleSection>
+    </>
+  ) : null;
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -723,30 +749,26 @@ export function NextWorkoutPane() {
           {/* Work first, reasoning after. Mid-set the useful payload is the load
               and the rep target; the readiness narrative and the WHY are a
               before-or-after read, and putting them on top meant scrolling past
-              ~15 lines of prose to reach the first lift on a phone. */}
-          <div className="space-y-5" style={executed ? { opacity: 0.7 } : undefined}>
-            <SessionStrip plan={data} />
-            <WarmupSection items={data.warmup ?? []} />
-            {(data.blocks ?? []).map((block, i) => (
-              <ExerciseBlock
-                key={i}
-                block={block}
-                onPick={setPicked}
-                modulated={data.recommendation?.intensity === "low" || data.recommendation?.intensity === "rest"}
-                executed={executed}
-              />
-            ))}
-            <CooldownRow text={data.cooldown ?? ""} />
-            <CollapsibleSection id="why" title="Why this session">
-              <div className="space-y-4">
-                <SessionRationale plan={data} />
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <ClinicalCallout notes={toStringArray(data.clinical_notes)} />
-                  <VaultInsights insights={toStringArray(data.vault_insights)} />
-                </div>
+              ~15 lines of prose to reach the first lift on a phone.
+
+              Once the session is EXECUTED this whole stack is a record, not an
+              action — and rendering it in full cost ~3,300px of the page on any
+              day already trained, with the banner above it explicitly saying not
+              to train off these loads. It now collapses to the banner plus a
+              disclosure. */}
+          {executed ? (
+            <CollapsibleSection
+              id="executed-plan"
+              title="What was prescribed this morning"
+              hint="record — not a target"
+            >
+              <div className="space-y-5" style={{ opacity: 0.7 }}>
+                {planBody}
               </div>
             </CollapsibleSection>
-          </div>
+          ) : (
+            <div className="space-y-5">{planBody}</div>
+          )}
         </div>
       )}
 

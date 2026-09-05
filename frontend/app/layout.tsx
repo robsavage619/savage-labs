@@ -18,7 +18,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@900&display=swap" rel="stylesheet" />
+        {/* Load every weight the CSS actually asks for. Loading 900 alone meant
+            .eyebrow (500), .shc-section-title (600), .metric-* (500) and the
+            header HUD (500/700) all rendered synthesized or silently Black. */}
+        <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;900&display=swap" rel="stylesheet" />
       </head>
       <body className="min-h-full bg-[var(--bg)] text-[var(--foreground)] antialiased">
         <TactileFeedback />
