@@ -1,0 +1,434 @@
+/*
+ * Console — the premium instrument treatment.
+ *
+ * Scoped under .cx so it cannot leak into the existing surfaces while the two
+ * run side by side. Deliberately does NOT inherit globals.css's HUD vocabulary:
+ * no neon glow, no scan lines, no Orbitron Black. Those read as gaming, and the
+ * brief here is premium, which in an instrument means calm, spacious and
+ * typographically disciplined — the opposite of loud.
+ *
+ * Everything is a token. The audit that produced this found 249 inline oklch()
+ * literals and 25 ad-hoc type sizes across the app; the whole point of starting
+ * clean is not to do that again.
+ */
+
+.cx {
+  /* Surfaces — four steps, cool-biased near-black. Depth comes from luminosity,
+     not from a border on every box. */
+  --c-bg:        oklch(0.145 0.008 250);
+  --c-surface:   oklch(0.185 0.009 250);
+  --c-surface-2: oklch(0.215 0.010 250);
+  --c-line:      oklch(0.285 0.012 250);
+  --c-line-soft: oklch(0.235 0.010 250);
+
+  /* Text — four tints, and they are actually distinguishable. */
+  --c-ink:   oklch(0.965 0.003 250);
+  --c-mute:  oklch(0.760 0.010 250);
+  --c-dim:   oklch(0.615 0.012 250);
+  --c-faint: oklch(0.480 0.012 250);
+
+  /* One accent. Semantic colour is separate and is not the accent. */
+  --c-accent: oklch(0.760 0.115 215);
+  --ok:   oklch(0.760 0.130 155);
+  --warn: oklch(0.800 0.135 78);
+  --bad:  oklch(0.680 0.170 25);
+
+  /* Type scale — six steps, no half-pixels. */
+  --fs-label: 11px;
+  --fs-read: 13.5px;
+  --fs-body: 15px;
+  --fs-num: 30px;
+  --fs-head: 21px;
+  --fs-hero: 44px;
+
+  --r: 12px;
+  --sp: 20px;
+
+  background: var(--c-bg);
+  color: var(--c-ink);
+  min-height: 100vh;
+  font-feature-settings: "cv05" 1, "ss01" 1;
+}
+
+
+/* ── type systems ───────────────────────────────────────────────────────────
+ *
+ * Three complete pairings, switched by data-type on .cx. Each sets a display
+ * face (the verdict and the big numerals), a body face (the plain-English
+ * reads) and a data face (labels, units, tabular figures).
+ *
+ * The app's existing Geist is deliberately not one of the options — it is the
+ * neutral SaaS default the audit found underneath an Orbitron HUD costume, and
+ * "premium" is exactly the thing it does not say.
+ */
+
+/* A · STUDIO — contemporary, characterful. Bricolage carries an optical-size
+ *   and width axis, so the verdict can be set wide and tight without a second
+ *   family. Reads like a 2025 design studio: confident, slightly wonky. */
+.cx[data-type="studio"] {
+  --f-display: "Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+  --f-body: "Instrument Sans", system-ui, -apple-system, sans-serif;
+  --f-data: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --display-wght: 700;
+  --display-tracking: -0.03em;
+  --display-settings: "wdth" 92, "opsz" 60;
+}
+
+/* B · EDITORIAL — luxury magazine. Fraunces at high optical size with a little
+ *   SOFT is genuinely beautiful at 44px, and a serif verdict on a dark ground
+ *   is the least software-looking option of the three. */
+.cx[data-type="editorial"] {
+  --f-display: "Fraunces", "Newsreader", Georgia, serif;
+  --f-body: "Newsreader", Georgia, serif;
+  --f-data: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --display-wght: 600;
+  --display-tracking: -0.018em;
+  --display-settings: "opsz" 120, "SOFT" 30, "WONK" 1;
+  --fs-read: 15px;
+  --fs-body: 16.5px;
+}
+
+/* C · SWISS — technical precision. One superfamily at two widths; the expanded
+ *   caps give the labels an instrument-panel authority without any HUD kitsch. */
+.cx[data-type="swiss"] {
+  --f-display: "Archivo", system-ui, sans-serif;
+  --f-body: "Archivo", system-ui, sans-serif;
+  --f-data: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+  --display-wght: 700;
+  --display-tracking: -0.02em;
+  --display-settings: "wdth" 112;
+}
+
+.cx { font-family: var(--f-body); }
+
+.cx-call-verdict {
+  font-family: var(--f-display);
+  font-weight: var(--display-wght);
+  letter-spacing: var(--display-tracking);
+  font-variation-settings: var(--display-settings);
+}
+.cx-value {
+  font-family: var(--f-display);
+  font-variation-settings: var(--display-settings);
+}
+.cx-word { font-family: var(--f-display); font-variation-settings: var(--display-settings); }
+.cx-label, .cx-status, .cx-when, .cx-tag, .cx-band-labels, .cx-rule, .cx-lock,
+.cx-tbl .rx, .cx-tbl .prev {
+  font-family: var(--f-data);
+}
+.cx-lede, .cx-read, .cx-tbl .ex { font-family: var(--f-body); }
+
+/* ── type switcher ──────────────────────────────────────────────────────── */
+.cx-type {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--c-line-soft);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--c-surface);
+}
+.cx-type button {
+  font-family: var(--f-data);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--c-faint);
+  cursor: pointer;
+  transition: color 180ms ease, background 180ms ease;
+}
+.cx-type button:hover { color: var(--c-mute); }
+.cx-type button[aria-pressed="true"] {
+  background: var(--c-surface-2);
+  color: var(--c-ink);
+}
+
+/* ── layout ─────────────────────────────────────────────────────────────── */
+
+.cx-wrap {
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 26px 32px 96px;
+}
+
+.cx-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+@media (max-width: 1180px) { .cx-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px)  { .cx-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── masthead ───────────────────────────────────────────────────────────── */
+
+.cx-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding-bottom: 18px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--c-line-soft);
+}
+.cx-word {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--c-ink);
+}
+.cx-word em { font-style: normal; color: var(--c-accent); }
+.cx-when {
+  font-size: var(--fs-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── the call: the one place that gets scale ────────────────────────────── */
+
+.cx-call {
+  grid-column: span 2;
+  background: linear-gradient(160deg, var(--c-surface-2), var(--c-surface));
+  border: 1px solid var(--c-line);
+  border-radius: var(--r);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+@media (max-width: 620px) { .cx-call { grid-column: span 1; } }
+
+/* Weight and tracking are owned by the active type system above — declaring
+   them again here would silently cancel it, since this block comes later at
+   equal specificity. Size and rhythm only. */
+.cx-call-verdict {
+  font-size: var(--fs-hero);
+  line-height: 1.02;
+  margin: 8px 0 0;
+}
+.cx-lede {
+  font-size: var(--fs-body);
+  line-height: 1.55;
+  color: var(--c-mute);
+  margin: 14px 0 0;
+  max-width: 58ch;
+  text-wrap: pretty;
+}
+.cx-locks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+.cx-lock {
+  font-size: var(--fs-label);
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklch, var(--bad) 40%, transparent);
+  background: color-mix(in oklch, var(--bad) 12%, transparent);
+  color: var(--bad);
+  white-space: nowrap;
+}
+.cx-lock[data-soft="true"] {
+  border-color: color-mix(in oklch, var(--warn) 40%, transparent);
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+/* ── channel card ───────────────────────────────────────────────────────── */
+
+.cx-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-line-soft);
+  border-radius: var(--r);
+  padding: 16px 17px 17px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  transition: border-color 220ms ease, background 220ms ease;
+}
+.cx-card:hover { border-color: var(--c-line); background: var(--c-surface-2); }
+/* Out-of-band channels get a hairline of their state colour — enough to find
+   them in a scan, not enough to shout. */
+.cx-card[data-state="watch"] { border-color: color-mix(in oklch, var(--warn) 34%, var(--c-line-soft)); }
+.cx-card[data-state="alert"] { border-color: color-mix(in oklch, var(--bad) 42%, var(--c-line-soft)); }
+
+.cx-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.cx-label {
+  font-size: var(--fs-label);
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--c-dim);
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.cx-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--c-faint);
+  border: 1px solid var(--c-line-soft);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+.cx-status {
+  font-size: var(--fs-label);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cx-dot { width: 6px; height: 6px; border-radius: 50%; display: block; }
+
+.cx-value {
+  font-size: var(--fs-num);
+  font-weight: 550;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-ink);
+}
+.cx-unit {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--c-faint);
+  margin-left: 5px;
+  letter-spacing: 0;
+}
+
+/* ── band ───────────────────────────────────────────────────────────────── */
+
+.cx-band-wrap { margin-top: 14px; }
+.cx-band {
+  height: 4px;
+  border-radius: 2px;
+  position: relative;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--bad) 30%, var(--c-surface-2)) 0%,
+    color-mix(in oklch, var(--warn) 26%, var(--c-surface-2)) 20%,
+    color-mix(in oklch, var(--ok) 30%, var(--c-surface-2)) 38%,
+    color-mix(in oklch, var(--ok) 30%, var(--c-surface-2)) 62%,
+    color-mix(in oklch, var(--warn) 26%, var(--c-surface-2)) 80%,
+    color-mix(in oklch, var(--bad) 30%, var(--c-surface-2)) 100%
+  );
+}
+.cx-marker {
+  position: absolute;
+  top: -3px;
+  width: 2.5px;
+  height: 10px;
+  border-radius: 2px;
+  transform: translateX(-50%);
+  transition: left 620ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.cx-band-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--c-faint);
+}
+.cx-band-mid { color: var(--c-dim); }
+
+/* ── the read line ──────────────────────────────────────────────────────── */
+
+.cx-read {
+  font-size: var(--fs-read);
+  line-height: 1.5;
+  color: var(--c-mute);
+  margin: 14px 0 0;
+  text-wrap: pretty;
+}
+
+/* ── section rules ──────────────────────────────────────────────────────── */
+
+.cx-rule {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 16px 0 2px;
+  font-size: var(--fs-label);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--c-faint);
+}
+.cx-rule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--c-line-soft);
+}
+
+/* ── session table ──────────────────────────────────────────────────────── */
+
+.cx-sess { grid-column: span 2; }
+@media (max-width: 620px) { .cx-sess { grid-column: span 1; } }
+.cx-tbl { width: 100%; border-collapse: collapse; margin-top: 12px; }
+.cx-tbl td {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--c-line-soft);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+.cx-tbl tr:last-child td { border-bottom: 0; }
+.cx-tbl .ex { white-space: normal; color: var(--c-ink); }
+.cx-tbl .rx {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-accent);
+  font-weight: 550;
+  padding-left: 14px;
+}
+.cx-tbl .prev {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-faint);
+  font-size: 12px;
+  padding-left: 14px;
+}
+
+/* ── motion: one calm entrance, and only once ───────────────────────────── */
+
+@keyframes cx-rise {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: none; }
+}
+.cx-card, .cx-call { animation: cx-rise 520ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.cx-grid > *:nth-child(1) { animation-delay: 0ms; }
+.cx-grid > *:nth-child(2) { animation-delay: 40ms; }
+.cx-grid > *:nth-child(3) { animation-delay: 80ms; }
+.cx-grid > *:nth-child(4) { animation-delay: 120ms; }
+.cx-grid > *:nth-child(5) { animation-delay: 160ms; }
+.cx-grid > *:nth-child(6) { animation-delay: 200ms; }
+.cx-grid > *:nth-child(n + 7) { animation-delay: 240ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cx-card, .cx-call { animation: none; }
+  .cx-marker { transition: none; }
+}
+
+.cx-skel {
+  border-radius: var(--r);
+  background: linear-gradient(90deg, var(--c-surface) 0%, var(--c-surface-2) 50%, var(--c-surface) 100%);
+  background-size: 200% 100%;
+  animation: cx-shimmer 1.4s ease-in-out infinite;
+  min-height: 148px;
+}
+@keyframes cx-shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .cx-skel { animation: none; } }

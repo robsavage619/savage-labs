@@ -22,6 +22,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             .eyebrow (500), .shc-section-title (600), .metric-* (500) and the
             header HUD (500/700) all rendered synthesized or silently Black. */}
         <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;900&display=swap" rel="stylesheet" />
+        {/* Console type systems — three complete pairings, switchable on /ops
+            while Rob picks one. Once chosen, delete the other two families:
+            carrying all three is ~9 webfonts and only one is ever rendered. */}
+        <link
+          href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@400;500;600&family=Fraunces:opsz,SOFT,WONK,wght@9..144,0..100,0..1,400..800&family=Newsreader:opsz,wght@6..72,400..600&family=IBM+Plex+Mono:wght@400;500;600&family=Archivo:wdth,wght@62..125,400..700&family=Space+Mono:wght@400;700&display=swap"
+          rel="stylesheet"
+        />
       </head>
       <body className="min-h-full bg-[var(--bg)] text-[var(--foreground)] antialiased">
         <TactileFeedback />
