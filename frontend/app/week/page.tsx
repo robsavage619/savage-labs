@@ -12,6 +12,7 @@ import { PatternsPane } from "@/components/patterns-pane";
 import { PeriodizationStrip } from "@/components/periodization-strip";
 import { PerformanceCurvePane } from "@/components/performance-curve";
 import { PickleballPane } from "@/components/pickleball-panel";
+import { TournamentReadiness } from "@/components/tournament-readiness";
 import { PillarRecovery } from "@/components/pillar-recovery";
 import { PillarSleep } from "@/components/pillar-sleep";
 import { PillarTrainingLoad } from "@/components/pillar-training-load";
@@ -527,6 +528,35 @@ export default function WeekPage() {
           }
         >
           <CardioPanel />
+        </Card>
+        <Card
+          id="event-prep"
+          span={4}
+          label="Tournament readiness"
+          help="How you prepared for, played at, and recovered from each tournament — day by day."
+          helpDetail={
+            <>
+              <p>
+                Each strip is the eleven days around one event: seven before, the day itself, and
+                three after. Bar height is that morning&apos;s recovery, and the markers underneath
+                are what you actually did — gym sessions and court minutes. A taper would show as
+                load emptying out over the last 72 hours.
+              </p>
+              <p>
+                <strong>It has not, so far.</strong> Before the PNW Team Cup you lifted six times
+                and played 277 minutes in the prior three days, 216 of them the day before, and
+                started the event on 41 recovery.
+              </p>
+              <p>
+                Three events is not enough to tell you what preparation works, and the numbers
+                currently point the wrong way — your best rating gain came off your worst recovery
+                and your worst result off your best. Read this as a record of what you did, not
+                as advice.
+              </p>
+            </>
+          }
+        >
+          <TournamentReadiness />
         </Card>
         <Card
           id="sport"

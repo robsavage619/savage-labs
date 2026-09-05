@@ -820,6 +820,116 @@ async def dupr_sync_matches() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
 
 
+@router.get("/pickleball/events")
+def pickleball_events(lead_in: int = 7, after: int = 3) -> dict[str, Any]:
+    """Per-tournament readiness profile: how he prepared, played, and recovered.
+
+    One row per day from `lead_in` days before each event through `after` days
+    past it, carrying recovery, HRV, RHR, sleep, lifts and court minutes, joined
+    to that event's win/loss record and net DUPR movement.
+
+    The point is the SHAPE of the days around the event, not any single number.
+    Whether recovery on the day predicts the result is exactly the question this
+    cannot answer yet — see `sample_warning`.
+    """
+    conn = get_read_conn()
+    try:
+        exists = conn.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'dupr_matches'"
+        ).fetchone()
+        if not exists or not exists[0]:
+            return {"events": [], "sample_warning": None}
+
+        events = conn.execute(
+            """
+            SELECT event_date, ANY_VALUE(event_name) AS event_name,
+                   ANY_VALUE(venue) AS venue,
+                   COUNT(*) FILTER (WHERE won) AS wins,
+                   COUNT(*) FILTER (WHERE NOT won) AS losses,
+                   SUM(dupr_delta) AS dupr_delta,
+                   MIN(dupr_pre) AS dupr_pre, MAX(dupr_post) AS dupr_post
+            FROM dupr_matches
+            WHERE event_date IS NOT NULL
+            GROUP BY event_date
+            ORDER BY event_date DESC
+            """
+        ).fetchall()
+
+        out: list[dict[str, Any]] = []
+        for ev in events:
+            ev_date = ev[0]
+            days: list[dict[str, Any]] = []
+            for offset in range(-abs(lead_in), abs(after) + 1):
+                day = ev_date + timedelta(days=offset)
+                rec = conn.execute(
+                    "SELECT score, hrv, rhr FROM recovery WHERE date = ?", [day]
+                ).fetchone()
+                slp = conn.execute(
+                    "SELECT DATE_DIFF('minute', ts_in, ts_out) / 60.0 FROM sleep "
+                    "WHERE night_date = ? AND is_nap = FALSE "
+                    "ORDER BY 1 DESC LIMIT 1",
+                    [day],
+                ).fetchone()
+                # Lifts exclude pickleball so a match day doesn't read as a gym day.
+                lifts = conn.execute(
+                    "SELECT COUNT(*) FROM workouts WHERE CAST(started_at AS DATE) = ? "
+                    "AND lower(COALESCE(sport_name, kind, '')) NOT LIKE '%pickle%'",
+                    [day],
+                ).fetchone()
+                court = conn.execute(
+                    "SELECT COALESCE(SUM(duration_min), 0) FROM cardio_sessions "
+                    "WHERE date = ? AND lower(modality) LIKE '%pickle%'",
+                    [day],
+                ).fetchone()
+                days.append(
+                    {
+                        "date": str(day),
+                        "offset": offset,
+                        "recovery": rec[0] if rec else None,
+                        "hrv": round(rec[1], 1) if rec and rec[1] is not None else None,
+                        "rhr": rec[2] if rec else None,
+                        "sleep_h": round(slp[0], 1) if slp and slp[0] is not None else None,
+                        "lifts": int(lifts[0]) if lifts else 0,
+                        "court_min": int(court[0]) if court else 0,
+                    }
+                )
+
+            on_day = next((d for d in days if d["offset"] == 0), None)
+            prior3 = [d for d in days if -3 <= d["offset"] <= -1]
+            out.append(
+                {
+                    "event_date": str(ev_date),
+                    "event_name": ev[1],
+                    "venue": ev[2],
+                    "wins": int(ev[3] or 0),
+                    "losses": int(ev[4] or 0),
+                    "dupr_delta": round(ev[5], 3) if ev[5] is not None else None,
+                    "dupr_pre": ev[6],
+                    "dupr_post": ev[7],
+                    "recovery_on_day": on_day["recovery"] if on_day else None,
+                    "court_min_on_day": on_day["court_min"] if on_day else 0,
+                    # A taper is the absence of load in the 72h before. Counting
+                    # both lifts and court minutes matters: the day before the
+                    # 2026-08-29 event carried 4 lifts AND 216 court minutes,
+                    # which no lift-only measure would have called a hard day.
+                    "lifts_prior_3d": sum(d["lifts"] for d in prior3),
+                    "court_min_prior_3d": sum(d["court_min"] for d in prior3),
+                    "days": days,
+                }
+            )
+
+        warning = None
+        if 0 < len(out) < 8:
+            warning = (
+                f"{len(out)} events on record. That is enough to see how you prepared, "
+                "and nowhere near enough to say what preparation works — treat any "
+                "pattern here as a question to test, not a finding."
+            )
+        return {"events": out, "sample_warning": warning}
+    finally:
+        conn.close()
+
+
 @router.get("/pickleball/matches")
 def get_pickleball_matches() -> dict[str, Any]:
     """Return DUPR match history joined with WHOOP recovery on match days.

@@ -82,6 +82,7 @@ export const SECTIONS: readonly Section[] = [
   // Tournament history was 678px of a 1,138px card — its own thing.
   { id: "sport", label: "Pickleball", surface: "week", keywords: ["dupr", "court", "freshness", "play"] },
   { id: "tournaments", label: "Tournament results", surface: "week", keywords: ["matches", "dupr", "results", "partners", "scores"] },
+  { id: "event-prep", label: "Tournament readiness", surface: "week", keywords: ["taper", "prep", "rest", "before event", "recovery on the day", "peaking"] },
   { id: "post", label: "Post-workout", surface: "week", keywords: ["debrief", "retrospective", "after action", "sync"] },
   { id: "goals", label: "2026 goals", surface: "week", keywords: ["scorecard", "targets", "dupr"] },
 

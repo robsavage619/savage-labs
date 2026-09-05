@@ -648,6 +648,39 @@ export interface ExperimentSuggestion {
   lab_verdict: string;
 }
 
+/** One day in the −7 … +3 window around a tournament. `offset` 0 is the event day. */
+export interface PickleballEventDay {
+  date: string;
+  offset: number;
+  recovery: number | null;
+  hrv: number | null;
+  rhr: number | null;
+  sleep_h: number | null;
+  lifts: number;
+  court_min: number;
+}
+
+export interface PickleballEvent {
+  event_date: string;
+  event_name: string;
+  venue: string | null;
+  wins: number;
+  losses: number;
+  dupr_delta: number | null;
+  dupr_pre: number | null;
+  dupr_post: number | null;
+  recovery_on_day: number | null;
+  court_min_on_day: number;
+  lifts_prior_3d: number;
+  court_min_prior_3d: number;
+  days: PickleballEventDay[];
+}
+
+export interface PickleballEvents {
+  events: PickleballEvent[];
+  sample_warning: string | null;
+}
+
 export const api = {
   recoveryToday: () => get<RecoveryToday>("/api/recovery/today"),
   recoveryTrend: (days = 14) => get<RecoveryPoint[]>(`/api/recovery/trend?days=${days}`),
@@ -1098,6 +1131,7 @@ export const api = {
       }[];
       total: number;
     }>("/api/pickleball/matches"),
+  pickleballEvents: () => get<PickleballEvents>("/api/pickleball/events"),
   trainingProgressionAll: (weeks = 8) =>
     get<{
       exercises: {
