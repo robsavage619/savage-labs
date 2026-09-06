@@ -270,6 +270,9 @@ class CheckinSubmission(BaseModel):
     notes: str | None = None
     muscle_soreness: dict[str, int] | None = None  # {muscle_key: severity 1-3}
     protein_grams: int | None = None  # total protein consumed today (grams)
+    # Override the weight plausibility check. A genuine 25%+ swing is possible
+    # over a long enough gap, so the gate must be answerable rather than final.
+    force_weight: bool = False
 
     @staticmethod
     def _validate_1_10(v: int | None, name: str) -> int | None:
@@ -278,6 +281,71 @@ class CheckinSubmission(BaseModel):
         if not 1 <= v <= 10:
             raise ValueError(f"{name} must be 1-10")
         return v
+
+
+# ── Check-in weight plausibility ────────────────────────────────────────────
+#
+# Every 1-10 field on the check-in is bounds-checked; body weight was not, and
+# on 2026-05-19 and 2026-05-21 a leading-digit slip put 138 lb into a run of
+# 233-239 lb. The frontend commits this field on blur, so a typo is written the
+# moment focus leaves the box — there is no confirm step to catch it. Two bad
+# rows then dragged the all-time weight chart's axis down by a hundred pounds
+# and gouged the rolling mean.
+#
+# An absolute band alone would not have caught it: 62.6 kg is a perfectly valid
+# human weight. What makes it impossible is the *neighbours*, so the real test
+# is deviation from the most recent prior weighing.
+
+_WEIGHT_ABS_MIN_KG = 30.0
+_WEIGHT_ABS_MAX_KG = 300.0
+_WEIGHT_MAX_DEVIATION = 0.25
+_WEIGHT_PRIOR_WINDOW_DAYS = 365
+
+
+def check_weight_plausible(kg: float, prior_kg: float | None) -> str | None:
+    """Return a rejection message for an implausible weight, or None to accept.
+
+    `prior_kg` is the most recent weighing before this one, from any source. It
+    is None when there is no usable history, in which case only the absolute
+    band applies — a first entry has nothing to be inconsistent with.
+    """
+    if not _WEIGHT_ABS_MIN_KG <= kg <= _WEIGHT_ABS_MAX_KG:
+        return (
+            f"body_weight_kg {kg:.1f} kg ({kg * 2.20462:.1f} lb) is outside "
+            f"{_WEIGHT_ABS_MIN_KG:.0f}-{_WEIGHT_ABS_MAX_KG:.0f} kg"
+        )
+    if prior_kg is None or prior_kg <= 0:
+        return None
+    deviation = abs(kg - prior_kg) / prior_kg
+    if deviation > _WEIGHT_MAX_DEVIATION:
+        return (
+            f"body_weight_kg {kg * 2.20462:.1f} lb is {deviation * 100:.0f}% off your last "
+            f"weighing of {prior_kg * 2.20462:.1f} lb — check for a typo. Re-send with "
+            f"force_weight=true if it is real."
+        )
+    return None
+
+
+def _latest_prior_weight_kg(conn, before: str) -> float | None:
+    """Most recent weighing strictly before `before`, from check-ins or Apple Health."""
+    row = conn.execute(
+        """
+        SELECT kg FROM (
+            SELECT date AS day, body_weight_kg AS kg
+            FROM daily_checkin
+            WHERE body_weight_kg IS NOT NULL
+            UNION ALL
+            SELECT ts::DATE AS day, value_num AS kg
+            FROM measurements
+            WHERE metric = 'body_mass_kg' AND value_num IS NOT NULL
+        )
+        WHERE day < $before AND day >= $before::DATE - INTERVAL ($window) DAY
+        ORDER BY day DESC
+        LIMIT 1
+        """,
+        {"before": before, "window": _WEIGHT_PRIOR_WINDOW_DAYS},
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
 
 
 @router.get("/checkin/today")
@@ -334,6 +402,12 @@ async def post_checkin(body: CheckinSubmission) -> dict:
     target_date = body.date if body.date else date.today().isoformat()
     ms_json = json.dumps(body.muscle_soreness) if body.muscle_soreness is not None else None
     async with write_ctx() as conn:
+        if body.body_weight_kg is not None and not body.force_weight:
+            problem = check_weight_plausible(
+                body.body_weight_kg, _latest_prior_weight_kg(conn, target_date)
+            )
+            if problem:
+                raise HTTPException(status_code=422, detail=problem)
         conn.execute(
             """
             INSERT INTO daily_checkin
