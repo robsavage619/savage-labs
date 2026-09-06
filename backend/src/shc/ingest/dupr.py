@@ -75,6 +75,12 @@ async def _login(client: httpx.AsyncClient) -> str:
         json={"email": email, "password": password},
         timeout=_TIMEOUT,
     )
+    if resp.status_code in (401, 403):
+        # The stored email/password itself is bad — this is the one failure
+        # that genuinely needs Rob to do something, so it is the one that
+        # raises the banner. A 5xx here falls through to raise_for_status
+        # without touching the flag.
+        await _mark_state(needs_reauth=True)
     resp.raise_for_status()
     token = (resp.json().get("result") or {}).get("accessToken")
     if not token:
@@ -303,8 +309,13 @@ async def sync_rating() -> dict[str, Any]:
     """Fetch the current DUPR rating and upsert today's snapshot.
 
     Returns the parsed doubles/singles rating. Raises RuntimeError on missing
-    credentials and httpx.HTTPStatusError on an unrecoverable API error (after
-    flagging the source as needing re-auth).
+    credentials and httpx.HTTPStatusError on an unrecoverable API error.
+
+    Only a rejected credential (a 401/403 that survives a fresh login) sets
+    `needs_reauth`. A 5xx does not: api.dupr.gg is an unofficial endpoint that
+    returns bare nginx 503s during its own outages, and on 2026-09-06 one of
+    those raised the reauth banner over an API Rob had no way to fix and a
+    "Reconnect" link that 404s. Same rule whoop.py already follows.
     """
     token = load_token("dupr", "access_token")
     async with httpx.AsyncClient() as client:
@@ -318,7 +329,13 @@ async def sync_rating() -> dict[str, Any]:
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError:
-            await _mark_state(needs_reauth=True)
+            # A 401/403 here already survived the re-login above, so the stored
+            # credentials really are bad. Anything else (5xx, 429, gateway HTML)
+            # is DUPR's problem, not Rob's — log it, leave the flag alone.
+            if resp.status_code in (401, 403):
+                await _mark_state(needs_reauth=True)
+            else:
+                log.warning("DUPR profile fetch failed transiently (%s)", resp.status_code)
             raise
         result = resp.json().get("result") or {}
 

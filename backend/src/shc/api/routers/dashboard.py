@@ -2898,14 +2898,26 @@ async def clinical_research_insights() -> dict:
         # ts_in/ts_out. For each minute of the 24h day across 14 nights, count
         # the fraction of consecutive-night pairs in the same state (asleep or
         # awake). 100 = perfectly regular; 0 = random.
+        # `is_nap` alone lets a mislabelled afternoon session into the
+        # regularity index; take the longest session per date as well.
+        #
+        # arg_max, not the QUALIFY ROW_NUMBER() this used to be: on DuckDB
+        # 1.5.2 that plan hit an optimizer bug — pushing the `is_nap` filter
+        # through the window operator re-bound the column against the window's
+        # own output (where that index is ROW_NUMBER's BIGINT), and the whole
+        # endpoint 500'd with `Failed to bind column reference "is_nap":
+        # inequal types (BIGINT != BOOLEAN)`. The panel rendered a permanent
+        # loading skeleton for it. Only this query's exact shape tripped it —
+        # the sibling QUALIFY queries above still plan fine — so this is a
+        # targeted dodge, not a codebase-wide migration off QUALIFY.
         sleep_rows = conn.execute(
-            # `is_nap` alone lets a mislabelled afternoon session into the
-            # regularity index; take the longest session per date as well.
-            "SELECT night_date, ts_in, ts_out FROM sleep "
+            "SELECT night_date, "
+            "       arg_max(ts_in, epoch(ts_out - ts_in)) AS ts_in, "
+            "       arg_max(ts_out, epoch(ts_out - ts_in)) AS ts_out "
+            "FROM sleep "
             "WHERE night_date >= $s AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
             "AND COALESCE(is_nap, FALSE) = FALSE "
-            "QUALIFY ROW_NUMBER() OVER ("
-            "  PARTITION BY night_date ORDER BY epoch(ts_out - ts_in) DESC) = 1 "
+            "GROUP BY night_date "
             "ORDER BY night_date, ts_in",
             {"s": (today - timedelta(days=14)).isoformat()},
         ).fetchall()
