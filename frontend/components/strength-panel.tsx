@@ -20,12 +20,14 @@ import { Eyebrow, Metric } from "@/components/ui/metric";
 
 // ── Heatmap ──────────────────────────────────────────────────────────────────
 
+// Single-hue ramp: elevated surface → accent. Five stops, evenly spaced in
+// lightness and chroma so density reads as intensity rather than as category.
 const HEAT = [
-  "oklch(0.22 0 0)",
-  "oklch(0.38 0.10 145)",
-  "oklch(0.52 0.15 145)",
-  "oklch(0.64 0.18 145)",
-  "oklch(0.76 0.21 145)",
+  "var(--bg-elevated)",
+  "oklch(0.330 0.036 232)",
+  "oklch(0.475 0.062 226)",
+  "oklch(0.618 0.089 220)",
+  "var(--sl-accent)",
 ];
 
 type HDay = { date: string; intensity: number; sets: number; volume_kg: number };
@@ -151,7 +153,7 @@ function VolumeTrend() {
             <YAxis tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} tickLine={false} axisLine={false} tickFormatter={v => `${(v / 1000).toFixed(0)}k`} />
             <Tooltip content={<VolumeTooltip />} cursor={{ fill: "oklch(1 0 0 / 0.03)" }} />
             {avg > 0 && <ReferenceLine y={avg} stroke="var(--chart-baseline)" strokeDasharray="3 3" />}
-            <Bar dataKey="volume_kg" fill="var(--chart-line)" radius={[3, 3, 0, 0]} maxBarSize={28} />
+            <Bar dataKey="volume_kg" fill="var(--chart-line)" radius={[3, 3, 0, 0]} maxBarSize={28} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
       )}
@@ -185,11 +187,14 @@ function E1RMTrajectories({ onPick }: { onPick: (exercise: string) => void }) {
   const rows = exercises.map((name, i) => {
     const h = histories[i]?.data?.history ?? [];
     // History is returned newest-first; reverse for left-to-right time order.
-    const points = [...h].reverse().map((s) => {
-      const reps = s.work_sets > 0 ? s.total_reps / s.work_sets : 0;
-      const e1rm = reps > 0 ? s.max_lbs * (1 + reps / 30) : s.max_lbs;
-      return { date: s.date, e1rm: +e1rm.toFixed(1), max: s.max_lbs };
-    });
+    const points = [...h]
+      .reverse()
+      .filter((s) => s.max_lbs != null)
+      .map((s) => {
+        const reps = s.work_sets > 0 ? s.total_reps / s.work_sets : 0;
+        const e1rm = reps > 0 ? s.max_lbs * (1 + reps / 30) : s.max_lbs;
+        return { date: s.date, e1rm: +e1rm.toFixed(1), max: s.max_lbs };
+      });
     return { name, points };
   });
 
@@ -454,11 +459,11 @@ const TARGET_WEEKLY: Record<string, number> = {
 // Neutral bars — status (on-target / high / below / neglected) carries the semantic
 // color, not the muscle group identity. Avoids red Push looking like a danger signal.
 const MUSCLE_COLOR: Record<string, string> = {
-  push: "oklch(0.55 0.04 250)",
-  pull: "oklch(0.55 0.04 250)",
-  legs: "oklch(0.55 0.04 250)",
-  core: "oklch(0.55 0.04 250)",
-  other: "oklch(0.45 0.02 250)",
+  push: "var(--text-faint)",
+  pull: "var(--text-faint)",
+  legs: "var(--text-faint)",
+  core: "var(--text-faint)",
+  other: "var(--hairline-strong)",
 };
 
 function MuscleBalance() {
@@ -758,8 +763,92 @@ function SessionHeader() {
             {signal?.overload_pct != null ? `${signal.overload_pct > 0 ? "+" : ""}${signal.overload_pct.toFixed(0)}%` : "—"}
           </span>
         </div>
-        <p className="text-[10px] text-[var(--text-faint)] mt-1">8w vs prior 8w</p>
+        <p className="text-[10px] text-[var(--text-faint)] mt-1">
+          {signal?.weeks_compared
+            ? `${signal.weeks_compared}w vs prior ${signal.weeks_compared}w`
+            : "8w vs prior 8w"}
+          {/* An untrained week is real and counts as zero volume. Saying so
+              stops a big swing looking like a data error. */}
+          {!!(signal?.blank_weeks_prior || signal?.blank_weeks_recent) && (
+            <span className="block text-[var(--text-faint)]">
+              incl. {(signal.blank_weeks_prior ?? 0) + (signal.blank_weeks_recent ?? 0)} untrained
+              week
+              {(signal.blank_weeks_prior ?? 0) + (signal.blank_weeks_recent ?? 0) === 1 ? "" : "s"}
+            </span>
+          )}
+        </p>
       </div>
+    </div>
+  );
+}
+
+// ── Volume load block (chart + e1RM trajectories + PR table) ─────────────────
+
+function VolumeLoadGrid({ onPick }: { onPick: (exercise: string) => void }) {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="space-y-6">
+        <VolumeTrend />
+        <E1RMTrajectories onPick={onPick} />
+      </div>
+      <PRTable onPick={onPick} />
+    </div>
+  );
+}
+
+// ── Standalone cards ─────────────────────────────────────────────────────────
+// Each of these mounts alone on a grid: it owns its own queries (React Query
+// dedupes by key, so sharing a key with a sibling costs nothing) and, where the
+// block opens the progression drawer, its own drawer state. No props required.
+
+export function LastSessionCard() {
+  return (
+    <div className="shc-card shc-enter p-6">
+      <SessionHeader />
+    </div>
+  );
+}
+
+export function TrainingConsistencyCard() {
+  return (
+    <div className="shc-card shc-enter p-6">
+      <Heatmap />
+    </div>
+  );
+}
+
+export function MuscleBalanceCard() {
+  return (
+    <div className="shc-card shc-enter p-6">
+      <MuscleBalance />
+    </div>
+  );
+}
+
+export function RecoveryTrainingCard() {
+  return (
+    <div className="shc-card shc-enter p-6">
+      <RecoveryCorrelation />
+    </div>
+  );
+}
+
+export function VolumeLoadCard() {
+  const [picked, setPicked] = useState<string | null>(null);
+  return (
+    <div className="shc-card shc-enter p-6">
+      <VolumeLoadGrid onPick={setPicked} />
+      <ProgressionDrawer exercise={picked} onClose={() => setPicked(null)} />
+    </div>
+  );
+}
+
+export function MostTrainedCard() {
+  const [picked, setPicked] = useState<string | null>(null);
+  return (
+    <div className="shc-card shc-enter p-6">
+      <TopExercisesTable onPick={setPicked} />
+      <ProgressionDrawer exercise={picked} onClose={() => setPicked(null)} />
     </div>
   );
 }
@@ -769,7 +858,7 @@ function SessionHeader() {
 export function StrengthPanel() {
   const [picked, setPicked] = useState<string | null>(null);
   return (
-    <div className="shc-card shc-enter p-5 space-y-6">
+    <div className="shc-card shc-enter p-6 space-y-6">
       <div className="flex items-baseline justify-between">
         <h2 className="shc-section-title">Strength Training</h2>
         <span className="text-[10.5px] text-[var(--text-faint)]">Fitbod · 2017 – present</span>
@@ -788,13 +877,7 @@ export function StrengthPanel() {
 
       <RecoveryCorrelation />
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="space-y-6">
-          <VolumeTrend />
-          <E1RMTrajectories onPick={setPicked} />
-        </div>
-        <PRTable onPick={setPicked} />
-      </div>
+      <VolumeLoadGrid onPick={setPicked} />
 
       <TopExercisesTable onPick={setPicked} />
 
