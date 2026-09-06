@@ -32,6 +32,7 @@ Personal health intelligence platform. Single user (Rob). Always push to main di
 - Always use `dev-restart.sh` to start API + frontend. Never start manually.
 - Preview server (when a screenshot is needed): see [feedback_preview_server](~/.claude/projects/-Users-robsavage-Projects-savage-health-center/memory/feedback_preview_server.md).
 - API runs on `:8000`, frontend on `:3000`.
+- Logs: `backend/data/logs/api.log` and `web.log` (nothing goes to `/tmp`). A card stuck on a shimmer skeleton is an errored query, not a slow one — every panel guards on `isLoading || !data`, so a 500 renders as a permanent skeleton. Curl the endpoint and grep the log before opening the component: [feedback_skeleton_means_500](~/.claude/projects/-Users-robsavage-Projects-savage-health-center/memory/feedback_skeleton_means_500.md).
 
 ## Git
 
