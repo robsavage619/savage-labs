@@ -133,14 +133,16 @@ def _vital(conn: duckdb.DuckDBPyConnection, metric: str, value: float, when: dat
 
 
 def test_allostatic_load_reads_blood_pressure(conn):
-    """The regression that hid a 142/82.
+    """The regression that hid a top-band blood-pressure reading.
 
     The column is `blood_pressure_systolic`; the endpoint asked for
     `bp_systolic`, got nothing, and silently renormalised the score over the
-    markers that happened to survive.
+    markers that happened to survive. Values here are SYNTHETIC — chosen to land
+    in bands 2 and 1 — not the subject's, because this repo is public. Same
+    reason `test_fib4.py` uses a synthetic date of birth.
     """
-    _vital(conn, "blood_pressure_systolic", 142.0, date(2025, 2, 4))
-    _vital(conn, "blood_pressure_diastolic", 82.0, date(2025, 2, 4))
+    _vital(conn, "blood_pressure_systolic", 145.0, date(2025, 1, 1))
+    _vital(conn, "blood_pressure_diastolic", 85.0, date(2025, 1, 1))
     out = _allostatic_load(conn)
     assert out["components"]["bp_systolic"] == 2
     assert out["components"]["bp_diastolic"] == 1
@@ -149,7 +151,7 @@ def test_allostatic_load_reads_blood_pressure(conn):
 
 def test_allostatic_load_reports_what_it_could_not_score(conn):
     """Missing markers move the score, so they must be named on the payload."""
-    _vital(conn, "bmi", 31.3, date(2025, 2, 2))
+    _vital(conn, "bmi", 30.5, date(2025, 1, 1))
     out = _allostatic_load(conn)
     assert out["n_markers"] == 1
     assert "bp_systolic" in out["missing"]
@@ -158,7 +160,7 @@ def test_allostatic_load_reports_what_it_could_not_score(conn):
 
 def test_allostatic_load_dates_every_input(conn):
     """A score blending a 2023 lipid panel with a 2026 metabolic one must say so."""
-    _vital(conn, "bmi", 31.3, date(2023, 12, 3))
+    _vital(conn, "bmi", 30.5, date(2023, 12, 3))
     out = _allostatic_load(conn)
     assert out["input_dates"]["bmi"] == "2023-12-03"
 
@@ -173,8 +175,8 @@ def test_no_tile_reports_missing_data_for_a_subject_who_has_it(conn):
         _sleep(conn, _TODAY - timedelta(days=i), 22.0, 8.0)
     for i in range(28, -1, -1):
         _recovery(conn, _TODAY - timedelta(days=i), 100.0)
-    _vital(conn, "blood_pressure_systolic", 142.0, date(2025, 2, 4))
-    _vital(conn, "bmi", 31.3, date(2025, 2, 2))
+    _vital(conn, "blood_pressure_systolic", 145.0, date(2025, 1, 1))
+    _vital(conn, "bmi", 30.5, date(2025, 1, 1))
 
     assert _sleep_regularity_index(conn, _TODAY)["value"] is not None
     assert _ln_rmssd_trend(conn, _TODAY)["today"] is not None

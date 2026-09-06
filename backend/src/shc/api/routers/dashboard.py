@@ -2070,15 +2070,15 @@ _FIB4_BANDS = {
 
 # ── Atherogenic lipids beyond LDL-C ─────────────────────────────────────────
 #
-# Rob's reported LDL is `LDL Cholesterol (calc)` — Friedewald, and the
-# arithmetic confirms it: 210 - 44 - 298/5 = 106.4 against a reported 106.
-# Friedewald assumes a FIXED triglyceride:VLDL ratio of 5, which degrades as
-# triglycerides rise. Samuel 2023 (Global Heart, n=5,051,467) put Friedewald at
-# 83.2% correct guideline classification against ultracentrifugation vs 89.6%
-# for Martin/Hopkins, and found that among patients with Friedewald LDL <70 and
-# triglycerides 150-399 — Rob's band, at 298 — almost half were reclassified
-# UPWARD by Martin/Hopkins. Sajja 2021 (JAMA Netw Open) reaches the same
-# conclusion above 400 and advises caution regardless of method.
+# `LDL Cholesterol (calc)` is Friedewald — checkable on any panel by comparing
+# the reported value against TC - HDL - TG/5. Friedewald assumes a FIXED
+# triglyceride:VLDL ratio of 5, which degrades as triglycerides rise. Samuel
+# 2023 (Global Heart, n=5,051,467) put Friedewald at 83.2% correct guideline
+# classification against ultracentrifugation vs 89.6% for Martin/Hopkins, and
+# found that among patients with Friedewald LDL <70 and triglycerides 150-399,
+# almost half were reclassified UPWARD by Martin/Hopkins. Sajja 2021 (JAMA Netw
+# Open) reaches the same conclusion above 400 and advises caution regardless of
+# method. The subject's own panel sits inside that band.
 #
 # So the LDL number on the cardiometabolic strip is soft, and it is soft in the
 # direction that matters. Two responses, both computed here:
