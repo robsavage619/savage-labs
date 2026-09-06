@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -65,12 +65,47 @@ def _insert_lab(conn: Any, lid: str, lab: dict, ts: datetime | None, panel: str 
     )
 
 
+def _default_yaml_path() -> Path:
+    return Path(__file__).resolve().parents[3] / "data" / "clinical_profile.yml"
+
+
+def subject_dob(yaml_path: Path | None = None) -> date | None:
+    """The subject's date of birth, read from the gitignored clinical profile.
+
+    Deliberately NOT a source constant. This repo is public, and a full DOB is
+    an identity credential in a way the age the engine prints everywhere is not
+    — so it lives in `backend/data/clinical_profile.yml` (gitignored) beside the
+    other clinical facts, under `patient.dob`.
+
+    Returns None when the profile or the key is absent. Callers must decide what
+    a missing DOB means; there is no fallback to today's age, because scoring a
+    historical draw with today's age is the precise error an age-dependent index
+    must not make silently.
+    """
+    path = yaml_path or _default_yaml_path()
+    try:
+        raw = (yaml.safe_load(path.read_text()) or {}).get("patient", {}).get("dob")
+    except (OSError, yaml.YAMLError) as exc:
+        log.warning("clinical profile unreadable at %s: %s", path, exc)
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            log.warning("patient.dob is not an ISO date: %r", raw)
+    return None
+
+
 def ingest_clinical_profile(yaml_path: Path | None = None) -> dict[str, int]:
     """Wipe + reload conditions, medications, labs, and vitals from YAML."""
     from shc.db.schema import get_read_conn
 
     if yaml_path is None:
-        yaml_path = Path(__file__).resolve().parents[3] / "data" / "clinical_profile.yml"
+        yaml_path = _default_yaml_path()
 
     if not yaml_path.exists():
         raise FileNotFoundError(f"Clinical profile YAML not found at {yaml_path}")

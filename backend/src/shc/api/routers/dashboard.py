@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import statistics
 import uuid
 from datetime import date, datetime, timedelta
@@ -23,6 +24,7 @@ from shc.ai.workout_planner import (
 )
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, get_write_conn, write_ctx
+from shc.ingest.clinical_profile import subject_dob
 from shc.lab import _welch_t as _lab_welch
 from shc.metrics import MUSCLE_TO_GROUP, compute_daily_state
 from shc.metrics import muscle_group as _mg
@@ -1725,6 +1727,138 @@ _MED_ADVISORIES: dict[str, list[dict]] = {
 }
 
 
+# ── FIB-4 — non-invasive advanced-liver-fibrosis index ───────────────────────
+#
+# FIB-4 = (age × AST) / (platelets × √ALT).  Computed on read, never stored:
+# every input already lives in `labs`, so a materialised copy could only go
+# stale or disagree with the row it was derived from.
+#
+# `metrics._ROB_AGE` is a *today* constant and cannot age a historical draw, so
+# FIB-4 derives the age at the draw from a DOB — scoring a 2023 draw with a 2026
+# age silently inflates it.
+#
+# The DOB is NOT a constant here. This repo is public, and a full date of birth
+# is an identity credential in a way the age printed all over the engine is not,
+# so it is read from the gitignored clinical profile (`patient.dob`). Absent
+# profile → no FIB-4, reported as such: an age-dependent index must not fall
+# back to today's age behind the reader's back.
+
+# Two threshold sets exist and they are NOT interchangeable — say which one you
+# mean. Sterling 2006 derived 1.45 / 3.25 in an HIV/HCV-coinfected cohort
+# (`sterling-2006-fib-4-fibrosis-index.md`). The 1.30 / 2.67 pair below comes
+# from later NAFLD/MASLD-specific validation and is what the MASLD pathways use;
+# it is the right set for Rob, whose open question is steatosis, not viral
+# hepatitis. Do not attribute these two numbers to Sterling.
+#
+# Age caveat: the lower cut-off loses specificity below ~35 and above ~65 (where
+# a raised rule-out near 2.0 is commonly applied). Rob is 40 — inside the
+# validated band — but this constant outlives that.
+_FIB4_RULE_OUT = 1.30
+_FIB4_RULE_IN = 2.67
+
+# The three analytes, by their exact `labs.name`. All three MUST come from one
+# draw — an AST from one panel against a platelet count from another produces a
+# plausible-looking number that means nothing.
+_FIB4_INPUTS = ("AST", "ALT", "Platelet Count")
+
+# Non-negotiable on every payload: a low FIB-4 is not a clean liver.
+_FIB4_CAVEAT = (
+    "FIB-4 screens for ADVANCED fibrosis (F3–F4) only. It does NOT rule out "
+    "steatosis (fatty liver), steatohepatitis, or inflammation — an elevated ALT "
+    "with a low FIB-4 still warrants a fatty-liver workup. A low score is not an "
+    "all-clear."
+)
+
+_FIB4_BANDS = {
+    "rule_out": "Advanced fibrosis effectively ruled out — does not rule out fatty liver",
+    "indeterminate": "Indeterminate — further workup (elastography / imaging) indicated",
+    "rule_in": "High risk of advanced fibrosis — hepatology referral indicated",
+}
+
+
+def _age_at(dob: date, when: date) -> int:
+    """Completed years from ``dob`` to ``when``."""
+    return when.year - dob.year - ((when.month, when.day) < (dob.month, dob.day))
+
+
+def _fib4(age_years: int, ast: float, alt: float, platelets: float) -> float | None:
+    """FIB-4 index. ``None`` when any input is non-positive (undefined domain).
+
+    Args:
+        age_years: Age at the draw, not today.
+        ast: AST in unit/L.
+        alt: ALT in unit/L.
+        platelets: Platelet count in x10^9/L — the formula's native unit, no
+            conversion.
+    """
+    if age_years <= 0 or ast <= 0 or alt <= 0 or platelets <= 0:
+        return None
+    return (age_years * ast) / (platelets * math.sqrt(alt))
+
+
+def _fib4_band(score: float) -> str:
+    if score < _FIB4_RULE_OUT:
+        return "rule_out"
+    if score > _FIB4_RULE_IN:
+        return "rule_in"
+    return "indeterminate"
+
+
+def _fib4_by_draw(rows: list[tuple], dob: date | None) -> list[dict]:
+    """One FIB-4 entry per blood draw, newest first.
+
+    Draws are keyed on ``collected_at`` so all three analytes provably share a
+    single venipuncture. A draw missing any input yields ``value: None`` and the
+    missing analyte names — it never borrows a value from an adjacent draw.
+
+    Args:
+        rows: ``(name, value, collected_at)`` for the FIB-4 analytes only.
+        dob: Subject DOB, for the age at each draw. Required and explicit —
+            None scores nothing and says so, rather than reaching for a
+            today-anchored age. Callers pass `subject_dob()`.
+    """
+    by_draw: dict[Any, dict[str, float]] = {}
+    for name, value, collected_at in rows:
+        if value is None or collected_at is None:
+            continue
+        by_draw.setdefault(collected_at, {})[name] = float(value)
+
+    out: list[dict] = []
+    for collected_at, vals in by_draw.items():
+        drawn_on = collected_at.date() if hasattr(collected_at, "date") else collected_at
+        missing = [n for n in _FIB4_INPUTS if n not in vals]
+        entry: dict[str, Any] = {
+            "collected_at": str(collected_at),
+            "value": None,
+            "band": None,
+            "band_label": None,
+            "missing_inputs": missing,
+        }
+        if dob is None:
+            entry["missing_inputs"] = [*missing, "patient.dob (clinical profile)"]
+            out.append(entry)
+            continue
+        if not missing:
+            age = _age_at(dob, drawn_on)
+            score = _fib4(age, vals["AST"], vals["ALT"], vals["Platelet Count"])
+            if score is not None:
+                entry |= {
+                    "value": round(score, 2),
+                    "band": _fib4_band(score),
+                    "band_label": _FIB4_BANDS[_fib4_band(score)],
+                    "age_at_draw": age,
+                    "inputs": {
+                        "ast": vals["AST"],
+                        "alt": vals["ALT"],
+                        "platelets": vals["Platelet Count"],
+                    },
+                }
+        out.append(entry)
+
+    out.sort(key=lambda e: e["collected_at"], reverse=True)
+    return out
+
+
 @router.get("/clinical/risk")
 async def clinical_risk() -> dict:
     """Cardiometabolic risk strip + overdue lab gaps + medication advisories.
@@ -1756,6 +1890,17 @@ async def clinical_risk() -> dict:
         ).fetchall()
         meds = conn.execute(
             "SELECT name, started FROM medications WHERE valid_to IS NULL AND stopped IS NULL"
+        ).fetchall()
+        # FIB-4 inputs: every row of the three analytes, NOT the latest-per-name
+        # `labs` pull above — that one collapses across draws, which is exactly
+        # the mix that makes FIB-4 silently wrong.
+        fib4_rows = conn.execute(
+            """
+            SELECT name, value, collected_at
+            FROM labs
+            WHERE name IN ('AST', 'ALT', 'Platelet Count')
+              AND value IS NOT NULL AND collected_at IS NOT NULL
+            """
         ).fetchall()
     finally:
         conn.close()
@@ -1924,11 +2069,26 @@ async def clinical_risk() -> dict:
                 )
                 break
 
+    fib4_history = _fib4_by_draw(fib4_rows, subject_dob())
+    fib4_latest = next((e for e in fib4_history if e["value"] is not None), None)
+
     return {
         "cardiometabolic": cardiometabolic,
         "overdue_labs": overdue,
         "med_advisories": advisories,
         "onset_windows": onset_windows,
+        # Hepatic sits apart from the cardiometabolic strip on purpose — FIB-4 is
+        # a fibrosis screen, not a cardiometabolic marker, and it carries a
+        # caveat the chip shape has nowhere to put.
+        "hepatic": {
+            "fib4": {
+                "latest": fib4_latest,
+                "history": fib4_history,
+                "caveat": _FIB4_CAVEAT,
+                "cutoffs": {"rule_out": _FIB4_RULE_OUT, "rule_in": _FIB4_RULE_IN},
+                "formula": "(age x AST) / (platelets x sqrt(ALT))",
+            }
+        },
     }
 
 

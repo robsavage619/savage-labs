@@ -268,6 +268,27 @@ export interface ClinicalRisk {
     full_effect_days: number;
     phase: "onset" | "active" | "established";
   }[];
+  hepatic: {
+    fib4: {
+      latest: Fib4Draw | null;
+      history: Fib4Draw[];
+      caveat: string;
+      cutoffs: { rule_out: number; rule_in: number };
+      formula: string;
+    };
+  };
+}
+
+/** One blood draw scored for FIB-4. `value` is null when the draw is missing
+ *  any of AST / ALT / Platelet Count — inputs are never borrowed across draws. */
+export interface Fib4Draw {
+  collected_at: string;
+  value: number | null;
+  band: "rule_out" | "indeterminate" | "rule_in" | null;
+  band_label: string | null;
+  missing_inputs: string[];
+  age_at_draw?: number;
+  inputs?: { ast: number; alt: number; platelets: number };
 }
 
 export interface TopExercise {
