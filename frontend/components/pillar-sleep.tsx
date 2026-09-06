@@ -77,6 +77,15 @@ function SleepRow({ entry }: { entry: SleepEntry }) {
   );
 }
 
+/** "HH:MM:SS" -> "12:45 am". WHOOP serves the window as a local clock string. */
+function clock12(hhmmss: string | null): string {
+  if (!hhmmss) return "—";
+  const [h, m] = hhmmss.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return "—";
+  const ampm = h < 12 ? "am" : "pm";
+  return `${((h + 11) % 12) + 1}:${m.toString().padStart(2, "0")} ${ampm}`;
+}
+
 export function PillarSleep() {
   const { data, isLoading } = useQuery({
     queryKey: ["sleep-7"],
@@ -101,6 +110,22 @@ export function PillarSleep() {
   const midpointStdev = sleepState?.midpoint_stdev_h_7d ?? null;
   const midpointLast = sleepState?.midpoint_local_h_last ?? null;
   const awakeLast = sleepState?.awake_min_last ?? null;
+
+  // WHOOP's own recommended sleep window. Vendor output, not an SHC derivation
+  // — Doherty 2025 catalogues these composite recommendations as undisclosed
+  // and largely unvalidated, so it is labelled rather than presented as fact.
+  // WHOOP also serves it only intermittently (1 of 31 rows carried it on
+  // 2026-09-06) and `_private_daily` falls back to the newest prior row with no
+  // upper bound, so a window with no age on it can be arbitrarily old.
+  const winStart = sleepState?.optimal_bedtime_start ?? null;
+  const winEnd = sleepState?.optimal_bedtime_end ?? null;
+  const winAsOf = sleepState?.optimal_window_as_of ?? null;
+  const tibMin = sleepState?.recommended_tib_min ?? null;
+  const vsOptimal = sleepState?.midpoint_vs_optimal_h ?? null;
+  const winAgeDays =
+    winAsOf != null ? Math.floor((Date.now() - new Date(`${winAsOf}T12:00:00`).getTime()) / 86_400_000) : null;
+  // Past a week it is not a recommendation for tonight any more.
+  const winUsable = winStart != null && winEnd != null && winAgeDays != null && winAgeDays <= 7;
 
   const entries = data ?? [];
   const parsed = entries.map((e) => ({ e, s: parseStages(e.stages) }));
@@ -239,6 +264,45 @@ export function PillarSleep() {
           )}
         </div>
       </div>
+
+      {winUsable && (
+        <div className="mt-3 rounded-md border border-[var(--border)] px-3 py-2">
+          <div className="flex items-baseline justify-between flex-wrap gap-x-3 gap-y-1">
+            <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
+              Target window · WHOOP
+            </p>
+            <span className="text-[9.5px] text-[var(--text-faint)] tabular-nums">
+              {winAgeDays === 0 ? "today" : winAgeDays === 1 ? "yesterday" : `${winAgeDays}d ago`}
+            </span>
+          </div>
+          <p className="mt-1 text-[13px] tabular-nums" style={{ fontFamily: "var(--font-orbitron)" }}>
+            {clock12(winStart)} – {clock12(winEnd)}
+          </p>
+          <p className="mt-0.5 text-[10.5px] text-[var(--text-muted)] tabular-nums">
+            {tibMin != null && <>needs {(tibMin / 60).toFixed(1)}h in bed</>}
+            {vsOptimal != null && (
+              <>
+                {tibMin != null && " · "}
+                you slept{" "}
+                <span
+                  style={{
+                    color:
+                      Math.abs(vsOptimal) < 0.5
+                        ? "var(--positive)"
+                        : Math.abs(vsOptimal) < 1.5
+                        ? "var(--text-primary)"
+                        : "var(--negative)",
+                  }}
+                >
+                  {Math.abs(vsOptimal) < 0.08
+                    ? "on centre"
+                    : `${Math.abs(vsOptimal).toFixed(1)}h ${vsOptimal < 0 ? "early" : "late"}`}
+                </span>
+              </>
+            )}
+          </p>
+        </div>
+      )}
 
       {nightRead && (
         <PlainRead state={nightRead.state} className="mt-3">

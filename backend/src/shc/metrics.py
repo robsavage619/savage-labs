@@ -208,6 +208,12 @@ class SleepMetrics:
     optimal_bedtime_start: str | None = None  # local "HH:MM:SS"
     optimal_bedtime_end: str | None = None
     recommended_tib_min: float | None = None  # time in bed for a 100% sleep-performance night
+    # The date the three fields above were actually served for. `_private_daily`
+    # deliberately falls back to the newest PRIOR row, and WHOOP's private API
+    # returns this window only intermittently — 1 of 31 rows carried it on
+    # 2026-09-06 — so without this date a month-old recommendation renders as
+    # today's with nothing to reveal it.
+    optimal_window_as_of: str | None = None
     # Signed hours between the actual sleep midpoint and the midpoint of WHOOP's
     # recommended window. This is the number the consistency problem lives in:
     # `midpoint_stdev_h_7d` says how much the midpoint MOVES, this says how far
@@ -820,11 +826,16 @@ def _private_daily(conn, today: date) -> tuple:
     match: the sleep-need window and sleeping-HR baseline are current-state
     values WHOOP only serves for "now", so they land on the sync date and would
     otherwise vanish from the state on any day the sync did not run.
+
+    The trailing `date` is the row's own date, and it matters: the fallback has
+    no upper bound, so a consumer that renders the bedtime window without ageing
+    it will present an arbitrarily old recommendation as current.
     """
     row = conn.execute(
         """
         SELECT stress_score, stress_level, stress_high_pct, sleeping_hr_baseline,
-               optimal_bedtime_start, optimal_bedtime_end, recommended_tib_min
+               optimal_bedtime_start, optimal_bedtime_end, recommended_tib_min,
+               date
         FROM whoop_private_daily
         WHERE date <= ?
         ORDER BY date DESC
@@ -1072,6 +1083,7 @@ def _sleep(conn, today: date) -> SleepMetrics:
         m.optimal_bedtime_start = private[4]
         m.optimal_bedtime_end = private[5]
         m.recommended_tib_min = private[6]
+        m.optimal_window_as_of = str(private[7]) if private[7] is not None else None
         start_h = _clock_to_hours(m.optimal_bedtime_start)
         end_h = _clock_to_hours(m.optimal_bedtime_end)
         if start_h is not None and end_h is not None and m.midpoint_local_h_last is not None:

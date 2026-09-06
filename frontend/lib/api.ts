@@ -434,6 +434,18 @@ export interface DailyStateSleep {
   midpoint_stdev_h_7d: number | null;
   spo2_avg_last: number | null;
   score: number | null;
+  /** WHOOP's own recommended sleep window — a vendor recommendation, not an SHC
+   *  derivation, and served only intermittently. Always age it against
+   *  `optimal_window_as_of` before rendering. */
+  optimal_bedtime_start: string | null;
+  optimal_bedtime_end: string | null;
+  recommended_tib_min: number | null;
+  /** Date the window above was served for. `_private_daily` falls back to the
+   *  newest prior row with no upper bound, so this is the only staleness signal. */
+  optimal_window_as_of: string | null;
+  /** Hours your actual sleep midpoint sat from the middle of that window;
+   *  negative = earlier. */
+  midpoint_vs_optimal_h: number | null;
 }
 
 export interface DailyStateLoad {
