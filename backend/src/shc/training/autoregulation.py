@@ -2786,10 +2786,14 @@ def prescription_context_block(
             "  `held Nwk` is how long that lift has occupied its slot. Past the "
             "rotation window the engine proposes a swap — if you program the incumbent "
             "anyway, say why in the plan notes rather than doing it silently.",
-            "  `also credits` is what else the lift pays into at synergist rate. Under "
-            "an hour that fits ~20 sets, a pick that covers a lagging muscle on the way "
-            "past is worth more than one that doesn't — it breaks ties, it never "
-            "outranks the target muscle's own stimulus.",
+            "  `also credits` is what else the lift pays into. THE NUMBER SHOWN IS "
+            "NOT THE RATE IT COUNTS AT: it is the stored `exercise_muscle.credit` "
+            "weight (0.5, or 0.3 for arms), while the volume validator credits EVERY "
+            "secondary at 1.0 per set. Budget each of these at 1.0/set, not at the "
+            "printed figure, or a plan that looks inside a maintenance cap will be "
+            "rejected. Under an hour that fits ~20 sets, a pick that covers a lagging "
+            "muscle on the way past is worth more than one that doesn't — it breaks "
+            "ties, it never outranks the target muscle's own stimulus.",
         ]
         if rx.direct_short:
             lines.append(
