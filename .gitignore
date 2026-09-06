@@ -215,3 +215,6 @@ backend/data/
 *.duckdb.wal
 *.duckdb.tmp
 
+
+# Playwright MCP browser-automation debris (console logs, page dumps)
+.playwright-mcp/
