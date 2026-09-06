@@ -18,15 +18,28 @@ import { Eyebrow } from "@/components/ui/metric";
 
 // ── Weight trend ─────────────────────────────────────────────────────────────
 
-function rollingAvg(data: { lbs: number | null }[], window: number) {
-  return data.map((_, i) => {
-    const slice = data
-      .slice(Math.max(0, i - window + 1), i + 1)
-      .filter((x): x is { lbs: number } => x.lbs != null);
-    if (!slice.length) return null;
-    return slice.reduce((s, x) => s + x.lbs, 0) / slice.length;
+/**
+ * Trailing mean over a window of DAYS, not of samples.
+ *
+ * This was a 7-sample mean labelled "7d avg" in the tooltip. The weigh-ins are
+ * not daily — 115 of them across nine years — so early in the series seven
+ * samples spanned multiple years, and the "7-day average" for 2019 was in fact
+ * an average of 2018 through 2020. A sample window is only a time window when
+ * the sampling is regular, and this sampling never was.
+ */
+function trailingMean(
+  data: { t: number; lbs: number | null }[],
+  windowDays: number,
+): (number | null)[] {
+  const span = windowDays * 86_400_000;
+  return data.map((row) => {
+    const seen = data.filter((x) => x.lbs != null && x.t <= row.t && x.t > row.t - span);
+    if (!seen.length) return null;
+    return seen.reduce((sum, x) => sum + (x.lbs as number), 0) / seen.length;
   });
 }
+
+const WEIGHT_TREND_DAYS = 30;
 
 /**
  * Flag readings that cannot be this body.
@@ -74,7 +87,7 @@ const WtTooltip = ({ active, payload, label }: {
     <div className="rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: "var(--card-hover)", borderColor: "var(--hairline-strong)", minWidth: 140 }}>
       <p className="text-[var(--text-dim)] mb-1">{when}</p>
       {lbs && <p className="text-[var(--text-primary)]">{lbs} lbs</p>}
-      {avg && <p className="text-[var(--text-muted)]">{avg.toFixed(1)} lbs 7d avg</p>}
+      {avg && <p className="text-[var(--text-muted)]">{avg.toFixed(1)} lbs · {WEIGHT_TREND_DAYS}d mean</p>}
       {source && (
         <p className="mt-1 text-[9.5px]" style={{ color: source === "checkin" ? CHECKIN_COLOR : "var(--text-faint)" }}>
           {source === "checkin" ? "● daily log" : "○ Apple Health"}
@@ -92,15 +105,16 @@ function WeightTrend() {
   });
 
   const bad = markImplausible(data);
-  const avgs = rollingAvg(
-    data.map((d, i) => ({ lbs: bad[i] ? null : d.lbs })),
-    7,
-  );
+  const stamped = data.map((d, i) => ({
+    t: new Date(`${d.date}T00:00:00`).getTime(),
+    lbs: bad[i] ? null : d.lbs,
+  }));
+  const avgs = trailingMean(stamped, WEIGHT_TREND_DAYS);
   // Time, not index. These weigh-ins are spread unevenly across nine years —
   // one in 2017, a cluster this summer — so an ordinal axis compresses the gaps
   // and stretches the clusters, which is exactly backwards for a weight trend.
   const formatted = data.map((d, i) => ({
-    t: new Date(`${d.date}T00:00:00`).getTime(),
+    t: stamped[i].t,
     label: d.date,
     lbs: bad[i] ? null : d.lbs,
     bad: bad[i] ? d.lbs : null,

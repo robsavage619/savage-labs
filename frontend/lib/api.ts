@@ -304,6 +304,12 @@ export interface OverloadSignal {
   overload_pct: number | null;
   prior_avg_kg: number;
   recent_avg_kg: number;
+  /** Weeks per side of the comparison, and how many of them had no training at
+   *  all. A blank week counts as zero volume — it used to vanish from the
+   *  GROUP BY, which quietly raised whichever average contained it. */
+  weeks_compared?: number;
+  blank_weeks_recent?: number;
+  blank_weeks_prior?: number;
   trend: "progressing" | "maintaining" | "deloading" | "insufficient_data";
   recent_sessions_per_week: number | null;
 }

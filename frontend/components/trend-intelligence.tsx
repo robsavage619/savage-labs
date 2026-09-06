@@ -62,7 +62,7 @@ export function RecoveryTrendPane() {
   const hrvRows = useMemo(() => dedupeByDate(hrv.data ?? []), [hrv.data]);
 
   return (
-    <div className="@container space-y-6">
+    <div className="@container space-y-8">
       {/* Stacked in a narrow column; 2-up once the card is wide enough that a
           755px stack would waste the horizontal room the grid just bought. */}
       <div className="grid grid-cols-1 @min-[680px]:grid-cols-2 gap-x-6 gap-y-6 items-start">
@@ -199,18 +199,30 @@ function buildHeatmapGrid(
     const hit = byDate.get(iso);
     cells.push(hit ? { date: hit.date, score: hit.score } : null);
   }
-  // Reshape to [weeks][7] where row 0 = Monday, row 6 = Sunday.
-  // Determine the column the leftmost day belongs to using its weekday.
+  // Reshape to [column][7] where row 0 = Monday, row 6 = Sunday.
+  //
+  // The column index has to come from the CALENDAR, not from `i / 7`. Bucketing
+  // by index put seven consecutive days in a column whatever weekday they
+  // started on, so unless the window happened to begin on a Monday every column
+  // straddled two calendar weeks and the whole grid was sheared — each cell in
+  // the right row, none of them in the right week. Offsetting by the first
+  // day's weekday makes column boundaries fall on Mondays, which is the only
+  // reading that makes "a column is a week" true. That needs one extra column
+  // for the partial week at each end.
+  const firstDate = new Date(today);
+  firstDate.setDate(today.getDate() - (totalDays - 1));
+  const firstDayIdx = (firstDate.getDay() + 6) % 7;
+  const columns = Math.ceil((totalDays + firstDayIdx) / 7);
   const grid: ({ date: string; score: number } | null)[][] = Array.from(
-    { length: weeks },
+    { length: columns },
     () => Array(7).fill(null),
   );
   for (let i = 0; i < cells.length; i++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - (cells.length - 1 - i));
+    const d = new Date(firstDate);
+    d.setDate(firstDate.getDate() + i);
     const dayIdx = (d.getDay() + 6) % 7; // Mon = 0
-    const weekIdx = Math.floor(i / 7);
-    if (weekIdx < weeks && grid[weekIdx]) grid[weekIdx][dayIdx] = cells[i];
+    const weekIdx = Math.floor((i + firstDayIdx) / 7);
+    if (grid[weekIdx]) grid[weekIdx][dayIdx] = cells[i];
   }
   return grid;
 }
@@ -491,7 +503,7 @@ function MonthlyAverages({ data }: { data: { date: string; score: number; hrv: n
 
 export function InsightsPane() {
   return (
-    <div className="@container space-y-6">
+    <div className="@container space-y-8">
       <ReadinessDecomposition />
       <VolumeLandmarks />
       <PrescriptionPanel />
@@ -946,7 +958,7 @@ export function TrendIntelligence() {
   const [tab, setTab] = useState<Tab>("Recovery");
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
         <h2 className="shc-section-title">Trend Intelligence</h2>
         <div

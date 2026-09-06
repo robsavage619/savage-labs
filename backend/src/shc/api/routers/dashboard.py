@@ -120,8 +120,21 @@ async def recovery_trend(days: int = Query(14, gt=0, le=365)) -> list[dict]:
     since = (date.today() - timedelta(days=days)).isoformat()
     conn = get_read_conn()
     try:
+        # One row per date. `recovery` can hold more than one — WHOOP revisions,
+        # and 2024-06-22 / 2024-09-17 still do — and every consumer of this
+        # endpoint aggregates client-side, so a duplicate date silently
+        # double-weights that day in the monthly means, the heatmap and both
+        # scatters. Prefer the row with the most complete data, newest id last.
         rows = conn.execute(
-            "SELECT date, score, hrv, rhr FROM recovery WHERE date >= $since ORDER BY date",
+            """
+            SELECT date, score, hrv, rhr FROM recovery
+            WHERE date >= $since
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY date
+                ORDER BY (score IS NULL)::INT + (hrv IS NULL)::INT + (rhr IS NULL)::INT, id DESC
+            ) = 1
+            ORDER BY date
+            """,
             {"since": since},
         ).fetchall()
     finally:
@@ -210,6 +223,27 @@ async def sleep_trend(days: int = Query(30, gt=0, le=365)) -> list[dict]:
     finally:
         conn.close()
     return [{"date": str(r[0]), "stages": r[1], "hours": r[2]} for r in rows]
+
+
+# One row per night, naps excluded.
+#
+# `sleep` holds every session WHOOP records, and `is_nap` does not reliably mark
+# the short ones: 2026-08-25 carries a 1.1h afternoon session flagged as a
+# night, and the fourteen days to 2026-09-05 held 17 rows across 14 dates. Any
+# average taken over raw rows therefore counts naps as nights — which is how
+# `/api/stats/summary` came to report 6.07h and 15.96h of sleep debt against
+# DailyState's 8.1h and 3.8h. Longest session per date is the night.
+_NIGHTS_SQL = """
+    SELECT night_date, epoch(ts_out - ts_in) / 3600.0 AS hours
+    FROM sleep
+    WHERE night_date >= $since
+      AND COALESCE(is_nap, FALSE) = FALSE
+      AND ts_in IS NOT NULL AND ts_out IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY night_date ORDER BY epoch(ts_out - ts_in) DESC
+    ) = 1
+    ORDER BY night_date
+"""
 
 
 # ── Airway: nocturnal SpO2 and respiratory rate ─────────────────────────────
@@ -712,9 +746,7 @@ async def stats_summary() -> dict:
             "SELECT date, hrv, hrv_28d_avg, hrv_28d_sd FROM v_hrv_baseline_28d ORDER BY date DESC LIMIT 1"
         ).fetchone()
         sleep_rows = conn.execute(
-            "SELECT night_date, epoch(ts_out - ts_in) / 3600.0 AS hours "
-            "FROM sleep WHERE night_date >= $since ORDER BY night_date",
-            {"since": (today - timedelta(days=14)).isoformat()},
+            _NIGHTS_SQL, {"since": (today - timedelta(days=14)).isoformat()}
         ).fetchall()
         # Canonical workload ACWR — same v_daily_load source and window math as
         # metrics._training_load, so this endpoint agrees with /daily/brief.
@@ -724,6 +756,7 @@ async def stats_summary() -> dict:
             "SELECT date, composite_load FROM v_daily_load WHERE date >= $s ORDER BY date",
             {"s": (today - timedelta(days=28)).isoformat()},
         ).fetchall()
+        _sleep_state = compute_daily_state(conn)["sleep"]
     finally:
         conn.close()
 
@@ -756,10 +789,23 @@ async def stats_summary() -> dict:
         if hrv_today and hrv_baseline and hrv_sd:
             hrv_sigma = (hrv_today - hrv_baseline) / hrv_sd
 
-    sleep_hours_7 = [float(r[1]) for r in sleep_rows[-7:] if r[1] is not None]
-    sleep_consistency = statistics.pstdev(sleep_hours_7) if len(sleep_hours_7) >= 2 else None
-    sleep_avg_7 = sum(sleep_hours_7) / len(sleep_hours_7) if sleep_hours_7 else None
-    sleep_debt_7 = sum(max(0.0, 8.0 - h) for h in sleep_hours_7) if sleep_hours_7 else None
+    # Sleep comes from DailyState, not from this endpoint's own arithmetic.
+    #
+    # It used to take `sleep_rows[-7:]` — the last seven ROWS, not the last
+    # seven nights. `sleep` carries naps, and `is_nap` does not reliably mark
+    # them: over the 14 days to 2026-09-05 there were 17 rows for 14 dates,
+    # three of them ~1.1-1.5h afternoon sessions. Averaging those alongside real
+    # nights reported 6.07h and 15.96h of debt against DailyState's 8.1h and
+    # 3.8h — a phantom twelve hours of debt, in a quantity that is 30% of the
+    # readiness composite and is read by five components.
+    #
+    # Patching the divisor would only have made two sources disagree less. The
+    # invariant is that there is one source (CLAUDE.md: "DailyState is the
+    # single source of truth for readiness, HRV, sleep, training-load"), so
+    # this reads it.
+    sleep_consistency = _sleep_state.get("consistency_stdev_7d")
+    sleep_avg_7 = _sleep_state.get("avg_7d")
+    sleep_debt_7 = _sleep_state.get("debt_7d_h")
 
     rec_trend_slope = _linreg_slope(scores_7) if len(scores_7) >= 3 else 0.0
 
@@ -814,11 +860,7 @@ async def momentum() -> dict:
             "SELECT date, score FROM recovery WHERE date >= $since ORDER BY date",
             {"since": last_start.isoformat()},
         ).fetchall()
-        sleep_rows = conn.execute(
-            "SELECT night_date, epoch(ts_out - ts_in) / 3600.0 AS hours "
-            "FROM sleep WHERE night_date >= $since ORDER BY night_date",
-            {"since": last_start.isoformat()},
-        ).fetchall()
+        sleep_rows = conn.execute(_NIGHTS_SQL, {"since": last_start.isoformat()}).fetchall()
         session_rows = conn.execute(
             "SELECT started_at::DATE AS d FROM workouts "
             "WHERE started_at::DATE >= $since "
@@ -1410,18 +1452,44 @@ async def training_top_exercises(n: int = Query(10, gt=0, le=100)) -> list[dict]
 async def training_overload_signal() -> dict:
     conn = get_read_conn()
     try:
+        # Dense week spine, LEFT JOINed.
+        #
+        # A bare GROUP BY emits no row for a week with no training, so a rested
+        # week simply vanished: `recent_sessions_per_week` was the mean over
+        # the weeks he DID train (never pulled down by a blank one), and the
+        # prior/recent split was by row count rather than by time, so "8 weeks
+        # vs the prior 8" could span very different amounts of calendar.
+        #
+        # The current week is excluded from both halves — it is still in
+        # progress, and counting a partial week as a whole one understates the
+        # recent side of every comparison on this card.
         rows = conn.execute(
             """
-            SELECT
-                date_trunc('week', started_at)::DATE AS week,
-                SUM(weight_kg * reps) AS volume_kg,
-                COUNT(*) AS sets,
-                COUNT(DISTINCT day_d) AS days
-            FROM workout_sets_dedup ws
-            WHERE ws.is_warmup = FALSE
-              AND day_d >= (current_date - INTERVAL '16 weeks')
-            GROUP BY week
-            ORDER BY week
+            WITH spine AS (
+                SELECT DISTINCT date_trunc('week', d)::DATE AS week
+                FROM generate_series(
+                    current_date - INTERVAL '16 weeks', current_date, INTERVAL '1 day'
+                ) t(d)
+                WHERE date_trunc('week', d) < date_trunc('week', current_date)
+            ),
+            agg AS (
+                SELECT
+                    date_trunc('week', started_at)::DATE AS week,
+                    SUM(weight_kg * reps) AS volume_kg,
+                    COUNT(*) AS sets,
+                    COUNT(DISTINCT day_d) AS days
+                FROM workout_sets_dedup ws
+                WHERE ws.is_warmup = FALSE
+                  AND day_d >= (current_date - INTERVAL '16 weeks')
+                GROUP BY week
+            )
+            SELECT s.week,
+                   COALESCE(a.volume_kg, 0) AS volume_kg,
+                   COALESCE(a.sets, 0) AS sets,
+                   COALESCE(a.days, 0) AS days
+            FROM spine s
+            LEFT JOIN agg a ON a.week = s.week
+            ORDER BY s.week
             """
         ).fetchall()
     finally:
@@ -1442,6 +1510,8 @@ async def training_overload_signal() -> dict:
 
     days_recent = [r[3] for r in rows[half:]]
     sessions_per_week = sum(days_recent) / max(len(days_recent), 1) if days_recent else None
+    blank_weeks_recent = sum(1 for d in days_recent if not d)
+    blank_weeks_prior = sum(1 for r in rows[:half] if not r[3])
 
     trend = (
         "progressing"
@@ -1459,6 +1529,9 @@ async def training_overload_signal() -> dict:
         "recent_avg_kg": round(recent_avg, 1),
         "trend": trend,
         "recent_sessions_per_week": round(sessions_per_week, 1) if sessions_per_week else None,
+        "weeks_compared": len(rows) - half,
+        "blank_weeks_recent": blank_weeks_recent,
+        "blank_weeks_prior": blank_weeks_prior,
     }
 
 
@@ -2826,9 +2899,13 @@ async def clinical_research_insights() -> dict:
         # the fraction of consecutive-night pairs in the same state (asleep or
         # awake). 100 = perfectly regular; 0 = random.
         sleep_rows = conn.execute(
+            # `is_nap` alone lets a mislabelled afternoon session into the
+            # regularity index; take the longest session per date as well.
             "SELECT night_date, ts_in, ts_out FROM sleep "
             "WHERE night_date >= $s AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
             "AND COALESCE(is_nap, FALSE) = FALSE "
+            "QUALIFY ROW_NUMBER() OVER ("
+            "  PARTITION BY night_date ORDER BY epoch(ts_out - ts_in) DESC) = 1 "
             "ORDER BY night_date, ts_in",
             {"s": (today - timedelta(days=14)).isoformat()},
         ).fetchall()
