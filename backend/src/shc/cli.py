@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 import click
 
 from shc.config import settings
-from shc.db.schema import init_db, write_ctx
+from shc.db.schema import get_read_conn, init_db, write_ctx
 
 
 @click.group()
@@ -47,10 +47,52 @@ def reconcile() -> None:
 
 @main.command()
 @click.option("--days", default=90, show_default=True, help="Days of demo data to seed")
-def seed(days: int) -> None:
-    """Populate DuckDB with synthetic WHOOP+sleep data for UI development."""
+@click.option("--force", is_flag=True, help="Seed even though the database already holds real data")
+def seed(days: int, force: bool) -> None:
+    """Populate DuckDB with synthetic WHOOP+sleep data for UI development.
+
+    Refuses to run against a database that already holds real recovery rows.
+    This command once wrote 90 nights of `random.gauss(65, 12)` HRV into the
+    live database tagged `source='whoop'` — invisible to every query that did
+    not also check `content_hash`, and it sat there depressing the all-time
+    recovery statistics by a fifth until 2026-09-05. Synthetic rows belong in a
+    scratch database, never beside real ones.
+    """
+    real = _real_row_count()
+    if real and not force:
+        raise SystemExit(
+            f"Refusing to seed: {real} real recovery rows already present. "
+            "Point DATA_DIR at a scratch database, or pass --force if you are "
+            "certain this database is disposable."
+        )
     asyncio.run(_seed(days))
     click.echo(f"Seeded {days} days of demo data.")
+
+
+def _real_row_count() -> int:
+    """Non-synthetic recovery rows in the target database.
+
+    Deliberately does not create the database: a fresh path, a missing table or
+    a lock all mean "nothing real to protect here" and return 0. A locked file
+    is safe to wave through because `_seed` needs the same write lock and will
+    fail on it a moment later without having written anything.
+    """
+    conn = None
+    try:
+        # get_read_conn() asserts the pool is initialised, so this has to run —
+        # it is what the seed itself would do a moment later anyway.
+        init_db()
+        conn = get_read_conn()
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM recovery WHERE COALESCE(content_hash, '') <> 'seed'"
+            ).fetchone()[0]
+        )
+    except Exception:
+        return 0
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 async def _seed(days: int) -> None:
@@ -84,9 +126,11 @@ async def _seed(days: int) -> None:
                 }
             )
             conn.execute(
+                # No `rhr` here: the column was dropped from `sleep` and this
+                # insert has been failing on it ever since.
                 "INSERT INTO sleep (id, source, night_date, ts_in, ts_out, stages_json, "
-                "spo2_avg, rhr, hrv, content_hash) "
-                "VALUES ($id, 'whoop', $night, $tin, $tout, $stages, $spo2, $rhr, $hrv, 'seed') "
+                "spo2_avg, hrv, content_hash) "
+                "VALUES ($id, 'whoop', $night, $tin, $tout, $stages, $spo2, $hrv, 'seed') "
                 "ON CONFLICT DO NOTHING",
                 {
                     "id": f"seed_sleep_{d}",
@@ -95,7 +139,6 @@ async def _seed(days: int) -> None:
                     "tout": ts_out.isoformat(),
                     "stages": stages,
                     "spo2": round(random.gauss(96.5, 0.8), 1),
-                    "rhr": rhr,
                     "hrv": hrv,
                 },
             )
