@@ -168,7 +168,7 @@ export function PillarRecovery() {
   }
 
   return (
-    <div className="@container shc-card shc-enter p-5 min-h-[320px] flex flex-col">
+    <div className="@container shc-card shc-enter p-6 min-h-[320px] flex flex-col">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <Eyebrow className="min-w-0">WHOOP recovery</Eyebrow>
         <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums shrink-0">

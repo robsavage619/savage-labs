@@ -35,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div
-          className="shc-card p-4 text-[11.5px]"
+          className="shc-card p-5 text-[11.5px]"
           style={{
             background: "var(--negative-soft)",
             borderColor: "var(--negative)",

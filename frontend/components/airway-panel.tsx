@@ -317,7 +317,7 @@ export function AirwayPanel() {
 
   if (isLoading || !data) {
     return (
-      <div className="shc-card shc-enter p-5 space-y-4">
+      <div className="shc-card shc-enter p-6 space-y-4">
         {[64, 150, 150].map((h, i) => (
           <div key={i} className="shc-skeleton rounded" style={{ height: h }} />
         ))}
@@ -346,7 +346,7 @@ export function AirwayPanel() {
           : "var(--positive)";
 
   return (
-    <div className="shc-card shc-enter p-5 space-y-5">
+    <div className="shc-card shc-enter p-6 space-y-7">
       <div className="grid grid-cols-2 @md:grid-cols-4 gap-4">
         <Stat
           label="SpO₂ mean"

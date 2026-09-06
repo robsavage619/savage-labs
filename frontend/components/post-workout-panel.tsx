@@ -107,7 +107,7 @@ export function PostWorkoutPanel() {
 
   if (isLoading) {
     return (
-      <div className="shc-card shc-enter p-5">
+      <div className="shc-card shc-enter p-6">
         <Eyebrow>Post-workout · debrief</Eyebrow>
         <div className="shc-skeleton h-[80px] mt-3" />
       </div>

@@ -53,7 +53,7 @@ export function SuggestedExperiments() {
   // is a real state and says something useful, so it gets drawn.
   if (data.length === 0) {
     return (
-      <div className="shc-card shc-enter p-5">
+      <div className="shc-card shc-enter p-6">
         <Eyebrow>Suggested studies · derived from standing research</Eyebrow>
         <p className="text-[11.5px] text-[var(--text-muted)] mt-3 leading-relaxed">
           Nothing on the shortlist right now. A finding qualifies once it is still unresolved
@@ -68,7 +68,7 @@ export function SuggestedExperiments() {
   }
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <Eyebrow>Suggested studies · derived from standing research</Eyebrow>
       <p className="text-[10.5px] text-[var(--text-dim)] mt-0.5">
         Unresolved lab findings with a controllable behavioral exposure — candidates for a

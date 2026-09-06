@@ -51,7 +51,7 @@ export function LabExperiments() {
   const data = exps.data ?? [];
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <div className="flex items-baseline justify-between flex-wrap gap-3">
         <div>
           <Eyebrow>Self-experiments · n-of-1, pre-registered</Eyebrow>

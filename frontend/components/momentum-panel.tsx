@@ -74,7 +74,7 @@ export function MomentumPanel() {
   const lw: MomentumWeek = q.data?.last_week ?? empty;
 
   return (
-    <div className="@container shc-card shc-enter p-5">
+    <div className="@container shc-card shc-enter p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <Eyebrow className="min-w-0">Momentum</Eyebrow>
         <span className="text-[10.5px] text-[var(--text-dim)] uppercase tracking-wider min-w-0">

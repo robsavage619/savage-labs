@@ -86,7 +86,7 @@ export function SubjectDossier() {
   const profile = q.data;
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div

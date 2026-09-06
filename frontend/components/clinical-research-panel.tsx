@@ -71,7 +71,7 @@ export function ClinicalResearchPanel() {
 
   if (isLoading || !data) {
     return (
-      <div className="shc-card shc-enter p-5">
+      <div className="shc-card shc-enter p-6">
         <Eyebrow>Clinical research signals</Eyebrow>
         <div className="shc-skeleton h-[180px] mt-3" />
       </div>
@@ -92,7 +92,7 @@ export function ClinicalResearchPanel() {
   const z2Tone = tone(z2cv, 4, 7, "low");
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <div className="flex items-baseline justify-between flex-wrap gap-3">
         <Eyebrow>Clinical research signals</Eyebrow>
         <span className="text-[10.5px] text-[var(--text-dim)] uppercase tracking-wider">

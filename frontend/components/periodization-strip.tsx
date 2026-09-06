@@ -72,7 +72,7 @@ export function PeriodizationStrip() {
   });
 
   return (
-    <div className="@container shc-card shc-enter p-5">
+    <div className="@container shc-card shc-enter p-6">
       <div className="grid grid-cols-1 @2xl:grid-cols-2 items-start gap-x-6 gap-y-5">
         {/* LEFT: mesocycle progress */}
         <div className="min-w-0">

@@ -125,7 +125,7 @@ export function LabPanel() {
   const refutedCount = answered.filter((f) => f.verdict === "refuted").length;
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <div className="flex items-baseline justify-between flex-wrap gap-3">
         <div>
           <Eyebrow>Research Lab · pre-registered hypotheses</Eyebrow>

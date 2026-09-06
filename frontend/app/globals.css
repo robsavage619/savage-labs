@@ -702,7 +702,12 @@ button:not(:disabled):not(.no-tactile):focus-visible {
 .board {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  /* 24, not 16. At 16 these cards read as one continuous sheet: several of
+     them stack three or four charts internally, and a gutter narrower than the
+     spacing INSIDE a card makes the card boundary the weakest line on the
+     board. The gutter has to be the widest gap in view for the grouping to be
+     legible. */
+  gap: 24px;
   align-items: start;
 }
 .board > .span-1 { grid-column: span 1; }

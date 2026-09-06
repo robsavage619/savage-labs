@@ -755,7 +755,7 @@ export function CardioPanel() {
   }, [data]);
 
   return (
-    <div className="shc-card shc-enter p-5 space-y-4 @container">
+    <div className="shc-card shc-enter p-6 space-y-7 @container">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h2 className="shc-section-title min-w-0">Cardio &amp; Sports</h2>
         <span className="min-w-0 text-[10.5px] text-[var(--text-faint)]">last 60 days · manual + WHOOP</span>

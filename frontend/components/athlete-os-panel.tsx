@@ -255,7 +255,7 @@ export function AthleteOSPanel() {
 
   return (
     <section
-      className="shc-card shc-enter p-5 border-l-[3px]"
+      className="shc-card shc-enter p-6 border-l-[3px]"
       style={{ borderLeftColor: "var(--sl-accent)" }}
     >
       {/* The product manifesto that used to sit here ("Lab thinking, consumer

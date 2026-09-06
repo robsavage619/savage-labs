@@ -244,10 +244,10 @@ export function PatternsPane() {
   }
 
   return (
-    <div className="@container space-y-6">
+    <div className="@container space-y-8">
       <DayOfWeekChart data={data.by_day_of_week} />
       <DistributionChart data={data.distribution} />
-      <div className="grid grid-cols-1 @min-[680px]:grid-cols-2 gap-6 items-start">
+      <div className="grid grid-cols-1 @min-[680px]:grid-cols-2 gap-8 items-start">
         <div className="@container min-w-0">
           <SleepScatterChart data={data.sleep_vs_recovery} />
         </div>

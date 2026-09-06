@@ -133,7 +133,7 @@ export function PillarSleep() {
     consistency == null ? "neutral" : consistency < 0.8 ? "positive" : consistency < 1.3 ? "neutral" : "negative";
 
   return (
-    <div className="@container shc-card shc-enter p-5 min-h-[320px] flex flex-col">
+    <div className="@container shc-card shc-enter p-6 min-h-[320px] flex flex-col">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <Eyebrow className="min-w-0">Sleep architecture</Eyebrow>
         {/* Not every tile is a 7-night aggregate: efficiency/SpO₂ and wakes are

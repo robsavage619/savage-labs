@@ -21,7 +21,7 @@ export function AfterActionPanel() {
 
   if (isLoading) {
     return (
-      <div className="shc-card shc-enter p-5">
+      <div className="shc-card shc-enter p-6">
         <Eyebrow>After-action · last session</Eyebrow>
         <div className="shc-skeleton h-[120px] mt-3" />
       </div>
@@ -30,7 +30,7 @@ export function AfterActionPanel() {
 
   if (!data || !data.session_date || data.exercises.length === 0) {
     return (
-      <div className="shc-card shc-enter p-5">
+      <div className="shc-card shc-enter p-6">
         <Eyebrow>After-action · last session</Eyebrow>
         <p className="text-[12px] text-[var(--text-dim)] mt-3">
           No completed sets in Hevy yet. After your next session syncs, this surface will
@@ -48,7 +48,7 @@ export function AfterActionPanel() {
       : `${data.days_ago}d ago`;
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <div className="flex items-baseline justify-between flex-wrap gap-3">
         <Eyebrow>After-action · last session</Eyebrow>
         <span className="text-[10.5px] text-[var(--text-dim)] tabular-nums">

@@ -43,7 +43,7 @@ export function FuelingPanel() {
       : "var(--text-primary)";
 
   return (
-    <div className="shc-card shc-enter p-5">
+    <div className="shc-card shc-enter p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <Eyebrow>Fueling · today</Eyebrow>
         <div className="flex items-center gap-3 text-[10px] text-[var(--text-dim)] uppercase tracking-wider">

@@ -187,7 +187,7 @@ export function MiddaySessionCard() {
   const session = data?.session ?? null;
 
   return (
-    <div id="midday-session" className="shc-card shc-enter p-5">
+    <div id="midday-session" className="shc-card shc-enter p-6">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           {/* eslint-disable-next-line @next/next/no-img-element */}

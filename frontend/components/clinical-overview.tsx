@@ -529,7 +529,7 @@ function CareGapsCard({ risk }: { risk: ClinicalRisk | undefined }) {
   if (gaps.length === 0) return null;
   return (
     <div
-      className="shc-card p-4 space-y-2.5"
+      className="shc-card p-5 space-y-2.5"
       style={{ borderColor: "var(--negative)40" }}
     >
       <div className="flex items-baseline justify-between">
@@ -630,15 +630,15 @@ export function ClinicalOverview() {
       <CareGapsCard risk={risk} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="shc-card p-4">
+        <div className="shc-card p-5">
           <ConditionsCard data={data} />
         </div>
-        <div className="shc-card p-4">
+        <div className="shc-card p-5">
           <MedicationsCard data={data} risk={risk} />
         </div>
       </div>
 
-      <div className="shc-card p-4 space-y-3">
+      <div className="shc-card p-5 space-y-3">
         <div className="flex items-baseline justify-between">
           <Eyebrow>Recent labs</Eyebrow>
           <span className="text-[10px] text-[var(--text-faint)]">H/L flags vs reference range</span>
@@ -647,7 +647,7 @@ export function ClinicalOverview() {
       </div>
 
       {data?.panels && data.panels.length > 0 && (
-        <div className="shc-card p-4 space-y-3">
+        <div className="shc-card p-5 space-y-3">
           <div className="flex items-baseline justify-between">
             <Eyebrow>Panel results</Eyebrow>
             <span className="text-[10px] text-[var(--text-faint)]">qualitative + numeric, grouped by order</span>
@@ -656,7 +656,7 @@ export function ClinicalOverview() {
         </div>
       )}
 
-      <div className="shc-card p-4">
+      <div className="shc-card p-5">
         <div className="flex items-baseline justify-between mb-3">
           <Eyebrow>Clinical timeline</Eyebrow>
           <span className="text-[10px] text-[var(--text-faint)]">
