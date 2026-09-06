@@ -2068,6 +2068,126 @@ _FIB4_BANDS = {
 }
 
 
+# ── Atherogenic lipids beyond LDL-C ─────────────────────────────────────────
+#
+# Rob's reported LDL is `LDL Cholesterol (calc)` — Friedewald, and the
+# arithmetic confirms it: 210 - 44 - 298/5 = 106.4 against a reported 106.
+# Friedewald assumes a FIXED triglyceride:VLDL ratio of 5, which degrades as
+# triglycerides rise. Samuel 2023 (Global Heart, n=5,051,467) put Friedewald at
+# 83.2% correct guideline classification against ultracentrifugation vs 89.6%
+# for Martin/Hopkins, and found that among patients with Friedewald LDL <70 and
+# triglycerides 150-399 — Rob's band, at 298 — almost half were reclassified
+# UPWARD by Martin/Hopkins. Sajja 2021 (JAMA Netw Open) reaches the same
+# conclusion above 400 and advises caution regardless of method.
+#
+# So the LDL number on the cardiometabolic strip is soft, and it is soft in the
+# direction that matters. Two responses, both computed here:
+#
+#   1. Flag it. `friedewald_reliable` is False at TG >= 150 and the value is
+#      formally invalid at >= 400, where labs are expected to measure directly.
+#   2. Route around it. Non-HDL-C needs no VLDL assumption at all — it is a
+#      subtraction — which is exactly why guidelines prefer it as the target
+#      when triglycerides are high.
+#
+# Martin/Hopkins itself is deliberately NOT implemented. It needs the published
+# 180-cell adjustable-factor table (Martin 2013, JAMA) and inventing those
+# coefficients would produce a confident wrong number in a health app. It goes
+# in when the table is sourced, not before.
+_TG_FRIEDEWALD_UNRELIABLE = 150.0
+_TG_FRIEDEWALD_INVALID = 400.0
+
+# Non-HDL-C target runs 30 mg/dL above the LDL target for the same risk tier.
+_NON_HDL_TARGET = 130.0
+
+# Wadstrom 2023 (Eur Heart J, n=87,192, Copenhagen General Population Study):
+# remnant cholesterol >= 39 mg/dL (1.0 mmol/L) carried a 2.2x hazard ratio for
+# cardiovascular mortality against < 19 mg/dL, over up to 13 years. The <30
+# figure below is the conventional normal ceiling, not Wadstrom's cut-point;
+# both are reported so neither gets mistaken for the other.
+_REMNANT_NORMAL_MAX = 30.0
+_REMNANT_ELEVATED = 39.0
+
+
+def _lipid_panel(lab_by_name: dict) -> dict | None:
+    """Derived atherogenic lipid measures from one draw.
+
+    Every value here is exact arithmetic on the panel — no fitted coefficients,
+    no lookup tables, nothing that could be silently wrong. All inputs must come
+    from the SAME draw; a total cholesterol from one panel against an HDL from
+    another is a meaningless subtraction.
+    """
+    tc = lab_by_name.get("Total Cholesterol")
+    hdl = lab_by_name.get("HDL Cholesterol")
+    tg = lab_by_name.get("Triglycerides")
+    ldl = lab_by_name.get("LDL Cholesterol (calc)")
+    if not (tc and hdl):
+        return None
+
+    draws = {str(r["collected_at"])[:10] for r in (tc, hdl, tg, ldl) if r}
+    tc_v, hdl_v = float(tc["value"]), float(hdl["value"])
+    tg_v = float(tg["value"]) if tg else None
+    ldl_v = float(ldl["value"]) if ldl else None
+
+    non_hdl = tc_v - hdl_v
+    remnant = (tc_v - hdl_v - ldl_v) if ldl_v is not None else None
+
+    friedewald_reliable = None
+    if tg_v is not None:
+        friedewald_reliable = tg_v < _TG_FRIEDEWALD_UNRELIABLE
+
+    return {
+        "collected_at": sorted(draws)[-1] if draws else None,
+        # True only when every input came from one draw. False means the
+        # subtractions below are comparing different days and mean nothing.
+        "single_draw": len(draws) == 1,
+        "non_hdl_c": {
+            "value": round(non_hdl, 1),
+            "target": _NON_HDL_TARGET,
+            "above_target_by": round(non_hdl - _NON_HDL_TARGET, 1),
+            "at_target": non_hdl < _NON_HDL_TARGET,
+            "formula": "total cholesterol - HDL-C",
+            "why": (
+                "Needs no VLDL assumption, so it stays valid at the triglyceride "
+                "levels where calculated LDL-C does not."
+            ),
+        },
+        "remnant_c": (
+            {
+                "value": round(remnant, 1),
+                "normal_max": _REMNANT_NORMAL_MAX,
+                "elevated_at": _REMNANT_ELEVATED,
+                "elevated": remnant >= _REMNANT_ELEVATED,
+                "formula": "total cholesterol - HDL-C - LDL-C",
+                "ref": "Wadstrom 2023 Eur Heart J - HR 2.2 for CV mortality at >=39 mg/dL",
+            }
+            if remnant is not None
+            else None
+        ),
+        "ratios": {
+            "tc_hdl": round(tc_v / hdl_v, 2) if hdl_v else None,
+            "tg_hdl": round(tg_v / hdl_v, 2) if (tg_v and hdl_v) else None,
+        },
+        "ldl_estimate": {
+            "value": ldl_v,
+            "method": "Friedewald",
+            "triglycerides": tg_v,
+            "reliable": friedewald_reliable,
+            "valid": (tg_v < _TG_FRIEDEWALD_INVALID) if tg_v is not None else None,
+            "caveat": (
+                None
+                if friedewald_reliable is not False
+                else (
+                    f"Triglycerides {tg_v:.0f} mg/dL exceed {_TG_FRIEDEWALD_UNRELIABLE:.0f}, "
+                    "where Friedewald's fixed 5:1 VLDL ratio degrades and tends to "
+                    "UNDERSTATE LDL-C. Use non-HDL-C as the target instead; a "
+                    "Martin/Hopkins or directly-measured LDL-C would reclassify this. "
+                    "(Samuel 2023, Global Heart, n=5,051,467)"
+                )
+            ),
+        },
+    }
+
+
 def _age_at(dob: date, when: date) -> int:
     """Completed years from ``dob`` to ``when``."""
     return when.year - dob.year - ((when.month, when.day) < (dob.month, dob.day))
@@ -2372,6 +2492,7 @@ async def clinical_risk() -> dict:
         # Hepatic sits apart from the cardiometabolic strip on purpose — FIB-4 is
         # a fibrosis screen, not a cardiometabolic marker, and it carries a
         # caveat the chip shape has nowhere to put.
+        "lipids": _lipid_panel(lab_by_name),
         "hepatic": {
             "fib4": {
                 "latest": fib4_latest,

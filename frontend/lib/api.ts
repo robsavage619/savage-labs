@@ -277,6 +277,41 @@ export interface ClinicalRisk {
       formula: string;
     };
   };
+  /** Exact arithmetic on ONE draw — null when total cholesterol or HDL is absent. */
+  lipids: LipidPanel | null;
+}
+
+/** Atherogenic lipid measures that do not depend on a VLDL assumption. */
+export interface LipidPanel {
+  collected_at: string | null;
+  /** False when the inputs came from different draws — then the values mean nothing. */
+  single_draw: boolean;
+  non_hdl_c: {
+    value: number;
+    target: number;
+    above_target_by: number;
+    at_target: boolean;
+    formula: string;
+    why: string;
+  };
+  remnant_c: {
+    value: number;
+    normal_max: number;
+    elevated_at: number;
+    elevated: boolean;
+    formula: string;
+    ref: string;
+  } | null;
+  ratios: { tc_hdl: number | null; tg_hdl: number | null };
+  ldl_estimate: {
+    value: number | null;
+    method: string;
+    triglycerides: number | null;
+    /** False above 150 mg/dL TG, where Friedewald tends to understate LDL-C. */
+    reliable: boolean | null;
+    valid: boolean | null;
+    caveat: string | null;
+  };
 }
 
 /** One blood draw scored for FIB-4. `value` is null when the draw is missing

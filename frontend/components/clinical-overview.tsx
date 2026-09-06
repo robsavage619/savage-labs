@@ -111,6 +111,124 @@ function RiskTile({ kpi }: { kpi: ClinicalRisk["cardiometabolic"][number] }) {
   );
 }
 
+/**
+ * Atherogenic lipids and the hepatic screen — both computed server-side long
+ * before this component existed, and neither one rendered until 2026-09-06.
+ * `hepatic.fib4` in particular had an implementation, a route, a type and a
+ * test suite while being invisible in the app.
+ */
+function LipidHepaticStrip({ risk }: { risk: ClinicalRisk | undefined }) {
+  const lipids = risk?.lipids;
+  const fib4 = risk?.hepatic?.fib4?.latest;
+  if (!lipids && !fib4) return null;
+
+  const neg = "var(--negative)";
+  const pos = "var(--positive)";
+  const warn = "oklch(0.75 0.18 75)";
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <Eyebrow>Atherogenic lipids &amp; hepatic screen</Eyebrow>
+        {lipids?.collected_at && (
+          <span className="text-[9.5px] text-[var(--text-faint)] tabular-nums">
+            drawn {lipids.collected_at}
+          </span>
+        )}
+      </div>
+
+      {lipids && !lipids.single_draw && (
+        <p className="mb-2 text-[10px] leading-snug" style={{ color: warn }}>
+          These values subtract results from different draws and should not be read as a panel.
+        </p>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {lipids && (
+          <div className="rounded-md border border-[var(--border)] p-2.5">
+            <p className="text-[9.5px] uppercase tracking-[0.14em] text-[var(--text-faint)]">Non-HDL-C</p>
+            <div className="flex items-baseline gap-1">
+              <span
+                className="text-[19px] tabular-nums"
+                style={{ fontFamily: "var(--font-orbitron)", color: lipids.non_hdl_c.at_target ? pos : neg }}
+              >
+                {lipids.non_hdl_c.value.toFixed(0)}
+              </span>
+              <span className="text-[10.5px] text-[var(--text-faint)]">mg/dL</span>
+            </div>
+            <p className="mt-1 text-[9.5px] text-[var(--text-muted)] tabular-nums">
+              target &lt;{lipids.non_hdl_c.target}
+              {!lipids.non_hdl_c.at_target && ` · +${lipids.non_hdl_c.above_target_by.toFixed(0)}`}
+            </p>
+          </div>
+        )}
+
+        {lipids?.remnant_c && (
+          <div className="rounded-md border border-[var(--border)] p-2.5">
+            <p className="text-[9.5px] uppercase tracking-[0.14em] text-[var(--text-faint)]">Remnant-C</p>
+            <div className="flex items-baseline gap-1">
+              <span
+                className="text-[19px] tabular-nums"
+                style={{ fontFamily: "var(--font-orbitron)", color: lipids.remnant_c.elevated ? neg : pos }}
+              >
+                {lipids.remnant_c.value.toFixed(0)}
+              </span>
+              <span className="text-[10.5px] text-[var(--text-faint)]">mg/dL</span>
+            </div>
+            <p className="mt-1 text-[9.5px] text-[var(--text-muted)] tabular-nums">
+              normal &lt;{lipids.remnant_c.normal_max} · 2.2× CV mortality ≥{lipids.remnant_c.elevated_at}
+            </p>
+          </div>
+        )}
+
+        {lipids && (
+          <div className="rounded-md border border-[var(--border)] p-2.5">
+            <p className="text-[9.5px] uppercase tracking-[0.14em] text-[var(--text-faint)]">TG : HDL</p>
+            <div className="flex items-baseline gap-1">
+              <span className="text-[19px] tabular-nums" style={{ fontFamily: "var(--font-orbitron)" }}>
+                {lipids.ratios.tg_hdl?.toFixed(1) ?? "—"}
+              </span>
+            </div>
+            <p className="mt-1 text-[9.5px] text-[var(--text-muted)] tabular-nums">
+              TC:HDL {lipids.ratios.tc_hdl?.toFixed(1) ?? "—"}
+            </p>
+          </div>
+        )}
+
+        {fib4?.value != null && (
+          <div className="rounded-md border border-[var(--border)] p-2.5">
+            <p className="text-[9.5px] uppercase tracking-[0.14em] text-[var(--text-faint)]">FIB-4</p>
+            <div className="flex items-baseline gap-1">
+              <span
+                className="text-[19px] tabular-nums"
+                style={{
+                  fontFamily: "var(--font-orbitron)",
+                  color: fib4.band === "rule_out" ? pos : fib4.band === "rule_in" ? neg : warn,
+                }}
+              >
+                {fib4.value.toFixed(2)}
+              </span>
+            </div>
+            <p className="mt-1 text-[9.5px] text-[var(--text-muted)]">
+              {fib4.band === "rule_out" ? "advanced fibrosis ruled out" : fib4.band_label}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {lipids?.ldl_estimate.caveat && (
+        <p className="mt-2 text-[10px] leading-snug" style={{ color: warn }}>
+          <strong>LDL-C {lipids.ldl_estimate.value?.toFixed(0)} is a Friedewald estimate.</strong>{" "}
+          {lipids.ldl_estimate.caveat}
+        </p>
+      )}
+      {risk?.hepatic?.fib4?.caveat && (
+        <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-muted)]">{risk.hepatic.fib4.caveat}</p>
+      )}
+    </div>
+  );
+}
+
 function CardiometabolicStrip({ risk }: { risk: ClinicalRisk | undefined }) {
   if (!risk?.cardiometabolic.length) return null;
   return (
@@ -626,6 +744,7 @@ export function ClinicalOverview() {
   return (
     <div className="space-y-5">
       <CardiometabolicStrip risk={risk} />
+        <LipidHepaticStrip risk={risk} />
 
       <CareGapsCard risk={risk} />
 
