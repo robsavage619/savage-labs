@@ -313,8 +313,11 @@ def backfill_exercise_map(conn: duckdb.DuckDBPyConnection) -> None:
         primary, secondaries = result
         # Write to the canonical exercise_muscle table (exercise_muscle_map is a
         # view over it, 0066): one primary row (full credit) plus one row per
-        # secondary at the standard synergist rate (arm flexors/extensors 0.3,
-        # else 0.5) — the same rule volume.py credits by.
+        # secondary row carrying the table's stored credit weight (arm
+        # flexors/extensors 0.3, else 0.5). These stored weights are NOT the
+        # crediting rate: volume.py counts every secondary at 1.0/set
+        # (``SECONDARY_CREDIT``/``ARM_SECONDARY_CREDIT``) regardless of what this
+        # column holds. The column is kept as-is deliberately.
         conn.execute(
             "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) "
             "VALUES (?, ?, 'primary', 1.0) ON CONFLICT DO NOTHING",

@@ -511,9 +511,9 @@ def _decide(
     ``'maintain'`` muscle is not a growth target this mesocycle: it is never
     ADDED to, and its floor is MV rather than MEV. It is deliberately NOT cut
     down to MV — compound spillover legitimately leaves several maintenance
-    muscles well above it (a row credits biceps 0.5 + traps 0.5), and stripping
-    productive volume that costs no dedicated budget would be the opposite of
-    the point. The tier only stops the engine *demanding* more.
+    muscles well above it (at the 1:1 rate a row credits biceps 1.0 + traps 1.0),
+    and stripping productive volume that costs no dedicated budget would be the
+    opposite of the point. The tier only stops the engine *demanding* more.
 
     Two guards, both deliberate. (1) An ``emphasis`` muscle can never maintain,
     whatever the tier says — invariant 7 forbids freezing a lagging bring-up
@@ -2229,7 +2229,7 @@ def _weekly_capacity(
     The distinction matters and an earlier cut of this function got it wrong by
     summing every ``target_sets``. A maintenance muscle that is HOLDING needs
     zero dedicated sets: its volume arrives as secondary spillover from the
-    grow-tier work (a row credits mid_back 1.0 and biceps/traps 0.5 each), and
+    grow-tier work (one row pays its primary AND every synergist it lists), and
     the same working set cannot be charged twice. Counting those holds as demand
     inflated the requirement by ~35 muscle-sets and reported a feasible week as
     infeasible. Dedicated demand is therefore:
@@ -2239,9 +2239,14 @@ def _weekly_capacity(
 
     ``credit_ratio`` is still reported for context — it says how much total
     muscle-stimulus each working set generates once spillover is counted — but
-    it is deliberately NOT used to discount the requirement, because the spilled
-    0.48 lands on whichever muscles the movement happens to hit, not necessarily
-    the ones being grown.
+    it is deliberately NOT used to discount the requirement, because the spill
+    lands on whichever muscles the movement happens to hit, not necessarily the
+    ones being grown. NOTE the ratio below is measured off ``exercise_muscle``'s
+    STORED ``credit`` weights (0.5/secondary), which are not the rate the volume
+    validator counts by — :data:`shc.training.volume.SECONDARY_CREDIT` is 1.0
+    since 9eb6aab. Left as-is here on purpose: this is only a context number and
+    changing it would move the ``feasible`` verdict, which is a behaviour call,
+    not a doc fix.
 
     Exists because the pre-0078 engine had no notion of a budget at all: with
     MEV the floor for all 17 muscles, demand summed to ~137 muscle-sets/wk

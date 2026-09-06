@@ -954,7 +954,7 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         ).fetchall()
     }
 
-    # Per-muscle volume table (anatomical; primary 1.0 + secondary 0.5 credit).
+    # Per-muscle volume table (anatomical; primary 1.0 + secondary 1.0 credit).
     # Landmarks marked with * are fitted to Rob's own data; others are RP population defaults.
     vol_rows: list[str] = []
     for r in report:
@@ -1073,7 +1073,8 @@ def mesocycle_context_block(conn: duckdb.DuckDBPyConnection) -> str:
         f"- Self-learning: {n_personal}/{n_total} muscles have personal landmarks (*); "
         f"ACWR gates from {acwr_src}",
         "",
-        "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 0.5; * = fitted to Rob's data)",
+        "## PER-MUSCLE VOLUME THIS WEEK (sets; primary 1.0 + secondary 1.0; "
+        "* = fitted to Rob's data)",
         "GROW-tier muscles are judged against MEV and are where weekly volume belongs.",
         "MAINTAIN-tier muscles are judged against **MV**, not MEV — a maintain muscle at "
         "or above MV is DONE, not deficient, and is not where the weekly budget goes. But "

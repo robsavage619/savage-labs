@@ -479,8 +479,11 @@ async def get_muscle_volume() -> dict[str, Any]:
     """Per-muscle weekly set counts vs MEV/MAV/MRV targets from the active mesocycle.
 
     Volume is credited per muscle via ``exercise_muscle_map`` (primary 1.0,
-    each secondary 0.5) by :func:`shc.training.volume.weekly_muscle_volume` —
-    the corrected single source of truth (see migration 0040).
+    each secondary 1.0 — the vault's 1:1 synergist ratio) by
+    :func:`shc.training.volume.weekly_muscle_volume`, the corrected single source
+    of truth (see migration 0040). The ``exercise_muscle.credit`` column still
+    stores 0.5/0.3 per secondary; those stored weights are not what this endpoint
+    counts by.
     """
     from dataclasses import asdict
 

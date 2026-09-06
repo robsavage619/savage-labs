@@ -9,9 +9,11 @@ Replaces two earlier broken implementations:
     mis-bucketed direct arm work into "pull", so biceps/glutes were invisible.
 
 Volume is counted from ``exercise_muscle_map``: a working set gives 1.0 credit to
-its ``primary_muscle`` and ``SECONDARY_CREDIT`` (0.5) to each ``secondary_muscle``
-— the Renaissance Periodization indirect-volume convention. Warmups and
-zero-load/zero-rep sets are excluded.
+its ``primary_muscle`` and ``SECONDARY_CREDIT`` to each ``secondary_muscle``. That
+credit is 1.0 — the vault's 1:1 synergist ratio, see the constant below. The
+``exercise_muscle.credit`` COLUMN still stores 0.5 (0.3 for arms); those stored
+weights are deliberately left alone and are not what this module counts by.
+Warmups and zero-load/zero-rep sets are excluded.
 """
 
 import logging
