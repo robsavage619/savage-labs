@@ -251,9 +251,17 @@ class TrainingLoadMetrics:
     # Per-muscle rest tracking (2026-07-23 remediation) — replaces the
     # group-level days_since_{legs,push,pull} as the REST GATE's input (those
     # group fields are kept for display/balance purposes only). Keyed by the
-    # 17-muscle taxonomy; {"days_since": int, "last_rpe": float | None,
-    # "last_dose_sets": int} for any muscle with a day at or above
-    # MEANINGFUL_DOSE_SETS in the last 28 days.
+    # 17-muscle taxonomy; an entry exists ONLY for a muscle with a day at or
+    # above MEANINGFUL_DOSE_SETS primary-credited sets in the last 28 days.
+    #
+    # `days_since_dose` is days since that DOSE day — NOT days since the muscle
+    # was last trained. A muscle worked at 2-3 sets/day every session still
+    # reports a large `days_since_dose`, because a sub-meaningful dose
+    # deliberately does not reset the rest clock (invariant 8). The rest gate
+    # wants exactly that; a reader wanting "when was this last touched" wants
+    # `days_since_any_primary_set`. Both are reported so the distinction cannot
+    # be lost at the wire (invariant 22). `dose_threshold_sets` carries the bar
+    # itself so a consumer never has to guess it.
     muscle_recovery: dict[str, dict[str, Any]] = field(default_factory=dict)
     push_pull_ratio_28d: float | None = None
     push_sets_28d: int = 0
@@ -1198,7 +1206,15 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         {"since": (today - timedelta(days=28)).isoformat()},
     ).fetchall()
     best_dose_day: dict[str, tuple[date, int, float | None]] = {}
+    # Last day the muscle was touched AT ALL (>= 1 primary-credited set),
+    # independent of the dose bar. Reported alongside the dose clock purely so
+    # a consumer can never read "chest: 21" as "chest untrained for 21 days"
+    # when it was pressed yesterday for 2 sets — see invariant 22.
+    last_touch_day: dict[str, date] = {}
     for day, muscle, n_sets, avg_rpe in muscle_day_rows:
+        prior_touch = last_touch_day.get(muscle)
+        if prior_touch is None or day > prior_touch:
+            last_touch_day[muscle] = day
         if n_sets < MEANINGFUL_DOSE_SETS:
             continue
         prior = best_dose_day.get(muscle)
@@ -1209,8 +1225,11 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
                 float(avg_rpe) if avg_rpe is not None else None,
             )
     for muscle, (day, n_sets, avg_rpe) in best_dose_day.items():
+        touch = last_touch_day.get(muscle, day)
         m.muscle_recovery[muscle] = {
-            "days_since": (today - day).days,
+            "days_since_dose": (today - day).days,
+            "days_since_any_primary_set": (today - touch).days,
+            "dose_threshold_sets": MEANINGFUL_DOSE_SETS,
             "last_rpe": round(avg_rpe, 1) if avg_rpe is not None else None,
             "last_dose_sets": n_sets,
         }
@@ -1983,7 +2002,7 @@ def _gates(
     for muscle, dose in load.muscle_recovery.items():
         if MUSCLE_TO_GROUP.get(muscle) not in ("push", "pull", "legs"):
             continue  # core (abs, lower_back) and forearms stay ungated, as before
-        rest = dose.get("days_since")
+        rest = dose.get("days_since_dose")
         last_rpe = dose.get("last_rpe")
         if MUSCLE_TO_GROUP[muscle] == "legs":
             # Frequency is the over-40 hypertrophy lever (vault: raise it, don't

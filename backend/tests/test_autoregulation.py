@@ -750,7 +750,7 @@ def test_trainable_today_rest_gated_muscle_takes_priority_over_group() -> None:
     happens to be forbidden — rest_gated is checked first (more specific)."""
     rx = [_make_rx("chest", 10)]
     gates = {"forbid_muscle_groups": ["push"], "forbid_muscles": ["chest"]}
-    recovery = {"chest": {"days_since": 1, "last_rpe": 8.0, "last_dose_sets": 5}}
+    recovery = {"chest": {"days_since_dose": 1, "last_rpe": 8.0, "last_dose_sets": 5}}
     today = trainable_today(rx, gates, recovery)
     assert today[0]["status"] == "rest_gated"
     assert "1d" in today[0]["detail"]

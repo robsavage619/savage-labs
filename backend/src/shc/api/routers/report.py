@@ -126,7 +126,7 @@ Sleep: deep%/**REM%**/**efficiency%**/consistency/performance, the **sleep-need 
 different question from how much it moves. Training load: pooled ACWR (+ acute_load_7d /
 chronic_load_21d) AND the modality split **resistance_acwr / conditioning_acwr**,
 **day_strain_yesterday / day_strain_7d_avg**, days-since legs/push/pull/**pickleball**,
-per-muscle **muscle_recovery**, push:pull balance, **pickleball_min_7d/28d**, **cardio zone
+per-muscle **muscle_recovery** (two clocks, don't confuse them: `days_since_dose` is the rest gate's input — days since a ≥4-set dose — while `days_since_any_primary_set` is when the muscle was last touched at all; quote the second one for "when did he last train X"), push:pull balance, **pickleball_min_7d/28d**, **cardio zone
 minutes (z0–z5)** read against **hr_zone_bounds** (WHOOP's real boundaries — Z5 starts at
 ~93% of max, not the textbook 90%), **cardio_aerobic_base_min_7d**, max HR. Plus readiness
 (weighted, β-blocker), check-in subjectives, gates (including **forbid_muscles** and

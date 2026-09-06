@@ -1930,7 +1930,7 @@ def trainable_today(
             continue
         group = MUSCLE_TO_GROUP.get(m.muscle)
         if m.muscle in forbid_muscles:
-            days = recovery.get(m.muscle, {}).get("days_since")
+            days = recovery.get(m.muscle, {}).get("days_since_dose")
             status = "rest_gated"
             detail = f"rest-gated — {days}d since last dose" if days is not None else "rest-gated"
         elif group in forbid_groups:

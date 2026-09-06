@@ -286,7 +286,13 @@ def test_acwr_in_safe_band_leaves_high() -> None:
 
 
 def _dose(days_since: int, last_rpe: float | None, sets: int = 4) -> dict:
-    return {"days_since": days_since, "last_rpe": last_rpe, "last_dose_sets": sets}
+    return {
+        "days_since_dose": days_since,
+        "days_since_any_primary_set": days_since,
+        "dose_threshold_sets": 4,
+        "last_rpe": last_rpe,
+        "last_dose_sets": sets,
+    }
 
 
 def test_recent_hard_muscle_dose_forbids_muscle() -> None:

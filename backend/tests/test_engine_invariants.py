@@ -22,6 +22,7 @@ import pytest
 from shc.ai.workout_planner import load_cap_pct
 from shc.metrics import (
     _ACWR_MIN_CHRONIC_DAYS,
+    MEANINGFUL_DOSE_SETS,
     CheckinMetrics,
     ReadinessSnapshot,
     RecoveryMetrics,
@@ -29,6 +30,7 @@ from shc.metrics import (
     TrainingLoadMetrics,
     _apply_band,
     _gates,
+    _training_load,
     muscle_group,
 )
 from shc.training.autoregulation import _CONFIDENCE_FULL, _decide, weekly_prescription
@@ -1495,12 +1497,12 @@ def test_a_muscle_is_never_satisfied_by_spillover_alone(conn) -> None:
     reliably supply stimulus (it cannot fill MEV), because on a compound the
     synergist is by construction not the limiting factor.
     """
+    from shc.training import volume
     from shc.training.autoregulation import (
         _DIRECT_FLOOR_MV_SETS,
         MusclePrescription,
         _direct_floor,
     )
-    from shc.training import volume
 
     # The ratio itself is the vault's, for arms as much as anything else.
     assert volume.SECONDARY_CREDIT == 1.0
@@ -1528,3 +1530,96 @@ def test_a_muscle_is_never_satisfied_by_spillover_alone(conn) -> None:
         muscle="calves", current_sets=0.0, target_sets=1, delta=1, action="add", reason=""
     )
     assert _direct_floor(tiny, 12.0) <= 1.0
+
+
+def _ago(today: date, n: int) -> date:
+    return today - timedelta(days=n)
+
+
+def test_a_muscle_trained_this_week_never_reports_as_untrained(conn, seed, today: date) -> None:
+    """Invariant 22: the per-muscle rest clock is days-since-DOSE, and it says so.
+
+    The live 2026-07-31 brief reported `chest.days_since = 21` and
+    `lats.days_since = 22` on a day chest had been pressed the previous
+    afternoon and lats pulled the same session. Both numbers were correct for
+    what the field MEASURES — the last day at or above `MEANINGFUL_DOSE_SETS`
+    primary-credited sets, which for chest was 2026-07-10 (10 sets) — and both
+    were unreadable as anything but "untrained for three weeks" at the wire.
+    That is invariant 8's own mechanism (a sub-meaningful dose must not reset
+    the clock) surfacing under a name that denies it, and it steered exercise
+    selection: the planner prose derived from that brief argued chest and lats
+    were "19-20 days from a dedicated dose" and programmed accordingly.
+
+    The fix is naming, not arithmetic — `days_since_dose` for the gate's clock,
+    `days_since_any_primary_set` for the question a reader is actually asking.
+    This test pins the property that made the old field a trap: a muscle
+    credited with primary sets inside the last 7 days can never report more
+    than 7 days since it was last touched, however long its dose clock runs.
+    """
+    # A real dose three weeks ago, then the distributed 2-3 set sessions that
+    # are Rob's actual pattern — none of which reach the dose bar.
+    seed.workout(_ago(today, 21), "Bench Press (Barbell)", [(80, 8)] * 5, rpe=8.0)
+    for n in (6, 1):
+        seed.workout(_ago(today, n), "Bench Press (Barbell)", [(80, 8)] * 2, rpe=7.0)
+
+    m = _training_load(conn, today)
+    chest = m.muscle_recovery["chest"]
+
+    # The dose clock still reads 21 days — the rest gate depends on that, and
+    # a 2-set touch must not unlock a muscle (invariant 8).
+    assert chest["days_since_dose"] == 21
+    assert chest["last_dose_sets"] == 5
+
+    # ...but the field a consumer reads as "when was this last trained" cannot
+    # disagree with the fact that it was trained yesterday.
+    assert chest["days_since_any_primary_set"] == 1
+
+    # The bar itself travels with the number, so no consumer has to guess it.
+    assert chest["dose_threshold_sets"] == MEANINGFUL_DOSE_SETS
+
+    # The general property, stated as the guard: any muscle with primary sets
+    # credited in the last 7 days reports <= 7 days since it was last touched.
+    # Derived from the rows, NOT from the reported field — asking the field
+    # which muscles are recent and then asserting they are recent proves
+    # nothing.
+    recent = conn.execute(
+        """
+        SELECT DISTINCT em.muscle
+        FROM workout_sets_dedup ws
+        JOIN exercise_muscle em ON em.exercise_name = ws.exercise AND em.role = 'primary'
+        WHERE ws.is_warmup = FALSE AND day_d > $since
+        """,
+        {"since": (today - timedelta(days=7)).isoformat()},
+    ).fetchall()
+    assert recent, "fixture seeded no recent primary sets — the guard would be vacuous"
+    for (muscle,) in recent:
+        dose = m.muscle_recovery.get(muscle)
+        if dose is None:
+            continue  # never reached the dose bar in 28d — no entry, nothing to misread
+        assert dose["days_since_any_primary_set"] <= 7, (
+            f"{muscle} was credited primary sets this week but reports "
+            f"{dose['days_since_any_primary_set']}d since it was last touched"
+        )
+
+
+def test_no_consumer_reads_the_retired_ambiguous_days_since_key() -> None:
+    """Invariant 22, second half: the ambiguous key is gone, not shadowed.
+
+    `days_since` survived as a dict key while callers each read it meaning
+    something slightly different. A `.get("days_since")` that now returns None
+    fails OPEN — `_gates` skips the rest lock entirely — so a missed rename does
+    not raise, it silently unlocks a muscle that should be resting. Grep is the
+    only guard that catches that.
+    """
+    import inspect
+
+    from shc import metrics
+    from shc.training import autoregulation
+
+    for mod in (metrics, autoregulation):
+        src = inspect.getsource(mod)
+        for bad in ('"days_since"', "'days_since'"):
+            assert bad not in src, (
+                f"{mod.__name__} still reads the retired ambiguous key {bad} — "
+                "it fails open (None skips the rest lock), so this must be a grep"
+            )

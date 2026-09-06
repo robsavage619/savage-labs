@@ -111,7 +111,7 @@ def test_muscle_recovery_locks_a_hard_focused_dose(conn, seed, today: date) -> N
     )
     m = _training_load(conn, today)
     assert "chest" in m.muscle_recovery
-    assert m.muscle_recovery["chest"]["days_since"] == 1
+    assert m.muscle_recovery["chest"]["days_since_dose"] == 1
     assert m.muscle_recovery["chest"]["last_rpe"] == 8.0
     assert m.muscle_recovery["chest"]["last_dose_sets"] == 5
 
@@ -140,7 +140,7 @@ def test_sub_threshold_dose_does_not_reset_the_clock(conn, seed, today: date) ->
     seed.workout(ago(today, 4), "Bench Press (Barbell)", [(80, 8)] * 5, rpe=8.0)
     seed.workout(ago(today, 1), "Bench Press (Barbell)", [(80, 8)] * 3, rpe=8.0)
     m = _training_load(conn, today)
-    assert m.muscle_recovery["chest"]["days_since"] == 4
+    assert m.muscle_recovery["chest"]["days_since_dose"] == 4
     assert m.muscle_recovery["chest"]["last_dose_sets"] == 5
 
 
