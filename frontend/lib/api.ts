@@ -971,6 +971,32 @@ export const api = {
       notes: string | null;
       volume_targets: Record<string, { mev: number; mav: number; mrv: number }>;
     }>("/api/training/mesocycle"),
+  engineReportCard: (days = 365) =>
+    get<{
+      as_of: string;
+      window_days: number;
+      calibration: {
+        n_prescribed: number;
+        n_matched: number;
+        bias_rpe?: number;
+        bias_ci95?: [number, number];
+        sd_rpe?: number;
+        within_target_pct?: number;
+        harder_than_programmed_pct?: number;
+        easier_than_programmed_pct?: number;
+        verdict: "calibrated" | "biased" | "insufficient";
+        on_target_window_rpe?: number;
+        worst_misses?: { date: string; exercise: string; target: number; actual: number; error: number }[];
+      };
+      predictive_validity: {
+        n: number;
+        verdict: string;
+        informative?: boolean;
+        caveat?: string;
+        correlations: Record<string, { r: number | null; n: number; ci95: [number | null, number | null]; excludes_zero: boolean }>;
+      };
+      summary: string;
+    }>(`/api/engine/report-card?days=${days}`),
   clinicalResearch: () =>
     get<{
       as_of: string;

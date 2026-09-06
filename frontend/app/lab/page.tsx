@@ -8,6 +8,7 @@ import { CardHelp } from "@/components/card-help";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { CorrelationCards } from "@/components/correlation-cards";
 import { EngineStatusPanel } from "@/components/engine-status-panel";
+import { EngineReportCard } from "@/components/engine-report-card";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { LabExperiments } from "@/components/lab-experiments";
 import { LabPanel } from "@/components/lab-panel";
@@ -231,6 +232,41 @@ export default function LabPage() {
           <EngineStatusPanel />
         </BoardCard>
         </div>
+
+        <BoardCard
+          id="report-card"
+          label="Report card"
+          span={4}
+          help="Whether the engine programs the right difficulty, and whether readiness predicts anything at all."
+          helpDetail={
+            <>
+              <p>
+                Two different questions, deliberately side by side. <strong>Prescription
+                calibration</strong> asks whether a load the planner picked actually landed at the
+                RPE it aimed for — a load-model question. <strong>Predictive validity</strong> asks
+                whether the morning readiness score has any measurable relationship to the session
+                that follows — a gate question. A system can be excellent at one and useless at the
+                other, and right now this one is.
+              </p>
+              <p>
+                This is NOT the same measure as <em>Engine self-assessment</em> above. That scores
+                per-muscle volume decisions against strength <em>outcomes</em> — did prescribing
+                this much volume move the e1RM as expected. This scores per-exercise effort against
+                <em> intent</em> — did the weight land where it was aimed. The two numbers being
+                close is coincidence.
+              </p>
+              <p>
+                Every correlation ships its 95% interval. A dot is only green when that interval
+                excludes zero; an r on its own is not a finding. A null on the readiness side is
+                not proof the score is meaningless — a gate that holds the session constant by
+                design would look identical — but it does mean readiness cannot currently be shown
+                to carry information about capacity.
+              </p>
+            </>
+          }
+        >
+          <EngineReportCard />
+        </BoardCard>
 
         <BoardCard
           id="findings"

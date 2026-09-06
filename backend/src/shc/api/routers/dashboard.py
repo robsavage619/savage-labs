@@ -3382,6 +3382,27 @@ async def signals_noise_floor(days: int = 28) -> dict:
     }
 
 
+@router.get("/engine/report-card")
+async def engine_report_card(days: int = 365) -> dict:
+    """Does the engine prescribe accurately, and does readiness predict anything?
+
+    Two axes, deliberately reported together — as of 2026-09-06 this system is
+    well calibrated and predictively null, and either number alone tells the
+    wrong story about it.
+
+    Distinct from `self_learning.prescription_accuracy` on the same page: that
+    scores per-MUSCLE volume decisions against strength OUTCOMES; this scores
+    per-EXERCISE effort against INTENT.
+    """
+    from shc.stats.engine_report import report_card
+
+    conn = get_read_conn()
+    try:
+        return report_card(conn, days=days)
+    finally:
+        conn.close()
+
+
 @router.get("/oauth/status")
 async def oauth_status() -> list[dict]:
     conn = get_read_conn()
