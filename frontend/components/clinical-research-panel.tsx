@@ -62,12 +62,49 @@ function Meaning({ children }: { children: ReactNode }) {
   return <p className="mt-1 text-[11px] text-[var(--text-muted)] leading-snug">{children}</p>;
 }
 
+/** Per-tile provenance. The panel used to carry one blanket "peer-reviewed"
+ *  badge while two of six tiles cited a vendor blog and a self-published
+ *  training method. Provenance is a property of the metric, not the panel. */
+function SourceTag({ label, peerReviewed }: { label: string; peerReviewed: boolean }) {
+  return (
+    <p className="text-[10px] uppercase tracking-wider" style={{ color: peerReviewed ? "var(--text-dim)" : "var(--warning, oklch(0.75 0.18 75))" }}>
+      {label}
+      {!peerReviewed && " · vendor"}
+    </p>
+  );
+}
+
+function monthsSince(iso: string | null): number | null {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  return (Date.now() - then) / (1000 * 60 * 60 * 24 * 30.44);
+}
+
 export function ClinicalResearchPanel() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["clinical-research"],
     queryFn: api.clinicalResearch,
     refetchInterval: 5 * 60_000,
   });
+
+  // An errored query must not render as a loading skeleton. React Query clears
+  // isLoading on error but leaves data undefined, so the old `isLoading || !data`
+  // guard showed a shimmer forever when the endpoint 500'd — which is exactly
+  // what happened for the whole life of the DuckDB QUALIFY bug.
+  if (isError) {
+    return (
+      <div className="shc-card shc-enter p-6">
+        <Eyebrow>Clinical research signals</Eyebrow>
+        <p className="mt-3 text-sm text-[var(--negative)]">
+          Signals unavailable — {error instanceof Error ? error.message : "request failed"}.
+        </p>
+        <button onClick={() => refetch()} className="mt-3 text-[11px] uppercase tracking-wider underline">
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (isLoading || !data) {
     return (
@@ -78,39 +115,50 @@ export function ClinicalResearchPanel() {
     );
   }
 
-  const sri = data.sleep_regularity_index.value;
+  const sriData = data.sleep_regularity_index;
+  const sri = sriData.value;
   const sriTone = tone(sri, 80, 60, "high");
+
   const ln = data.ln_rmssd;
-  const lnTone = tone(ln.delta, 0.05, -0.05, "high");
+  // The verdict is noise-relative, not threshold-relative: a delta inside Rob's
+  // own smallest worthwhile change is neutral whatever its sign.
+  const lnTone: "positive" | "neutral" | "negative" =
+    ln.delta == null || ln.within_noise !== false ? "neutral" : ln.delta > 0 ? "positive" : "negative";
+
   const streak = data.recovery_deficit_streak.consecutive_red_days;
   const streakTone: "positive" | "neutral" | "negative" =
     streak >= 3 ? "negative" : streak >= 1 ? "neutral" : "positive";
-  const al = data.allostatic_load.score_0_10;
+
+  const alData = data.allostatic_load;
+  const al = alData.score_0_10;
   const alTone = tone(al, 3, 6, "low");
-  const drugs = data.hrv_drug_adjusted;
-  const z2cv = data.z2_hr_consistency.cv_pct;
-  const z2Tone = tone(z2cv, 4, 7, "low");
+  const staleMarkers = Object.entries(alData.input_dates)
+    .map(([k, d]) => [k, monthsSince(d)] as const)
+    .filter(([, m]) => m != null && m > 12);
 
   return (
     <div className="shc-card shc-enter p-6">
       <div className="flex items-baseline justify-between flex-wrap gap-3">
         <Eyebrow>Clinical research signals</Eyebrow>
         <span className="text-[10.5px] text-[var(--text-dim)] uppercase tracking-wider">
-          peer-reviewed
+          published thresholds
         </span>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-5 gap-y-6">
+      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-6">
         {/* Sleep Regularity Index */}
-        <div title={data.sleep_regularity_index.ref}>
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{"SRI · Phillips '17"}</p>
+        <div title={sriData.ref}>
+          <SourceTag label="SRI · Phillips '17" peerReviewed={sriData.peer_reviewed} />
           <Metric
             value={sri != null ? sri.toFixed(0) : "—"}
             unit={sri != null ? "/100" : undefined}
             size="lg"
             tone={sriTone}
           />
-          <Meaning>How consistent your sleep & wake times are, night to night.</Meaning>
+          <Meaning>
+            How consistent your sleep &amp; wake times are, scored across the full 24h day
+            over {sriData.n_nights} nights.
+          </Meaning>
           <BandScale
             active={sriTone}
             bands={[
@@ -121,36 +169,53 @@ export function ClinicalResearchPanel() {
           />
         </div>
 
-        {/* lnRMSSD */}
-        <div title={data.ln_rmssd.ref}>
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{"lnRMSSD · Buchheit '14"}</p>
+        {/* lnRMSSD vs personal baseline, banded by SWC */}
+        <div title={ln.ref}>
+          <SourceTag label="lnRMSSD · Buchheit '14" peerReviewed={ln.peer_reviewed} />
           <Metric value={ln.today != null ? ln.today.toFixed(2) : "—"} size="lg" tone={lnTone} />
-          {ln.delta != null && ln.avg_4w != null && (
+          {ln.delta != null && ln.baseline_7d != null && (
             <p className="text-[10.5px] tabular-nums" style={{ color: toneColor(lnTone) }}>
-              {ln.delta > 0 ? "+" : ""}{ln.delta.toFixed(2)} vs 4w avg
+              {ln.delta > 0 ? "+" : ""}
+              {ln.delta.toFixed(3)} vs 7d baseline
+              {ln.swc != null && (
+                <span className="text-[var(--text-dim)]"> · SWC ±{ln.swc.toFixed(3)}</span>
+              )}
             </p>
           )}
-          <Meaning>{"Today's HRV vs your 4-week norm — the trend separates fitness gains from accumulating fatigue."}</Meaning>
+          {ln.within_noise === true && (
+            <p className="text-[10px] uppercase tracking-wider text-[var(--text-faint)]">
+              inside your noise floor
+            </p>
+          )}
+          <Meaning>
+            {"Today's HRV against your own 7-day baseline. The band is your smallest worthwhile change — half your baseline SD — not a population constant."}
+          </Meaning>
           <BandScale
             active={lnTone}
             bands={[
-              { label: "Adapting", range: "≥ +0.05", tone: "positive" },
-              { label: "Steady", range: "± 0.05", tone: "neutral" },
-              { label: "Fatiguing", range: "≤ −0.05", tone: "negative" },
+              { label: "Adapting", range: "> +SWC", tone: "positive" },
+              { label: "Within noise", range: "± SWC", tone: "neutral" },
+              { label: "Fatiguing", range: "< −SWC", tone: "negative" },
             ]}
           />
         </div>
 
         {/* Recovery deficit streak */}
         <div title={data.recovery_deficit_streak.ref}>
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{"Red-streak · WHOOP '22"}</p>
+          <SourceTag
+            label="Red-streak · WHOOP"
+            peerReviewed={data.recovery_deficit_streak.peer_reviewed}
+          />
           <Metric
             value={streak.toString()}
             unit={streak === 1 ? "day" : "days"}
             size="lg"
             tone={streakTone}
           />
-          <Meaning>Days in a row WHOOP scored you red (under-recovered). 3+ ≈ double the soft-tissue injury risk.</Meaning>
+          <Meaning>
+            Days in a row WHOOP scored you red. Vendor-defined banding — for an injury-risk
+            read with literature behind it, use ACWR.
+          </Meaning>
           <BandScale
             active={streakTone}
             bands={[
@@ -161,9 +226,9 @@ export function ClinicalResearchPanel() {
           />
         </div>
 
-        {/* Allostatic load */}
-        <div title={data.allostatic_load.ref}>
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{"Allostatic load · Seeman '01"}</p>
+        {/* Cardiometabolic load (Seeman subset) */}
+        <div title={`${alData.ref} — ${alData.scope}`}>
+          <SourceTag label="Cardiometabolic · Seeman '01" peerReviewed={alData.peer_reviewed} />
           <Metric
             value={al != null ? al.toFixed(1) : "—"}
             unit={al != null ? "/10" : undefined}
@@ -171,62 +236,22 @@ export function ClinicalResearchPanel() {
             tone={alTone}
           />
           <Meaning>
-            Cumulative “wear &amp; tear” from chronic stress, scored across {data.allostatic_load.n_markers} body markers.
+            Cumulative “wear &amp; tear” across {alData.n_markers} markers
+            ({alData.axes_covered.join(" + ")}). A subset of Seeman&apos;s index — no
+            neuroendocrine or immune markers exist in this data.
           </Meaning>
+          {staleMarkers.length > 0 && (
+            <p className="mt-1 text-[10px] text-[oklch(0.75_0.18_75)] leading-snug">
+              {staleMarkers.length} marker{staleMarkers.length > 1 ? "s" : ""} over a year old
+              ({staleMarkers.map(([k]) => k).join(", ")}) — the score blends panels drawn years apart.
+            </p>
+          )}
           <BandScale
             active={alTone}
             bands={[
               { label: "Low", range: "≤ 3", tone: "positive" },
               { label: "Moderate", range: "4–5", tone: "neutral" },
               { label: "High", range: "≥ 6", tone: "negative" },
-            ]}
-          />
-        </div>
-
-        {/* Drug-adjusted HRV */}
-        <div title={drugs.ref}>
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">{"Adj. HRV · Kemp '10"}</p>
-          {drugs.adjusted != null ? (
-            <>
-              <Metric value={drugs.adjusted.toFixed(0)} unit="ms" size="lg" />
-              {drugs.raw != null && drugs.factor !== 1 && (
-                <p className="text-[10.5px] text-[var(--text-muted)] tabular-nums">
-                  raw {drugs.raw.toFixed(0)}ms · ×{drugs.factor.toFixed(2)}
-                </p>
-              )}
-              {drugs.active_drugs.length > 0 && (
-                <p className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider">
-                  {drugs.active_drugs.join(" · ")}
-                </p>
-              )}
-              <Meaning>
-                Your HRV with the propranolol/SSRI dampening factored back out — a truer read of autonomic recovery.
-              </Meaning>
-            </>
-          ) : (
-            <>
-              <Metric value="—" size="lg" />
-              <Meaning>HRV corrected for HRV-suppressing meds. Shows a value only on days such a drug is active.</Meaning>
-            </>
-          )}
-        </div>
-
-        {/* Z2 HR drift */}
-        <div title={data.z2_hr_consistency.ref}>
-          <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Z2 HR drift · Maffetone</p>
-          <Metric
-            value={z2cv != null ? z2cv.toFixed(1) : "—"}
-            unit={z2cv != null ? "%CV" : undefined}
-            size="lg"
-            tone={z2Tone}
-          />
-          <Meaning>How steady your heart rate holds during easy Zone-2 cardio — a gauge of aerobic-base quality.</Meaning>
-          <BandScale
-            active={z2Tone}
-            bands={[
-              { label: "Stable", range: "≤ 4%", tone: "positive" },
-              { label: "Drifting", range: "5–7%", tone: "neutral" },
-              { label: "Unstable", range: "> 7%", tone: "negative" },
             ]}
           />
         </div>

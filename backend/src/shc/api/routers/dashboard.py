@@ -2883,315 +2883,315 @@ async def lab_run() -> dict:
     }
 
 
+# ── Clinical research signals ───────────────────────────────────────────────
+
+
+def _swc(values: list[float]) -> float | None:
+    """Smallest worthwhile change: 0.5 x the SD of the subject's own baseline.
+
+    Hopkins' 0.2 x between-subject SD does not apply to an n-of-1 series; for
+    individual monitoring the reference is the person's own day-to-day
+    variation. A delta smaller than this is inside the noise floor and must not
+    be read as a change. See [[sesoi-typical-error-individual-change]].
+    """
+    if len(values) < 7:
+        return None
+    m = sum(values) / len(values)
+    sd = (sum((x - m) ** 2 for x in values) / (len(values) - 1)) ** 0.5
+    return 0.5 * sd
+
+
+def _sleep_regularity_index(conn, today: date) -> dict:
+    """Phillips 2017 SRI over the full 24h day, across 14 nights.
+
+    SRI = 100 x (2 x P(same sleep/wake state at minute m on consecutive days) - 1),
+    so a perfectly regular schedule is 100 and a random one is 0.
+
+    The full 1440-minute day is the whole point of the metric and this used to
+    score only the sleep window (`min(start)-30` to `max(end)+30`), which throws
+    away the long high-agreement daytime stretch and reports a systematically
+    pessimistic number against Phillips' full-day thresholds: 66.3 where the
+    real SRI on the same 11 nights was 75.8 — "moderate" for what is actually a
+    fairly tight schedule.
+    """
+    rows = conn.execute(
+        "SELECT night_date, "
+        "       arg_max(ts_in, epoch(ts_out - ts_in)) AS ts_in, "
+        "       arg_max(ts_out, epoch(ts_out - ts_in)) AS ts_out "
+        "FROM sleep "
+        "WHERE night_date >= $s AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
+        "AND COALESCE(is_nap, FALSE) = FALSE "
+        "GROUP BY night_date ORDER BY night_date",
+        {"s": (today - timedelta(days=14)).isoformat()},
+    ).fetchall()
+
+    nights: list[tuple[int, int]] = []
+    for _nd, ts_in, ts_out in rows:
+        base = ts_in.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = int((ts_in - base).total_seconds() // 60)
+        nights.append((start, start + int((ts_out - ts_in).total_seconds() // 60)))
+
+    sri: float | None = None
+    if len(nights) >= 2:
+        agree = total = 0
+        for i in range(1, len(nights)):
+            a_s, a_e = nights[i - 1]
+            b_s, b_e = nights[i]
+            for m in range(1440):
+                # A session can run past midnight, so test the minute in this
+                # cycle and the next before calling the subject awake.
+                a = any(a_s <= m + 1440 * k < a_e for k in (0, 1))
+                b = any(b_s <= m + 1440 * k < b_e for k in (0, 1))
+                agree += a == b
+                total += 1
+        if total:
+            sri = round(100.0 * (2.0 * agree / total - 1.0), 1)
+
+    return {
+        "value": sri,
+        "n_nights": len(nights),
+        "interpretation": (
+            "tight" if sri is not None and sri >= 80
+            else "moderate" if sri is not None and sri >= 60
+            else "scattered" if sri is not None
+            else None
+        ),
+        "ref": "Phillips 2017 - Scientific Reports",
+        "peer_reviewed": True,
+    }
+
+
+def _ln_rmssd_trend(conn, today: date) -> dict:
+    """Buchheit 2014: TODAY's lnRMSSD against a 7-day rolling baseline, +/- SWC.
+
+    The comparison is daily-vs-baseline. This used to compare a 7-day mean
+    ending YESTERDAY against the mean of all rolling means — smoothed against
+    smoothed, which damps the delta so far that the +/-0.05 bands (written for
+    daily-vs-baseline) essentially never tripped.
+    """
+    rows = conn.execute(
+        "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL "
+        "ORDER BY date",
+        {"s": (today - timedelta(days=28)).isoformat()},
+    ).fetchall()
+    vals = [math.log(float(v)) for _d, v in rows if v and float(v) > 0]
+    if len(vals) < 8:
+        return {
+            "today": None, "baseline_7d": None, "delta": None, "swc": None,
+            "within_noise": None, "cv_pct_7d": None, "n_days": len(vals),
+            "ref": "Buchheit 2014 - Front Physiol", "peer_reviewed": True,
+        }
+
+    today_ln = vals[-1]
+    baseline_window = vals[-8:-1]
+    baseline = sum(baseline_window) / len(baseline_window)
+    delta = today_ln - baseline
+    # SWC comes from the SAME window as the baseline it bands. Deriving it from
+    # a wider window would compare today against a 7-day mean using a 28-day
+    # noise floor — two different questions in one verdict.
+    swc = _swc(baseline_window)
+    sd = 2.0 * swc if swc is not None else None
+    return {
+        "today": round(today_ln, 3),
+        "baseline_7d": round(baseline, 3),
+        "delta": round(delta, 3),
+        # `is not None`, not a truthiness check: a perfectly flat baseline has an
+        # SWC of exactly 0.0, which is a real answer ("any change is outside the
+        # noise") and not a missing one. `if swc` silently discarded it.
+        "swc": round(swc, 3) if swc is not None else None,
+        # The verdict the tile should actually render. A delta inside the
+        # subject's own noise floor is not a signal, whatever its sign.
+        "within_noise": (abs(delta) < swc) if swc is not None else None,
+        "cv_pct_7d": round(100.0 * sd / baseline, 2) if sd is not None and baseline > 0 else None,
+        "n_days": len(vals),
+        "ref": "Buchheit 2014 - Front Physiol",
+        "peer_reviewed": True,
+    }
+
+
+def _recovery_red_streak(conn, today: date) -> dict:
+    """Consecutive days in WHOOP's red recovery band (<34%).
+
+    Vendor-defined, and labelled as such. The previous version cited "WHOOP
+    2022 - internal cohort" and claimed 3+ days is "~double the soft-tissue
+    injury risk" under a PEER-REVIEWED badge. That figure is from a vendor blog
+    with no published cohort, methods or interval. The count is a fact; the
+    risk multiplier was not, and is gone. For an injury-risk read with actual
+    literature behind it, use ACWR ([[windt-2017-workload-injury-aetiology]],
+    [[zouhal-2021-acwr-scientific-evidence]]), which this engine already
+    computes in `metrics.py`.
+    """
+    rows = conn.execute(
+        "SELECT date, score FROM recovery WHERE date >= $s ORDER BY date DESC",
+        {"s": (today - timedelta(days=14)).isoformat()},
+    ).fetchall()
+    streak = 0
+    for _d, score in rows:
+        if score is not None and float(score) < 34:
+            streak += 1
+        else:
+            break
+    return {
+        "consecutive_red_days": streak,
+        "alarm": streak >= 3,
+        "ref": "WHOOP recovery banding (vendor-defined, not peer-reviewed)",
+        "peer_reviewed": False,
+    }
+
+
+# Seeman's index spans neuroendocrine, cardiovascular, metabolic and immune
+# axes. This database has cardiovascular and metabolic only — no cortisol,
+# catecholamines, DHEA-S or inflammatory markers — so what is computed here is
+# a CARDIOMETABOLIC SUBSET and is labelled that way rather than borrowing the
+# full construct's name unqualified.
+_ALLOSTATIC_AXES = {
+    "bp_systolic": "cardiovascular",
+    "bp_diastolic": "cardiovascular",
+    "bmi": "metabolic",
+    "waist_cm": "metabolic",
+    "ldl": "metabolic",
+    "trig": "metabolic",
+    "a1c": "metabolic",
+    "hdl_low": "metabolic",
+}
+
+
+def _allostatic_load(conn) -> dict:
+    """Cardiometabolic subset of Seeman 2001, each marker banded 0/1/2.
+
+    Two things the previous version got wrong, both silent:
+
+    1. It read `bp_systolic` / `systolic` from `measurements`. The column is
+       `blood_pressure_systolic`. Blood pressure — the highest-scoring marker
+       in this subject's set — dropped out of every score ever rendered.
+    2. The score renormalises over whichever markers happen to be present, so
+       missing data MOVES THE NUMBER rather than widening an interval. That is
+       unavoidable without imputation, but it must be disclosed: `n_markers`,
+       the axes covered, and the age of each input now ride on the payload.
+    """
+    vitals = {
+        str(r[0]).lower(): (float(r[1]), r[2])
+        for r in conn.execute(
+            "SELECT DISTINCT ON (metric) metric, value_num, ts::DATE "
+            "FROM measurements WHERE source = 'kaiser_summary' "
+            "ORDER BY metric, ts DESC"
+        ).fetchall()
+        if r[1] is not None
+    }
+    labs = {
+        str(r[0]).lower(): (float(r[1]), r[2])
+        for r in conn.execute(
+            "SELECT DISTINCT ON (name) name, value, collected_at::DATE "
+            "FROM labs WHERE value IS NOT NULL ORDER BY name, collected_at DESC"
+        ).fetchall()
+        if r[1] is not None
+    }
+
+    def pick(store: dict, *keys: str) -> tuple[float | None, object]:
+        for k in keys:
+            if k in store:
+                return store[k]
+        return (None, None)
+
+    bp_sys = pick(vitals, "blood_pressure_systolic", "bp_systolic", "systolic")
+    bp_dia = pick(vitals, "blood_pressure_diastolic", "bp_diastolic", "diastolic")
+    bmi = pick(vitals, "bmi")
+    waist = pick(vitals, "waist_circumference_cm")
+    ldl = pick(labs, "ldl cholesterol (calc)", "ldl-c", "ldl")
+    hdl = pick(labs, "hdl cholesterol", "hdl")
+    trig = pick(labs, "triglycerides")
+    a1c = pick(labs, "hba1c", "a1c")
+
+    def band(v: float | None, low: float, high: float) -> int | None:
+        if v is None:
+            return None
+        return 2 if v >= high else 1 if v >= low else 0
+
+    def band_low(v: float | None, bad: float, borderline: float) -> int | None:
+        """Inverted marker — lower is worse (HDL)."""
+        if v is None:
+            return None
+        return 2 if v < bad else 1 if v < borderline else 0
+
+    scored = {
+        "bp_systolic": (band(bp_sys[0], 130, 140), bp_sys),
+        "bp_diastolic": (band(bp_dia[0], 80, 90), bp_dia),
+        "bmi": (band(bmi[0], 25, 30), bmi),
+        "waist_cm": (band(waist[0], 94, 102), waist),
+        "ldl": (band(ldl[0], 100, 130), ldl),
+        "trig": (band(trig[0], 150, 200), trig),
+        "a1c": (band(a1c[0], 5.7, 6.5), a1c),
+        "hdl_low": (band_low(hdl[0], 35, 40), hdl),
+    }
+
+    present = {k: v for k, (v, _src) in scored.items() if v is not None}
+    total = sum(present.values())
+    score = round(10.0 * total / (2 * len(present)), 1) if present else None
+
+    return {
+        "score_0_10": score,
+        "components": present,
+        "n_markers": len(present),
+        "missing": sorted(k for k, (v, _s) in scored.items() if v is None),
+        "axes_covered": sorted({_ALLOSTATIC_AXES[k] for k in present}),
+        # Every input's draw date, because this score currently blends a
+        # 2023 lipid panel with a 2026 metabolic one and the single number
+        # gives no hint of that.
+        "input_dates": {
+            k: (str(src[1]) if src[1] is not None else None)
+            for k, (v, src) in scored.items()
+            if v is not None
+        },
+        "interpretation": (
+            "low" if score is not None and score < 3
+            else "moderate" if score is not None and score < 6
+            else "elevated" if score is not None
+            else None
+        ),
+        "scope": "cardiometabolic subset - no neuroendocrine or immune markers available",
+        "ref": "Seeman 2001 - JAMA (subset)",
+        "peer_reviewed": True,
+    }
+
+
 @router.get("/clinical-research/insights")
 async def clinical_research_insights() -> dict:
-    """Six research-grade signals layered on top of the standard Insights pane.
+    """Four longitudinal physiology signals with published thresholds.
 
-    All numbers point at peer-reviewed thresholds — see vault for primary refs.
+    Was six. Z2 HR drift and drug-adjusted HRV were removed 2026-09-06: both
+    had been dead since they were written (they queried `cardio_sessions.
+    started_at` and `medications.generic_name`, neither of which exists), and
+    both failures were swallowed by a bare `except Exception`, so the tiles
+    rendered an em-dash and a x1.00 factor instead of an error. Z2 drift was
+    also misnamed — it computed the CV of MEAN HR ACROSS sessions, which is not
+    within-session cardiac drift, and no minute-level HR series exists in this
+    database to compute the real thing from.
+
+    FIB-4 deliberately does NOT appear here. It lives on `/api/clinical/risk`
+    (`hepatic.fib4`) and is already rendered by `clinical-overview.tsx`. This
+    panel is longitudinal wearable physiology; that one is clinical labs.
+    Duplicating it across both is two sources of truth for one number.
+
+    Every signal that can be compared to the subject's own noise floor is —
+    see `_swc` and [[sesoi-typical-error-individual-change]]. A population
+    threshold alone cannot say whether a change is real for one person.
     """
-    import math
-
     today = date.today()
     conn = get_read_conn()
     try:
-        # Sleep Regularity Index (Phillips 2017) — overlap-based proxy from
-        # ts_in/ts_out. For each minute of the 24h day across 14 nights, count
-        # the fraction of consecutive-night pairs in the same state (asleep or
-        # awake). 100 = perfectly regular; 0 = random.
-        # `is_nap` alone lets a mislabelled afternoon session into the
-        # regularity index; take the longest session per date as well.
-        #
-        # arg_max, not the QUALIFY ROW_NUMBER() this used to be: on DuckDB
-        # 1.5.2 that plan hit an optimizer bug — pushing the `is_nap` filter
-        # through the window operator re-bound the column against the window's
-        # own output (where that index is ROW_NUMBER's BIGINT), and the whole
-        # endpoint 500'd with `Failed to bind column reference "is_nap":
-        # inequal types (BIGINT != BOOLEAN)`. The panel rendered a permanent
-        # loading skeleton for it. Only this query's exact shape tripped it —
-        # the sibling QUALIFY queries above still plan fine — so this is a
-        # targeted dodge, not a codebase-wide migration off QUALIFY.
-        sleep_rows = conn.execute(
-            "SELECT night_date, "
-            "       arg_max(ts_in, epoch(ts_out - ts_in)) AS ts_in, "
-            "       arg_max(ts_out, epoch(ts_out - ts_in)) AS ts_out "
-            "FROM sleep "
-            "WHERE night_date >= $s AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
-            "AND COALESCE(is_nap, FALSE) = FALSE "
-            "GROUP BY night_date "
-            "ORDER BY night_date, ts_in",
-            {"s": (today - timedelta(days=14)).isoformat()},
-        ).fetchall()
-
-        # Build per-night [start_min, end_min) within 24h cycle. Anchor each
-        # session to its bedtime calendar day so back-to-back nights compare
-        # cleanly across midnight.
-        nights: list[tuple[date, int, int]] = []
-        for nd, ts_in, ts_out in sleep_rows:
-            if ts_in is None or ts_out is None:
-                continue
-            # Minutes since midnight of bedtime day
-            base = ts_in.replace(hour=0, minute=0, second=0, microsecond=0)
-            start_min = int((ts_in - base).total_seconds() // 60)
-            duration_min = int((ts_out - ts_in).total_seconds() // 60)
-            end_min = start_min + duration_min
-            nights.append((nd, start_min, end_min))
-
-        sri: float | None = None
-        if len(nights) >= 2:
-            # Compare each consecutive pair. For each minute m in 0..1440 of
-            # day t, asleep_t(m) = (m_offset is within [start, end) for night
-            # anchored to t-1 or t depending on overlap). Use a normalized
-            # 24h window starting at min(start) of pair so cross-midnight is
-            # handled naturally.
-            agreement_total = 0
-            minutes_total = 0
-            for i in range(1, len(nights)):
-                _a_d, a_s, a_e = nights[i - 1]
-                _b_d, b_s, b_e = nights[i]
-                lo = min(a_s, b_s) - 30  # 30-min slack on each end
-                hi = max(a_e, b_e) + 30
-                # Step every minute
-                for m in range(lo, hi):
-                    a_state = 1 if a_s <= m < a_e else 0
-                    b_state = 1 if b_s <= m < b_e else 0
-                    agreement_total += 1 if a_state == b_state else 0
-                    minutes_total += 1
-            if minutes_total:
-                sri = round(100.0 * agreement_total / minutes_total, 1)
-
-        # lnRMSSD weekly trend (Buchheit 2014) — log-transformed HRV mean,
-        # rolling 7d, with cv% (week-over-week noise floor).
-        hrv_rows = conn.execute(
-            "SELECT date, hrv FROM recovery WHERE date >= $s AND hrv IS NOT NULL ORDER BY date",
-            {"s": (today - timedelta(days=28)).isoformat()},
-        ).fetchall()
-        ln_means: list[float] = []
-        cv_pcts: list[float] = []
-        if len(hrv_rows) >= 14:
-            ln_vals = [math.log(float(r[1])) for r in hrv_rows if r[1] and r[1] > 0]
-            for i in range(7, len(ln_vals)):
-                window = ln_vals[i - 7 : i]
-                m = sum(window) / 7
-                ln_means.append(m)
-                if m > 0:
-                    sd = (sum((x - m) ** 2 for x in window) / 7) ** 0.5
-                    cv_pcts.append(100.0 * sd / m)
-
-        ln_rmssd_today = round(ln_means[-1], 3) if ln_means else None
-        ln_rmssd_4w_avg = round(sum(ln_means) / len(ln_means), 3) if ln_means else None
-        ln_rmssd_delta = (
-            round(ln_rmssd_today - ln_rmssd_4w_avg, 3)
-            if (ln_rmssd_today is not None and ln_rmssd_4w_avg is not None)
-            else None
-        )
-        ln_rmssd_cv = round(cv_pcts[-1], 2) if cv_pcts else None
-
-        # Recovery-deficit streak — consecutive days with recovery score < 34
-        # (red zone). 3+ flags injury-risk window per WHOOP 2022 internal study.
-        rec_rows = conn.execute(
-            "SELECT date, score FROM recovery WHERE date >= $s ORDER BY date DESC",
-            {"s": (today - timedelta(days=14)).isoformat()},
-        ).fetchall()
-        red_streak = 0
-        for _d, score in rec_rows:
-            if score is not None and float(score) < 34:
-                red_streak += 1
-            else:
-                break
-
-        # Allostatic Load Index (Seeman 2001) — composite of metabolic +
-        # cardiovascular markers normalised against clinical thresholds.
-        # Each marker contributes 0/1/2 (0 = normal, 1 = borderline, 2 = high).
-        # Sum / max yields a 0-1 fraction surfaced as 0-10 score.
-        # Vitals (BP, BMI) live in `measurements` with source='kaiser_summary'
-        vital_rows = conn.execute(
-            """
-            SELECT DISTINCT ON (metric) metric, value_num
-            FROM measurements
-            WHERE source = 'kaiser_summary'
-            ORDER BY metric, ts DESC
-            """
-        ).fetchall()
-        vitals_map = {str(r[0]).lower(): float(r[1]) for r in vital_rows if r[1] is not None}
-        bp_sys = vitals_map.get("bp_systolic") or vitals_map.get("systolic")
-        bp_dia = vitals_map.get("bp_diastolic") or vitals_map.get("diastolic")
-        bmi = vitals_map.get("bmi")
-
-        # Labs live in `labs` table — most-recent per name
-        lab_rows = conn.execute(
-            """
-            SELECT DISTINCT ON (name) name, value
-            FROM labs
-            WHERE value IS NOT NULL
-            ORDER BY name, collected_at DESC
-            """
-        ).fetchall()
-        labs_map = {str(r[0]).lower(): float(r[1]) for r in lab_rows if r[1] is not None}
-        ldl = labs_map.get("ldl cholesterol (calc)") or labs_map.get("ldl-c") or labs_map.get("ldl")
-        hdl = labs_map.get("hdl cholesterol") or labs_map.get("hdl")
-        trig = labs_map.get("triglycerides")
-        a1c = labs_map.get("hba1c") or labs_map.get("a1c")
-
-        def _band(value, low, high):
-            """Return 0 (normal) | 1 (borderline) | 2 (high) | None (missing)."""
-            if value is None:
-                return None
-            try:
-                v = float(value)
-            except (TypeError, ValueError):
-                return None
-            if v >= high:
-                return 2
-            if v >= low:
-                return 1
-            return 0
-
-        bands = {
-            "bp_systolic": _band(bp_sys, 130, 140),
-            "bp_diastolic": _band(bp_dia, 80, 90),
-            "bmi": _band(bmi, 25, 30),
-            "ldl": _band(ldl, 100, 130),
-            "trig": _band(trig, 150, 200),
-            "a1c": _band(a1c, 5.7, 6.5),
-            # HDL is inverted — lower is worse
-            "hdl_low": (
-                2
-                if hdl is not None and float(hdl) < 35
-                else 1
-                if hdl is not None and float(hdl) < 40
-                else 0
-                if hdl is not None
-                else None
-            ),
-        }
-        scored_bands = [v for v in bands.values() if v is not None]
-        allostatic_total = sum(scored_bands)
-        allostatic_max = 2 * len(scored_bands)
-        allostatic_score = (
-            round(10.0 * allostatic_total / allostatic_max, 1) if allostatic_max else None
-        )
-
-        # Drug-adjusted HRV: propranolol blunts HRV ~10-20% (Mølgaard 1991);
-        # SSRIs blunt 5-10% (Kemp 2010 meta).
-        latest_rec = conn.execute(
-            "SELECT hrv FROM recovery WHERE hrv IS NOT NULL ORDER BY date DESC LIMIT 1"
-        ).fetchone()
-        hrv_today = float(latest_rec[0]) if latest_rec else None
-        prop_today = conn.execute(
-            "SELECT propranolol_taken FROM daily_checkin "
-            "WHERE date = $d AND propranolol_taken IS NOT NULL",
-            {"d": today.isoformat()},
-        ).fetchone()
-        on_prop = bool(prop_today and prop_today[0])
-        # Escitalopram is daily — check active medications
-        try:
-            active_meds = conn.execute(
-                "SELECT LOWER(generic_name) FROM medications "
-                "WHERE valid_to IS NULL OR valid_to >= $d",
-                {"d": today.isoformat()},
-            ).fetchall()
-        except Exception:
-            active_meds = []
-        on_ssri = any(
-            r[0] and ("escitalopram" in r[0] or "sertraline" in r[0] or "fluoxetine" in r[0])
-            for r in active_meds
-        )
-
-        adj_factor = 1.0
-        if on_prop:
-            adj_factor *= 1 / (1 - 0.15)  # uplift to undo ~15% blunting
-        if on_ssri:
-            adj_factor *= 1 / (1 - 0.07)  # uplift to undo ~7% blunting
-        hrv_drug_adjusted = round(hrv_today * adj_factor, 1) if hrv_today else None
-
-        # HR drift in Z2 — compare avg HR first half vs second half of cardio
-        # sessions where avg_hr is available and duration >= 20 min in Z2 zone.
-        hr_drift_pct = None
-        try:
-            cardio_rows = conn.execute(
-                """
-                SELECT started_at, duration_min, avg_hr
-                FROM cardio_sessions
-                WHERE started_at::DATE >= $s AND avg_hr IS NOT NULL
-                  AND duration_min >= 20
-                  AND avg_hr BETWEEN 110 AND 145
-                ORDER BY started_at DESC LIMIT 8
-                """,
-                {"s": (today - timedelta(days=60)).isoformat()},
-            ).fetchall()
-            if len(cardio_rows) >= 4:
-                avg_hrs = [float(r[2]) for r in cardio_rows]
-                # Approximate drift as variance of avg HR across sessions of
-                # similar effort — true HR-drift needs minute-by-minute series.
-                if len(avg_hrs) >= 2:
-                    m = sum(avg_hrs) / len(avg_hrs)
-                    cv = (sum((x - m) ** 2 for x in avg_hrs) / len(avg_hrs)) ** 0.5 / m
-                    hr_drift_pct = round(cv * 100, 2)
-        except Exception:
-            pass
+        sri = _sleep_regularity_index(conn, today)
+        ln = _ln_rmssd_trend(conn, today)
+        red_streak = _recovery_red_streak(conn, today)
+        allostatic = _allostatic_load(conn)
     finally:
         conn.close()
 
     return {
         "as_of": today.isoformat(),
-        "sleep_regularity_index": {
-            "value": sri,
-            "interpretation": (
-                "tight"
-                if sri is not None and sri >= 80
-                else "moderate"
-                if sri is not None and sri >= 60
-                else "scattered"
-                if sri is not None
-                else None
-            ),
-            "ref": "Phillips 2017 — Scientific Reports",
-        },
-        "ln_rmssd": {
-            "today": ln_rmssd_today,
-            "avg_4w": ln_rmssd_4w_avg,
-            "delta": ln_rmssd_delta,
-            "cv_pct_7d": ln_rmssd_cv,
-            "ref": "Buchheit 2014 — Front Physiol",
-        },
-        "recovery_deficit_streak": {
-            "consecutive_red_days": red_streak,
-            "alarm": red_streak >= 3,
-            "ref": "WHOOP 2022 — internal cohort, soft-tissue injury risk",
-        },
-        "allostatic_load": {
-            "score_0_10": allostatic_score,
-            "components": {k: v for k, v in bands.items() if v is not None},
-            "n_markers": len(scored_bands),
-            "interpretation": (
-                "low"
-                if allostatic_score is not None and allostatic_score < 3
-                else "moderate"
-                if allostatic_score is not None and allostatic_score < 6
-                else "elevated"
-                if allostatic_score is not None
-                else None
-            ),
-            "ref": "Seeman 2001 — JAMA",
-        },
-        "hrv_drug_adjusted": {
-            "raw": hrv_today,
-            "adjusted": hrv_drug_adjusted,
-            "factor": round(adj_factor, 3),
-            "active_drugs": (["propranolol"] if on_prop else []) + (["ssri"] if on_ssri else []),
-            "ref": "Kemp 2010 meta-analysis · Mølgaard 1991 β-blockers",
-        },
-        "z2_hr_consistency": {
-            "cv_pct": hr_drift_pct,
-            "interpretation": (
-                "stable"
-                if hr_drift_pct is not None and hr_drift_pct < 5
-                else "drifting"
-                if hr_drift_pct is not None
-                else None
-            ),
-            "ref": "Maffetone — aerobic-fitness drift proxy",
-        },
+        "sleep_regularity_index": sri,
+        "ln_rmssd": ln,
+        "recovery_deficit_streak": red_streak,
+        "allostatic_load": allostatic,
     }
 
 

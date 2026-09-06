@@ -277,7 +277,7 @@ export default function LabPage() {
           id="signals"
           label="Clinical research signals"
           span={2}
-          help="Six published metrics computed from your data, each shown against the range its research defines."
+          help="Four longitudinal signals computed from your data, each banded against its published threshold — or, where one exists, against your own noise floor. Lab-based indices like FIB-4 live on the Body panel."
           helpDetail={
             <>
               <p>

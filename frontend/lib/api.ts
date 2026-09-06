@@ -927,24 +927,44 @@ export const api = {
   clinicalResearch: () =>
     get<{
       as_of: string;
-      sleep_regularity_index: { value: number | null; interpretation: string | null; ref: string };
-      ln_rmssd: { today: number | null; avg_4w: number | null; delta: number | null; cv_pct_7d: number | null; ref: string };
-      recovery_deficit_streak: { consecutive_red_days: number; alarm: boolean; ref: string };
+      sleep_regularity_index: {
+        value: number | null;
+        n_nights: number;
+        interpretation: string | null;
+        ref: string;
+        peer_reviewed: boolean;
+      };
+      ln_rmssd: {
+        today: number | null;
+        baseline_7d: number | null;
+        delta: number | null;
+        /** Smallest worthwhile change from Rob's own baseline SD, not a population constant. */
+        swc: number | null;
+        within_noise: boolean | null;
+        cv_pct_7d: number | null;
+        n_days: number;
+        ref: string;
+        peer_reviewed: boolean;
+      };
+      recovery_deficit_streak: {
+        consecutive_red_days: number;
+        alarm: boolean;
+        ref: string;
+        peer_reviewed: boolean;
+      };
       allostatic_load: {
         score_0_10: number | null;
         components: Record<string, number>;
         n_markers: number;
+        missing: string[];
+        axes_covered: string[];
+        /** Per-marker draw date — this score blends panels years apart. */
+        input_dates: Record<string, string | null>;
         interpretation: string | null;
+        scope: string;
         ref: string;
+        peer_reviewed: boolean;
       };
-      hrv_drug_adjusted: {
-        raw: number | null;
-        adjusted: number | null;
-        factor: number;
-        active_drugs: string[];
-        ref: string;
-      };
-      z2_hr_consistency: { cv_pct: number | null; interpretation: string | null; ref: string };
     }>("/api/clinical-research/insights"),
   labFindings: () =>
     get<{
