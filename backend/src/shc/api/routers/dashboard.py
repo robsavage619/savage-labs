@@ -25,6 +25,7 @@ from shc.ai.workout_planner import (
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, get_write_conn, write_ctx
 from shc.ingest.clinical_profile import subject_dob
+from shc.stats import classify_change, swc
 from shc.lab import _welch_t as _lab_welch
 from shc.metrics import MUSCLE_TO_GROUP, compute_daily_state
 from shc.metrics import muscle_group as _mg
@@ -2072,13 +2073,18 @@ _FIB4_BANDS = {
 #
 # `LDL Cholesterol (calc)` is Friedewald — checkable on any panel by comparing
 # the reported value against TC - HDL - TG/5. Friedewald assumes a FIXED
-# triglyceride:VLDL ratio of 5, which degrades as triglycerides rise. Samuel
-# 2023 (Global Heart, n=5,051,467) put Friedewald at 83.2% correct guideline
-# classification against ultracentrifugation vs 89.6% for Martin/Hopkins, and
-# found that among patients with Friedewald LDL <70 and triglycerides 150-399,
-# almost half were reclassified UPWARD by Martin/Hopkins. Sajja 2021 (JAMA Netw
-# Open) reaches the same conclusion above 400 and advises caution regardless of
-# method. The subject's own panel sits inside that band.
+# triglyceride:VLDL ratio of 5, and Martin 2013 (JAMA, n=1,350,908) showed the
+# real ratio has a median of 5.2 but an IQR of 4.5-6.0 and a full range of
+# 0.4-145 — a fixed factor cannot represent that. Measured cost, for samples
+# estimated below 70 mg/dL: Friedewald is correct 61.3% of the time at TG
+# 150-199 and 40.3% at TG 200-399, vs 92.4% / 84.0% for an adjustable factor.
+# Samuel 2023 (Global Heart, n=5,051,467) reproduces the ranking across 23
+# equations; Sajja 2021 (JAMA Netw Open) advises caution above 400 regardless
+# of method.
+#
+# Martin's own paper points at the answer this module implements: "At
+# triglyceride levels of 200 mg/dL or higher, guidelines recommend non-HDL-C as
+# a treatment goal", and non-HDL-C "is not dependent on VLDL-C estimation".
 #
 # So the LDL number on the cardiometabolic strip is soft, and it is soft in the
 # direction that matters. Two responses, both computed here:
@@ -2179,9 +2185,12 @@ def _lipid_panel(lab_by_name: dict) -> dict | None:
                 else (
                     f"Triglycerides {tg_v:.0f} mg/dL exceed {_TG_FRIEDEWALD_UNRELIABLE:.0f}, "
                     "where Friedewald's fixed 5:1 VLDL ratio degrades and tends to "
-                    "UNDERSTATE LDL-C. Use non-HDL-C as the target instead; a "
-                    "Martin/Hopkins or directly-measured LDL-C would reclassify this. "
-                    "(Samuel 2023, Global Heart, n=5,051,467)"
+                    "UNDERSTATE LDL-C. Martin 2013 (JAMA, n=1,350,908) measured how "
+                    "badly: of samples estimated below 70 mg/dL, Friedewald was right "
+                    "61.3% of the time at TG 150-199 and 40.3% at TG 200-399, against "
+                    "92.4% and 84.0% for an adjustable-factor method. Guidelines "
+                    "recommend non-HDL-C as the treatment goal at TG >=200 for exactly "
+                    "this reason - it needs no VLDL estimate at all."
                 )
             ),
         },
@@ -3007,19 +3016,9 @@ async def lab_run() -> dict:
 # ── Clinical research signals ───────────────────────────────────────────────
 
 
-def _swc(values: list[float]) -> float | None:
-    """Smallest worthwhile change: 0.5 x the SD of the subject's own baseline.
-
-    Hopkins' 0.2 x between-subject SD does not apply to an n-of-1 series; for
-    individual monitoring the reference is the person's own day-to-day
-    variation. A delta smaller than this is inside the noise floor and must not
-    be read as a change. See [[sesoi-typical-error-individual-change]].
-    """
-    if len(values) < 7:
-        return None
-    m = sum(values) / len(values)
-    sd = (sum((x - m) ** 2 for x in values) / (len(values) - 1)) ** 0.5
-    return 0.5 * sd
+# One definition of the noise floor for the whole app. `shc.stats.noise_floor`
+# owns it; this alias exists so the panel below reads naturally.
+_swc = swc
 
 
 def _sleep_regularity_index(conn, today: date) -> dict:
@@ -3313,6 +3312,73 @@ async def clinical_research_insights() -> dict:
         "ln_rmssd": ln,
         "recovery_deficit_streak": red_streak,
         "allostatic_load": allostatic,
+    }
+
+
+# The repeated measures worth a personal noise floor, and the column each lives
+# in. Deliberately excludes anything the engine gates on: this endpoint reports,
+# it does not decide (ENGINE_INVARIANTS.md, "the rule for changing the engine").
+_NOISE_FLOOR_SIGNALS = (
+    ("hrv", "recovery", "hrv", "ms"),
+    ("rhr", "recovery", "rhr", "bpm"),
+    ("recovery_score", "recovery", "score", "%"),
+    ("skin_temp", "recovery", "skin_temp", "degC"),
+    ("respiratory_rate", "sleep", "respiratory_rate", "br/min"),
+    ("sleep_efficiency", "sleep", "sleep_efficiency_pct", "%"),
+)
+
+
+@router.get("/signals/noise-floor")
+async def signals_noise_floor(days: int = 28) -> dict:
+    """Today's reading against the subject's OWN variation, per signal.
+
+    Every tile in this app that shows a repeated measure against a fixed
+    threshold is answering "where does Rob sit among people?" when the question
+    is "did this actually move?". A population band cannot tell a real shift
+    from ordinary day-to-day noise for one person; a smallest-worthwhile-change
+    drawn from his own baseline can.
+
+    Read-only and additive. No gate, threshold, band-fit or classifier consumes
+    this — it exists so the UI can say "inside your noise floor" instead of
+    manufacturing a direction for a delta the series cannot resolve.
+    """
+    today = date.today()
+    since = (today - timedelta(days=days)).isoformat()
+    conn = get_read_conn()
+    out: dict[str, dict] = {}
+    try:
+        for key, table, column, unit in _NOISE_FLOOR_SIGNALS:
+            date_col = "date" if table == "recovery" else "night_date"
+            nap_filter = "" if table == "recovery" else "AND COALESCE(is_nap, FALSE) = FALSE "
+            rows = conn.execute(
+                f"SELECT {date_col}, {column} FROM {table} "  # noqa: S608 - fixed tuple above
+                f"WHERE {date_col} >= $s AND {column} IS NOT NULL {nap_filter}"
+                f"ORDER BY {date_col}",
+                {"s": since},
+            ).fetchall()
+            series = [float(r[1]) for r in rows]
+            if not series:
+                out[key] = {"unit": unit, "n": 0, **classify_change(None, []).as_dict()}
+                continue
+            # The latest reading against the window that PRECEDES it — including
+            # today in its own baseline drags the floor toward the value and
+            # shrinks every delta.
+            verdict = classify_change(series[-1], series[:-1])
+            out[key] = {"unit": unit, "n": len(series), **verdict.as_dict()}
+    finally:
+        conn.close()
+
+    resolved = [k for k, v in out.items() if v["within_noise"] is False]
+    return {
+        "as_of": today.isoformat(),
+        "window_days": days,
+        "signals": out,
+        # The one-line read: which signals actually moved today.
+        "moved": sorted(resolved),
+        "method": (
+            "SWC = 0.5 x SD of the subject's own baseline window, excluding the "
+            "reading under test. A delta inside it is reported flat regardless of sign."
+        ),
     }
 
 
