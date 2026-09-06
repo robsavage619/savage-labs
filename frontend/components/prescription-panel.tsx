@@ -82,7 +82,11 @@ export function PrescriptionPanel() {
         </div>
       )}
 
-      <div className="-mb-2.5 columns-1 gap-x-6 @min-[600px]:columns-2 @min-[900px]:columns-3">
+      {/* No negative bottom margin here: in a multi-column layout the last
+          item of *every* column sits at the container edge, so pulling the
+          following footnote up by one gap overlapped whichever column ran
+          longest. */}
+      <div className="columns-1 gap-x-6 @min-[600px]:columns-2 @min-[900px]:columns-3">
         {ordered.map((m) => {
           const style = ACTION_STYLE[m.action];
           return (
@@ -124,7 +128,7 @@ export function PrescriptionPanel() {
         })}
       </div>
 
-      <p className="text-[10px] text-[var(--text-faint)] leading-relaxed pt-1 border-t border-[var(--hairline)]">
+      <p className="text-[10px] text-[var(--text-faint)] leading-relaxed mt-3 pt-2 border-t border-[var(--hairline)]">
         Set targets the engine adapted from your e1RM performance, soreness, and court/cardio load.
         ★ = emphasis muscle (prioritized). The chat builds today&apos;s session from these.
       </p>

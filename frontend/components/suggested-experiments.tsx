@@ -47,7 +47,25 @@ export function SuggestedExperiments() {
   const data = suggestions.data ?? [];
 
   if (suggestions.isLoading) return null;
-  if (data.length === 0) return null;
+
+  // Returning null here left the board card's heading and explainer floating
+  // above a hole the height of Active trials beside it. An exhausted shortlist
+  // is a real state and says something useful, so it gets drawn.
+  if (data.length === 0) {
+    return (
+      <div className="shc-card shc-enter p-5">
+        <Eyebrow>Suggested studies · derived from standing research</Eyebrow>
+        <p className="text-[11.5px] text-[var(--text-muted)] mt-3 leading-relaxed">
+          Nothing on the shortlist right now. A finding qualifies once it is still unresolved
+          <em> and</em> has an exposure you can deliberately change — every current one is
+          either already answered, already under test, or has no lever you control.
+        </p>
+        <p className="text-[10.5px] text-[var(--text-faint)] mt-2 leading-relaxed">
+          The list refills on its own as the standing research program re-runs against new data.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="shc-card shc-enter p-5">

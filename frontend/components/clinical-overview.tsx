@@ -7,11 +7,9 @@ import {
   type ClinicalOverview as ClinicalOverviewData,
   type ClinicalRisk,
   type LabPanel,
-  type LabPoint,
   type RiskZone,
 } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
-import { Line, LineChart, ResponsiveContainer } from "recharts";
 
 // ── Zone palette ─────────────────────────────────────────────────────────────
 
@@ -60,7 +58,11 @@ function fmtDate(s: string | null | undefined): string {
 
 function timeSince(s: string | null | undefined): string {
   if (!s) return "—";
-  const d = new Date(s.includes("T") ? s : s + "T00:00:00");
+  // Postgres/DuckDB hand back "2026-09-04 15:17:00-07:00" — a space, not a T, and
+  // Safari refuses that. Normalise before parsing, and only add a midnight time
+  // to a bare date.
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00` : s.replace(" ", "T");
+  const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
   if (days < 30) return `${days}d ago`;
@@ -126,22 +128,78 @@ function CardiometabolicStrip({ risk }: { risk: ClinicalRisk | undefined }) {
 
 // ── Labs table with H/L flags + sparkline ───────────────────────────────────
 
-function LabSparkline({ history }: { history: LabPoint[] }) {
-  const data = history.slice(-8).map((h, i) => ({ i, v: h.value }));
-  if (data.length < 2) return <span className="text-[9px] text-[var(--text-faint)]">—</span>;
+/**
+ * Where one result sits inside its own reference interval.
+ *
+ * This column used to be a sparkline, which was the wrong mark for the data:
+ * 46 of the 52 labs on record have exactly one draw, so 88% of the column
+ * rendered an em-dash. A single result still carries the clinically useful
+ * comparison — value against interval — and that is what this draws.
+ *
+ * The domain is the reference interval padded by 55% on each side, so a normal
+ * result sits in the middle two-thirds and an abnormal one visibly breaks the
+ * band without ever leaving the track. Out-of-domain extremes clamp to the edge
+ * and keep their flag colour, so "high" never reads as "just inside".
+ */
+function RangeTrack({
+  value,
+  low,
+  high,
+  flag,
+  unit,
+}: {
+  value: number;
+  low: number | null;
+  high: number | null;
+  flag: string | null;
+  unit: string | null;
+}) {
+  if (low == null && high == null) {
+    return <span className="text-[9px] text-[var(--text-faint)]">—</span>;
+  }
+
+  // One-sided intervals ("≤239", "≥40") get an implied opposite bound so the
+  // band still has width to draw; it is derived from the stated bound, never
+  // from the measured value, so the marker position stays meaningful.
+  const lo = low ?? (high != null ? high - Math.abs(high) * 0.6 : 0);
+  const hi = high ?? (low != null ? low + Math.abs(low) * 0.6 : 1);
+  const span = hi - lo || Math.abs(hi) || 1;
+  const dMin = lo - span * 0.55;
+  const dMax = hi + span * 0.55;
+  const pct = (v: number) => Math.max(1.5, Math.min(98.5, ((v - dMin) / (dMax - dMin)) * 100));
+
+  const color =
+    flag === "H" ? "var(--negative)" : flag === "L" ? "var(--neutral)" : "var(--positive)";
+  const bandLeft = pct(lo);
+  const bandRight = pct(hi);
+
   return (
-    <div className="w-[60px] h-[18px] inline-block">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 1, right: 0, left: 0, bottom: 1 }}>
-          <Line
-            dataKey="v"
-            stroke="var(--chart-line)"
-            strokeWidth={1.2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+    <div
+      className="relative h-[7px] w-[76px] inline-block rounded-full align-middle"
+      style={{ background: "var(--hairline)" }}
+      title={`${value}${unit ? " " + unit : ""} — reference ${low ?? "−∞"}–${high ?? "∞"}`}
+    >
+      <div
+        className="absolute inset-y-0 rounded-full"
+        style={{
+          left: `${bandLeft}%`,
+          width: `${Math.max(2, bandRight - bandLeft)}%`,
+          background: "var(--positive)",
+          opacity: 0.22,
+        }}
+      />
+      <div
+        className="absolute rounded-full"
+        style={{
+          left: `${pct(value)}%`,
+          top: -2,
+          bottom: -2,
+          width: 2.5,
+          marginLeft: -1.25,
+          background: color,
+          boxShadow: `0 0 0 1.5px var(--card)`,
+        }}
+      />
     </div>
   );
 }
@@ -171,7 +229,7 @@ function LabsTable({
             <th className="px-3 py-2 text-left font-normal">Lab</th>
             <th className="px-3 py-2 text-right font-normal">Value</th>
             <th className="px-3 py-2 text-right font-normal">Range</th>
-            <th className="px-3 py-2 text-right font-normal">Trend</th>
+            <th className="px-3 py-2 text-right font-normal">In range</th>
             <th className="px-3 py-2 text-right font-normal">Drawn</th>
           </tr>
         </thead>
@@ -188,7 +246,6 @@ function LabsTable({
                   : l.ref_low != null
                     ? `≥${l.ref_low}`
                     : "—";
-            const history = data.lab_history[l.name] ?? [];
             return (
               <tr key={l.name} className="border-b border-[var(--hairline)] last:border-b-0 hover:bg-[oklch(1_0_0/0.02)]">
                 <td className="px-3 py-2 text-[var(--text-muted)]">
@@ -225,7 +282,13 @@ function LabsTable({
                 </td>
                 <td className="px-3 py-2 text-right text-[var(--text-faint)] tabular-nums">{range}</td>
                 <td className="px-3 py-2 text-right">
-                  <LabSparkline history={history} />
+                  <RangeTrack
+                    value={l.value}
+                    low={l.ref_low}
+                    high={l.ref_high}
+                    flag={l.flag}
+                    unit={l.unit}
+                  />
                 </td>
                 <td className="px-3 py-2 text-right text-[var(--text-faint)] tabular-nums whitespace-nowrap">
                   {timeSince(l.collected_at)}

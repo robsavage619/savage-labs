@@ -21,6 +21,13 @@ import { SurfaceShell } from "@/components/surface-shell";
  * Anchor ids come from `lib/sections.ts`, which the command palette reads too,
  * so a link can no longer point at a section that isn't here.
  *
+ * The report is stacked under the session in the same three-column stack rather
+ * than given its own band below. The check-in is a ~960px sidebar whatever width
+ * it gets, and on a day the session is already logged the prescription card
+ * collapses to a 280px receipt — which left ~890px of empty board beside the
+ * sidebar. Stacking closes most of that, and on an untrained day the two columns
+ * come out near enough level.
+ *
  * Each panel here brings its own card chrome and its own heading, so unlike the
  * body and lab boards there is no local wrapper to hang the explanation on. The
  * `CardHelp` therefore sits inline as the first child of every section — same
@@ -62,7 +69,8 @@ export default function TodayPage() {
 
         <div className="board-rule">The session</div>
 
-        <section id="session" className="span-3 scroll-mt-24">
+        <div className="span-3 flex flex-col gap-4">
+        <section id="session" className="scroll-mt-24">
           <div className="px-1">
             <CardHelp summary="Today's prescribed lifts — sets, reps, load and target effort — ready to push to Hevy.">
               <p>
@@ -93,6 +101,37 @@ export default function TodayPage() {
             <NextWorkoutPane />
           </ErrorBoundary>
         </section>
+        <section id="report" className="scroll-mt-24">
+          <div className="px-1">
+            <CardHelp summary="The written read on your morning: what your sleep and recovery numbers actually mean today.">
+              <p>
+                The ring is this system&apos;s own readiness score, which reconciles the raw
+                numbers against the day&apos;s gates; the tracker&apos;s separate score sits
+                beside it as a stat, and the two disagreeing is informative rather than a
+                fault.
+              </p>
+              <p>
+                On the stats: the figure next to <strong>HRV</strong> is how many standard
+                deviations you are from your own 28-day baseline, so −1σ or worse alongside a
+                raised resting heart rate is a genuine recovery day rather than one bad
+                night. The <strong>load ratio</strong> compares recent training against your
+                established base — above roughly 1.5 means the last week has outrun what your
+                body is conditioned for, and it is the usual reason a muscle appears locked
+                in the card at the top of this page.
+              </p>
+              <p>
+                The narrative is not automatic: <strong>Generate daily report</strong> copies
+                a prompt to run in Claude Code, which posts the written version back. Check
+                the date beside the heading — an old date means you are reading an old
+                morning.
+              </p>
+            </CardHelp>
+          </div>
+          <ErrorBoundary label="Daily report">
+            <DailyReport />
+          </ErrorBoundary>
+        </section>
+        </div>
 
         <div className="span-1 flex flex-col gap-4">
           <section id="midday" className="scroll-mt-24">
@@ -144,38 +183,6 @@ export default function TodayPage() {
           </section>
         </div>
 
-        <div className="board-rule">Today&apos;s report</div>
-
-        <section id="report" className="span-4 scroll-mt-24">
-          <div className="px-1">
-            <CardHelp summary="The written read on your morning: what your sleep and recovery numbers actually mean today.">
-              <p>
-                The ring is this system&apos;s own readiness score, which reconciles the raw
-                numbers against the day&apos;s gates; the tracker&apos;s separate score sits
-                beside it as a stat, and the two disagreeing is informative rather than a
-                fault.
-              </p>
-              <p>
-                On the stats: the figure next to <strong>HRV</strong> is how many standard
-                deviations you are from your own 28-day baseline, so −1σ or worse alongside a
-                raised resting heart rate is a genuine recovery day rather than one bad
-                night. The <strong>load ratio</strong> compares recent training against your
-                established base — above roughly 1.5 means the last week has outrun what your
-                body is conditioned for, and it is the usual reason a muscle appears locked
-                in the card at the top of this page.
-              </p>
-              <p>
-                The narrative is not automatic: <strong>Generate daily report</strong> copies
-                a prompt to run in Claude Code, which posts the written version back. Check
-                the date beside the heading — an old date means you are reading an old
-                morning.
-              </p>
-            </CardHelp>
-          </div>
-          <ErrorBoundary label="Daily report">
-            <DailyReport />
-          </ErrorBoundary>
-        </section>
       </div>
     </SurfaceShell>
   );

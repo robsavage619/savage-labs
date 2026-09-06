@@ -1,7 +1,16 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { LineChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, YAxis } from "recharts";
+import {
+  Area,
+  ComposedChart,
+  ReferenceArea,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { api } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
@@ -43,6 +52,16 @@ export function PeriodizationStrip() {
   const week = m?.week_number ?? 1;
   const weeksLeft = m?.weeks_remaining ?? 0;
   const deloadWeek = planned;
+
+  // The band edges (+5 fresh, −10 fatigued) are part of the reading, so they are
+  // always in frame even on a quiet block where TSB never approaches either.
+  const tsbVals = c?.points.map((pt) => pt.tsb) ?? [];
+  const tsbLo = Math.floor((Math.min(-12, ...tsbVals) - 1) / 5) * 5;
+  const tsbHi = Math.ceil((Math.max(7, ...tsbVals) + 1) / 5) * 5;
+  const tsbDomain: [number, number] = [tsbLo, tsbHi];
+  const tsbTicks = [tsbLo, -10, 0, 5, tsbHi].filter(
+    (v, i, a) => v >= tsbLo && v <= tsbHi && a.indexOf(v) === i,
+  );
 
   const cells = Array.from({ length: planned }, (_, i) => {
     const wk = i + 1;
@@ -139,29 +158,46 @@ export function PeriodizationStrip() {
             </div>
           </div>
 
-          {/* TSB sparkline */}
-          <div className="mt-3 h-[60px] min-w-0">
+          {/* Form, on its own axis.
+              This used to draw TSB and CTL together against a hidden auto
+              domain. They are not the same kind of number — TSB is a balance
+              around zero, CTL an absolute load — so CTL (≈10) set the scale and
+              flattened TSB (≈−1) into a straight line, with the ±5/−10 guide
+              lines invisible off the top and bottom. CTL is already the number
+              to the left and has its own chart further down the page, so this
+              draws form alone, diverging from zero, with the bands the labels
+              above actually refer to. */}
+          <div className="mt-3 h-[84px] min-w-0">
             {c && c.points.length > 0 && (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={c.points} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                  <YAxis hide domain={["auto", "auto"]} />
-                  <ReferenceLine y={0} stroke="var(--hairline)" strokeDasharray="2 2" />
-                  <ReferenceLine y={5} stroke="var(--positive)" strokeOpacity={0.3} strokeDasharray="2 2" />
-                  <ReferenceLine y={-10} stroke="var(--negative)" strokeOpacity={0.3} strokeDasharray="2 2" />
-                  <Line
+                <ComposedChart data={c.points} margin={{ top: 6, right: 4, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id="tsb-fill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={toneColor} stopOpacity={0.35} />
+                      <stop offset="100%" stopColor={toneColor} stopOpacity={0.05} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="date" hide />
+                  <YAxis
+                    domain={tsbDomain}
+                    ticks={tsbTicks}
+                    width={26}
+                    tick={{ fontSize: 8.5, fill: "var(--text-faint)" }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <ReferenceArea y1={5} y2={tsbDomain[1]} fill="var(--positive)" fillOpacity={0.05} />
+                  <ReferenceArea y1={tsbDomain[0]} y2={-10} fill="var(--negative)" fillOpacity={0.06} />
+                  <ReferenceLine y={0} stroke="var(--hairline-strong)" />
+                  <ReferenceLine y={5} stroke="var(--positive)" strokeOpacity={0.35} strokeDasharray="2 2" />
+                  <ReferenceLine y={-10} stroke="var(--negative)" strokeOpacity={0.35} strokeDasharray="2 2" />
+                  <Area
                     type="monotone"
                     dataKey="tsb"
                     stroke={toneColor}
                     strokeWidth={1.5}
-                    dot={false}
-                    isAnimationActive={false}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="ctl"
-                    stroke="var(--text-dim)"
-                    strokeWidth={1}
-                    strokeDasharray="3 3"
+                    fill="url(#tsb-fill)"
+                    baseValue={0}
                     dot={false}
                     isAnimationActive={false}
                   />
@@ -172,12 +208,19 @@ export function PeriodizationStrip() {
                       borderRadius: 6,
                       fontSize: 11,
                     }}
-                    formatter={(v: number, name: string) => [v.toFixed(1), name.toUpperCase()]}
+                    formatter={(v: number) => [v.toFixed(1), "TSB"]}
                     labelFormatter={(l: string) => l}
                   />
-                </LineChart>
+                </ComposedChart>
               </ResponsiveContainer>
             )}
+          </div>
+          <div className="mt-1 flex items-center justify-between text-[9px] text-[var(--text-faint)]">
+            <span>90 days</span>
+            <span>
+              above <span className="text-[var(--positive)]">+5</span> fresh · below{" "}
+              <span className="text-[var(--negative)]">−10</span> fatigued
+            </span>
           </div>
         </div>
       </div>

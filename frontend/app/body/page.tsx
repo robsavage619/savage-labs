@@ -70,7 +70,7 @@ export default function BodyPage() {
         <BoardCard
           id="fueling"
           label="Fuelling"
-          span={2}
+          span={1}
           help="Whether today's eating supports the build: protein, calorie balance, and where your weight sits."
           helpDetail={
             <>
@@ -100,7 +100,7 @@ export default function BodyPage() {
         <BoardCard
           id="physique"
           label="Progress photos"
-          span={2}
+          span={3}
           help="Visual proof of whether your shape is actually changing, measured rather than eyeballed."
           helpDetail={
             <>

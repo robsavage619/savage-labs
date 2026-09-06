@@ -54,6 +54,24 @@ function MuscleBar({
   const pct = (v: number) => `${Math.min(100, (v / max) * 100)}%`;
   const label = MUSCLE_LABELS[muscle] ?? muscle.replace(/_/g, " ");
 
+  // Landmarks are often equal or nearly so — abs currently has mev === mav === 12,
+  // and biceps sits inside three points across all three — which put two or three
+  // centred labels on the same few pixels. Merge any that land within 9% of the
+  // track of each other into one label rather than stacking them.
+  const landmarkTicks = ([["MEV", mev], ["MAV", mav], ["MRV", mrv]] as [string, number | null][])
+    .filter((e): e is [string, number] => e[1] != null)
+    .reduce<{ names: string[]; values: number[]; at: number }[]>((acc, [name, v]) => {
+      const at = Math.min(100, (v / max) * 100);
+      const last = acc[acc.length - 1];
+      if (last && at - last.at < 9) {
+        last.names.push(name);
+        if (!last.values.includes(v)) last.values.push(v);
+        return acc;
+      }
+      acc.push({ names: [name], values: [v], at });
+      return acc;
+    }, []);
+
   return (
     <div className="space-y-1">
       <div className="flex items-baseline justify-between gap-2 text-[11.5px]">
@@ -114,17 +132,25 @@ function MuscleBar({
             />
           ))}
       </div>
+      {/* The label track is 13px, not 10: an 8.5px span lays out on a ~12.75px
+          line box, so a 10px track let the last row's MEV/MAV/MRV labels spill
+          onto the legend paragraph below the card. */}
       {(mev != null || mav != null || mrv != null) && (
-        <div className="relative h-[10px] text-[8.5px] text-[var(--text-faint)] tabular-nums">
-          {mev != null && (
-            <span className="absolute" style={{ left: pct(mev), transform: "translateX(-50%)" }}>MEV {mev}</span>
-          )}
-          {mav != null && (
-            <span className="absolute" style={{ left: pct(mav), transform: "translateX(-50%)" }}>MAV {mav}</span>
-          )}
-          {mrv != null && (
-            <span className="absolute" style={{ left: pct(mrv), transform: "translateX(-50%)" }}>MRV {mrv}</span>
-          )}
+        <div className="relative h-[13px] text-[8.5px] text-[var(--text-faint)] tabular-nums">
+          {landmarkTicks.map((t) => (
+            <span
+              key={t.names.join("/")}
+              className="absolute whitespace-nowrap"
+              style={{
+                left: `${t.at}%`,
+                // The last tick is usually at 100%; centring it would hang half
+                // the label off the card.
+                transform: t.at > 92 ? "translateX(-100%)" : t.at < 8 ? "none" : "translateX(-50%)",
+              }}
+            >
+              {t.names.join("/")} {t.values.join("–")}
+            </span>
+          ))}
         </div>
       )}
     </div>
@@ -179,7 +205,11 @@ export function MuscleVolumePanel() {
         </span>
       </div>
 
-      <div className="-mb-4 columns-1 gap-x-6 @min-[600px]:columns-2 @min-[900px]:columns-3">
+      {/* Same trap as the prescription card: in a multi-column layout every
+          column ends at the container edge, so a negative bottom margin
+          intended to cancel the last item's gap pulled the legend below up
+          into whichever column ran longest. */}
+      <div className="columns-1 gap-x-6 @min-[600px]:columns-2 @min-[900px]:columns-3">
         {sorted.map((m) => (
           <div key={m.muscle} className="mb-4 break-inside-avoid">
             <MuscleBar
@@ -203,7 +233,7 @@ export function MuscleVolumePanel() {
         </div>
       )}
 
-      <p className="text-[10px] text-[var(--text-faint)] leading-relaxed pt-1 border-t border-[var(--hairline)]">
+      <p className="text-[10px] text-[var(--text-faint)] leading-relaxed mt-3 pt-2 border-t border-[var(--hairline)]">
         Below MEV → insufficient stimulus. MEV–MAV → productive growth zone. MAV–MRV → diminishing
         returns, rising injury risk. Above MRV → junk volume.
       </p>

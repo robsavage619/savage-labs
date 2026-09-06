@@ -3,9 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { WarningIcon } from "@/components/ui/icons";
 import {
+  Area,
+  Bar,
   ComposedChart,
   Line,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -17,28 +18,61 @@ import { Eyebrow } from "@/components/ui/metric";
 
 // ── Weight trend ─────────────────────────────────────────────────────────────
 
-function rollingAvg(data: { lbs: number }[], window: number) {
-  return data.map((d, i) => {
-    const slice = data.slice(Math.max(0, i - window + 1), i + 1);
+function rollingAvg(data: { lbs: number | null }[], window: number) {
+  return data.map((_, i) => {
+    const slice = data
+      .slice(Math.max(0, i - window + 1), i + 1)
+      .filter((x): x is { lbs: number } => x.lbs != null);
+    if (!slice.length) return null;
     return slice.reduce((s, x) => s + x.lbs, 0) / slice.length;
   });
 }
 
+/**
+ * Flag readings that cannot be this body.
+ *
+ * The feed carries two 138 lb entries from May 2026 sitting inside a run of
+ * 233–239 lb — a 100 lb round trip in five days, so a different person's scale
+ * session or a unit slip, not a measurement. Left in, they drag the y-domain
+ * down by a hundred pounds and gouge the rolling mean, which is what made this
+ * chart unreadable.
+ *
+ * They are not silently dropped: excluded from the trend and the domain, drawn
+ * in the negative colour, and counted in a note under the chart.
+ */
+function markImplausible(data: { lbs: number }[]): boolean[] {
+  const n = data.length;
+  return data.map((d, i) => {
+    const lo = Math.max(0, i - 3);
+    const neighbours = data
+      .slice(lo, Math.min(n, i + 4))
+      .filter((_, j) => lo + j !== i)
+      .map((x) => x.lbs)
+      .sort((a, b) => a - b);
+    if (neighbours.length < 4) return false;
+    const median = neighbours[Math.floor(neighbours.length / 2)];
+    return Math.abs(d.lbs - median) / median > 0.25;
+  });
+}
+
 const CHECKIN_COLOR = "var(--sl-accent)";
-const APPLE_COLOR = "oklch(1 0 0 / 0.06)";
 
 const WtTooltip = ({ active, payload, label }: {
   active?: boolean;
   payload?: { dataKey: string; value: number | null; payload?: { source?: string } }[];
-  label?: string;
+  label?: string | number;
 }) => {
   if (!active || !payload?.length) return null;
+  const when =
+    typeof label === "number"
+      ? new Date(label).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+      : label;
   const lbs = payload.find((p) => p.dataKey === "lbs")?.value;
   const avg = payload.find((p) => p.dataKey === "avg")?.value;
   const source = payload.find((p) => p.dataKey === "lbs")?.payload?.source;
   return (
     <div className="rounded-lg border px-3 py-2 text-[11px] font-mono" style={{ background: "var(--card-hover)", borderColor: "var(--hairline-strong)", minWidth: 140 }}>
-      <p className="text-[var(--text-dim)] mb-1">{label}</p>
+      <p className="text-[var(--text-dim)] mb-1">{when}</p>
       {lbs && <p className="text-[var(--text-primary)]">{lbs} lbs</p>}
       {avg && <p className="text-[var(--text-muted)]">{avg.toFixed(1)} lbs 7d avg</p>}
       {source && (
@@ -50,31 +84,6 @@ const WtTooltip = ({ active, payload, label }: {
   );
 };
 
-// Custom bar shape — accent color for checkin points, dim for Apple Health.
-const WeightBar = (props: {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  source?: string;
-}) => {
-  const { x, y, width, height, source } = props;
-  if (!height || height <= 0) return null;
-  return (
-    <rect
-      x={x}
-      y={y}
-      width={width}
-      height={height}
-      rx={2}
-      ry={2}
-      fill={source === "checkin" ? "oklch(0.72 0.20 210 / 0.55)" : "oklch(1 0 0 / 0.06)"}
-      stroke={source === "checkin" ? "oklch(0.72 0.20 210 / 0.85)" : "none"}
-      strokeWidth={source === "checkin" ? 0.5 : 0}
-    />
-  );
-};
-
 function WeightTrend() {
   const { data = [], isLoading } = useQuery({
     queryKey: ["body-weight"],
@@ -82,16 +91,38 @@ function WeightTrend() {
     refetchInterval: 3_600_000,
   });
 
-  const avgs = rollingAvg(data, 7);
+  const bad = markImplausible(data);
+  const avgs = rollingAvg(
+    data.map((d, i) => ({ lbs: bad[i] ? null : d.lbs })),
+    7,
+  );
+  // Time, not index. These weigh-ins are spread unevenly across nine years —
+  // one in 2017, a cluster this summer — so an ordinal axis compresses the gaps
+  // and stretches the clusters, which is exactly backwards for a weight trend.
   const formatted = data.map((d, i) => ({
-    label: d.date.slice(5),
-    lbs: d.lbs,
-    avg: +avgs[i].toFixed(1),
+    t: new Date(`${d.date}T00:00:00`).getTime(),
+    label: d.date,
+    lbs: bad[i] ? null : d.lbs,
+    bad: bad[i] ? d.lbs : null,
+    avg: avgs[i] == null ? null : +avgs[i]!.toFixed(1),
     source: d.source,
   }));
+  const badCount = bad.filter(Boolean).length;
 
-  const latest = data[data.length - 1];
-  const earliest = data[0];
+  // The excluded readings must not define the axis — that is the whole point —
+  // but they should still be visible, so they are pinned to the domain edge.
+  const cleanVals = data.filter((_, i) => !bad[i]).map((d) => d.lbs);
+  // Snapped to 5 lb so the axis ticks come out even rather than ending on a
+  // ragged domain bound.
+  const yMin = cleanVals.length ? Math.floor((Math.min(...cleanVals) - 4) / 5) * 5 : 0;
+  const yMax = cleanVals.length ? Math.ceil((Math.max(...cleanVals) + 4) / 5) * 5 : 1;
+  for (const row of formatted) {
+    if (row.bad != null) row.bad = Math.min(yMax, Math.max(yMin, row.bad));
+  }
+
+  const clean = data.filter((_, i) => !bad[i]);
+  const latest = clean[clean.length - 1];
+  const earliest = clean[0];
   const delta = latest && earliest ? +(latest.lbs - earliest.lbs).toFixed(1) : null;
   const deltaColor = delta == null ? "var(--text-faint)" : delta <= 0 ? "var(--positive)" : "var(--negative)";
   const checkinCount = data.filter(d => d.source === "checkin").length;
@@ -124,14 +155,75 @@ function WeightTrend() {
         <p className="text-[12px] text-[var(--text-faint)] py-8 text-center">No weight data</p>
       ) : (
         <ResponsiveContainer width="100%" height={140}>
-          <ComposedChart data={formatted} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
-            <XAxis dataKey="label" tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} tickLine={false} axisLine={false} interval={Math.floor(formatted.length / 6) || 1} />
-            <YAxis tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} tickLine={false} axisLine={false} domain={["auto", "auto"]} />
+          <ComposedChart data={formatted} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+            <defs>
+              <linearGradient id="wt-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--chart-line)" stopOpacity={0.22} />
+                <stop offset="100%" stopColor="var(--chart-line)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <XAxis
+              dataKey="t"
+              type="number"
+              scale="time"
+              domain={["dataMin", "dataMax"]}
+              tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(t: number) =>
+                new Date(t).toLocaleDateString(undefined, { month: "short", year: "2-digit" })
+              }
+              minTickGap={44}
+            />
+            <YAxis
+              tick={{ fontSize: 9.5, fill: "var(--text-faint)" }}
+              tickLine={false}
+              axisLine={false}
+              domain={[yMin, yMax]}
+              allowDataOverflow
+              width={34}
+            />
             <Tooltip content={<WtTooltip />} cursor={{ stroke: "var(--hairline-strong)" }} />
-            <Bar dataKey="lbs" maxBarSize={6} isAnimationActive={false} shape={<WeightBar />} />
-            <Line dataKey="avg" stroke="var(--chart-line)" strokeWidth={2} dot={false} isAnimationActive={false} />
+            <Area
+              dataKey="avg"
+              stroke="none"
+              fill="url(#wt-fill)"
+              isAnimationActive={false}
+              connectNulls
+            />
+            {/* Raw weigh-ins as points, the rolling mean as the line. The
+                measurement and the trend are different claims and should not
+                share a mark. */}
+            <Line
+              dataKey="lbs"
+              stroke="none"
+              dot={{ r: 1.6, fill: "var(--text-faint)", stroke: "none" }}
+              isAnimationActive={false}
+            />
+            <Line
+              dataKey="avg"
+              stroke="var(--chart-line)"
+              strokeWidth={2}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls
+            />
+            <Line
+              dataKey="bad"
+              stroke="none"
+              dot={{ r: 2.4, fill: "none", stroke: "var(--negative)", strokeWidth: 1 }}
+              isAnimationActive={false}
+            />
           </ComposedChart>
         </ResponsiveContainer>
+      )}
+      {badCount > 0 && (
+        <p className="text-[10px] text-[var(--text-faint)]">
+          <span style={{ color: "var(--negative)" }}>○</span> {badCount} reading
+          {badCount === 1 ? "" : "s"} excluded from the trend — more than 25% off the
+          surrounding weigh-ins, so a scale or unit error rather than a measurement. Fix at the
+          source and they come back.
+        </p>
       )}
     </div>
   );

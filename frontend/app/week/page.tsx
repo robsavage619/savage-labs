@@ -87,6 +87,11 @@ function Card({
  *     a quarter-column pillar of unreadable text);
  *   - a short card at span-4 owns a whole row for nothing (Momentum rendered
  *     1616x184), so it gets a partner of similar height instead.
+ *
+ * The corollary was being missed: a span-2 card with no partner is just as
+ * wrong, and four of them (Most trained, Volume prescription, Cardio,
+ * Pickleball) were leaving ~3,400px of empty right-hand column between them.
+ * A card with nothing beside it takes span-4.
  */
 export default function WeekPage() {
   return (
@@ -401,7 +406,7 @@ export default function WeekPage() {
         </Card>
         <Card
           id="most-trained"
-          span={2}
+          span={4}
           label="Most trained"
           help="The ten exercises you do most, with your best lift on each — click one for its full history."
           helpDetail={
@@ -478,7 +483,7 @@ export default function WeekPage() {
         </Card>
         <Card
           id="prescription"
-          span={2}
+          span={4}
           label="Volume prescription"
           help="How many sets each muscle should get this week, and whether to add work, hold, or cut."
           helpDetail={
@@ -507,7 +512,7 @@ export default function WeekPage() {
         <div className="board-rule">Output</div>
         <Card
           id="cardio"
-          span={2}
+          span={4}
           label="Cardio"
           help="How much conditioning you are doing, how hard it is, and whether your engine is improving."
           helpDetail={
@@ -560,7 +565,7 @@ export default function WeekPage() {
         </Card>
         <Card
           id="sport"
-          span={2}
+          span={4}
           label="Pickleball"
           help="How much you are playing, how fresh you play, and how quickly you bounce back afterwards."
           helpDetail={

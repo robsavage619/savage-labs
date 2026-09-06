@@ -176,6 +176,11 @@ export default function LabPage() {
           <LabExperiments />
         </BoardCard>
 
+        {/* Two short cards stacked into one column beside Active trials.
+            Alone they were each a ~200px card facing a 945px and a 1,891px
+            neighbour; the spans on the sections below are inert inside this
+            wrapper, since `.board > .span-N` only matches direct children. */}
+        <div className="span-2 flex flex-col gap-4">
         <BoardCard
           label="Suggested studies"
           span={2}
@@ -196,39 +201,6 @@ export default function LabPage() {
           }
         >
           <SuggestedExperiments />
-        </BoardCard>
-
-        <BoardCard
-          id="findings"
-          label="Standing research program"
-          span={2}
-          help="The standing question bank: which hypotheses about you the data has answered, and how firmly."
-          helpDetail={
-            <>
-              <p>
-                Every card is a question registered in advance, with its test and threshold
-                fixed before the data was looked at. Four verdicts:
-                <strong> confirmed</strong> (the effect met the threshold in the predicted
-                direction), <strong>refuted</strong> (it ran the other way),
-                <strong> inconclusive</strong> (right direction, too small to act on), and
-                <strong> insufficient n</strong> (not enough days yet — no verdict at all, not
-                a negative one).
-              </p>
-              <p>
-                A question only moves to <em>Answered</em> after three consecutive identical
-                definitive verdicts, and is re-checked every 30 days after that; a disagreeing
-                re-check sends it back under test. Confirmations are corrected for the fact
-                that many hypotheses are being tested at once, but not for re-testing the same
-                one as data accumulates — so read a confirmation as strong evidence, not proof.
-              </p>
-              <p>
-                <strong>Run all</strong> rescores the whole bank against current data. The
-                page runs it for you at most once every six hours.
-              </p>
-            </>
-          }
-        >
-          <LabPanel />
         </BoardCard>
 
         <BoardCard
@@ -258,6 +230,41 @@ export default function LabPage() {
         >
           <EngineStatusPanel />
         </BoardCard>
+        </div>
+
+        <BoardCard
+          id="findings"
+          label="Standing research program"
+          span={4}
+          help="The standing question bank: which hypotheses about you the data has answered, and how firmly."
+          helpDetail={
+            <>
+              <p>
+                Every card is a question registered in advance, with its test and threshold
+                fixed before the data was looked at. Four verdicts:
+                <strong> confirmed</strong> (the effect met the threshold in the predicted
+                direction), <strong>refuted</strong> (it ran the other way),
+                <strong> inconclusive</strong> (right direction, too small to act on), and
+                <strong> insufficient n</strong> (not enough days yet — no verdict at all, not
+                a negative one).
+              </p>
+              <p>
+                A question only moves to <em>Answered</em> after three consecutive identical
+                definitive verdicts, and is re-checked every 30 days after that; a disagreeing
+                re-check sends it back under test. Confirmations are corrected for the fact
+                that many hypotheses are being tested at once, but not for re-testing the same
+                one as data accumulates — so read a confirmation as strong evidence, not proof.
+              </p>
+              <p>
+                <strong>Run all</strong> rescores the whole bank against current data. The
+                page runs it for you at most once every six hours.
+              </p>
+            </>
+          }
+        >
+          <LabPanel />
+        </BoardCard>
+
 
         {/* Ordered so each companion pair lands SIDE BY SIDE rather than
             stacked across a row break: the derived-signal panels take the

@@ -13,6 +13,7 @@ import {
 import { api, type ProgressComparison } from "@/lib/api";
 import { localDate } from "@/lib/date";
 import { Eyebrow } from "@/components/ui/metric";
+import { Markdown } from "@/components/ui/markdown";
 
 const FLAG_LABEL: Record<string, string> = {
   incomplete_frame: "Frame your torso — shoulders through hips must be in shot",
@@ -227,6 +228,71 @@ function RatioTrend() {
       </p>
     );
 
+  // One session is not a trend. Two lone dots on a 140px time axis read as a
+  // broken chart; the same two numbers against the 1.0 taper line read as a
+  // starting point, which is what they are.
+  if (series.length === 1) {
+    const only = series[0];
+    const rows: { label: string; value: number; color: string; note: string }[] = [
+      {
+        label: "waist : shoulder",
+        value: only.waist_to_shoulder,
+        color: "var(--sl-accent)",
+        note: only.waist_to_shoulder >= 1 ? "no taper — waist is the widest line" : "trunk tapers",
+      },
+      {
+        label: "waist : hip",
+        value: only.waist_to_hip,
+        color: "var(--text-muted)",
+        note: only.waist_to_hip >= 1 ? "waist at or past the hip line" : "waist inside the hip line",
+      },
+    ];
+    return (
+      <div className="space-y-3 py-1">
+        {rows.map((r) => {
+          // Fixed 0.80–1.20 scale so the two readings are comparable to each
+          // other and to the same picture next month.
+          const pct = Math.max(2, Math.min(98, ((r.value - 0.8) / 0.4) * 100));
+          return (
+            <div key={r.label}>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[11px] text-[var(--text-muted)]">{r.label}</span>
+                <span className="text-[12px] font-mono tabular-nums" style={{ color: r.color }}>
+                  {r.value.toFixed(2)}
+                </span>
+              </div>
+              <div
+                className="relative h-[6px] rounded-full mt-1.5"
+                style={{ background: "var(--hairline)" }}
+              >
+                <div
+                  className="absolute inset-y-0 left-1/2 w-px"
+                  style={{ background: "var(--hairline-strong)" }}
+                />
+                <div
+                  className="absolute rounded-full"
+                  style={{
+                    left: `${pct}%`,
+                    top: -2,
+                    bottom: -2,
+                    width: 2.5,
+                    marginLeft: -1.25,
+                    background: r.color,
+                  }}
+                />
+              </div>
+              <p className="text-[10px] text-[var(--text-faint)] mt-1">{r.note}</p>
+            </div>
+          );
+        })}
+        <p className="text-[10px] text-[var(--text-faint)] pt-1">
+          One session on record ({only.label}) — the midline is 1.00, where the two widths are
+          equal. A second passing photo turns this into a trend.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <ResponsiveContainer width="100%" height={140}>
       <LineChart data={series} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
@@ -236,10 +302,10 @@ function RatioTrend() {
           contentStyle={{ background: "var(--card-hover)", border: "1px solid var(--hairline-strong)", fontSize: 11 }}
         />
         {/* Faint raw points; bold lines are the rolling median (the real signal). */}
-        <Line type="monotone" dataKey="waist_to_shoulder" stroke="var(--sl-accent)" strokeOpacity={0.25} dot={{ r: 1.5 }} strokeWidth={0.8} />
-        <Line type="monotone" dataKey="waist_to_hip" stroke="var(--text-muted)" strokeOpacity={0.25} dot={{ r: 1.5 }} strokeWidth={0.8} />
-        <Line type="monotone" dataKey="w2s_med" name="waist:shoulder (median)" stroke="var(--sl-accent)" dot={false} strokeWidth={1.8} />
-        <Line type="monotone" dataKey="w2h_med" name="waist:hip (median)" stroke="var(--text-muted)" dot={false} strokeWidth={1.5} />
+        <Line type="monotone" dataKey="waist_to_shoulder" stroke="var(--sl-accent)" strokeOpacity={0.25} dot={{ r: 1.5 }} strokeWidth={0.8} isAnimationActive={false} />
+        <Line type="monotone" dataKey="waist_to_hip" stroke="var(--text-muted)" strokeOpacity={0.25} dot={{ r: 1.5 }} strokeWidth={0.8} isAnimationActive={false} />
+        <Line type="monotone" dataKey="w2s_med" name="waist:shoulder (median)" stroke="var(--sl-accent)" dot={false} strokeWidth={1.8} isAnimationActive={false} />
+        <Line type="monotone" dataKey="w2h_med" name="waist:hip (median)" stroke="var(--text-muted)" dot={false} strokeWidth={1.5} isAnimationActive={false} />
       </LineChart>
     </ResponsiveContainer>
   );
@@ -357,14 +423,14 @@ function CritiquePanel() {
             <span className="text-[9.5px] font-mono uppercase tracking-wide" style={{ color: "var(--sl-accent)" }}>
               Shape &amp; change · verdict: {c.verdict}
             </span>
-            <p className="whitespace-pre-wrap text-[var(--text-primary)]">{c.shape_change_md}</p>
+            <Markdown text={c.shape_change_md} />
           </div>
           {c.visible_detail_md && (
             <div>
               <span className="text-[9.5px] font-mono uppercase tracking-wide text-[var(--text-faint)]">
                 Visible detail · lighting-dependent
               </span>
-              <p className="whitespace-pre-wrap text-[var(--text-muted)]">{c.visible_detail_md}</p>
+              <Markdown text={c.visible_detail_md} />
             </div>
           )}
         </div>

@@ -17,6 +17,25 @@ import { api } from "@/lib/api";
 import { CHART } from "@/lib/palette";
 import { Eyebrow } from "@/components/ui/metric";
 
+/**
+ * Round a numeric domain outward to a step and hand back matching ticks.
+ *
+ * Recharts was left to pick its own ticks on both scatter axes and produced
+ * "2.12 / 5.12 / 10.26" for a sleep-hours axis — values outside the stated
+ * domain and meaningless as hours. Explicit ticks are the only reliable fix.
+ */
+function niceAxis(values: number[], step: number): { domain: [number, number]; ticks: number[] } {
+  if (!values.length) return { domain: [0, step], ticks: [0, step] };
+  const lo = Math.floor(Math.min(...values) / step) * step;
+  const hi = Math.ceil(Math.max(...values) / step) * step;
+  const ticks: number[] = [];
+  // Aim for ~5 gridlines whatever the span.
+  const stride = Math.max(step, Math.round((hi - lo) / 5 / step) * step);
+  for (let v = lo; v <= hi + 1e-9; v += stride) ticks.push(+v.toFixed(2));
+  if (ticks[ticks.length - 1] < hi) ticks.push(hi);
+  return { domain: [lo, hi], ticks };
+}
+
 function tierColor(score: number) {
   if (score >= 67) return CHART.ok;
   if (score >= 34) return CHART.warn;
@@ -43,7 +62,7 @@ function DayOfWeekChart({ data }: { data: { day: string; avg_recovery: number; n
               itemStyle={{ color: "var(--text-primary)" }}
               formatter={(v: number) => [v.toFixed(1), "Avg recovery"]}
             />
-            <Bar dataKey="avg_recovery" radius={[3, 3, 0, 0]}>
+            <Bar dataKey="avg_recovery" radius={[3, 3, 0, 0]} isAnimationActive={false}>
               {data.map((d, i) => (
                 <Cell key={i} fill={d.avg_recovery === max ? CHART.line : CHART.lineDim} />
               ))}
@@ -101,6 +120,7 @@ function DistributionChart({ data }: { data: { bucket: string; n: number }[] }) 
 
 function SleepScatterChart({ data }: { data: { date: string; recovery: number; sleep_h: number | null }[] }) {
   const points = data.filter(d => d.sleep_h != null && d.sleep_h > 2 && d.sleep_h < 14);
+  const xAxis = niceAxis(points.map(d => d.sleep_h as number), 0.5);
   return (
     <div>
       <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
@@ -113,8 +133,8 @@ function SleepScatterChart({ data }: { data: { date: string; recovery: number; s
             <XAxis
               type="number" dataKey="sleep_h" name="Sleep"
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false}
-              domain={[4, 10]} interval="preserveStartEnd" minTickGap={14}
-              label={{ value: "hrs", position: "insideRight", offset: 4, fontSize: 9, fill: "var(--text-faint)" }}
+              domain={xAxis.domain} ticks={xAxis.ticks} allowDataOverflow
+              tickFormatter={(v: number) => `${v}h`}
             />
             <YAxis
               type="number" dataKey="recovery" name="Recovery"
@@ -156,6 +176,7 @@ function SleepScatterChart({ data }: { data: { date: string; recovery: number; s
 
 function HrvScatterChart({ data }: { data: { date: string; recovery: number | null; hrv: number | null }[] }) {
   const points = data.filter((d): d is { date: string; recovery: number; hrv: number } => d.hrv != null && d.hrv > 0 && d.recovery != null);
+  const xAxis = niceAxis(points.map(d => d.hrv), 10);
   return (
     <div>
       <div className="flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap mb-2 min-w-0">
@@ -168,8 +189,8 @@ function HrvScatterChart({ data }: { data: { date: string; recovery: number | nu
             <XAxis
               type="number" dataKey="hrv" name="HRV"
               tick={{ fontSize: 9.5, fill: "var(--text-faint)" }} axisLine={false} tickLine={false}
-              interval="preserveStartEnd" minTickGap={14}
-              label={{ value: "ms", position: "insideRight", offset: 4, fontSize: 9, fill: "var(--text-faint)" }}
+              domain={xAxis.domain} ticks={xAxis.ticks} allowDataOverflow
+              tickFormatter={(v: number) => `${v}ms`}
             />
             <YAxis
               type="number" dataKey="recovery" name="Recovery"

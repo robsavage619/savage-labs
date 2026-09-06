@@ -185,7 +185,7 @@ export function FuelingPanel() {
                   }}
                   formatter={(v: number) => [v > 0 ? `+${v}` : v, "kcal"]}
                 />
-                <Bar dataKey="balance" radius={[2, 2, 0, 0]}>
+                <Bar dataKey="balance" radius={[2, 2, 0, 0]} isAnimationActive={false}>
                   {trend.data.map((d, i) => (
                     <Cell
                       key={i}

@@ -247,9 +247,9 @@ function WeeklyZoneVolume({
               cursor={{ fill: "oklch(1 0 0 / 0.03)" }}
               formatter={(v: number, name: string) => [`${v} min`, name]}
             />
-            <Bar dataKey="z12" stackId="a" fill={ZONE_FILL.z12} name="Z1–Z2" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="z3"  stackId="a" fill={ZONE_FILL.z3}  name="Z3"     radius={[0, 0, 0, 0]} />
-            <Bar dataKey="z45" stackId="a" fill={ZONE_FILL.z45} name="Z4–Z5"  radius={[3, 3, 0, 0]} />
+            <Bar dataKey="z12" stackId="a" fill={ZONE_FILL.z12} name="Z1–Z2" radius={[0, 0, 0, 0]} isAnimationActive={false} />
+            <Bar dataKey="z3"  stackId="a" fill={ZONE_FILL.z3}  name="Z3"     radius={[0, 0, 0, 0]} isAnimationActive={false} />
+            <Bar dataKey="z45" stackId="a" fill={ZONE_FILL.z45} name="Z4–Z5"  radius={[3, 3, 0, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
       </div>
