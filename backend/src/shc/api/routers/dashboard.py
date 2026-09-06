@@ -1745,10 +1745,18 @@ _MED_ADVISORIES: dict[str, list[dict]] = {
 
 # Two threshold sets exist and they are NOT interchangeable — say which one you
 # mean. Sterling 2006 derived 1.45 / 3.25 in an HIV/HCV-coinfected cohort
-# (`sterling-2006-fib-4-fibrosis-index.md`). The 1.30 / 2.67 pair below comes
-# from later NAFLD/MASLD-specific validation and is what the MASLD pathways use;
-# it is the right set for Rob, whose open question is steatosis, not viral
-# hepatitis. Do not attribute these two numbers to Sterling.
+# (`sterling-2006-fib-4-fibrosis-index.md`). The 1.30 / 2.67 pair below is from
+# Shah 2009, doi:10.1016/j.cgh.2009.05.033 (`shah-2009-fib4-nafld-validation.md`),
+# which revalidated the index in 541 biopsy-confirmed NAFLD adults — the right
+# set here, because Rob's open question is steatosis, not viral hepatitis.
+# Do NOT attribute these two numbers to Sterling; that is the specific
+# mis-citation both vault notes exist to prevent.
+#
+# What a rule-out is worth: Shah reports 90% NPV at <=1.30, but says outright
+# that it runs "much lower" with metabolic-syndrome features (83% in their
+# steatohepatitis subgroup), and 33 of their 327 sub-1.30 subjects were false
+# negatives. Both derivation cohorts were ~75-80% Caucasian, so performance in
+# East Asian or admixed individuals is uncharacterised.
 #
 # Age caveat: the lower cut-off loses specificity below ~35 and above ~65 (where
 # a raised rule-out near 2.0 is commonly applied). Rob is 40 — inside the
