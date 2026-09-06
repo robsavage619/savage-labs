@@ -90,6 +90,7 @@ export const SECTIONS: readonly Section[] = [
   { id: "fueling", label: "Fuelling", surface: "body", keywords: ["protein", "calories", "weight", "hydration"] },
   { id: "physique", label: "Progress photos", surface: "body", keywords: ["photos", "waist", "compare", "upload"] },
   { id: "composition", label: "Body composition", surface: "body", keywords: ["weight", "vo2", "steps", "rhr"] },
+  { id: "airway", label: "Airway overnight", surface: "body", keywords: ["spo2", "oxygen", "saturation", "apnea", "osa", "respiratory", "breathing", "cpap"] },
   { id: "clinical", label: "Clinical record", surface: "body", keywords: ["labs", "meds", "conditions", "bloodwork", "risk"] },
 
   // ── Lab ──────────────────────────────────────────────────────────────────

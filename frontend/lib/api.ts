@@ -702,12 +702,51 @@ export interface PickleballEvents {
   sample_warning: string | null;
 }
 
+
+/** One night of airway data: overnight oxygen saturation and respiratory rate. */
+export interface AirwayNight {
+  date: string;
+  spo2: number | null;
+  spo2_7d: number | null;
+  resp: number | null;
+  resp_7d: number | null;
+}
+
+export interface AirwayTrend {
+  window_days: number;
+  nights: AirwayNight[];
+  spo2: {
+    n: number;
+    mean: number | null;
+    min: number | null;
+    last: number | null;
+    below_95: number;
+    below_94: number;
+    below_92: number;
+    normal_pct: number;
+    screen_pct: number;
+    gate_pct: number;
+  };
+  resp: {
+    n: number;
+    baseline_28d: number | null;
+    last: number | null;
+    last_7d_mean: number | null;
+    delta: number | null;
+    nights_above_clinical: number;
+    watch_delta: number;
+    gate_delta: number;
+    clinical_bpm: number;
+  };
+}
+
 export const api = {
   recoveryToday: () => get<RecoveryToday>("/api/recovery/today"),
   recoveryTrend: (days = 14) => get<RecoveryPoint[]>(`/api/recovery/trend?days=${days}`),
   hrvTrend: (days = 28) => get<HRVPoint[]>(`/api/hrv/trend?days=${days}`),
   sleepRecent: (days = 7) => get<SleepEntry[]>(`/api/sleep/recent?days=${days}`),
   sleepTrend: (days = 30) => get<SleepTrendPoint[]>(`/api/sleep/trend?days=${days}`),
+  sleepAirway: (days = 180) => get<AirwayTrend>(`/api/sleep/airway?days=${days}`),
   readinessToday: () => get<ReadinessToday>("/api/readiness/today"),
   oauthStatus: () => get<OAuthStatus[]>("/api/oauth/status"),
   statsSummary: () => get<StatsSummary>("/api/stats/summary"),

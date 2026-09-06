@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { SurfaceShell } from "@/components/surface-shell";
 
+import { AirwayPanel } from "@/components/airway-panel";
 import { BodyPane } from "@/components/body-panel";
 import { CardHelp } from "@/components/card-help";
 import { ClinicalOverview } from "@/components/clinical-overview";
@@ -163,6 +164,43 @@ export default function BodyPage() {
           <BodyPane />
         </BoardCard>
 
+        <BoardCard
+          id="airway"
+          label="Airway overnight"
+          span={4}
+          help="Whether your breathing is holding up overnight — oxygen saturation and respiratory rate against the thresholds that would prompt a doctor's visit."
+          helpDetail={
+            <>
+              <p>
+                This card exists because you have <strong>diagnosed obstructive sleep apnea and
+                are off CPAP</strong>. Both numbers were already being recorded every night and
+                neither was plotted anywhere, so a slow drift had nowhere to show up.
+              </p>
+              <p>
+                On the top chart, the shaded bands are what matters more than any single dot.
+                Above 95% is unremarkable; the amber band is 94–95%; the red band is under 94%,
+                which is the screening floor where a consistently low reading is worth raising
+                with a physician. The dashed line near the bottom is 92%, where this system
+                actually restricts training. The solid line is a seven-night mean — one bad
+                night is a bad night, a line that sits in the amber band is a pattern.
+              </p>
+              <p>
+                The lower chart is respiratory rate against <em>your own</em> 28-night baseline
+                rather than a textbook number. Amber is +0.5 bpm, red is +1.0 — the same
+                thresholds the daily gate already uses to flag possible illness. It is the
+                companion signal: infection and airway load both push it up, so a saturation dip
+                with a flat respiratory rate reads differently from one where both move together.
+              </p>
+              <p>
+                What this cannot tell you is how <em>often</em> you stop breathing. A nightly
+                average is not an apnea count, and only a sleep study produces one.
+              </p>
+            </>
+          }
+        >
+          <AirwayPanel />
+        </BoardCard>
+
         {/* 649 lines of risk strip, meds, labs table and panel results — the
             widest surface in the app, and until now reachable only through a tab
             bar inside a collapsed accordion. */}
@@ -177,8 +215,9 @@ export default function BodyPage() {
                 The tiles at the top are your latest cardiometabolic values with the zone each
                 one falls in. In the labs table, an <strong>H or L flag</strong> means outside
                 the lab&apos;s reference range — that is a question for your doctor, not an
-                input to today&apos;s training. The sparkline beside each value is the more
-                useful read: one flagged value is noise, a drifting line is a trend.
+                input to today&apos;s training. The bar beside each value is the more useful
+                read: it shows where the result sits inside its own reference interval,
+                so a value scraping the edge looks different from one in the middle.
               </p>
               <p>
                 <strong>Care gaps</strong> lists panels that are past their re-draw interval,

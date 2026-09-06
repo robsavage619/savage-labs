@@ -212,6 +212,143 @@ async def sleep_trend(days: int = Query(30, gt=0, le=365)) -> list[dict]:
     return [{"date": str(r[0]), "stages": r[1], "hours": r[2]} for r in rows]
 
 
+# ── Airway: nocturnal SpO2 and respiratory rate ─────────────────────────────
+#
+# Both numbers already exist per night and neither is trended anywhere. Rob has
+# diagnosed OSA and is off CPAP, and the vault is explicit about what that means
+# for this screen:
+#
+#   "WHOOP SpO2 floor is the primary OSA screening signal in SHC. A consistently
+#    low floor (< 94%) displayed in the sleep panel warrants clinical
+#    discussion."  — [[obstructive-sleep-apnea]]
+#
+#   "Build a 'nocturnal RR' panel showing 28d baseline, current 7d mean, and any
+#    sustained excursion > +1 bpm with a colour-coded gate state."
+#    — [[nicolo-2020-respiratory-rate-monitoring]]
+#
+# The RR baseline and delta are already computed in `metrics` and already gate
+# the day (+1.0 corroborated caps intensity, +0.5 is a watch note); this endpoint
+# does not re-derive them differently, it reports the same window and the same
+# median so the chart and the gate can never disagree.
+
+_SPO2_SCREEN_PCT = 94.0  # vault OSA screening floor
+_SPO2_NORMAL_PCT = 95.0
+_SPO2_GATE_PCT = 92.0  # where the engine actually gates
+_RR_WATCH_DELTA = 0.5
+_RR_GATE_DELTA = 1.0
+_RR_CLINICAL_BPM = 18.0  # Nicolo: multiple nights above this is a "see a doctor" trigger
+_RR_PLAUSIBLE = (8.0, 30.0)  # same bounds metrics uses for the baseline
+
+
+def _rolling_mean(values: list[float | None], window: int) -> list[float | None]:
+    out: list[float | None] = []
+    for i in range(len(values)):
+        seen = [v for v in values[max(0, i - window + 1) : i + 1] if v is not None]
+        out.append(round(sum(seen) / len(seen), 2) if seen else None)
+    return out
+
+
+@router.get("/sleep/airway")
+async def sleep_airway(days: int = Query(180, gt=0, le=1000)) -> dict:
+    """Nightly SpO2 and respiratory rate against their screening thresholds.
+
+    SpO2 is read from `recovery`, not `sleep` — WHOOP's sleep endpoint omits it,
+    so `sleep.spo2_avg` is always NULL (same join as `/sleep/recent`).
+    """
+    since = (date.today() - timedelta(days=days)).isoformat()
+    conn = get_read_conn()
+    try:
+        rows = conn.execute(
+            """
+            WITH one_sleep AS (
+                -- `is_nap` is not reliable: 2026-08-25 carries a 1.09h afternoon
+                -- session flagged as a night. The longest session per date is the
+                -- actual night, and picking one also stops the join to `recovery`
+                -- from multiplying nights that have more than one row.
+                SELECT night_date, respiratory_rate
+                FROM sleep
+                WHERE night_date >= $since AND COALESCE(is_nap, FALSE) = FALSE
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY night_date
+                    ORDER BY COALESCE(epoch(ts_out - ts_in), 0) DESC
+                ) = 1
+            ),
+            one_recovery AS (
+                SELECT date, spo2
+                FROM recovery
+                WHERE date >= $since
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY date ORDER BY spo2 IS NULL, id
+                ) = 1
+            )
+            SELECT s.night_date,
+                   r.spo2,
+                   CASE WHEN s.respiratory_rate BETWEEN $lo AND $hi
+                        THEN s.respiratory_rate END AS rr
+            FROM one_sleep s
+            LEFT JOIN one_recovery r ON r.date = s.night_date
+            ORDER BY s.night_date
+            """,
+            {"since": since, "lo": _RR_PLAUSIBLE[0], "hi": _RR_PLAUSIBLE[1]},
+        ).fetchall()
+    finally:
+        conn.close()
+
+    spo2_vals = [float(r[1]) if r[1] is not None else None for r in rows]
+    rr_vals = [float(r[2]) if r[2] is not None else None for r in rows]
+    spo2_roll = _rolling_mean(spo2_vals, 7)
+    rr_roll = _rolling_mean(rr_vals, 7)
+
+    nights = [
+        {
+            "date": str(r[0]),
+            "spo2": spo2_vals[i],
+            "spo2_7d": spo2_roll[i],
+            "resp": rr_vals[i],
+            "resp_7d": rr_roll[i],
+        }
+        for i, r in enumerate(rows)
+    ]
+
+    seen_spo2 = [v for v in spo2_vals if v is not None]
+    seen_rr = [v for v in rr_vals if v is not None]
+    # Median over the trailing 28 nights, matching metrics._recovery exactly —
+    # a mean here would put the chart's baseline slightly off the gate's.
+    rr_recent = [v for v in seen_rr[-28:]]
+    rr_baseline = round(statistics.median(rr_recent), 2) if rr_recent else None
+    rr_last7 = [v for v in seen_rr[-7:]]
+
+    return {
+        "window_days": days,
+        "nights": nights,
+        "spo2": {
+            "n": len(seen_spo2),
+            "mean": round(sum(seen_spo2) / len(seen_spo2), 2) if seen_spo2 else None,
+            "min": round(min(seen_spo2), 1) if seen_spo2 else None,
+            "last": round(seen_spo2[-1], 1) if seen_spo2 else None,
+            "below_95": sum(1 for v in seen_spo2 if v < _SPO2_NORMAL_PCT),
+            "below_94": sum(1 for v in seen_spo2 if v < _SPO2_SCREEN_PCT),
+            "below_92": sum(1 for v in seen_spo2 if v < _SPO2_GATE_PCT),
+            "normal_pct": _SPO2_NORMAL_PCT,
+            "screen_pct": _SPO2_SCREEN_PCT,
+            "gate_pct": _SPO2_GATE_PCT,
+        },
+        "resp": {
+            "n": len(seen_rr),
+            "baseline_28d": rr_baseline,
+            "last": round(seen_rr[-1], 2) if seen_rr else None,
+            "last_7d_mean": round(sum(rr_last7) / len(rr_last7), 2) if rr_last7 else None,
+            "delta": (
+                round(seen_rr[-1] - rr_baseline, 2) if seen_rr and rr_baseline is not None else None
+            ),
+            "nights_above_clinical": sum(1 for v in seen_rr[-30:] if v > _RR_CLINICAL_BPM),
+            "watch_delta": _RR_WATCH_DELTA,
+            "gate_delta": _RR_GATE_DELTA,
+            "clinical_bpm": _RR_CLINICAL_BPM,
+        },
+    }
+
+
 @router.get("/readiness/today")
 async def readiness_today() -> dict:
     """Today's readiness — thin reader of the canonical DailyState.
