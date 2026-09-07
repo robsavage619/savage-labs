@@ -130,3 +130,62 @@ def test_report_card_summarises_both_axes(conn):
     out = report_card(conn)
     assert "calibration" in out and "predictive_validity" in out
     assert isinstance(out["summary"], str) and out["summary"]
+
+
+# ── component-level validity ────────────────────────────────────────────────
+
+
+def _night(conn, day, hours: float) -> None:
+    from datetime import datetime as _dt
+
+    ts_in = _dt.combine(day, _dt.min.time()).replace(hour=23)
+    conn.execute(
+        "INSERT INTO sleep (id, source, night_date, ts_in, ts_out, is_nap, content_hash) "
+        "VALUES (?,'whoop',?,?,?,FALSE,?)",
+        [f"s{day}", day, ts_in, ts_in + timedelta(hours=hours), f"sh{day}"],
+    )
+
+
+def test_component_validity_isolates_the_input_that_predicts(conn):
+    """A composite null cannot say WHICH input is dead. This must."""
+    from shc.stats.engine_report import component_validity
+
+    for i in range(26):
+        d = _TODAY - timedelta(days=i + 1)
+        # sleep drives set count; hrv/rhr are flat noise
+        _readiness_day(conn, d, 60.0, 8 + i // 3, 7.5)
+        _night(conn, d, 6.0 + i * 0.1)
+    out = component_validity(conn)
+    assert out["n"] >= 20
+    assert "sleep" in out["components_carrying_signal"]
+    assert out["components"]["sleep"]["predicts_anything"] is True
+
+
+def test_component_validity_totals_the_weight_sitting_on_silent_inputs(conn):
+    """The headline number: how much of the composite rests on nothing."""
+    from shc.stats.engine_report import component_validity
+
+    for i in range(26):
+        d = _TODAY - timedelta(days=i + 1)
+        _readiness_day(conn, d, 60.0, 10, 7.5)   # nothing varies with anything
+        _night(conn, d, 8.0)
+    out = component_validity(conn)
+    assert out["components_carrying_signal"] == []
+    assert out["weight_on_silent_components"] == pytest.approx(0.90)
+
+
+def test_component_validity_refuses_on_thin_data(conn):
+    from shc.stats.engine_report import component_validity
+
+    assert component_validity(conn)["verdict"] == "insufficient"
+
+
+def test_component_validity_states_that_it_does_not_decide(conn):
+    """Guard the boundary: this reports, a weight change is a gate change."""
+    from shc.stats.engine_report import component_validity
+
+    for i in range(26):
+        d = _TODAY - timedelta(days=i + 1)
+        _readiness_day(conn, d, 60.0, 10, 7.5)
+        _night(conn, d, 8.0)
+    assert "does not decide" in component_validity(conn)["note"]

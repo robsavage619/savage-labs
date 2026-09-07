@@ -44,6 +44,7 @@ export function EngineReportCard() {
 
   const cal = data.calibration;
   const val = data.predictive_validity;
+  const comp = data.component_validity;
   const pos = "var(--positive)";
   const neu = "var(--text-primary)";
   const neg = "var(--negative)";
@@ -149,6 +150,59 @@ export function EngineReportCard() {
           )}
         </div>
       </div>
+
+      {comp && comp.components && Object.keys(comp.components).length > 0 && (
+        <div className="mt-5 pt-4 border-t border-[var(--border)]">
+          <div className="flex items-baseline justify-between flex-wrap gap-2">
+            <p className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
+              Which input carries the signal
+            </p>
+            {comp.weight_on_silent_components != null && (
+              <span
+                className="text-[10.5px] tabular-nums"
+                style={{ color: comp.weight_on_silent_components >= 0.5 ? neg : neu }}
+              >
+                {Math.round(comp.weight_on_silent_components * 100)}% of the composite&apos;s weight
+                sits on inputs with no detectable signal
+              </span>
+            )}
+          </div>
+          <ul className="mt-2 space-y-1">
+            {Object.entries(comp.components).map(([name, cc]) => {
+              const best = Object.entries(cc.vs).reduce<[string, (typeof cc.vs)[string]] | null>(
+                (a, b) => (a && Math.abs(a[1].r ?? 0) >= Math.abs(b[1].r ?? 0) ? a : b),
+                null,
+              );
+              return (
+                <li key={name} className="flex items-center gap-2 text-[10.5px] tabular-nums">
+                  <span
+                    className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                    style={{ background: cc.predicts_anything ? pos : "var(--neutral)" }}
+                  />
+                  <span className="uppercase tracking-wide text-[var(--text-muted)] w-[52px]">
+                    {name}
+                  </span>
+                  <span className="text-[var(--text-dim)] w-[72px]">
+                    weight {cc.weight.toFixed(2)}
+                  </span>
+                  <span style={{ color: cc.predicts_anything ? pos : "var(--text-faint)" }}>
+                    {cc.predicts_anything ? "predicts" : "no signal"}
+                  </span>
+                  {best && (
+                    <span className="ml-auto text-[var(--text-dim)]">
+                      best {best[0].replace(/_/g, " ")} {(best[1].r ?? 0) > 0 ? "+" : ""}
+                      {(best[1].r ?? 0).toFixed(2)}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {comp.note && (
+            <p className="mt-2 text-[10px] text-[var(--text-faint)] leading-snug">{comp.note}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

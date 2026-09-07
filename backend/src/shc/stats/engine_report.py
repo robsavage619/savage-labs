@@ -188,15 +188,105 @@ def readiness_validity(conn, days: int = 365) -> dict:
     }
 
 
+# The four inputs to `metrics._readiness_snapshot`, mapped to the raw columns
+# that stand in for each subscore. Weights are the live DEFAULT_WEIGHTS; they
+# are quoted here only so the report can show weight against evidence side by
+# side. Nothing here reads or writes them.
+_READINESS_COMPONENTS = (
+    ("hrv", 0.40, "recovery.hrv"),
+    ("sleep", 0.30, "sleep hours"),
+    ("rhr", 0.20, "recovery.rhr"),
+)
+
+
+def component_validity(conn, days: int = 365) -> dict:
+    """Which INPUT to the readiness composite actually predicts the session?
+
+    The composite is a weighted blend, so a null on the whole score cannot say
+    which part is dead weight. This splits it.
+
+    Two things make the split worth reporting rather than acting on directly:
+    HRV and RHR correlate at about -0.75 across this subject's history, so 0.60
+    of the composite is largely one underlying signal wearing two hats; and the
+    codebase ALREADY contains a weighting that trusts sleep over autonomic tone
+    (`metrics.BETA_BLOCKER_WEIGHTS`, sleep 0.50 / hrv 0.15 / rhr 0.10) which
+    fires only on beta-blocker days — and the beta-blocker here is PRN, so it
+    almost never runs.
+
+    This function does NOT change any weight. Re-weighting readiness is a gate
+    change and needs an invariant update plus a DECISIONS.md entry
+    (ENGINE_INVARIANTS.md, "the rule for changing the engine"), not one
+    marginal correlation on a small sample. The point of shipping it is that
+    the evidence accumulates in the open until it is or is not strong enough.
+    """
+    since = (date.today() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        """
+        WITH sess AS (
+          SELECT w.started_at::DATE d, SUM(s.weight_kg * s.reps) vol,
+                 AVG(s.rpe) rpe, COUNT(*) n_sets
+          FROM workouts w JOIN workout_sets s ON s.workout_id = w.id
+          WHERE s.is_warmup = FALSE AND s.weight_kg > 0 AND s.reps > 0
+            AND w.started_at::DATE >= ?
+          GROUP BY 1 HAVING COUNT(*) >= 8),
+        sl AS (
+          SELECT night_date d,
+                 arg_max(epoch(ts_out - ts_in) / 3600.0, epoch(ts_out - ts_in)) hrs
+          FROM sleep
+          WHERE COALESCE(is_nap, FALSE) = FALSE AND ts_in IS NOT NULL AND ts_out IS NOT NULL
+          GROUP BY 1)
+        SELECT r.hrv, sl.hrs, r.rhr, sess.vol, sess.rpe, sess.n_sets
+        FROM sess JOIN recovery r ON r.date = sess.d LEFT JOIN sl ON sl.d = sess.d
+        WHERE sess.rpe IS NOT NULL
+        """,
+        [since],
+    ).fetchall()
+
+    if len(rows) < _MIN_PAIRS:
+        return {"n": len(rows), "verdict": "insufficient", "components": {}}
+
+    outcomes = {"session_volume_load": 3, "mean_session_rpe": 4, "working_sets": 5}
+    out: dict[str, dict] = {}
+    for i, (name, weight, source) in enumerate(_READINESS_COMPONENTS):
+        per = {}
+        for oname, oi in outcomes.items():
+            pairs = [(float(r[i]), float(r[oi])) for r in rows if r[i] is not None and r[oi] is not None]
+            per[oname] = correlate([p[0] for p in pairs], [p[1] for p in pairs])
+        out[name] = {
+            "weight": weight,
+            "source": source,
+            "vs": per,
+            # The headline per component: does it predict ANY outcome at all?
+            "predicts_anything": any(v["excludes_zero"] for v in per.values()),
+        }
+
+    carrying = [k for k, v in out.items() if v["predicts_anything"]]
+    dead_weight = round(sum(v["weight"] for k, v in out.items() if not v["predicts_anything"]), 2)
+    return {
+        "n": len(rows),
+        "components": out,
+        "components_carrying_signal": carrying,
+        # How much of the composite's weight sits on inputs with no detectable
+        # relationship to the session. Reported, never acted on.
+        "weight_on_silent_components": dead_weight,
+        "note": (
+            "Re-weighting readiness is a gate change requiring an invariant update "
+            "and a DECISIONS.md entry. This measures; it does not decide."
+        ),
+    }
+
+
 def report_card(conn, days: int = 365) -> dict:
     """Both axes, plus the one-line read."""
     cal = prescription_calibration(conn, days)
     val = readiness_validity(conn, days)
+    comp = component_validity(conn, days)
     return {
         "as_of": date.today().isoformat(),
         "window_days": days,
         "calibration": cal,
         "predictive_validity": val,
+        "component_validity": comp,
         "summary": _summarise(cal, val),
     }
 

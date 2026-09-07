@@ -995,6 +995,15 @@ export const api = {
         caveat?: string;
         correlations: Record<string, { r: number | null; n: number; ci95: [number | null, number | null]; excludes_zero: boolean }>;
       };
+      component_validity: {
+        n: number;
+        verdict?: string;
+        components: Record<string, { weight: number; source: string; predicts_anything: boolean; vs: Record<string, { r: number | null; ci95: [number | null, number | null]; excludes_zero: boolean }> }>;
+        components_carrying_signal?: string[];
+        /** Share of the readiness composite resting on inputs with no detectable signal. */
+        weight_on_silent_components?: number;
+        note?: string;
+      };
       summary: string;
     }>(`/api/engine/report-card?days=${days}`),
   clinicalResearch: () =>

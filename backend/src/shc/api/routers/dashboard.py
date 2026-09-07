@@ -3403,6 +3403,24 @@ async def engine_report_card(days: int = 365) -> dict:
         conn.close()
 
 
+@router.get("/training/monotony")
+async def training_monotony(weeks: int = 12) -> dict:
+    """Foster monotony and strain — the sameness axis ACWR cannot see.
+
+    ACWR asks whether this week is bigger than the last few; monotony asks
+    whether every day looks the same. A flat ACWR of 1.0 is compatible with
+    training identically seven days a week, which is the state Foster 1998
+    associated with illness.
+    """
+    from shc.stats.training_monotony import monotony_series
+
+    conn = get_read_conn()
+    try:
+        return monotony_series(conn, weeks=weeks)
+    finally:
+        conn.close()
+
+
 @router.get("/oauth/status")
 async def oauth_status() -> list[dict]:
     conn = get_read_conn()
