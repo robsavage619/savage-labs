@@ -69,6 +69,15 @@ class Experiment:
 # ── Pre-registration ─────────────────────────────────────────────────────────
 
 
+# The two designs the scorer knows how to treat. An observational study has its
+# arm OBSERVED from ingested data (`backfill_observational`); a randomized one
+# has it ASSIGNED before the outcome exists (`arm_for_day`). Writing the wrong
+# one is not cosmetic — `backfill_observational` refuses randomized studies
+# precisely because overwriting assigned arms with observed ones destroys the
+# randomisation silently, and the column defaults to randomized, so an
+# observational study that never states its design is mislabelled by omission.
+_DESIGNS = ("randomized_alternating", "observational")
+
 def preregister(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -80,6 +89,7 @@ def preregister(
     outcome_metric: str,
     min_effect: float,
     outcome_direction: str = "higher_better",
+    design: str = "randomized_alternating",
     min_per_arm: int = 6,
     washout_hours: int = 0,
     started_on: date | None = None,
@@ -122,6 +132,8 @@ def preregister(
             target_kind or direction / have a non-positive magnitude or cap /
             declare a magnitude exceeding the cap.
     """
+    if design not in _DESIGNS:
+        raise ValueError(f"design must be one of {_DESIGNS}, got {design!r}")
     if min_effect <= 0:
         raise ValueError(
             f"min_effect must be > 0 (got {min_effect}) — a study preregistered at "
@@ -161,14 +173,14 @@ def preregister(
         """
         INSERT INTO experiments
             (slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
-             outcome_direction, min_per_arm, min_effect, washout_hours, started_on,
+             outcome_direction, design, min_per_arm, min_effect, washout_hours, started_on,
              planned_end, notes, actuation_target_kind, actuation_target_key,
              actuation_direction, actuation_magnitude_pct, actuation_cap_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
-            outcome_direction, min_per_arm, min_effect, washout_hours, started.isoformat(),
+            outcome_direction, design, min_per_arm, min_effect, washout_hours, started.isoformat(),
             planned_end.isoformat() if planned_end else None, notes,
             actuation_target_kind, actuation_target_key, actuation_direction,
             actuation_magnitude_pct, actuation_cap_pct,
@@ -293,6 +305,32 @@ SUPPORTED_OUTCOME_METRICS = frozenset(
 )
 
 
+def _e1rm_delta_2wk(
+    conn: duckdb.DuckDBPyConnection, exercise: str, day: date
+) -> float | None:
+    """Change in weekly e1RM for `exercise` from `day`'s week to two weeks on.
+
+    The dose question is about CHANGE, not level. Comparing e1RM levels between
+    a high-set week and a low-set week measures the training trend, not the
+    dose: e1RM drifts upward over a training block, so whichever arm happened to
+    fall later would win regardless of dose.
+    """
+    week = day - timedelta(days=day.weekday())
+    rows = conn.execute(
+        """
+        SELECT week_start::DATE, e1rm_kg FROM exercise_weekly_e1rm
+        WHERE lower(exercise) = lower(?) AND e1rm_kg IS NOT NULL
+          AND week_start::DATE IN (?, ?)
+        """,
+        [exercise, week.isoformat(), (week + timedelta(weeks=2)).isoformat()],
+    ).fetchall()
+    found = {r[0]: float(r[1]) for r in rows}
+    start, end = found.get(week), found.get(week + timedelta(weeks=2))
+    if start is None or end is None:
+        return None
+    return end - start
+
+
 def _outcome_value(conn: duckdb.DuckDBPyConnection, metric: str, day: date) -> float | None:
     """Resolve one day's outcome for a metric spec."""
     kind, _, arg = metric.partition(":")
@@ -302,6 +340,8 @@ def _outcome_value(conn: duckdb.DuckDBPyConnection, metric: str, day: date) -> f
         return _next_morning(conn, "hrv", day)
     if kind == "recovery_score_next_day":
         return _next_morning(conn, "score", day)
+    if kind == "e1rm_delta_2wk" and arg:
+        return _e1rm_delta_2wk(conn, arg, day)
     raise ValueError(f"unsupported outcome metric {metric!r}")
 
 
@@ -401,11 +441,68 @@ def _classify_training_spacing(conn: duckdb.DuckDBPyConnection, day: date) -> st
     return "A" if lifted(day - timedelta(days=1)) else "B"
 
 
+# Foster-style dose arms for a single exercise. Deliberately leaves a GAP
+# between the arms (nothing is classified at 1-2 or exactly at the boundary
+# beyond these bands): adjacent-dose weeks carry most of the noise and none of
+# the contrast, and a study whose arms touch is measuring rounding.
+_DOSE_ARM_A = (3, 5)
+_DOSE_ARM_B = (6, 9)
+
+
+def _classify_weekly_set_dose(
+    conn: duckdb.DuckDBPyConnection, exercise: str, day: date
+) -> str | None:
+    """Arm for the WEEK containing `day`, by working sets of one exercise.
+
+    Returns a value ONLY on the week's Monday. Every day of a week shares that
+    week's dose, so classifying all seven would write seven copies of one
+    observation into `experiment_log` — inflating n sevenfold with perfectly
+    correlated rows and shrinking the p-value on data that does not exist. One
+    week, one row.
+    """
+    if day.weekday() != 0:
+        return None
+    row = conn.execute(
+        """
+        SELECT COUNT(*) FROM workouts w JOIN workout_sets s ON s.workout_id = w.id
+        WHERE lower(s.exercise) = lower(?) AND s.is_warmup = FALSE
+          AND s.weight_kg > 0 AND s.reps > 0
+          AND w.started_at::DATE >= ? AND w.started_at::DATE < ?
+        """,
+        [exercise, day.isoformat(), (day + timedelta(days=7)).isoformat()],
+    ).fetchone()
+    n = int(row[0]) if row else 0
+    if _DOSE_ARM_A[0] <= n <= _DOSE_ARM_A[1]:
+        return "A"
+    if _DOSE_ARM_B[0] <= n <= _DOSE_ARM_B[1]:
+        return "B"
+    return None
+
+
 OBSERVATIONAL_CLASSIFIERS = {
     "sleep_hours": _classify_sleep_hours,
     "pickleball_sessions_3d": _classify_pickleball_density,
     "training_spacing": _classify_training_spacing,
 }
+
+# Classifiers that take an argument, addressed as "kind:arg" in `manipulated` —
+# the same convention `_outcome_value` already uses for outcome metrics, so a
+# study can name the exercise it is about without a registry entry per lift.
+PARAMETRIC_CLASSIFIERS = {
+    "weekly_set_dose": _classify_weekly_set_dose,
+}
+
+
+def _resolve_classifier(manipulated: str):
+    """Look up a classifier, supporting both plain and `kind:arg` forms."""
+    plain = OBSERVATIONAL_CLASSIFIERS.get(manipulated)
+    if plain is not None:
+        return plain
+    kind, _, arg = manipulated.partition(":")
+    factory = PARAMETRIC_CLASSIFIERS.get(kind)
+    if factory is None or not arg:
+        return None
+    return lambda conn, day: factory(conn, arg, day)
 
 
 def backfill_observational(
@@ -425,7 +522,7 @@ def backfill_observational(
             f"{exp.slug} is design={exp.design!r}; backfill is only valid for "
             "observational studies (a randomized arm is assigned, not observed)"
         )
-    classify = OBSERVATIONAL_CLASSIFIERS.get(exp.manipulated)
+    classify = _resolve_classifier(exp.manipulated)
     if classify is None:
         raise ValueError(f"no observational classifier for {exp.manipulated!r}")
 
