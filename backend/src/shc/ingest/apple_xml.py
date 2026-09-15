@@ -29,6 +29,13 @@ _WANTED: dict[str, tuple[str, str | None]] = {
     "HKQuantityTypeIdentifierBodyMassIndex": ("body_mass_index", "kg/m²"),
     "HKQuantityTypeIdentifierVO2Max": ("vo2_max", "mL/kg/min"),
     "HKQuantityTypeIdentifierFlightsClimbed": ("flights_climbed", "count"),
+    # Effort / light exposure (large-volume Watch metrics, not previously mapped)
+    "HKQuantityTypeIdentifierPhysicalEffort": ("physical_effort", "kcal/hr·kg"),
+    "HKQuantityTypeIdentifierTimeInDaylight": ("time_in_daylight_min", "min"),
+    # Fall-risk / cardiorespiratory fitness — low volume, high signal
+    "HKQuantityTypeIdentifierAppleWalkingSteadiness": ("walking_steadiness_pct", "%"),
+    "HKQuantityTypeIdentifierSixMinuteWalkTestDistance": ("six_min_walk_test_m", "m"),
+    "HKQuantityTypeIdentifierHeight": ("height_cm", "cm"),
     # Body composition — populated by smart scales via Apple Health
     "HKQuantityTypeIdentifierLeanBodyMass": ("lean_body_mass_kg", "kg"),
     # Cardio / recovery
@@ -65,6 +72,33 @@ _WANTED: dict[str, tuple[str, str | None]] = {
 
 _KG_TYPES = {"HKQuantityTypeIdentifierBodyMass", "HKQuantityTypeIdentifierLeanBodyMass"}
 _LB_TO_KG = 0.453592
+_FT_TYPES = {"HKQuantityTypeIdentifierHeight"}
+_FT_TO_CM = 30.48
+
+# Apple's XML export stores every HealthKit percentUnit field (unit="%") as a
+# fraction of 1, not a number out of 100 — verified 2026-09-14 against ingested
+# samples, whose values sat two orders of magnitude below their plausible
+# physiological range. Every "%"-unit type must be multiplied by 100 at ingest,
+# or it silently reads 100x low downstream (dashboard.py's 28d
+# walking-asymmetry note would render a fraction where a percentage belongs).
+# Applies uniformly to every _WANTED type carrying unit "%" (spo2_pct,
+# walking_asymmetry_pct, walking_double_support_pct, walking_steadiness_pct,
+# body_fat_pct).
+
+# Category (interval) types handled outside the quantity `_WANTED` table —
+# value is a string enum, not a float, and duration comes from start/end
+# rather than a `value=` attribute. Stored as its own `apple_health` metric,
+# deliberately namespaced apart from the `sleep` table WHOOP populates —
+# DailyState's sleep numbers must stay WHOOP-sourced per CLAUDE.md; this is
+# supplementary (and, pre-2023, the only sleep signal that exists at all).
+_SLEEP_STAGE_VALUES = {
+    "HKCategoryValueSleepAnalysisInBed": "in_bed",
+    "HKCategoryValueSleepAnalysisAsleepUnspecified": "asleep",
+    "HKCategoryValueSleepAnalysisAwake": "awake",
+    "HKCategoryValueSleepAnalysisAsleepCore": "asleep_core",
+    "HKCategoryValueSleepAnalysisAsleepDeep": "asleep_deep",
+    "HKCategoryValueSleepAnalysisAsleepREM": "asleep_rem",
+}
 
 
 def _h(s: str) -> str:
@@ -82,38 +116,127 @@ def _to_kg(value: float, unit: str) -> float:
     return value
 
 
-async def ingest_export(path: Path, batch_size: int = 500) -> dict[str, int]:
-    """Stream Apple Health export.xml and import wanted metric types.
+def _duration_min(start: str, end: str) -> float | None:
+    from datetime import datetime
+
+    try:
+        s = datetime.fromisoformat(_norm_ts(start))
+        e = datetime.fromisoformat(_norm_ts(end))
+    except ValueError:
+        return None
+    return round((e - s).total_seconds() / 60, 2)
+
+
+_STAGING_TABLE = "_apple_xml_staging"
+
+
+async def ingest_export(path: Path, batch_size: int = 50_000) -> dict[str, int]:
+    """Stream Apple Health export.xml and import wanted metric + sleep-stage types.
 
     Workout/activity elements are skipped — WHOOP handles cardio tracking
-    and mirrors sessions into cardio_sessions via the API sync.
-    """
-    counts: dict[str, int] = {}
-    batch: list[dict] = []
+    and mirrors sessions into cardio_sessions via the API sync. Sleep-stage
+    category records are imported as a distinct `sleep_stage_apple` metric,
+    not written into the `sleep` table WHOOP owns — see module docstring.
 
-    async def _flush_measurements(conn) -> None:
-        for row in batch:
-            conn.execute(
-                """
-                INSERT INTO measurements
-                    (source, metric, ts, value_num, unit, external_id, content_hash)
-                VALUES ('apple_health', $metric, $ts, $value, $unit, $ext_id, $hash)
-                ON CONFLICT (source, metric, ts, external_id) DO NOTHING
-                """,
-                row,
+    Bulk-loads each batch into an unconstrained temp staging table, then does
+    ONE set-based anti-join INSERT against `measurements` per batch, instead
+    of per-row inserts against the live composite PRIMARY KEY. Measured
+    2026-09-14: per-row inserts against the already-populated table ran at
+    roughly 500 rows/0.95s (~2+ hours for this file's ~4.2M records) — DuckDB
+    is a columnar engine, and incremental single/small-batch constraint
+    checks against a multi-million-row index are the wrong shape for it. The
+    anti-join pattern turns millions of point lookups into one hash join per
+    batch, which is what the engine is actually built for.
+    """
+    import time
+
+    counts: dict[str, int] = {}
+    batch: list[tuple] = []
+    total_flushed = 0
+    t_start = time.time()
+
+    async def _flush(conn) -> None:
+        nonlocal total_flushed
+        if not batch:
+            return
+        conn.execute(f"DELETE FROM {_STAGING_TABLE}")
+        conn.executemany(
+            f"INSERT INTO {_STAGING_TABLE} VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            batch,
+        )
+        conn.execute(
+            f"""
+            INSERT INTO measurements
+                (source, metric, ts, value_num, value_text, unit, external_id, content_hash)
+            SELECT s.source, s.metric, s.ts, s.value_num, s.value_text, s.unit,
+                   s.external_id, s.content_hash
+            FROM (
+                -- Two Apple sources (e.g. Watch + Clock app) can both report a
+                -- record with the identical (source, metric, ts, external_id)
+                -- key within one batch — the old per-row ON CONFLICT DO NOTHING
+                -- handled this for free since each row was a separate committed
+                -- statement; this batch approach needs the dedup made explicit,
+                -- or the second occurrence collides on insert. Confirmed
+                -- 2026-09-14: crashed 4.25M rows into this exact file.
+                SELECT DISTINCT ON (source, metric, ts, external_id) *
+                FROM {_STAGING_TABLE}
+            ) s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM measurements m
+                WHERE m.source = s.source AND m.metric = s.metric
+                  AND m.ts = s.ts AND m.external_id = s.external_id
             )
+            """
+        )
+        total_flushed += len(batch)
+        elapsed = time.time() - t_start
+        log.info(
+            "Apple Health XML import: %d rows flushed (%.0f rows/sec, %.1fs elapsed)",
+            total_flushed,
+            total_flushed / elapsed if elapsed > 0 else 0,
+            elapsed,
+        )
         batch.clear()
 
-    log.info("streaming Apple Health XML from %s (this may take several minutes)", path)
+    log.info("streaming Apple Health XML from %s", path)
     context = iterparse(str(path), events=("end",))
 
     async with write_ctx() as conn:
+        conn.execute(
+            f"""
+            CREATE TEMP TABLE IF NOT EXISTS {_STAGING_TABLE} (
+                source VARCHAR, metric VARCHAR, ts TIMESTAMPTZ, value_num DOUBLE,
+                value_text VARCHAR, unit VARCHAR, external_id VARCHAR, content_hash VARCHAR
+            )
+            """
+        )
+        conn.execute(f"DELETE FROM {_STAGING_TABLE}")
+
         for _event, elem in context:
             if elem.tag != "Record":
                 elem.clear()
                 continue
 
             rtype = elem.get("type", "")
+
+            if rtype == "HKCategoryTypeIdentifierSleepAnalysis":
+                raw_stage = elem.get("value", "")
+                stage = _SLEEP_STAGE_VALUES.get(raw_stage, raw_stage)
+                start = elem.get("startDate") or elem.get("creationDate", "")
+                end = elem.get("endDate") or start
+                ts = _norm_ts(start)
+                dur = _duration_min(start, end)
+                ext_id = f"apple:{rtype}:{ts}"
+                batch.append((
+                    "apple_health", "sleep_stage_apple", ts, dur, stage, "min",
+                    ext_id, _h(ext_id),
+                ))
+                counts["sleep_stage_apple"] = counts.get("sleep_stage_apple", 0) + 1
+                if len(batch) >= batch_size:
+                    await _flush(conn)
+                elem.clear()
+                continue
+
             if rtype not in _WANTED:
                 elem.clear()
                 continue
@@ -131,26 +254,27 @@ async def ingest_export(path: Path, batch_size: int = 500) -> dict[str, int]:
 
             if rtype in _KG_TYPES:
                 val = _to_kg(val, raw_unit)
+            elif rtype in _FT_TYPES:
+                val = round(val * _FT_TO_CM, 2)
+            elif raw_unit == "%":
+                # Apple stores percentUnit fields as a 0-1 fraction — see the
+                # module-level note above _SLEEP_STAGE_VALUES.
+                val = round(val * 100, 4)
 
             unit = unit_override or raw_unit
             ext_id = f"apple:{rtype}:{ts}"
-            batch.append({
-                "metric": metric_name,
-                "ts": ts,
-                "value": val,
-                "unit": unit,
-                "ext_id": ext_id,
-                "hash": _h(ext_id),
-            })
+            batch.append((
+                "apple_health", metric_name, ts, val, None, unit, ext_id, _h(ext_id),
+            ))
             counts[metric_name] = counts.get(metric_name, 0) + 1
 
             if len(batch) >= batch_size:
-                await _flush_measurements(conn)
+                await _flush(conn)
 
             elem.clear()
 
-        if batch:
-            await _flush_measurements(conn)
+        await _flush(conn)
+        conn.execute(f"DROP TABLE IF EXISTS {_STAGING_TABLE}")
 
     log.info("Apple Health XML import complete: %s", counts)
     return counts

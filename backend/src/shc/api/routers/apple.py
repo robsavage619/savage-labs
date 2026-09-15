@@ -102,6 +102,11 @@ _SHORTCUT_UNITS: dict[str, tuple[str, str]] = {
     "respiratory_rate": ("respiratory_rate", "bpm"),
     "bp_systolic": ("bp_systolic", "mmHg"),
     "bp_diastolic": ("bp_diastolic", "mmHg"),
+    "physical_effort": ("physical_effort", "kcal/hr·kg"),
+    "time_in_daylight_min": ("time_in_daylight_min", "min"),
+    "walking_steadiness_pct": ("walking_steadiness_pct", "%"),
+    "six_min_walk_test_m": ("six_min_walk_test_m", "m"),
+    "height_cm": ("height_cm", "cm"),
     # Cardio / recovery
     "walking_heart_rate_avg": ("walking_heart_rate_avg", "bpm"),
     # Activity (unit-neutral)
@@ -141,6 +146,17 @@ _IMPERIAL_TO_SI: dict[str, tuple[str, str, float]] = {
     "stair_descent_speed_fps": ("stair_descent_speed_m_s", "m/s", 0.3048),
     # Wrist temp: Shortcuts sends delta °F → store as delta °C (delta, so just multiply)
     "wrist_temp_delta_f": ("wrist_temp_delta_c", "°C", 0.5556),
+}
+
+# Same 0-1-fraction quirk as ingest/apple.py's HAE path and apple_xml.py's
+# XML importer — Shortcuts' Health actions surface the raw HealthKit
+# percentUnit value, not a 0-100 display percentage.
+_SHORTCUT_PCT_FRACTION_METRICS = {
+    "spo2_pct",
+    "walking_asymmetry_pct",
+    "walking_double_support_pct",
+    "walking_steadiness_pct",
+    "body_fat_pct",
 }
 
 
@@ -203,6 +219,8 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
                 val = round(val * multiplier, 4)
             elif shortcut_key in _SHORTCUT_UNITS:
                 db_metric, db_unit = _SHORTCUT_UNITS[shortcut_key]
+                if db_metric in _SHORTCUT_PCT_FRACTION_METRICS and db_unit == "%":
+                    val = round(val * 100, 4)
             else:
                 skipped.append(shortcut_key)
                 continue

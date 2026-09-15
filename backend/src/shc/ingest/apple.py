@@ -117,6 +117,23 @@ _HAE_METRIC_MAP: dict[str, str] = {
     "Lean Body Mass": "lean_body_mass_kg",
     "Blood Pressure Systolic": "bp_systolic",
     "Blood Pressure Diastolic": "bp_diastolic",
+    "Physical Effort": "physical_effort",
+    "Time in Daylight": "time_in_daylight_min",
+    "Walking Steadiness": "walking_steadiness_pct",
+    "Six-Minute Walk Test Distance": "six_min_walk_test_m",
+    "Height": "height_cm",
+}
+
+# Metrics whose Apple-reported unit is "%" but whose raw value is a 0-1
+# fraction, not 0-100 — see the matching note in ingest/apple_xml.py. HAE and
+# raw XML export use the same underlying HealthKit representation, so this
+# applies identically here.
+_HAE_PCT_FRACTION_METRICS = {
+    "spo2_pct",
+    "walking_asymmetry_pct",
+    "walking_double_support_pct",
+    "walking_steadiness_pct",
+    "body_fat_pct",
 }
 
 # HAE sends values in the iPhone locale's preferred units (US = imperial).
@@ -165,6 +182,8 @@ async def _store_hae(data: dict, content_hash: str) -> None:
                     value = float(raw_value) if isinstance(raw_value, (int, float, str)) else None
                 if value is None:
                     continue
+                if canonical in _HAE_PCT_FRACTION_METRICS and hae_unit == "%":
+                    value = round(value * 100, 4)
                 external_id = f"hae:{canonical}:{ts}"
                 row_hash = hashlib.sha256(f"{canonical}{ts}{value}".encode()).hexdigest()[:16]
                 conn.execute(

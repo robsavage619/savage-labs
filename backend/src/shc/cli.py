@@ -211,6 +211,37 @@ def ingest_clinical_profile_cmd(yaml_path: str | None) -> None:
     )
 
 
+@main.command("ingest-apple-export")
+@click.argument("xml_path", type=click.Path(exists=True, dir_okay=False))
+def ingest_apple_export_cmd(xml_path: str) -> None:
+    """Stream an Apple Health export.xml (Settings → Export All Health Data)
+    into the measurements table.
+
+    Point this at export.xml inside an unzipped export folder, e.g.:
+    shc ingest-apple-export ~/Downloads/apple_health_export/export.xml
+
+    Replaces the fixed iCloud-path assumption in POST /api/apple/ingest — the
+    workflow is now a periodic manual export, not a continuous webhook.
+    """
+    import logging
+    from pathlib import Path
+
+    from shc.ingest.apple_xml import ingest_export as _ingest
+
+    # No logging is configured for the CLI by default — without this, the
+    # per-batch progress log.info() calls in ingest_export() print nothing at
+    # all, and a multi-million-row streaming import looks silently hung.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    init_db()
+    click.echo(f"Streaming {xml_path} — progress logs every ~50k rows ...")
+    counts = asyncio.run(_ingest(Path(xml_path)))
+    total = sum(counts.values())
+    click.echo(f"Done: {total} rows across {len(counts)} metrics.")
+    for metric, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+        click.echo(f"  {metric}: {n}")
+
+
 @main.command()
 @click.confirmation_option(prompt="This will delete and recreate the database. Are you sure?")
 def reset() -> None:
