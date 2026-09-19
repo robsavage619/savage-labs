@@ -149,3 +149,26 @@ def test_every_vault_citation_resolves_to_a_real_note(conn) -> None:
     }
     missing = sorted(c for c in cited if not (vault / c).is_file())
     assert not missing, f"citations naming a note that does not exist in the vault: {missing}"
+
+
+def test_every_development_head_is_creditable(conn) -> None:
+    # A head no curated row carries can never be credited, so the menu reads it 0
+    # every week and it permanently leads selection (0101: quads listed three vastus
+    # heads while every quad row said 'vastii').
+    import json
+
+    creditable = {
+        (m, r)
+        for m, r in conn.execute(
+            "SELECT DISTINCT muscle, region FROM exercise_science WHERE region IS NOT NULL"
+        ).fetchall()
+    }
+    phantom = [
+        (muscle, head)
+        for muscle, regions in conn.execute(
+            "SELECT muscle, regions FROM muscle_development"
+        ).fetchall()
+        for head in json.loads(regions)
+        if (muscle, head) not in creditable
+    ]
+    assert not phantom, f"heads no curated exercise credits: {phantom}"
