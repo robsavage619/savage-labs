@@ -187,12 +187,21 @@ async def sleep_recent(days: int = Query(7, gt=0, le=365)) -> list[dict]:
         rows = conn.execute(
             # spo2 lives on `recovery` — Whoop's sleep endpoint omits it, so
             # sleep.spo2_avg is always NULL. See metrics._sleep for the same join.
+            # Join on recovery.sleep_id (the true FK to sleep.id), not on date —
+            # WHOOP creates one recovery cycle per sleep session, so a date-only
+            # join fans out whenever a night has >1 session (e.g. two full
+            # sessions both dated the same night_date). Same reason this query
+            # dedupes to one row per night_date, longest session wins — see the
+            # "one row per night" convention in _NIGHTS_SQL below.
             "SELECT s.night_date, s.stages_json, r.spo2, s.respiratory_rate, "
             "epoch(s.ts_out - s.ts_in) / 3600.0 AS hours "
-            "FROM sleep s LEFT JOIN recovery r ON r.date = s.night_date "
+            "FROM sleep s LEFT JOIN recovery r ON r.sleep_id = s.id "
             "WHERE s.night_date >= $since "
             "  AND COALESCE(s.is_nap, FALSE) = FALSE "
             "  AND s.ts_in IS NOT NULL AND s.ts_out IS NOT NULL "
+            "QUALIFY ROW_NUMBER() OVER ("
+            "    PARTITION BY s.night_date ORDER BY epoch(s.ts_out - s.ts_in) DESC"
+            ") = 1 "
             "ORDER BY s.night_date",
             {"since": since},
         ).fetchall()
