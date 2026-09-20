@@ -140,13 +140,13 @@ dropping whatever does not fit.
            ▼                                ▼
 ┌──────────────────────┐      ┌─────────────────────────────────┐
 │    FastAPI REST       │      │         AI LAYER                │
-│    60+ endpoints      │      │                                 │
+│    124 endpoints      │      │                                 │
 │                       │      │  build_daily_context()          │
 │  /api/state/today     │      │  build_training_context()       │
 │  /api/daily/brief     │      │  build_clinical_context()       │
 │  /api/workout/*       │      │  load_vault_research()          │
 │  /api/training/*      ├──────┤                                 │
-│  /api/training/load-curve    │  Claude Opus 4.7                │
+│  /api/training/load-curve    │  Claude Opus 4.8                │
 │  /api/training/after-action  │  -> validate_plan()             │
 │  /api/training/mesocycle     │  -> Ollama fallback (air-gapped)│
 │  /api/clinical-research/*                                      │
@@ -233,7 +233,7 @@ because a bare `except Exception` was swallowing a wrong column name.
 | [`ENGINE_INVARIANTS.md`](ENGINE_INVARIANTS.md) | The athlete-protection contract, 43 tests behind it |
 | `validate_plan()` | Schema plus deterministic gates, rejects rather than adjusts |
 | Migrations | 102 of them, with view and data-integrity tests on the ones that change semantics |
-| Suite | 1,028 tests, 13,951 test lines against 33,295 lines of source |
+| Suite | 1,030 tests, 14,120 test lines against 33,295 lines of source |
 | Self-evaluation | Calibration and predictive validity, measured and published |
 
 ---
