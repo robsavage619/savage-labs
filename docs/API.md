@@ -147,7 +147,7 @@ Composite readiness score (HRV 40% + sleep 30% + RHR 20% + subjective 10%).
 }
 ```
 
-`tier` is `"green"` (≥70), `"yellow"` (50–69), or `"red"` (<50).
+`tier` is `"green"` (≥70), `"yellow"` (50-69), or `"red"` (<50).
 
 ---
 
@@ -168,7 +168,7 @@ Aggregated metrics used by the Command Briefing strip.
 }
 ```
 
-`acwr` = 7d avg recovery / 28d avg recovery. Safe zone 0.8–1.3.
+`acwr` = 7d avg recovery / 28d avg recovery. Safe zone 0.8-1.3.
 
 ---
 
@@ -305,7 +305,7 @@ Submit daily subjective scores.
 }
 ```
 
-All fields 1–10. Returns `{"ok": true}`.
+All fields 1-10. Returns `{"ok": true}`.
 
 ---
 
@@ -329,7 +329,7 @@ All-time highs and lows for key metrics.
 
 ### `GET /api/week/summary`
 
-Current week (Mon–Sun) recovery and sleep by day.
+Current week (Mon, Sun) recovery and sleep by day.
 
 ```json
 [

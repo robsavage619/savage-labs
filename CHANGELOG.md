@@ -190,53 +190,53 @@ Every endpoint paged the entire account on every run. `sync_cycle` alone walked 
 
 ## 2026-08-08 (exercise selection: the rotation was naming lifts I can't log)
 
-I kept seeing the same exercises and assumed the selection engine wasn't smart. It was — it ranked, it rotated, it fired plateau and tenure triggers on schedule. Then it emitted a name that doesn't exist in my Hevy catalog, the plan couldn't write it, and the lift it was supposed to replace stayed in. The intelligence was real and it was landing on the floor.
+I kept seeing the same exercises and assumed the selection engine wasn't smart. It was, it ranked, it rotated, it fired plateau and tenure triggers on schedule. Then it emitted a name that doesn't exist in my Hevy catalog, the plan couldn't write it, and the lift it was supposed to replace stayed in. The intelligence was real and it was landing on the floor.
 
 Over 90 days: 49 training days, 50 distinct exercises, but Face Pull and Lateral Raise each on **23 of 49 days** against a 574-exercise catalog.
 
 ### The vocabulary boundary
 
-- **59 of 167 curated exercise names did not exist in the catalog the planner is told to quote verbatim.** The context hands the model an `AVAILABLE HEVY EXERCISES` list and an evidence-ranked menu, and the two were drawn from different namespaces that had quietly diverged. On 2026-08-08 the engine actuated seven rotations and **four named a lift that could not be written** — `Hammer Curls`, `Chin-Up`, `Dumbbell Bench Press`, `Cable Rope Overhead Triceps Extension`. Nothing enforced the instruction, so there was no error to notice: the swap simply had no effect.
+- **59 of 167 curated exercise names did not exist in the catalog the planner is told to quote verbatim.** The context hands the model an `AVAILABLE HEVY EXERCISES` list and an evidence-ranked menu, and the two were drawn from different namespaces that had quietly diverged. On 2026-08-08 the engine actuated seven rotations and **four named a lift that could not be written**, `Hammer Curls`, `Chin-Up`, `Dumbbell Bench Press`, `Cable Rope Overhead Triceps Extension`. Nothing enforced the instruction, so there was no error to notice: the swap simply had no effect.
 
-- **Two of those four were the same movement under a different spelling.** The curated catalog carried 17 movements under two name conventions each — `Bench Press (Dumbbell)` / `Dumbbell Bench Press`, `Overhead Triceps Extension (Cable)` / `Cable Rope Overhead Triceps Extension`. The twins also disagreed with each other on attributes (`Leg Extension` tagged high stimulus-to-fatigue, `Leg Extension (Machine)` moderate), and since selection sorts on those, the better-tagged twin won — systematically the unloggable one, which also looked "fresh" because all the training history sat on its sibling. The 4–6 week rotation trigger was being consumed by renames.
+- **Two of those four were the same movement under a different spelling.** The curated catalog carried 17 movements under two name conventions each, `Bench Press (Dumbbell)` / `Dumbbell Bench Press`, `Overhead Triceps Extension (Cable)` / `Cable Rope Overhead Triceps Extension`. The twins also disagreed with each other on attributes (`Leg Extension` tagged high stimulus-to-fatigue, `Leg Extension (Machine)` moderate), and since selection sorts on those, the better-tagged twin won, systematically the unloggable one, which also looked "fresh" because all the training history sat on its sibling. The 4-6 week rotation trigger was being consumed by renames.
 
-- **`loggable_names()` is now the planner's legal vocabulary:** the Hevy template catalog plus anything logged with `source = 'hevy'`. Fitbod-era strings (`Hammer Curls`, `Leg Extension`, `Cable Row`) are deliberately excluded — they must keep crediting a decade of historical volume, but I cannot select one in the app today, so programming it produces a session I can't log. Provenance is the exact test; recency is only a proxy for it. A movement-identity key collapses punctuation and word-order duplicates while *preserving* equipment words, and the menu fails safe per muscle: if filtering would empty a muscle it keeps the candidates and warns, because a blank menu reads as "nothing to train here."
+- **`loggable_names()` is now the planner's legal vocabulary:** the Hevy template catalog plus anything logged with `source = 'hevy'`. Fitbod-era strings (`Hammer Curls`, `Leg Extension`, `Cable Row`) are deliberately excluded, they must keep crediting a decade of historical volume, but I cannot select one in the app today, so programming it produces a session I can't log. Provenance is the exact test; recency is only a proxy for it. A movement-identity key collapses punctuation and word-order duplicates while *preserving* equipment words, and the menu fails safe per muscle: if filtering would empty a muscle it keeps the candidates and warns, because a blank menu reads as "nothing to train here."
 
 - **Validator #24 rejects any plan naming something outside that vocabulary.** Previously the load checks *skipped* an unknown exercise rather than failing it, so an unloggable lift sailed through and was then invisible to e1RM, plateau detection, and volume crediting.
 
-  Migration 0089 reconciles 33 duplicate pairs by clone-then-retire: the loggable survivor inherits the science, the duplicate's citation clears so it leaves the menu, and its crediting row **survives** — several carry four-figure Fitbod histories that an in-place rename would have orphaned. Alias redirects are inverted rather than dropped so sets logged under either name still credit. Unwritable recommendations went **18 → 0**; unwritable rotations **4 → 0**.
+  Migration 0089 reconciles 33 duplicate pairs by clone-then-retire: the loggable survivor inherits the science, the duplicate's citation clears so it leaves the menu, and its crediting row **survives**, several carry four-figure Fitbod histories that an in-place rename would have orphaned. Alias redirects are inverted rather than dropped so sets logged under either name still credit. Unwritable recommendations went **18 -> 0**; unwritable rotations **4 -> 0**.
 
-> Twenty-five curated names still sit outside the vocabulary. They are filtered, harmless, and reported at `/api/training/alias-gaps` under `unloggable`. They need a real judgment call — an earlier automated pass paired seated with standing calf raises, and a chest fly with a rear-delt fly — so they stay unresolved rather than guessed.
+> Twenty-five curated names still sit outside the vocabulary. They are filtered, harmless, and reported at `/api/training/alias-gaps` under `unloggable`. They need a real judgment call, an earlier automated pass paired seated with standing calf raises, and a chest fly with a rear-delt fly, so they stay unresolved rather than guessed.
 
 ### Two volume authorities, and the lower one was winning
 
-- **Abs asked for 12–20 sets/week and drew 6.** The curated `muscle_development` brief and the fitted `muscle_volume_targets` row are printed two lines apart in the same planner block, and the prescription followed the fitted one. Six sets across four sessions is one exercise per session — which is exactly what I'd been getting.
+- **Abs asked for 12-20 sets/week and drew 6.** The curated `muscle_development` brief and the fitted `muscle_volume_targets` row are printed two lines apart in the same planner block, and the prescription followed the fitted one. Six sets across four sessions is one exercise per session, which is exactly what I'd been getting.
 
-- **Abs was never in `muscle_emphasis`.** It held only glutes and biceps. The `EMPHASIS_MUSCLES` constant in code additionally listed `traps`, which the table has never contained — dead code, since a non-empty table wins. Code and data now agree.
+- **Abs was never in `muscle_emphasis`.** It held only glutes and biceps. The `EMPHASIS_MUSCLES` constant in code additionally listed `traps`, which the table has never contained, dead code, since a non-empty table wins. Code and data now agree.
 
-- **The undertrained-fit guard missed at exactly the boundary.** Landmarks are fitted as percentiles of weeks actually performed, so a muscle never trained hard can never be prescribed hard. There's a guard that floors an obviously habit-driven fit to population values — but it tested `fitted_MRV < population_MRV × 0.5`, and quads sat at fitted 10 against population 20. `10 < 10` is false, so quads kept a personal *ceiling* of 10 while its brief asked for 12–18. Now `<=`, and it additionally floors a fitted MEV that falls below the curated weekly low. Abs 6 → 12, quads 8 → 12, chest 10 → 12, glutes 6 → 8.
+- **The undertrained-fit guard missed at exactly the boundary.** Landmarks are fitted as percentiles of weeks actually performed, so a muscle never trained hard can never be prescribed hard. There's a guard that floors an obviously habit-driven fit to population values, but it tested `fitted_MRV < population_MRV × 0.5`, and quads sat at fitted 10 against population 20. `10 < 10` is false, so quads kept a personal *ceiling* of 10 while its brief asked for 12-18. Now `<=`, and it additionally floors a fitted MEV that falls below the curated weekly low. Abs 6 -> 12, quads 8 -> 12, chest 10 -> 12, glutes 6 -> 8.
 
 ### The weekly budget is published instead of silently triaged
 
-`_weekly_capacity()` ran on every prescription and its verdict was never rendered. An over-prescribed week reached the planner looking identical to a feasible one, so dropping whatever didn't fit — without saying which — was the only available response. Raising eight MEV floors at once pushed demand to 66.6 dedicated sets against a measured capacity of 59/wk, which is now stated above the table with the triage order named and an instruction to record what was cut.
+`_weekly_capacity()` ran on every prescription and its verdict was never rendered. An over-prescribed week reached the planner looking identical to a feasible one, so dropping whatever didn't fit, without saying which, was the only available response. Raising eight MEV floors at once pushed demand to 66.6 dedicated sets against a measured capacity of 59/wk, which is now stated above the table with the triage order named and an instruction to record what was cut.
 
-I deliberately did **not** rate-limit the climb to MEV, which was the obvious companion change. That exemption is intentional: a muscle far below MEV is re-seeded in one step because crawling it at +2/wk left a recovered athlete with a one-set-per-muscle session. Several muscles seeding at once is that ramp working, at the moment the budget binds hardest — so the block says so rather than quietly clamping targets the landmark logic set on purpose.
+I deliberately did **not** rate-limit the climb to MEV, which was the obvious companion change. That exemption is intentional: a muscle far below MEV is re-seeded in one step because crawling it at +2/wk left a recovered athlete with a one-set-per-muscle session. Several muscles seeding at once is that ramp working, at the moment the budget binds hardest, so the block says so rather than quietly clamping targets the landmark logic set on purpose.
 
 ### Rear and side delts could not rotate at all
 
-Measured per muscle rather than trusted: both had exactly **4 distinct movements against 4 menu slots**, so the coverage pass took one and the fill pass took the rest, forever — no alternative existed for a plateau trigger to swap to. Neither had a single name-blocked option; they were simply under-curated. Migration 0091 curates four more by copying science from already-vetted, mechanically-equivalent rows, carrying `UNGROUNDED` provenance flags forward rather than laundering them. Every muscle can now rotate, and rear delts actuates a swap for the first time.
+Measured per muscle rather than trusted: both had exactly **4 distinct movements against 4 menu slots**, so the coverage pass took one and the fill pass took the rest, forever, no alternative existed for a plateau trigger to swap to. Neither had a single name-blocked option; they were simply under-curated. Migration 0091 curates four more by copying science from already-vetted, mechanically-equivalent rows, carrying `UNGROUNDED` provenance flags forward rather than laundering them. Every muscle can now rotate, and rear delts actuates a swap for the first time.
 
 Two adjacent defects fell out of that:
 
-- **Duplicate twins were ranked by lifetime set count.** `Dumbbell Lateral Raise` (438 Fitbod sets, last February) beat `Lateral Raise (Dumbbell)` (57 sets, source `hevy`, last *three days ago*) — surfacing a dead string tagged "stale: not trained in >6wk" while hiding the lift I'd actually just done. Ranking is now by most-recent Hevy log.
+- **Duplicate twins were ranked by lifetime set count.** `Dumbbell Lateral Raise` (438 Fitbod sets, last February) beat `Lateral Raise (Dumbbell)` (57 sets, source `hevy`, last *three days ago*), surfacing a dead string tagged "stale: not trained in >6wk" while hiding the lift I'd actually just done. Ranking is now by most-recent Hevy log.
 
-- **`exercise_alias` is read in opposite directions by its two consumers.** The plateau lookup maps curated name → logged string; volume crediting joins the other way. One row serves both only while the curated name has no history of its own — once I log it directly, following the redirect reads the older name. `_progress_info` now prefers whichever name was trained most recently, so a stale or inverted row degrades to a no-op. That also fixed a pre-existing misdirection on Bulgarian Split Squat.
+- **`exercise_alias` is read in opposite directions by its two consumers.** The plateau lookup maps curated name -> logged string; volume crediting joins the other way. One row serves both only while the curated name has no history of its own, once I log it directly, following the redirect reads the older name. `_progress_info` now prefers whichever name was trained most recently, so a stale or inverted row degrades to a no-op. That also fixed a pre-existing misdirection on Bulgarian Split Squat.
 
 ### Also
 
-- **`dev-restart.sh` was SIGTERM-ing my browser and then dying.** `lsof -ti :3000` matches any socket on the port, including client connections, so an open Chrome tab was in the kill list; since Chrome isn't the script's to reap it then aborted under `set -e` before starting uvicorn. A failing `PIDS=$(lsof …)` assignment aborts too, so the case that most needs a restart — the API already dead — silently did nothing. The parent uvicorn had survived five days this way, with `--reload` swapping only the child. Worth knowing: a `.sql`-only change doesn't trigger that reload, so a new migration won't apply until the process genuinely restarts.
+- **`dev-restart.sh` was SIGTERM-ing my browser and then dying.** `lsof -ti :3000` matches any socket on the port, including client connections, so an open Chrome tab was in the kill list; since Chrome isn't the script's to reap it then aborted under `set -e` before starting uvicorn. A failing `PIDS=$(lsof …)` assignment aborts too, so the case that most needs a restart, the API already dead, silently did nothing. The parent uvicorn had survived five days this way, with `--reload` swapping only the child. Worth knowing: a `.sql`-only change doesn't trigger that reload, so a new migration won't apply until the process genuinely restarts.
 
-> **Verified end-to-end.** A full plan built from the engine's own prescription passes the validator, and the three names the old engine was actively recommending — `Chin-Up`, `Hammer Curls`, `Cable Rope Overhead Triceps Extension` — are now rejected by #24. Three of six lifts in that session also needed their loads corrected: the deterministic prescriptor and the RPE-coherence check disagreed, and on the Pallof press double-progression had walked the load down from 90 lb to 70 by anchoring on the most recent session rather than the best one. That disagreement looks systematic and is not yet fixed.
+> **Verified end-to-end.** A full plan built from the engine's own prescription passes the validator, and the three names the old engine was actively recommending, `Chin-Up`, `Hammer Curls`, `Cable Rope Overhead Triceps Extension`, are now rejected by #24. Three of six lifts in that session also needed their loads corrected: the deterministic prescriptor and the RPE-coherence check disagreed, and on the Pallof press double-progression had walked the load down from 90 lb to 70 by anchoring on the most recent session rather than the best one. That disagreement looks systematic and is not yet fixed.
 
 ---
 
@@ -246,159 +246,159 @@ Three passes on things the UI was asserting that weren't true: a completed sessi
 
 ### Today's Plan card stopped prescribing a session you already did
 
-- **A finished session left the plan card actionable, at loads below what was lifted.** Plan→workout adherence linking only ran in the nightly scheduler job (`_recompute_adherence`), so a plan wasn't marked executed until the following morning. Verified live: the 2026-07-25 plan was written at 09:11, the session ran 09:41–10:27 (14 working sets), and at 18:31 the card still prescribed Incline Chest Press at 205 lb against a logged 220×10 — printing its own contradiction as `last 220x10 @ 8.0 · today (-15 lbs)`. Following it would have deloaded for no reason.
+- **A finished session left the plan card actionable, at loads below what was lifted.** Plan->workout adherence linking only ran in the nightly scheduler job (`_recompute_adherence`), so a plan wasn't marked executed until the following morning. Verified live: the 2026-07-25 plan was written at 09:11, the session ran 09:41-10:27 (14 working sets), and at 18:31 the card still prescribed Incline Chest Press at 205 lb against a logged 220×10, printing its own contradiction as `last 220x10 @ 8.0 · today (-15 lbs)`. Following it would have deloaded for no reason.
 
-  `plan_execution_status()` now answers this live in the read path: a session on the plan's own date, started after the plan's `created_at`, carrying at least one working set. Started-after is what separates "the plan was executed" from "the plan was regenerated after a session"; the working-set floor dodges the WHOOP shadow row (WHOOP mirrors every Hevy lift as a zero-set workout) the same way the nightly job does. Status is re-read outside `_WORKOUT_CACHE` — the executing session lands hours after the plan is cached, so caching the answer reintroduces the bug.
+  `plan_execution_status()` now answers this live in the read path: a session on the plan's own date, started after the plan's `created_at`, carrying at least one working set. Started-after is what separates "the plan was executed" from "the plan was regenerated after a session"; the working-set floor dodges the WHOOP shadow row (WHOOP mirrors every Hevy lift as a zero-set workout) the same way the nightly job does. Status is re-read outside `_WORKOUT_CACHE`, the executing session lands hours after the plan is cached, so caching the answer reintroduces the bug.
 
   The card now titles as **Completed** (or **Last Plan** when carried from an earlier date), summarises the logged session, dims the prescription as a record rather than a target, disables the Hevy push, and drops the prescribed-vs-actual delta that produced the phantom deload.
 
-- **The readiness narrative carries its own timestamp.** The plan's `readiness_summary` is a snapshot written when the plan was generated, and it sits a scroll away from the live gauge — 55.6 in the narrative against 65.6 live read as a contradiction rather than as two different times. It now stamps `(as of 9:11 AM)`.
+- **The readiness narrative carries its own timestamp.** The plan's `readiness_summary` is a snapshot written when the plan was generated, and it sits a scroll away from the live gauge, 55.6 in the narrative against 65.6 live read as a contradiction rather than as two different times. It now stamps `(as of 9:11 AM)`.
 
-- **Sleep architecture tiles are labelled by window.** The panel was headed "last 7 nights" while its efficiency and wakes tiles are single-night `DailyState` values — a wakes count of 14 (the 2026-07-24 `disturbance_count`; the 7-night sum is 70) read as a week's total. Those two tiles are now marked `1n`.
+- **Sleep architecture tiles are labelled by window.** The panel was headed "last 7 nights" while its efficiency and wakes tiles are single-night `DailyState` values, a wakes count of 14 (the 2026-07-24 `disturbance_count`; the 7-night sum is 70) read as a week's total. Those two tiles are now marked `1n`.
 
 ### Dashboard split into NOW / REVIEW / LAB
 
-The dashboard was organised by data domain — recovery, sleep, load, strength, cardio, body. That's a schema, not a sequence: one 10,579px page served four different moments (morning phone check, mid-workout, post-session logging, weekly desktop review) and served the rarest of them best.
+The dashboard was organised by data domain, recovery, sleep, load, strength, cardio, body. That's a schema, not a sequence: one 10,579px page served four different moments (morning phone check, mid-workout, post-session logging, weekly desktop review) and served the rarest of them best.
 
 - **Three surfaces, one per moment.** `/` (NOW) is today's call, the session, and the check-in. `/review` opens on what changed vs last week, then the signal pillars, then training and body history as drill-downs. `/lab` is unchanged in content. A shared `AppShell` replaces the header chrome all three routes were duplicating.
 
-- **One readiness number.** A single screen carried 66 (header), 66 (report ring), 66 (rail dial), 71 (recovery pillar), 65.6 (load panel) and 55.6 (plan narrative), all labelled some variant of readiness or recovery. The composite score now has exactly one home — the header HUD, always rounded. The training-load panel reports what the gates *did* rather than reprinting the score unrounded, and WHOOP's own score is labelled "WHOOP recovery" wherever it appears.
+- **One readiness number.** A single screen carried 66 (header), 66 (report ring), 66 (rail dial), 71 (recovery pillar), 65.6 (load panel) and 55.6 (plan narrative), all labelled some variant of readiness or recovery. The composite score now has exactly one home, the header HUD, always rounded. The training-load panel reports what the gates *did* rather than reprinting the score unrounded, and WHOOP's own score is labelled "WHOOP recovery" wherever it appears.
 
-- **Chrome cut from four stacked bars to one.** The `ProtocolStrip` ticker is deleted — every number in it was already on screen, and it clipped mid-word at 375px. The product manifesto ("Lab thinking, consumer sensors, daily action" + the NSRL-loop paragraph) is written for a first-time visitor and lives in this repo's README; on a phone it pushed today's command ~1,300px down every morning. Content now starts at 194px on mobile instead of ~550px.
+- **Chrome cut from four stacked bars to one.** The `ProtocolStrip` ticker is deleted, every number in it was already on screen, and it clipped mid-word at 375px. The product manifesto ("Lab thinking, consumer sensors, daily action" + the NSRL-loop paragraph) is written for a first-time visitor and lives in this repo's README; on a phone it pushed today's command ~1,300px down every morning. Content now starts at 194px on mobile instead of ~550px.
 
-- **The plan card leads with the work.** Session strip → warm-up → exercises, with the readiness narrative, the WHY, clinical notes and vault citations collapsed behind "Why this session". The first lift moved from roughly 5,000px to 1,807px on mobile. Exercise names wrap instead of truncating.
+- **The plan card leads with the work.** Session strip -> warm-up -> exercises, with the readiness narrative, the WHY, clinical notes and vault citations collapsed behind "Why this session". The first lift moved from roughly 5,000px to 1,807px on mobile. Exercise names wrap instead of truncating.
 
-- **Check-in is a step in the daily loop,** not a widget in a right rail. The rail is gone; Momentum — what changed vs last week — now opens REVIEW instead of ending the page.
+- **Check-in is a step in the daily loop,** not a widget in a right rail. The rail is gone; Momentum, what changed vs last week, now opens REVIEW instead of ending the page.
 
 NOW is 3,467px on desktop and 6,272px on mobile, down from 10,579px.
 
-### Standing research program — answers are now visible, and re-checked
+### Standing research program: answers are now visible, and re-checked
 
-- **The panel could not display a conclusion.** `/api/lab/findings` filtered on `enabled = TRUE`, and `rotate_if_stable` disables a question at exactly the moment it reaches a stable definitive verdict — so the only questions the endpoint could return were the ones the lab had *not* answered. Nine resolved hypotheses were invisible, including both CONFIRMED findings: ≥8h sleep lifts next-morning HRV by +14.0ms (n=62, p=0.018), and a pickleball day depresses it by −12.3ms (n=152, p=0.019). The endpoint now returns answered questions too, tagged `status`/`answered_at`, and the panel leads with **Answered** (confirmed above refuted) over **Under test**.
+- **The panel could not display a conclusion.** `/api/lab/findings` filtered on `enabled = TRUE`, and `rotate_if_stable` disables a question at exactly the moment it reaches a stable definitive verdict, so the only questions the endpoint could return were the ones the lab had *not* answered. Nine resolved hypotheses were invisible, including both CONFIRMED findings: ≥8h sleep lifts next-morning HRV by +14.0ms (n=62, p=0.018), and a pickleball day depresses it by −12.3ms (n=152, p=0.019). The endpoint now returns answered questions too, tagged `status`/`answered_at`, and the panel leads with **Answered** (confirmed above refuted) over **Under test**.
 
-- **An answered question was frozen forever.** `run_all` only iterated enabled questions, so a confirmed effect stood on whatever the data said the day it stabilised, with nothing re-checking it. Retired questions are now re-run every 30 days (`_REVERIFY_AFTER_DAYS`); if the re-check disagrees with the verdict they retired on, `reverify_retired()` puts them back under test, where they must re-earn retirement through `rotate_if_stable`. A runner crash (`error`) never counts as disagreement — it means the hypothesis wasn't tested.
+- **An answered question was frozen forever.** `run_all` only iterated enabled questions, so a confirmed effect stood on whatever the data said the day it stabilised, with nothing re-checking it. Retired questions are now re-run every 30 days (`_REVERIFY_AFTER_DAYS`); if the re-check disagrees with the verdict they retired on, `reverify_retired()` puts them back under test, where they must re-earn retirement through `rotate_if_stable`. A runner crash (`error`) never counts as disagreement, it means the hypothesis wasn't tested.
 
-- **The FDR denominator drifted.** `_apply_fdr` corrected across whatever ran that cycle. As questions retire that shrinks — it had reached m=3 against a docstring claiming ~15 — which makes the correction quietly *looser* the longer the program runs, and lets an unchanged p-value flip verdict because an unrelated sibling retired. It is now the full catalogue, floored at the current run size. The docstring also now states what BH does not cover: the catalogue is re-run daily, so repeated looks at accumulating data are uncorrected.
+- **The FDR denominator drifted.** `_apply_fdr` corrected across whatever ran that cycle. As questions retire that shrinks, it had reached m=3 against a docstring claiming ~15, which makes the correction quietly *looser* the longer the program runs, and lets an unchanged p-value flip verdict because an unrelated sibling retired. It is now the full catalogue, floored at the current run size. The docstring also now states what BH does not cover: the catalogue is re-run daily, so repeated looks at accumulating data are uncorrected.
 
 - **Bank exhaustion is stated, not implied.** All 15 registered hypotheses have been enabled at some point and `_promote_next` has nothing left to promote. The panel now says so instead of falling through to "No hypotheses registered yet."
 
-> **First re-verification result.** Simulated against live data before shipping: `pickleball_next_morning_hrv`, retired CONFIRMED at −12.3ms, re-tests at −4.5ms (p=0.31) on the current window — it no longer holds, and will re-open on the next run. `strain_high_rhr_next` and `yoga_hrv_lift` also disagree with their retirement verdicts. This is the mechanism working: the pickleball finding had been frozen since July while court load climbed to 649 min/week.
+> **First re-verification result.** Simulated against live data before shipping: `pickleball_next_morning_hrv`, retired CONFIRMED at −12.3ms, re-tests at −4.5ms (p=0.31) on the current window, it no longer holds, and will re-open on the next run. `strain_high_rhr_next` and `yoga_hrv_lift` also disagree with their retirement verdicts. This is the mechanism working: the pickleball finding had been frozen since July while court load climbed to 649 min/week.
 
 ---
 
 ## 2026-07-11 (comprehensive audit + fix pass)
 
-A full-codebase read-only audit across six dimensions — gates/ACWR, self-learning, exercise selection, API, ingest, and frontend — followed by a systematic fix pass. Every finding was verified against source before writing any code. 15 items fixed across Tier 1 (data-corrupting), Tier 2 (wrong numbers), and Tier 3 (cleanup).
+A full-codebase read-only audit across six dimensions, gates/ACWR, self-learning, exercise selection, API, ingest, and frontend, followed by a systematic fix pass. Every finding was verified against source before writing any code. 15 items fixed across Tier 1 (data-corrupting), Tier 2 (wrong numbers), and Tier 3 (cleanup).
 
 ### Pre-audit additions (since last entry)
 
-- **Plateau-triggered exercise rotation.** Selection now rotates when a movement has plateaued (flat e1RM + stagnant tonnage for ≥3 weeks) rather than on a fixed weekly schedule — so a lift stays in the rotation as long as it's working, and gets swapped when it stops. Weekly churn was causing unnecessary variation before adaptation was signalled.
+- **Plateau-triggered exercise rotation.** Selection now rotates when a movement has plateaued (flat e1RM + stagnant tonnage for ≥3 weeks) rather than on a fixed weekly schedule, so a lift stays in the rotation as long as it's working, and gets swapped when it stops. Weekly churn was causing unnecessary variation before adaptation was signalled.
 
-- **MEV floor preserved under conditioning interference.** When ACWR conditions suppress a lower-body target to zero, the engine was dropping volume below MEV for emphasis muscles (glutes). A target-zero muscle on the forbidden list that also carries the MEV floor now keeps `desired = mev` instead of 0 — accumulation continues, just at floor, not at silence.
+- **MEV floor preserved under conditioning interference.** When ACWR conditions suppress a lower-body target to zero, the engine was dropping volume below MEV for emphasis muscles (glutes). A target-zero muscle on the forbidden list that also carries the MEV floor now keeps `desired = mev` instead of 0, accumulation continues, just at floor, not at silence.
 
-- **Athlete OS Panel wired in.** New top-of-page card fuses today's readiness command (engine-gate-aware verdict + plan rationale), goal pressure (push:pull ratio / pickleball court load), active experiment status, and personal lab findings into a single decision surface. Reads `DailyState`, `WorkoutPlan`, `Experiments`, and `LabFindings` — four reads, one view.
+- **Athlete OS Panel wired in.** New top-of-page card fuses today's readiness command (engine-gate-aware verdict + plan rationale), goal pressure (push:pull ratio / pickleball court load), active experiment status, and personal lab findings into a single decision surface. Reads `DailyState`, `WorkoutPlan`, `Experiments`, and `LabFindings`, four reads, one view.
 
-### Tier 1 — data-corrupting fixes
+### Tier 1: data-corrupting fixes
 
-- **`plan_adherence` never populated.** The nightly adherence job and the `/api/training/adherence/recompute` endpoint both used `GROUP BY w.id ORDER BY w.started_at` — invalid DuckDB syntax (can't `ORDER BY` a non-aggregated column in a grouped query). Threw every night since the feature shipped; the table was always empty. Fixed: `ORDER BY MAX(w.started_at)`.
+- **`plan_adherence` never populated.** The nightly adherence job and the `/api/training/adherence/recompute` endpoint both used `GROUP BY w.id ORDER BY w.started_at`, invalid DuckDB syntax (can't `ORDER BY` a non-aggregated column in a grouped query). Threw every night since the feature shipped; the table was always empty. Fixed: `ORDER BY MAX(w.started_at)`.
 
-- **Classifier misattribution poisoning volume data.** The exercise keyword classifier checked `"hammer"` before `"hammerstrength"`, so all Hammerstrength machines (chest, back, shoulder) credited biceps — the emphasis muscle — instead of their actual primary. Same family: the chest block swallowed `Chest Supported Incline Row` and reverse flyes, crediting chest+push for pull work. Reordered the keyword blocks; backfilled 0068 to repair the 1,583 bad `exercise_muscle` rows accumulated in production.
+- **Classifier misattribution poisoning volume data.** The exercise keyword classifier checked `"hammer"` before `"hammerstrength"`, so all Hammerstrength machines (chest, back, shoulder) credited biceps, the emphasis muscle, instead of their actual primary. Same family: the chest block swallowed `Chest Supported Incline Row` and reverse flyes, crediting chest+push for pull work. Reordered the keyword blocks; backfilled 0068 to repair the 1,583 bad `exercise_muscle` rows accumulated in production.
 
 - **Fitbod contamination in e1RM ceilings and working weights.** `e1rm_by_exercise` read raw `workout_sets` with no source filter, so Fitbod sets (logged with a 2× dumbbell multiplier and non-Hevy naming) inflated every load ceiling. `working_weights` had no guard on Fitbod overwrites, so one `ingest-fitbod` run silently replaced Hevy's measured weights. Both now filter to `source='hevy'` / `workout_sets_dedup`.
 
-- **Beta-blocker badge fired every day.** `hasBetaBlocker()` in the frontend read the medications list — propranolol is PRN but always listed — so the "β-adj" badge rendered on every recovery panel, and every genuine HRV-below-baseline driver was silently downgraded to neutral ~95% of days. Badge now reads `readiness.beta_blocker_adjusted` from `DailyState`, which is true only on days the morning check-in logged the dose.
+- **Beta-blocker badge fired every day.** `hasBetaBlocker()` in the frontend read the medications list, propranolol is PRN but always listed, so the "β-adj" badge rendered on every recovery panel, and every genuine HRV-below-baseline driver was silently downgraded to neutral ~95% of days. Badge now reads `readiness.beta_blocker_adjusted` from `DailyState`, which is true only on days the morning check-in logged the dose.
 
-- **Stale exercises causing phantom deloads.** `_muscle_performance()` iterated `weekly_e1rm` with no recency bound — exercises last touched in the Fitbod era (2022–2024) scored perpetually "regressing," averaged into per-muscle performance, and drove `deload_check` to a systemic deload (≥3 regressing muscles) with zero current fatigue. Added an 8-week recency filter.
+- **Stale exercises causing phantom deloads.** `_muscle_performance()` iterated `weekly_e1rm` with no recency bound, exercises last touched in the Fitbod era (2022-2024) scored perpetually "regressing," averaged into per-muscle performance, and drove `deload_check` to a systemic deload (≥3 regressing muscles) with zero current fatigue. Added an 8-week recency filter.
 
-- **Volume landmarks fitted on a different scale than the gate reads.** `fit_volume_landmarks()` ran over `work_sets` (warmups included, no rep-window filter, no secondary credit). The live gate compares against `weekly_muscle_volume` (warmup-excluded, rep-windowed, 0.5/0.3 secondary credit). Fitted MRV understated the credited scale → early "at MRV — hold." Fitter now runs over the same computation path as the controller.
+- **Volume landmarks fitted on a different scale than the gate reads.** `fit_volume_landmarks()` ran over `work_sets` (warmups included, no rep-window filter, no secondary credit). The live gate compares against `weekly_muscle_volume` (warmup-excluded, rep-windowed, 0.5/0.3 secondary credit). Fitted MRV understated the credited scale -> early "at MRV, hold." Fitter now runs over the same computation path as the controller.
 
-- **Hevy set-ID collision for repeated exercises.** The set hash keyed on `(workout_id, exercise_name, set_index)` — a superset that contains the same exercise twice (e.g. backoff sets after main work logged as a second block) collides, and the second block silently overwrites the first. Hash now includes the exercise entry index within the workout.
+- **Hevy set-ID collision for repeated exercises.** The set hash keyed on `(workout_id, exercise_name, set_index)`, a superset that contains the same exercise twice (e.g. backoff sets after main work logged as a second block) collides, and the second block silently overwrites the first. Hash now includes the exercise entry index within the workout.
 
-- **HAE ingest was a black hole.** `apple.py` used fire-and-forget on the ingest future and deleted the source file unconditionally in `finally:`, so permanent data loss on failure was silent. The metric mapping also stored raw WHOOP/HAE field names ("Heart Rate Variability") with no conversion — HAE ingested "successfully" and was never queryable. Fixed: future is awaited + file only unlinked on success; metric mapping reuses the `_SHORTCUT_UNITS` + `_IMPERIAL_TO_SI` table from the Shortcuts endpoint.
+- **HAE ingest was a black hole.** `apple.py` used fire-and-forget on the ingest future and deleted the source file unconditionally in `finally:`, so permanent data loss on failure was silent. The metric mapping also stored raw WHOOP/HAE field names ("Heart Rate Variability") with no conversion. HAE ingested "successfully" and was never queryable. Fixed: future is awaited + file only unlinked on success; metric mapping reuses the `_SHORTCUT_UNITS` + `_IMPERIAL_TO_SI` table from the Shortcuts endpoint.
 
-### Tier 2 — wrong numbers / misfiring gates
+### Tier 2: wrong numbers / misfiring gates
 
-- **Stale WHOOP data silently disabling safety caps.** The skin-temp, SpO₂, and HRV gates read the most-recent recovery row with no freshness check. One bad sync + outage = capped `low` indefinitely — or no cap at all if the row was from a week ago. Applied the same staleness guard already present on the conditioning ACWR gate. When WHOOP is stale, caps don't silently open; they fire a "gate is BLIND" reason.
+- **Stale WHOOP data silently disabling safety caps.** The skin-temp, SpO₂, and HRV gates read the most-recent recovery row with no freshness check. One bad sync + outage = capped `low` indefinitely, or no cap at all if the row was from a week ago. Applied the same staleness guard already present on the conditioning ACWR gate. When WHOOP is stale, caps don't silently open; they fire a "gate is BLIND" reason.
 
-- **ACWR on the dashboard contradicted DailyState.** Two dashboard endpoints (`/whoop/patterns` and `/acwr`) recomputed a coupled 28-day formula that was already fixed in `metrics.py` — so `/api/state/today` said 1.0 while the dashboard said 1.14. Both now delegate to the same `_arm_acwr()` call used by `DailyState`.
+- **ACWR on the dashboard contradicted DailyState.** Two dashboard endpoints (`/whoop/patterns` and `/acwr`) recomputed a coupled 28-day formula that was already fixed in `metrics.py`, so `/api/state/today` said 1.0 while the dashboard said 1.14. Both now delegate to the same `_arm_acwr()` call used by `DailyState`.
 
-- **RPE damper was backwards and reopened the progressing-freeze.** The damper applied `rpe_factor` *before* the `perf ≥ 4` floor, so `round(1 × 0.5) = 0` could freeze a progressing muscle in the same pass that was supposed to protect it. Additionally, over-RPE clamped to `1.0` (no damping — opposite of the docstring). Fixed sign/direction; floor now applied after damping.
+- **RPE damper was backwards and reopened the progressing-freeze.** The damper applied `rpe_factor` *before* the `perf ≥ 4` floor, so `round(1 × 0.5) = 0` could freeze a progressing muscle in the same pass that was supposed to protect it. Additionally, over-RPE clamped to `1.0` (no damping, opposite of the docstring). Fixed sign/direction; floor now applied after damping.
 
-- **Under-recovered muscle below MEV jumped to MEV in one step.** `desired = max(mev, cur - 1)` raised `cur=3 → mev=8` in a single "back off a set" step. Fixed to `max(min(cur, mev), cur - 1)` — an under-recovered muscle at 3 backs off to 2, not up to 8.
+- **Under-recovered muscle below MEV jumped to MEV in one step.** `desired = max(mev, cur - 1)` raised `cur=3 -> mev=8` in a single "back off a set" step. Fixed to `max(min(cur, mev), cur - 1)`, an under-recovered muscle at 3 backs off to 2, not up to 8.
 
 - **Validator false 409s blocking every plan resubmit (four bugs):**
-  - Rep-cap asymmetry: the e1RM ceiling capped history reps at 12 but the demand path used uncapped plan reps — represcribing your own logged 15-rep best failed validation. Cap now applied symmetrically.
+  - Rep-cap asymmetry: the e1RM ceiling capped history reps at 12 but the demand path used uncapped plan reps, represcribing your own logged 15-rep best failed validation. Cap now applied symmetrically.
   - Alias gaps: `e1rm_by_exercise` and the rep-window resolver never consulted `exercise_alias`, so aliased movements (17 exercises) always 409'd as if no history existed. Both paths now join through the alias table.
-  - Conflicting rep windows: 7 exercises (e.g. Deadlift with overlapping 3–10 vs 6–8 rows) collapsed nondeterministically. Primary-muscle row now wins; fallback is min-low/max-high merge.
+  - Conflicting rep windows: 7 exercises (e.g. Deadlift with overlapping 3-10 vs 6-8 rows) collapsed nondeterministically. Primary-muscle row now wins; fallback is min-low/max-high merge.
   - Secondary spillover: 4 squat sets produce 2.0 hamstring secondary credit, which exceeded the per-muscle cap on a conditioning-frozen muscle with target=0. Secondary-only credit is now exempt from per-session caps on zero-target muscles.
 
-- **Frontend readiness verdict ignored engine gates.** `pillar-training-load.tsx` computed its verdict client-side from HRV σ and the load ratio — could say "Push" while the engine had a deload flagged. Panel now reads `reconciledVerdict(state)` from `DailyState`, with the same gate-ceiling logic used everywhere else.
+- **Frontend readiness verdict ignored engine gates.** `pillar-training-load.tsx` computed its verdict client-side from HRV σ and the load ratio, could say "Push" while the engine had a deload flagged. Panel now reads `reconciledVerdict(state)` from `DailyState`, with the same gate-ceiling logic used everywhere else.
 
-- **`hr_zone_shift_bpm` applied to 12 weeks of history.** `bucketByWeek` in `cardio-panel.tsx` shifted all historical sessions by the propranolol HR adjustment, flipping the polarization verdict on any week I happened to be in a chart during. Shift now applied only to today's sessions (`date === todayStr && hrShift > 0`). Same fix in `PickleballEfficiency` — historical comparison charts always use unshifted HRmax.
+- **`hr_zone_shift_bpm` applied to 12 weeks of history.** `bucketByWeek` in `cardio-panel.tsx` shifted all historical sessions by the propranolol HR adjustment, flipping the polarization verdict on any week I happened to be in a chart during. Shift now applied only to today's sessions (`date === todayStr && hrShift > 0`). Same fix in `PickleballEfficiency`, historical comparison charts always use unshifted HRmax.
 
 - **UTC date truncation dropped evening sessions.** After 5pm PDT, `toISOString().slice(0, 10)` returns tomorrow in UTC, so training sessions logged in the evening vanished from heatmaps and recovery panels. New `localDate()` utility in `lib/date.ts` formats YYYY-MM-DD from local time; applied to all five affected components.
 
 - **Frontend hardcoded age 40 and bodyweight 108.8 kg.** `cardio-panel.tsx` had hardcoded constants for Tanaka HRmax and Keytel kcal formula. Both now sourced from `DailyState`: `max_hr_tanaka` for age (inverted: `(208 - tanaka) / 0.7`) and `checkin.body_weight_kg`.
 
-- **WHOOP UTC timestamps bucketing evening sessions to tomorrow.** `whoop.py` truncated UTC ISO strings directly (`r["start"][:10]`), putting any session that started after midnight UTC (5pm PDT) on the next calendar date — wrong ACWR day, DUPR competitive multiplier never applied to evening matches. Fixed with `_utc_to_local_date()` using `ZoneInfo("America/Los_Angeles")`. Same fix for recovery and sleep records. Apple Shortcuts naive timestamps were stamped UTC; now stamped as local iPhone time.
+- **WHOOP UTC timestamps bucketing evening sessions to tomorrow.** `whoop.py` truncated UTC ISO strings directly (`r["start"][:10]`), putting any session that started after midnight UTC (5pm PDT) on the next calendar date, wrong ACWR day, DUPR competitive multiplier never applied to evening matches. Fixed with `_utc_to_local_date()` using `ZoneInfo("America/Los_Angeles")`. Same fix for recovery and sleep records. Apple Shortcuts naive timestamps were stamped UTC; now stamped as local iPhone time.
 
-- **Step count triple-counted from three sources.** Apple XML intervals, HAE daily totals, and Shortcuts snapshots all wrote `step_count` to the same `measurements` table. `dashboard.py` summed them → 3× actual steps. Fixed with a priority CTE: apple XML intervals > HAE > Shortcuts, one source wins per day.
+- **Step count triple-counted from three sources.** Apple XML intervals, HAE daily totals, and Shortcuts snapshots all wrote `step_count` to the same `measurements` table. `dashboard.py` summed them -> 3× actual steps. Fixed with a priority CTE: apple XML intervals > HAE > Shortcuts, one source wins per day.
 
 - **DuckDB `dayofweek()` offset.** WHOOP weekly patterns endpoint used `DOW_LABELS` indexed from 0=Monday but DuckDB's `dayofweek()` returns 0=Sunday. Every weekday was shifted by one. Fixed: `(int(r[0]) - 1) % 7`.
 
-### Tier 3 — cleanup
+### Tier 3: cleanup
 
-- **Gate keyword misroutes.** "Step up" (space) was not in `_LEGS` (only "step-up" hyphen) — step-up variations escaped the legs gate. "Rear delt fly" and "reverse fly" classified as PUSH because `"fly"` in `_PUSH` fired before `"rear delt"` in `_PULL`. Both fixed: added `"step up"` to `_LEGS`; added an explicit guard before the `_PUSH` check.
+- **Gate keyword misroutes.** "Step up" (space) was not in `_LEGS` (only "step-up" hyphen), step-up variations escaped the legs gate. "Rear delt fly" and "reverse fly" classified as PUSH because `"fly"` in `_PUSH` fired before `"rear delt"` in `_PULL`. Both fixed: added `"step up"` to `_LEGS`; added an explicit guard before the `_PUSH` check.
 
-- **`forbid_muscle_groups` duplicate entries.** The rest-day loop appended a group without checking membership first — if both conditioning ACWR and rest thresholds fired for "legs," the list contained two "legs" entries, causing plan validators to double-count the gate. Added `if grp not in g.forbid_muscle_groups` guard.
+- **`forbid_muscle_groups` duplicate entries.** The rest-day loop appended a group without checking membership first, if both conditioning ACWR and rest thresholds fired for "legs," the list contained two "legs" entries, causing plan validators to double-count the gate. Added `if grp not in g.forbid_muscle_groups` guard.
 
 - **`personal_floored` used personal (low) values.** When a personal MRV is < 50% of population MRV, the engine flags the muscle as undertrained and is supposed to floor to population values. The code used `vt.mev, vt.mav, vt.mrv` (the low personal values) while labelling the result `"personal_floored"`. Now uses `pop.mev, pop.mav, pop.mrv`.
 
-- **Skin-temp unit bugs.** `briefing.py` double-converted `skin_temp_delta` (`* 9/5` when it was already °F from `dashboard.py`). `workout_planner.py` labelled a °F value as `°C`. `/recovery/today` returned raw `skin_temp` in °C while `DailyState` returns °F — now converts on the way out.
+- **Skin-temp unit bugs.** `briefing.py` double-converted `skin_temp_delta` (`* 9/5` when it was already °F from `dashboard.py`). `workout_planner.py` labelled a °F value as `°C`. `/recovery/today` returned raw `skin_temp` in °C while `DailyState` returns °F, now converts on the way out.
 
 - **Report prompt used wrong ACWR thresholds.** Prompt said `>1.5 = cap LOW; >1.65 = rest`. Actual gate constants: `RES_ACWR_MOD=1.5`, `RES_ACWR_LOW=1.8`, `RES_ACWR_REST=2.0`. Corrected.
 
 - **Hevy cursor set to wall-clock after sync.** `cursor = datetime.now(UTC)` after the sync window means events generated mid-sync fall in a blind spot. Cursor now captured before the sync begins so those events are re-fetched next run (deduplicated by ON CONFLICT).
 
-- **`_ms_to_min(0)` returned None.** `if ms` is falsy for 0 → zero-duration sleep stages became null zone values. Fixed to `0.0 if ms == 0 else None`.
+- **`_ms_to_min(0)` returned None.** `if ms` is falsy for 0 -> zero-duration sleep stages became null zone values. Fixed to `0.0 if ms == 0 else None`.
 
 - **`body_measurement` upsert key never fired.** `measured_at = datetime.now(UTC)` generated a new timestamp on every sync call, preventing `ON CONFLICT (source, measured_at)` from ever matching. Now uses `date.today().isoformat()` so same-day re-syncs hit the same row.
 
 - **Fitbod per-row parse errors silently swallowed at DEBUG.** Promoted to `log.warning` so bad CSV rows are visible.
 
-- **Frontend label corrections.** "strength + fat loss" goal label → "build muscle · recomp". "Cardio strain" label → "Cardio volume" (field shows min/wk, not strain units). Sleep "Eff." cell shows "SpO₂" when falling back to overnight SpO₂ data. `trainStreak` now counts consecutive calendar days (prior loop over sparse heatmap entries skipped rest days and overcounted).
+- **Frontend label corrections.** "strength + fat loss" goal label -> "build muscle · recomp". "Cardio strain" label -> "Cardio volume" (field shows min/wk, not strain units). Sleep "Eff." cell shows "SpO₂" when falling back to overnight SpO₂ data. `trainStreak` now counts consecutive calendar days (prior loop over sparse heatmap entries skipped rest days and overcounted).
 
 ### Tests
 
-428 passing, 1 skipped (unchanged from Tier 1 baseline — new fixes land in paths with no prior test coverage; invariant tests in `test_engine_invariants.py` continue to enforce the 6 ENGINE_INVARIANTS.md contracts).
+428 passing, 1 skipped (unchanged from Tier 1 baseline, new fixes land in paths with no prior test coverage; invariant tests in `test_engine_invariants.py` continue to enforce the 6 ENGINE_INVARIANTS.md contracts).
 
 ---
 
 ## 2026-07-05 (exercise-intelligence pass)
 
-The trigger was a prescription that asked for a hammer curl at 95 lbs *in each hand* — a weight never lifted. Tracing it opened up the whole exercise-intelligence layer: load semantics, muscle-head anatomy, exercise selection, and the split-brain data model underneath all of it.
+The trigger was a prescription that asked for a hammer curl at 95 lbs *in each hand*, a weight never lifted. Tracing it opened up the whole exercise-intelligence layer: load semantics, muscle-head anatomy, exercise selection, and the split-brain data model underneath all of it.
 
 ### Fixed
 
-- **Per-hand load semantics for dumbbell / cable-pair lifts.** Two-implement lifts (a dumbbell in each hand, a cable stack per hand) are logged as the *combined* weight but loaded — and prescribed — per hand. The engine read the logged number as *the* load, so a per-hand target was validated against a total-load e1RM: the "95 lb each hand" hammer curl. New `load_mechanics.py` classifies each movement's load type (`dumbbell_pair` / `cable_pair` → ÷2 per hand; single-arm / barbell / machine as-is; a movement-default layer catches un-suffixed Fitbod names like bare `Hammer Curls`). `e1rm_by_exercise` now normalizes every set to per-hand before the Epley estimate; the working-weights table, top-exercises list, load rule, and output schema all speak per-hand ("85 lbs each hand (170 total)"). Verified on real data: the Hammer Curl ceiling dropped from a level that permitted 95 lb/hand to ~47 lb/hand.
+- **Per-hand load semantics for dumbbell / cable-pair lifts.** Two-implement lifts (a dumbbell in each hand, a cable stack per hand) are logged as the *combined* weight but loaded, and prescribed, per hand. The engine read the logged number as *the* load, so a per-hand target was validated against a total-load e1RM: the "95 lb each hand" hammer curl. New `load_mechanics.py` classifies each movement's load type (`dumbbell_pair` / `cable_pair` -> ÷2 per hand; single-arm / barbell / machine as-is; a movement-default layer catches un-suffixed Fitbod names like bare `Hammer Curls`). `e1rm_by_exercise` now normalizes every set to per-hand before the Epley estimate; the working-weights table, top-exercises list, load rule, and output schema all speak per-hand ("85 lbs each hand (170 total)"). Verified on real data: the Hammer Curl ceiling dropped from a level that permitted 95 lb/hand to ~47 lb/hand.
 
 - **Fat-fingered e1RM outliers float the load ceiling.** A single mis-logged heavy set could inflate an exercise's e1RM and let a supramaximal weight through the validator. `_robust_max` trims the high tail via a median/MAD filter (with a median-ratio fallback when the core history is near-identical and MAD collapses to zero), so one bad log can't raise the ceiling.
 
-- **Landmark volume crediting disagreed with the anatomy.** 14 curated movements named a muscle in the science layer that the crediting map didn't credit — a hammer curl built brachioradialis *coverage* but contributed zero to the forearm *volume target*; rows never counted toward mid-back, squats missed adductors, hinges missed lower-back, the dumbbell press missed side-delts. Migration 0065 backfills those secondaries at the standard synergist rates (arm flexors/extensors 0.3, else 0.5). Verified across 8 weeks of real data: every muscle moves proportionally and stays within its landmarks — no spurious cut or deload. Also corrected a `"curl"`-substring misclassification that mapped Palms-Down/Up Dumbbell Wrist Curl to *biceps* primary; a wrist curl is a forearm movement.
+- **Landmark volume crediting disagreed with the anatomy.** 14 curated movements named a muscle in the science layer that the crediting map didn't credit, a hammer curl built brachioradialis *coverage* but contributed zero to the forearm *volume target*; rows never counted toward mid-back, squats missed adductors, hinges missed lower-back, the dumbbell press missed side-delts. Migration 0065 backfills those secondaries at the standard synergist rates (arm flexors/extensors 0.3, else 0.5). Verified across 8 weeks of real data: every muscle moves proportionally and stays within its landmarks, no spurious cut or deload. Also corrected a `"curl"`-substring misclassification that mapped Palms-Down/Up Dumbbell Wrist Curl to *biceps* primary; a wrist curl is a forearm movement.
 
-- **Exercise selection was frozen on the same pick every week.** `_select_grounded`'s recency tiebreaker read the wrong tuple index (a citation URL, not the last-trained timestamp) and always threw → returned 0, so selection was fully deterministic on (length-bias, SFR): the repetition problem. The rewrite (below) fixes the root cause; a deterministic exercise-name final tiebreaker also removes a latent dependence on row/storage order.
+- **Exercise selection was frozen on the same pick every week.** `_select_grounded`'s recency tiebreaker read the wrong tuple index (a citation URL, not the last-trained timestamp) and always threw -> returned 0, so selection was fully deterministic on (length-bias, SFR): the repetition problem. The rewrite (below) fixes the root cause; a deterministic exercise-name final tiebreaker also removes a latent dependence on row/storage order.
 
 ### Added
 
-- **Head-level (muscle-region) volume crediting.** `weekly_region_volume` credits each stimulating set to the specific head the science layer maps — a Hammer Curl credits `biceps/brachialis` *and* `forearms/brachioradialis`, not just "biceps." This is the coverage ledger that lets the engine see *which* head got stimulus.
+- **Head-level (muscle-region) volume crediting.** `weekly_region_volume` credits each stimulating set to the specific head the science layer maps, a Hammer Curl credits `biceps/brachialis` *and* `forearms/brachioradialis`, not just "biceps." This is the coverage ledger that lets the engine see *which* head got stimulus.
 
 - **Head-aware, rotating exercise selection.** `_select_grounded` now orders candidates head-first: the least-trained head (from `weekly_region_volume`) leads, then length-bias and SFR for quality, then staleness so the pick rotates among equal-quality options instead of freezing. The prescription context shows per-head coverage including zero-trained heads (`long_head 0 ←lead · short_head 3 · brachialis 5`) so the plan leads the neglected head.
 
-- **Curated the top frequently-trained movements off the recency fallback.** Only 78 exercises carried science rows; ~15 movements Rob trains often (Hammerstrength presses, rope pushdowns, cable crossovers, the Fitbod-named `Hammer Curls`, iso-lateral row, machine leg/calf work) fell back to blind recency. Migration 0064 curates them by copying each variant's row from its already-vetted canonical movement (`INSERT..SELECT`) — no invented science; every citation is one already grounded in the table, and the source is chosen to match the variant's mechanics (a low-to-high cable fly inherits the *upper-chest* incline-fly row). `exercise_science` 95 → 113 rows.
+- **Curated the top frequently-trained movements off the recency fallback.** Only 78 exercises carried science rows; ~15 movements Rob trains often (Hammerstrength presses, rope pushdowns, cable crossovers, the Fitbod-named `Hammer Curls`, iso-lateral row, machine leg/calf work) fell back to blind recency. Migration 0064 curates them by copying each variant's row from its already-vetted canonical movement (`INSERT..SELECT`), no invented science; every citation is one already grounded in the table, and the source is chosen to match the variant's mechanics (a low-to-high cable fly inherits the *upper-chest* incline-fly row). `exercise_science` 95 -> 113 rows.
 
 ### Changed
 
-- **Unified `exercise_muscle_map` + `exercise_science` into one canonical `exercise_muscle` table.** The two tables were a split-brain — one drove volume crediting (primary/secondary), the other head/length/SFR selection — keyed the same way but able to disagree about which muscles a movement trains. That disagreement was the root cause behind most of the fixes above. Migration 0066 collapses them into a single row per (exercise, muscle) carrying *both* the crediting (`role` + `credit`) and the anatomy (`region`, `length_bias`, `sfr_tier`, rep range, citation) — one row, so the two can never diverge again. Done as expand-contract: the old table names are recreated as **views** over `exercise_muscle` reproducing their exact prior shapes, so all seven reader files stayed unchanged. Proven byte-identical before/after on real data for `weekly_muscle_volume`, `weekly_region_volume`, `evidence_menu`, and `_planned_sets_by_muscle`. The one runtime writer (the classifier's auto-mapping backfill) and the affected tests now write `exercise_muscle` directly. This is the entity/master-data layer; the metrics semantic layer (`DailyState`, landmarks, gates) already existed.
+- **Unified `exercise_muscle_map` + `exercise_science` into one canonical `exercise_muscle` table.** The two tables were a split-brain, one drove volume crediting (primary/secondary), the other head/length/SFR selection, keyed the same way but able to disagree about which muscles a movement trains. That disagreement was the root cause behind most of the fixes above. Migration 0066 collapses them into a single row per (exercise, muscle) carrying *both* the crediting (`role` + `credit`) and the anatomy (`region`, `length_bias`, `sfr_tier`, rep range, citation), one row, so the two can never diverge again. Done as expand-contract: the old table names are recreated as **views** over `exercise_muscle` reproducing their exact prior shapes, so all seven reader files stayed unchanged. Proven byte-identical before/after on real data for `weekly_muscle_volume`, `weekly_region_volume`, `evidence_menu`, and `_planned_sets_by_muscle`. The one runtime writer (the classifier's auto-mapping backfill) and the affected tests now write `exercise_muscle` directly. This is the entity/master-data layer; the metrics semantic layer (`DailyState`, landmarks, gates) already existed.
 
 ### Tests
 
@@ -410,17 +410,17 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Fixed
 
-- **Deload unification.** Calendar deloads and signal-based deloads are now ORed under a single gate. Previously, `deload_check()` (fatigue signal) and `state.is_deload_week` (calendar) were computed in parallel and never combined — the prescription only acted on the signal arm. Now either triggers a deload; the distinction is preserved as `deload_reason: "calendar" | "signal" | "both"` so the planner can apply the correct volume-reduction depth. Calendar-only deloads (all perf scores ≥ 4) reduce to 40–50% of current vs 50% for signal deloads, because acute fatigue is low.
+- **Deload unification.** Calendar deloads and signal-based deloads are now ORed under a single gate. Previously, `deload_check()` (fatigue signal) and `state.is_deload_week` (calendar) were computed in parallel and never combined, the prescription only acted on the signal arm. Now either triggers a deload; the distinction is preserved as `deload_reason: "calendar" | "signal" | "both"` so the planner can apply the correct volume-reduction depth. Calendar-only deloads (all perf scores ≥ 4) reduce to 40-50% of current vs 50% for signal deloads, because acute fatigue is low.
 
-- **Deload depth floored at MEV (not below it).** `_decide()` was computing `max(mev, round(cur * 0.5))` for deload targets, flooring at MEV. A muscle at MRV=20, MEV=8 deloaded to max(8, 10)=10 — above MEV, meaning systemic fatigue could not actually clear. Changed to `max(round(mev * 0.4), round(cur * 0.5))`: a real deload floor at ~40% of MEV (RP: deloads typically 30–50% of MEV).
+- **Deload depth floored at MEV (not below it).** `_decide()` was computing `max(mev, round(cur * 0.5))` for deload targets, flooring at MEV. A muscle at MRV=20, MEV=8 deloaded to max(8, 10)=10, above MEV, meaning systemic fatigue could not actually clear. Changed to `max(round(mev * 0.4), round(cur * 0.5))`: a real deload floor at ~40% of MEV (RP: deloads typically 30-50% of MEV).
 
-- **Outcome scoring window per muscle size + action.** `score_prescription_outcomes()` used a hardcoded 3-week lag for every muscle and action type. Replaced with a per-(muscle_category, action_type) lookup. Small muscles: add/hold 3w, cut 4w. Medium: add/hold 4w, cut 5w. Large: add 5w, hold 4w, cut 6w. Cut windows are longer because the supercompensation rebound (performance temporarily improves post-cut) takes 1–3 weeks — scoring at week 3 falsely confirmed cuts that should have been holds. Sources: Schoenfeld 2019, Baz-Valle 2022 meta (N=2058).
+- **Outcome scoring window per muscle size + action.** `score_prescription_outcomes()` used a hardcoded 3-week lag for every muscle and action type. Replaced with a per-(muscle_category, action_type) lookup. Small muscles: add/hold 3w, cut 4w. Medium: add/hold 4w, cut 5w. Large: add 5w, hold 4w, cut 6w. Cut windows are longer because the supercompensation rebound (performance temporarily improves post-cut) takes 1-3 weeks, scoring at week 3 falsely confirmed cuts that should have been holds. Sources: Schoenfeld 2019, Baz-Valle 2022 meta (N=2058).
 
-- **RPE drift factor + propranolol integration.** `rpe_drift_signed_mean()` added to `quality.py`: 14-day signed mean of (actual − target RPE) from `plan_adherence`. `_rpe_drift_factor()` in `autoregulation.py` converts persistent over-RPE drift into a [0.5, 1.0] volume-delta multiplier — dampening only, never amplifying. Applied before the MAX_WEEKLY_ADD clamp in `_decide()`. On propranolol days: `_conditioning_pressure()` returns None (WHOOP HR suppressed by beta-blocker makes strain an unreliable load signal), and `rpe_factor` is forced to 1.0 to restore full RPE authority.
+- **RPE drift factor + propranolol integration.** `rpe_drift_signed_mean()` added to `quality.py`: 14-day signed mean of (actual − target RPE) from `plan_adherence`. `_rpe_drift_factor()` in `autoregulation.py` converts persistent over-RPE drift into a [0.5, 1.0] volume-delta multiplier, dampening only, never amplifying. Applied before the MAX_WEEKLY_ADD clamp in `_decide()`. On propranolol days: `_conditioning_pressure()` returns None (WHOOP HR suppressed by beta-blocker makes strain an unreliable load signal), and `rpe_factor` is forced to 1.0 to restore full RPE authority.
 
-- **Plan JSON schema stub.** A TypeScript interface for the expected plan shape is now inserted in `build_training_context()` immediately before vault research — within ~500 tokens of generation start. Covers the three recurring structural errors: `label` (not `name`) on blocks, `rest_seconds` required on every exercise, exact-lowercase enum values for `readiness_tier` and `intensity`.
+- **Plan JSON schema stub.** A TypeScript interface for the expected plan shape is now inserted in `build_training_context()` immediately before vault research, within ~500 tokens of generation start. Covers the three recurring structural errors: `label` (not `name`) on blocks, `rest_seconds` required on every exercise, exact-lowercase enum values for `readiness_tier` and `intensity`.
 
-- **Recovery thresholds enforced too early.** `_gates()` was using `threshold = 2 if grp == "legs" else 1`, forbidding legs when `days_since < 2` (i.e. after 24h) and push/pull when `days_since < 1` (i.e. same day). The reason strings advertised "needs ≥3d rest" / "needs ≥2d rest" — wrong thresholds. Changed to `threshold = 3 if grp == "legs" else 2` to align enforcement with the stated rest windows.
+- **Recovery thresholds enforced too early.** `_gates()` was using `threshold = 2 if grp == "legs" else 1`, forbidding legs when `days_since < 2` (i.e. after 24h) and push/pull when `days_since < 1` (i.e. same day). The reason strings advertised "needs ≥3d rest" / "needs ≥2d rest", wrong thresholds. Changed to `threshold = 3 if grp == "legs" else 2` to align enforcement with the stated rest windows.
 
 - **Deload calibration stub returned misleading status.** `calibrate_deload_trigger()` returned `status='fitted'` and `using_population_defaults=False` when ≥3 deload events existed, with no actual fitting logic inside. Changed to `status='stub'` / `using_population_defaults=True` so callers can't assume personal thresholds are active.
 
@@ -428,17 +428,17 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 - **ACWR chronic window mismatch between fitting and live.** `_historical_weekly_acwr()` in `self_learning.py` used a 21-day chronic window `[ws-28, ws-7)/21`, but `metrics.py` uses 28 days `[ws-35, ws-7)/28`. Personal ACWR bands fitted on the shorter window produced systematically lower thresholds than the gates compare against, biasing all personal bands downward. Changed the fitting formula to use the same `[ws-35, ws-7)/28` window for exact parity.
 
-- **Week number drifts for mid-week block starts.** `_build_state()` computed `week_number = (today - started_on).days // 7 + 1` from calendar days. A block started on Thursday showed `week_number=2` the following Thursday (7 calendar days elapsed), regardless of ISO week boundaries — causing `is_deload_week` to fire one day early on the last accumulation day. Changed to `(today - _iso_week_start(started_on)).days // 7 + 1`, aligning both sides to their respective ISO Monday before dividing.
+- **Week number drifts for mid-week block starts.** `_build_state()` computed `week_number = (today - started_on).days // 7 + 1` from calendar days. A block started on Thursday showed `week_number=2` the following Thursday (7 calendar days elapsed), regardless of ISO week boundaries, causing `is_deload_week` to fire one day early on the last accumulation day. Changed to `(today - _iso_week_start(started_on)).days // 7 + 1`, aligning both sides to their respective ISO Monday before dividing.
 
 - **WHOOP staleness silently drops conditioning gate.** When WHOOP hadn't synced for >2 days, `conditioning_acwr` trended toward zero as zeros filled the chronic window. Silently low ratio meant leg/conditioning gates never fired (fail-open). Now treats WHOOP-derived conditioning as `None` (fail-closed) when `rec.score_date` is >2 days stale. Resistance ACWR (Hevy-sourced) is unaffected.
 
-- **Dead import, latent circular dependency.** `score_prescription_outcomes()` imported `_muscle_performance` from `autoregulation` and never called it. The import created a `self_learning → autoregulation → self_learning` circular chain that only resolved because both are deferred inside function bodies. Removed.
+- **Dead import, latent circular dependency.** `score_prescription_outcomes()` imported `_muscle_performance` from `autoregulation` and never called it. The import created a `self_learning -> autoregulation -> self_learning` circular chain that only resolved because both are deferred inside function bodies. Removed.
 
-- **Protein target hardcoded.** `_PROTEIN_TARGET_G = 239` was a bodyweight snapshot. Replaced with `_protein_target_g(conn)` that reads the most recent `body_weight_kg` from `daily_checkin` (1g/lb target, kg→lbs conversion). Falls back to 239g when no check-in weight is available.
+- **Protein target hardcoded.** `_PROTEIN_TARGET_G = 239` was a bodyweight snapshot. Replaced with `_protein_target_g(conn)` that reads the most recent `body_weight_kg` from `daily_checkin` (1g/lb target, kg->lbs conversion). Falls back to 239g when no check-in weight is available.
 
 ### Tests
 
-214 passing (unchanged — test updated to match new deload floor behavior: `target_sets == 9` not `10` for `chest` at current=18, MEV=10, MRV=22 with deload floor now at `round(mev*0.4)=4`).
+214 passing (unchanged, test updated to match new deload floor behavior: `target_sets == 9` not `10` for `chest` at current=18, MEV=10, MRV=22 with deload floor now at `round(mev*0.4)=4`).
 
 ---
 
@@ -446,21 +446,21 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Self-learning hypertrophy engine — Phase 1–3 complete.** The training controller now fits personal parameters from Rob's own training history rather than relying on Renaissance Periodization population defaults.
+- **Self-learning hypertrophy engine. Phase 1-3 complete.** The training controller now fits personal parameters from Rob's own training history rather than relying on Renaissance Periodization population defaults.
 
   **Engine wake-up (#1):** `backfill_weekly_e1rm()` upserted 7,910 rows across 234 exercises and 361 weeks of history (back to 2015). `compute_all_scores` now backtests perf_scores across all historical weeks, not just the current one.
 
-  **Volume mapping (#2):** New `exercise_classifier.py` — deterministic keyword rules covering all 17 canonical muscle keys. Went from 65% unmapped sets (trailing 90d) to 0%. Emphasis muscles (biceps, glutes, hamstrings) are now fully visible to the prescription controller. `backfill_exercise_map()` runs each nightly cycle; `_warn_if_high_unmapped()` fires loudly when >20% of 90d working sets lack a mapping.
+  **Volume mapping (#2):** New `exercise_classifier.py`, deterministic keyword rules covering all 17 canonical muscle keys. Went from 65% unmapped sets (trailing 90d) to 0%. Emphasis muscles (biceps, glutes, hamstrings) are now fully visible to the prescription controller. `backfill_exercise_map()` runs each nightly cycle; `_warn_if_high_unmapped()` fires loudly when >20% of 90d working sets lack a mapping.
 
-  **Phase 3 self-learning (#3):** `fit_volume_landmarks()` fits personal MEV/MRV per muscle from the P20/P80 of productive weeks (2-year lookback, set-weighted perf). `fit_acwr_bands()` fits ACWR gate thresholds from 369 weeks of Rob's resistance load history (P65/P80/P90). Results: biceps MEV 8→11, ACWR LOW 1.8→1.48, ACWR MOD 1.5→1.22. Both re-fit each nightly run and persist to `muscle_volume_targets` (mesocycle-scoped) and `personal_acwr_bands`. `_gates()` in `metrics.py` reads personal bands from the DB with fallback to population constants.
+  **Phase 3 self-learning (#3):** `fit_volume_landmarks()` fits personal MEV/MRV per muscle from the P20/P80 of productive weeks (2-year lookback, set-weighted perf). `fit_acwr_bands()` fits ACWR gate thresholds from 369 weeks of Rob's resistance load history (P65/P80/P90). Results: biceps MEV 8->11, ACWR LOW 1.8->1.48, ACWR MOD 1.5->1.22. Both re-fit each nightly run and persist to `muscle_volume_targets` (mesocycle-scoped) and `personal_acwr_bands`. `_gates()` in `metrics.py` reads personal bands from the DB with fallback to population constants.
 
-  **Tonnage blend:** `score_exercise` upgrades flat e1RM (score=3) to "progressing" (score=4) when weekly tonnage trend ≥0.5%/week — prevents a hypertrophy block from being misread as a stall. `regrade_stalled_with_tonnage_blend()` retroactively applied the blend to 1,123 historical stalled rows.
+  **Tonnage blend:** `score_exercise` upgrades flat e1RM (score=3) to "progressing" (score=4) when weekly tonnage trend ≥0.5%/week, prevents a hypertrophy block from being misread as a stall. `regrade_stalled_with_tonnage_blend()` retroactively applied the blend to 1,123 historical stalled rows.
 
-- **Confidence quantification.** `compute_muscle_signal_quality()` returns `scored_weeks`, `signal_stability` (fraction of consecutive weeks where trend direction is consistent), and `confidence` (0–1). Materialized to `muscle_signal_cache` each nightly run; read via fast cache path in prescription and context block. Each `MusclePrescription` now carries `confidence` and `scored_weeks` fields. Planner context block has a Confidence column per muscle. Range: biceps 0.68 (315 weeks), lower_back 0.28 (10 weeks).
+- **Confidence quantification.** `compute_muscle_signal_quality()` returns `scored_weeks`, `signal_stability` (fraction of consecutive weeks where trend direction is consistent), and `confidence` (0-1). Materialized to `muscle_signal_cache` each nightly run; read via fast cache path in prescription and context block. Each `MusclePrescription` now carries `confidence` and `scored_weeks` fields. Planner context block has a Confidence column per muscle. Range: biceps 0.68 (315 weeks), lower_back 0.28 (10 weeks).
 
 - **MRV floor for undertrained muscles.** When the fitted MRV < 50% of population MRV, `persist_volume_landmarks()` floors it to 50% and warns loudly. This prevents a self-reinforcing low-volume loop for muscles Rob has never pushed past low volume. The `VolumeTarget.source` field carries `'personal'`, `'personal_floored'`, or `'population'` through to `MusclePrescription.landmark_source` and the prescription reason string.
 
-- **Prescription reason transparency.** Reason strings now include the landmark source inline: `"stalled e1RM → +1 set [personal MEV=11/MRV=20]"` or `"[personal MEV=3, MRV=10↑ floored — may be undertrained]"`. The planner sees exactly what data backed each call.
+- **Prescription reason transparency.** Reason strings now include the landmark source inline: `"stalled e1RM -> +1 set [personal MEV=11/MRV=20]"` or `"[personal MEV=3, MRV=10↑ floored, may be undertrained]"`. The planner sees exactly what data backed each call.
 
 - **Undertrained flag in self-learning status.** `GET /api/training/self-learning/status` now surfaces `undertrained: true` when personal MRV < population MAV (muscle hasn't explored the upper half of its productive range). 9 of 15 muscles currently flagged.
 
@@ -468,29 +468,29 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 - **Session split.** `_session_split()` distributes the weekly set prescription across Upper-A (Tue) / Lower-A (Wed) / Upper-B (Thu) / Lower-B (Fri) with ≤10 sets per muscle per session. Exposed in `Prescription.session_split`, the prescription API response, and the planner context block.
 
-- **Protein gate.** `protein_grams` added to `daily_checkin` schema and `POST /checkin` API. `_protein_gate()` reads the last 7 days; if protein has been <80% of 239g target on ≥4 days, non-emphasis volume-increase prescriptions are held: `"[held: protein below target — substrate needed to convert stimulus]"`. Planner context block surfaces protein status (target, average, adequacy) on every call.
+- **Protein gate.** `protein_grams` added to `daily_checkin` schema and `POST /checkin` API. `_protein_gate()` reads the last 7 days; if protein has been <80% of 239g target on ≥4 days, non-emphasis volume-increase prescriptions are held: `"[held: protein below target, substrate needed to convert stimulus]"`. Planner context block surfaces protein status (target, average, adequacy) on every call.
 
 - **Deload calibration infrastructure.** `calibrate_deload_trigger()` built and wired to the status endpoint. Currently returns `"insufficient_data"` (0 deload events on record). Fits automatically when ≥3 deloads are logged; uses population defaults until then.
 
-- **Dynamic OLS trend window.** `score_exercise()` now uses 12-week trend for exercises with ≥24 weeks of history, 9-week for ≥12, 6-week otherwise. Reduces false "stalled" calls for exercises where gains are <0.5%/week — common for advanced lifters 9+ years in.
+- **Dynamic OLS trend window.** `score_exercise()` now uses 12-week trend for exercises with ≥24 weeks of history, 9-week for ≥12, 6-week otherwise. Reduces false "stalled" calls for exercises where gains are <0.5%/week, common for advanced lifters 9+ years in.
 
-- **Exercise classifier expansion.** `exercise_classifier.py` extended with 28 new rules covering: back extensions, pullover→lats, kettlebell swing→glutes, shoulder raise→side_delts, internal/external rotation→rear_delts, clamshell, band pullaparts, scapular retraction, bench dip→triceps, wood chop/side bend/scissor/mountain climber/fire hydrant→abs, high pull→traps, hip flexor→quads, and more. Unclassifiable count dropped from 61→~24 (remaining are intentional: plyometrics, cardio, mobility).
+- **Exercise classifier expansion.** `exercise_classifier.py` extended with 28 new rules covering: back extensions, pullover->lats, kettlebell swing->glutes, shoulder raise->side_delts, internal/external rotation->rear_delts, clamshell, band pullaparts, scapular retraction, bench dip->triceps, wood chop/side bend/scissor/mountain climber/fire hydrant->abs, high pull->traps, hip flexor->quads, and more. Unclassifiable count dropped from 61->~24 (remaining are intentional: plyometrics, cardio, mobility).
 
 - **Self-learning observability endpoint.** `GET /api/training/self-learning/status` exposes: ACWR source (personal vs population + why RPE-adjusted is blocked), per-muscle volume landmarks with population comparison and undertrained flag, prescription accuracy (overall + per-muscle + source), deload calibration status, signal quality (scored_weeks, stability, confidence) per muscle.
 
-- **Security (#7).** `api/deps.py` — `require_admin_key` FastAPI dependency backed by `settings.effective_admin_key` (falls back to `APPLE_WEBHOOK_KEY`). Applied to all 26 mutating POST/PUT/DELETE endpoints across hevy.py, training.py, report.py, and dashboard.py. GET endpoints remain open. New `shc_admin_key` settings field; fallback means no .env change required for existing deployments.
+- **Security (#7).** `api/deps.py`, `require_admin_key` FastAPI dependency backed by `settings.effective_admin_key` (falls back to `APPLE_WEBHOOK_KEY`). Applied to all 26 mutating POST/PUT/DELETE endpoints across hevy.py, training.py, report.py, and dashboard.py. GET endpoints remain open. New `shc_admin_key` settings field; fallback means no .env change required for existing deployments.
 
 ### Fixed
 
-- **Shadowing `_LEGS`/`_CORE` tuples** — Duplicate definitions at ~line 349 of `metrics.py` lacked `"adduct"`, `"abduct"`, `"bulgarian"` etc., silently routing hip-adduction and split-squat exercises to `"other"`. Deleted; 3 regression tests added.
+- **Shadowing `_LEGS`/`_CORE` tuples**. Duplicate definitions at ~line 349 of `metrics.py` lacked `"adduct"`, `"abduct"`, `"bulgarian"` etc., silently routing hip-adduction and split-squat exercises to `"other"`. Deleted; 3 regression tests added.
 
-- **`v_daily_load` double-counting** — View joined `workout_sets` (raw); now joins `workout_sets_dedup` so Fitbod+Hevy overlap days don't double the resistance ACWR signal. Migration 0046.
+- **`v_daily_load` double-counting**. View joined `workout_sets` (raw); now joins `workout_sets_dedup` so Fitbod+Hevy overlap days don't double the resistance ACWR signal. Migration 0046.
 
-- **Hevy `ON CONFLICT` dropped edits** — `workout_sets` upsert was not updating `reps`, `weight_kg`, or `rpe` on conflict, silently discarding edits made in the Hevy app. Added all three to the UPDATE set.
+- **Hevy `ON CONFLICT` dropped edits**, `workout_sets` upsert was not updating `reps`, `weight_kg`, or `rpe` on conflict, silently discarding edits made in the Hevy app. Added all three to the UPDATE set.
 
-- **Prescription reason contradicted action** — When current sets < MEV while regressing (perf ≤ 2), the desired target is MEV (ramp up), not a cut. Old reason said "cut toward MEV" while action was "add". Now: `"regressing (perf 2/5) but below MEV → build to minimum productive volume"`.
+- **Prescription reason contradicted action**. When current sets < MEV while regressing (perf ≤ 2), the desired target is MEV (ramp up), not a cut. Old reason said "cut toward MEV" while action was "add". Now: `"regressing (perf 2/5) but below MEV -> build to minimum productive volume"`.
 
-- **Signal quality computed on every request** — `compute_all_muscle_signal_quality()` was called on every `/training/prescription` and `/training/context` hit (16 DB aggregations per call). Now materialized to `muscle_signal_cache` in `compute_all_scores` and read via a single table scan.
+- **Signal quality computed on every request**, `compute_all_muscle_signal_quality()` was called on every `/training/prescription` and `/training/context` hit (16 DB aggregations per call). Now materialized to `muscle_signal_cache` in `compute_all_scores` and read via a single table scan.
 
 ### Migrations
 
@@ -506,15 +506,15 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Loaded-lift RPE floor at 6** — `save_plan()` now normalizes plans on persist: any loaded exercise (and the session-level target) prescribed below RPE 6 is raised to 6. Hevy's RPE picker only goes 6–10, so a sub-6 target (e.g. a deload set at RPE 5) is unloggable and can't be autoregulated against. Cardio/bodyweight work is left untouched — it isn't RPE-logged in Hevy.
+- **Loaded-lift RPE floor at 6**, `save_plan()` now normalizes plans on persist: any loaded exercise (and the session-level target) prescribed below RPE 6 is raised to 6. Hevy's RPE picker only goes 6-10, so a sub-6 target (e.g. a deload set at RPE 5) is unloggable and can't be autoregulated against. Cardio/bodyweight work is left untouched, it isn't RPE-logged in Hevy.
 
-- **Research lab study swap: yoga → heavy lift volume** — Retired the `yoga_hrv_lift` hypothesis (fired ~twice a year, so it never gathered enough exposure days to produce a verdict) and activated `lift_volume_hrv_drop`: a Pearson correlation between a day's strength tonnage and next-morning HRV deviation from the trailing 28-day mean. Runs well-powered on existing Hevy + WHOOP data (n≈180). Migration `0028`, runner `_run_lift_volume_hrv_drop`.
+- **Research lab study swap: yoga -> heavy lift volume**. Retired the `yoga_hrv_lift` hypothesis (fired ~twice a year, so it never gathered enough exposure days to produce a verdict) and activated `lift_volume_hrv_drop`: a Pearson correlation between a day's strength tonnage and next-morning HRV deviation from the trailing 28-day mean. Runs well-powered on existing Hevy + WHOOP data (n≈180). Migration `0028`, runner `_run_lift_volume_hrv_drop`.
 
 ### Fixed
 
-- **After-action RPE comparison ignored Hevy's loggable floor** — The autoregulation read compared logged RPE directly against the plan target with no floor. Since Hevy can't record below RPE 6, every deload set prescribed at RPE 5 was guaranteed to read "harder than planned" and drop the load — a pure artifact. The comparison now clamps the target to a floor of 6; genuine overshoots (RPE 8+) still trigger a drop.
+- **After-action RPE comparison ignored Hevy's loggable floor**. The autoregulation read compared logged RPE directly against the plan target with no floor. Since Hevy can't record below RPE 6, every deload set prescribed at RPE 5 was guaranteed to read "harder than planned" and drop the load, a pure artifact. The comparison now clamps the target to a floor of 6; genuine overshoots (RPE 8+) still trigger a drop.
 
-- **HRV baseline dict keyed by string, looked up by date** — `_hrv_baseline_28d()` built its output keyed by `str(date)`, but every consumer looked it up with a `datetime.date` (`d not in baselines`). The check never matched, so every day was skipped and the yoga, two-pickleball, rest-day, rhr-trend, and sleep-quality runners all returned `n=0` ("insufficient"). Keyed by the raw date object — `two_pb_3d_hrv_drop` and the others now produce real verdicts (e.g. two-pickleball-in-3-days → REFUTED, n=145). The earlier index fix had unmasked this; the runners crashed before reaching it.
+- **HRV baseline dict keyed by string, looked up by date**, `_hrv_baseline_28d()` built its output keyed by `str(date)`, but every consumer looked it up with a `datetime.date` (`d not in baselines`). The check never matched, so every day was skipped and the yoga, two-pickleball, rest-day, rhr-trend, and sleep-quality runners all returned `n=0` ("insufficient"). Keyed by the raw date object, `two_pb_3d_hrv_drop` and the others now produce real verdicts (e.g. two-pickleball-in-3-days -> REFUTED, n=145). The earlier index fix had unmasked this; the runners crashed before reaching it.
 
 ---
 
@@ -522,13 +522,13 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Post-workout retrospective surface** — A dedicated **Post-workout** dashboard section that captures execution feedback after a session instead of regenerating the (unchanged) morning recovery story. New endpoints: `GET /api/workout/retrospective/latest` (latest logged session + stored retrospective + `needs_retrospective` flag) and `POST /api/workout/retrospective` (stores the Claude-written narrative, flags, and vault citations, which feed the next morning's PRESCRIPTION → EXECUTION line). `PostWorkoutPanel` mirrors the health-story copy-prompt flow (Copy CC prompt → paste into Claude Code → POST back → Sync) and renders the narrative above the existing after-action adherence table.
+- **Post-workout retrospective surface**. A dedicated **Post-workout** dashboard section that captures execution feedback after a session instead of regenerating the (unchanged) morning recovery story. New endpoints: `GET /api/workout/retrospective/latest` (latest logged session + stored retrospective + `needs_retrospective` flag) and `POST /api/workout/retrospective` (stores the Claude-written narrative, flags, and vault citations, which feed the next morning's PRESCRIPTION -> EXECUTION line). `PostWorkoutPanel` mirrors the health-story copy-prompt flow (Copy CC prompt -> paste into Claude Code -> POST back -> Sync) and renders the narrative above the existing after-action adherence table.
 
-- **Research-grounded retrospectives** — `GET /api/training/after-action` now returns a `## VAULT RESEARCH` block: notes selected server-side from the session's *execution* signals (rep misses → effective-reps/load-selection, RPE overshoot → fatigue-management/SFR, progression → progressive-overload, missing RPE → autoregulation), routed through the same retrieval engine the planner uses. Every adjustment the retrospective recommends is grounded in cited research.
+- **Research-grounded retrospectives**, `GET /api/training/after-action` now returns a `## VAULT RESEARCH` block: notes selected server-side from the session's *execution* signals (rep misses -> effective-reps/load-selection, RPE overshoot -> fatigue-management/SFR, progression -> progressive-overload, missing RPE -> autoregulation), routed through the same retrieval engine the planner uses. Every adjustment the retrospective recommends is grounded in cited research.
 
 ### Fixed
 
-- **HRV column index in lab baseline helper** — `_hrv_baseline_28d()` read the HRV value at tuple index 2, but every caller selects HRV as the second column (index 1). The yoga, two-pickleball, and rest-day runners passed `(date, hrv)` rows and crashed with "tuple index out of range" (surfaced as `n=0` inconclusive); `rhr_trend` passed `(date, hrv, rhr)` and silently averaged RHR as the HRV baseline. Now reads index 1, with all callers consistent on `(date, hrv, …)`.
+- **HRV column index in lab baseline helper**, `_hrv_baseline_28d()` read the HRV value at tuple index 2, but every caller selects HRV as the second column (index 1). The yoga, two-pickleball, and rest-day runners passed `(date, hrv)` rows and crashed with "tuple index out of range" (surfaced as `n=0` inconclusive); `rhr_trend` passed `(date, hrv, rhr)` and silently averaged RHR as the HRV baseline. Now reads index 1, with all callers consistent on `(date, hrv, …)`.
 
 ---
 
@@ -536,29 +536,29 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **DUPR unofficial API integration** — `sync_rating()` authenticates against `api.dupr.gg` (unofficial mobile/web backend) using email + password stored in macOS Keychain. Fetches `result.stats.doubles` and upserts one snapshot per calendar day into `dupr_snapshots`. Token cached in Keychain; 401/403 triggers automatic re-login. Migration `0026` adds `dupr_snapshots` and `oauth_state` tables.
+- **DUPR unofficial API integration**, `sync_rating()` authenticates against `api.dupr.gg` (unofficial mobile/web backend) using email + password stored in macOS Keychain. Fetches `result.stats.doubles` and upserts one snapshot per calendar day into `dupr_snapshots`. Token cached in Keychain; 401/403 triggers automatic re-login. Migration `0026` adds `dupr_snapshots` and `oauth_state` tables.
 
-- **DUPR match history pipeline** — `sync_matches()` paginates `POST /match/v1.0/history/` (limit=25, offset=0 required — API quirk). Extracts pre/post/delta ratings from the team's `preMatchRatingAndImpact` object, per-game scores (G1/G2/G3), partner name, and opponents. Upserted into `dupr_matches` (migration `0027`). New endpoints: `POST /api/pickleball/dupr/sync-matches`, `GET /api/pickleball/matches` (joins `dupr_matches` with `recovery` for WHOOP context on tournament days).
+- **DUPR match history pipeline**, `sync_matches()` paginates `POST /match/v1.0/history/` (limit=25, offset=0 required. API quirk). Extracts pre/post/delta ratings from the team's `preMatchRatingAndImpact` object, per-game scores (G1/G2/G3), partner name, and opponents. Upserted into `dupr_matches` (migration `0027`). New endpoints: `POST /api/pickleball/dupr/sync-matches`, `GET /api/pickleball/matches` (joins `dupr_matches` with `recovery` for WHOOP context on tournament days).
 
-- **2026 Goal Scorecard section** — New `GoalScorecard` component tracking three north-star metrics: DUPR doubles trajectory toward 5.0 (with glowing number, gradient progress bar, embedded latest-tournament context card), key compound e1RM hold-or-climb (per-lift trend with color-coded left borders), and bodyweight concurrent-training target with 4-week trend.
+- **2026 Goal Scorecard section**. New `GoalScorecard` component tracking three north-star metrics: DUPR doubles trajectory toward 5.0 (with glowing number, gradient progress bar, embedded latest-tournament context card), key compound e1RM hold-or-climb (per-lift trend with color-coded left borders), and bodyweight concurrent-training target with 4-week trend.
 
-- **Pickleball panel tournament section** — Match history grouped by event date. Per-tournament header shows event name, venue, W/L record, DUPR arc (pre→post), and WHOOP recovery % + HRV for the tournament day. Per-game rows: G-label, WIN/LOSS badge, score, opponents, partner first name, DUPR delta (falls back to `→ post_rating` when delta is null).
+- **Pickleball panel tournament section**. Match history grouped by event date. Per-tournament header shows event name, venue, W/L record, DUPR arc (pre->post), and WHOOP recovery % + HRV for the tournament day. Per-game rows: G-label, WIN/LOSS badge, score, opponents, partner first name, DUPR delta (falls back to `-> post_rating` when delta is null).
 
-- **DUPR wordmark** — Official navy PNG fetched from DUPR's CDN, inverted white via CSS filter, placed in the goal scorecard DUPR block header and inline in the pickleball panel tournament section eyebrow.
+- **DUPR wordmark**. Official navy PNG fetched from DUPR's CDN, inverted white via CSS filter, placed in the goal scorecard DUPR block header and inline in the pickleball panel tournament section eyebrow.
 
-- **Test suite** — 117 backend tests added across four new files: `compute_daily_state` end-to-end integration, readiness composite + subscores + e1RM helper, deload / e1RM auto-regulation logic, training-load (ACWR), muscle-group recency, sleep builder, and `workout_sets_dedup` source priority.
+- **Test suite**, 117 backend tests added across four new files: `compute_daily_state` end-to-end integration, readiness composite + subscores + e1RM helper, deload / e1RM auto-regulation logic, training-load (ACWR), muscle-group recency, sleep builder, and `workout_sets_dedup` source priority.
 
-- **CI: local pre-push gate** — GitHub Actions CI dropped in favour of a local `pre-push` hook (ruff + pyright + pytest). Keeps the feedback loop fast without needing remote CI on a personal tool.
+- **CI: local pre-push gate**. GitHub Actions CI dropped in favour of a local `pre-push` hook (ruff + pyright + pytest). Keeps the feedback loop fast without needing remote CI on a personal tool.
 
 ### Fixed
 
-- **Self-perpetuating deload loop** — Deload flag was derived from the current deload week itself, causing it to always be set once triggered. Fixed by only evaluating the e1RM regression window, not the in-flight deload state.
+- **Self-perpetuating deload loop**. Deload flag was derived from the current deload week itself, causing it to always be set once triggered. Fixed by only evaluating the e1RM regression window, not the in-flight deload state.
 
-- **`workout_sets_dedup` column name** — Column is `exercise`, not `exercise_name`; `/training/progression/all` endpoint was referencing the wrong column name.
+- **`workout_sets_dedup` column name**. Column is `exercise`, not `exercise_name`; `/training/progression/all` endpoint was referencing the wrong column name.
 
-- **`/training/progression` route shadowing** — `dashboard.py` registered a `GET /training/progression` requiring an `exercise` query param, shadowing `training.py`'s all-exercises version. Resolved by adding `/training/progression/all` as a distinct path.
+- **`/training/progression` route shadowing**, `dashboard.py` registered a `GET /training/progression` requiring an `exercise` query param, shadowing `training.py`'s all-exercises version. Resolved by adding `/training/progression/all` as a distinct path.
 
-- **`recovery` table `strain` column** — `GET /pickleball/matches` JOIN referenced a `strain` column that was never in the `recovery` schema; removed.
+- **`recovery` table `strain` column**, `GET /pickleball/matches` JOIN referenced a `strain` column that was never in the `recovery` schema; removed.
 
 ---
 
@@ -566,9 +566,9 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Plain-language clinical signal meanings** — Clinical Research Signals tiles now include an English-phrase interpretation below each computed value (e.g. "SRI 87 — tight circadian rhythm"). Range scales visualise where today's value sits within the clinical spectrum.
+- **Plain-language clinical signal meanings**. Clinical Research Signals tiles now include an English-phrase interpretation below each computed value (e.g. "SRI 87, tight circadian rhythm"). Range scales visualise where today's value sits within the clinical spectrum.
 
-- **Section nav + progressive disclosure** — Fixed top nav strip with section anchors (Today, Plan, Signals, Goals, Training, Cardio, Research, Trends). Collapsible sections default to the appropriate open/closed state on first load. Gate-reconciled readiness verdict consolidates all active gate reasons into one plain-English summary card.
+- **Section nav + progressive disclosure**. Fixed top nav strip with section anchors (Today, Plan, Signals, Goals, Training, Cardio, Research, Trends). Collapsible sections default to the appropriate open/closed state on first load. Gate-reconciled readiness verdict consolidates all active gate reasons into one plain-English summary card.
 
 ---
 
@@ -576,21 +576,21 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **PMC (Performance Management Chart)** — CTL, ATL, and TSB plotted on a shared axis over a 180-day window. TSB zone bands drawn directly on the chart (Race-Ready, Productive, Fatigued, Overreaching). Replaces the sparkline-only Banister strip.
+- **PMC (Performance Management Chart)**. CTL, ATL, and TSB plotted on a shared axis over a 180-day window. TSB zone bands drawn directly on the chart (Race-Ready, Productive, Fatigued, Overreaching). Replaces the sparkline-only Banister strip.
 
-- **HRV 7-day rolling band** — 7-day EWMA overlaid on the 90-day HRV chart with ±0.5σ guidance band. Visually separates short-term trend from long-term baseline noise.
+- **HRV 7-day rolling band**, 7-day EWMA overlaid on the 90-day HRV chart with ±0.5σ guidance band. Visually separates short-term trend from long-term baseline noise.
 
-- **Propranolol β-ADJ badge** — When the morning check-in flags propranolol taken, a `β-ADJ` chip appears on the HRV tile. Signals that the σ-deviation is calculated on the drug-adjusted baseline.
+- **Propranolol β-ADJ badge**. When the morning check-in flags propranolol taken, a `β-ADJ` chip appears on the HRV tile. Signals that the σ-deviation is calculated on the drug-adjusted baseline.
 
-- **Muscle volume panel** — Per-muscle-group set counts for the current mesocycle week vs MEV/MAV/MRV targets. Bars colour-code to target zone (under/in/over). Reads live from `muscle_volume_targets`.
+- **Muscle volume panel**. Per-muscle-group set counts for the current mesocycle week vs MEV/MAV/MRV targets. Bars colour-code to target zone (under/in/over). Reads live from `muscle_volume_targets`.
 
-- **Pickleball panel (initial)** — Sport tab in Trend Intelligence: session-count, court-time, and play-freshness KPIs; Play Freshness bar chart (recovery score on court days); Post-play HRV Delta chart (next-morning vs day-of).
+- **Pickleball panel (initial)**. Sport tab in Trend Intelligence: session-count, court-time, and play-freshness KPIs; Play Freshness bar chart (recovery score on court days); Post-play HRV Delta chart (next-morning vs day-of).
 
 ### Fixed
 
-- **`workout_sets_dedup` column reference** — Muscle-volume SQL used `ws.exercise_name`; the view's column is `ws.exercise`. Fixed.
+- **`workout_sets_dedup` column reference**. Muscle-volume SQL used `ws.exercise_name`; the view's column is `ws.exercise`. Fixed.
 
-- **Pickleball sessions counted as legs stimulus** — Rest-day tracker was not counting pickleball workouts when checking 48h/72h muscle group rest; now treated as lower-body stimulus.
+- **Pickleball sessions counted as legs stimulus**. Rest-day tracker was not counting pickleball workouts when checking 48h/72h muscle group rest; now treated as lower-body stimulus.
 
 ---
 
@@ -598,15 +598,15 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **WHOOP re-auth button** — When `oauth_state.needs_reauth` is true for WHOOP, the Biometric HUD strip shows a one-click re-authorization button instead of a stale sync warning.
+- **WHOOP re-auth button**. When `oauth_state.needs_reauth` is true for WHOOP, the Biometric HUD strip shows a one-click re-authorization button instead of a stale sync warning.
 
-- **Exercise notes + time-based durations** — Hevy workout display now surfaces per-exercise notes (coaching cues synced from the app). Time-based exercises show duration instead of reps×weight.
+- **Exercise notes + time-based durations**. Hevy workout display now surfaces per-exercise notes (coaching cues synced from the app). Time-based exercises show duration instead of reps×weight.
 
 ### Fixed
 
-- **SVG modality icons** — All emoji-based sport/modality icons replaced with inline SVG. No more font-glyph fallbacks on systems without the full emoji set.
+- **SVG modality icons**. All emoji-based sport/modality icons replaced with inline SVG. No more font-glyph fallbacks on systems without the full emoji set.
 
-- **Planner session-logged-today check** — Was counting any Hevy workout type as "already trained today"; now only counts strength sessions, so a standalone pickleball day doesn't block plan generation.
+- **Planner session-logged-today check**. Was counting any Hevy workout type as "already trained today"; now only counts strength sessions, so a standalone pickleball day doesn't block plan generation.
 
 ---
 
@@ -614,7 +614,7 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Exercise notes from Hevy** — `GET /api/hevy/workouts` now surfaces per-exercise notes alongside sets. Notes appear as coaching-cue callouts in the After-Action panel.
+- **Exercise notes from Hevy**, `GET /api/hevy/workouts` now surfaces per-exercise notes alongside sets. Notes appear as coaching-cue callouts in the After-Action panel.
 
 ---
 
@@ -622,19 +622,19 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Lab hypothesis rotation** — When a question accumulates 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, it is automatically retired (`retired_at` set, `enabled` → FALSE) and the next queued hypothesis (lowest `queued_order`) is promoted. The system never runs out of questions to test. Migration `0023` adds `retired_at` and `queued_order` columns to `lab_questions`.
+- **Lab hypothesis rotation**. When a question accumulates 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, it is automatically retired (`retired_at` set, `enabled` -> FALSE) and the next queued hypothesis (lowest `queued_order`) is promoted. The system never runs out of questions to test. Migration `0023` adds `retired_at` and `queued_order` columns to `lab_questions`.
 
-- **Queued hypothesis bank (8 questions)** — Seeded alongside the rotation system; each has a wired runner function in `lab.py`. Questions promote in order: yoga → HRV lift, consecutive training → recovery drop, two pickleball sessions in 3 days → HRV depression, weekly volume spike → recovery correlation, full rest day → HRV rebound, self-reported energy ↔ same-day HRV, 7-day rising RHR → HRV below baseline, low sleep quality → reduced HRV.
+- **Queued hypothesis bank (8 questions)**. Seeded alongside the rotation system; each has a wired runner function in `lab.py`. Questions promote in order: yoga -> HRV lift, consecutive training -> recovery drop, two pickleball sessions in 3 days -> HRV depression, weekly volume spike -> recovery correlation, full rest day -> HRV rebound, self-reported energy ↔ same-day HRV, 7-day rising RHR -> HRV below baseline, low sleep quality -> reduced HRV.
 
-- **Lab findings injected into LLM context** — `build_daily_context()` and `build_training_context()` now include a `## YOUR PERSONAL LAB FINDINGS` block with the latest CONFIRMED / REFUTED / INCONCLUSIVE verdict per enabled question, sorted by verdict strength. Every briefing and workout plan is now grounded in Rob's own statistical findings, not just population-level assumptions.
+- **Lab findings injected into LLM context**, `build_daily_context()` and `build_training_context()` now include a `## YOUR PERSONAL LAB FINDINGS` block with the latest CONFIRMED / REFUTED / INCONCLUSIVE verdict per enabled question, sorted by verdict strength. Every briefing and workout plan is now grounded in Rob's own statistical findings, not just population-level assumptions.
 
-- **Health story format upgrade** — Daily briefings now open with a 3-line metrics header (HRV · WHOOP recovery · RHR · skin temp · ACWR) and a cycle-position line before the prose. Tone tuned for 5am reading: short declarative sentences, conclusions front-loaded, clinical register stripped. Anti-repetition rule added: the header owns the numbers; prose paragraphs own the meaning.
+- **Health story format upgrade**. Daily briefings now open with a 3-line metrics header (HRV · WHOOP recovery · RHR · skin temp · ACWR) and a cycle-position line before the prose. Tone tuned for 5am reading: short declarative sentences, conclusions front-loaded, clinical register stripped. Anti-repetition rule added: the header owns the numbers; prose paragraphs own the meaning.
 
-- **`/api/lab/run` response** — Now returns `retired` list of question IDs that were rotated out during the run.
+- **`/api/lab/run` response**. Now returns `retired` list of question IDs that were rotated out during the run.
 
 ### Fixed
 
-- **`rest_seconds` silently dropped on Hevy push** — `_plan_to_hevy_exercises()` validated `rest_seconds` in the plan schema but never forwarded it to the Hevy routine exercise payload. Fixed.
+- **`rest_seconds` silently dropped on Hevy push**, `_plan_to_hevy_exercises()` validated `rest_seconds` in the plan schema but never forwarded it to the Hevy routine exercise payload. Fixed.
 
 ---
 
@@ -642,23 +642,23 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Apple Health Shortcuts ingestion** — `POST /api/apple/shortcut` accepts a native iOS Shortcuts payload (JSON body with typed metric keys). Covers body weight, gait speed, cardio fitness, VO₂max, steps, resting energy, active energy, sleep analysis, stand hours, sound exposure, and respiratory rate. Imperial→SI conversion applied server-side.
+- **Apple Health Shortcuts ingestion**, `POST /api/apple/shortcut` accepts a native iOS Shortcuts payload (JSON body with typed metric keys). Covers body weight, gait speed, cardio fitness, VO₂max, steps, resting energy, active energy, sleep analysis, stand hours, sound exposure, and respiratory rate. Imperial->SI conversion applied server-side.
 
-- **Apple Health webhook (HAE)** — `POST /api/apple/webhook` endpoint for HealthAutoExport push notifications with Tailscale host allowlist. Registered in the APScheduler job loop alongside the existing WHOOP/Hevy jobs.
+- **Apple Health webhook (HAE)**, `POST /api/apple/webhook` endpoint for HealthAutoExport push notifications with Tailscale host allowlist. Registered in the APScheduler job loop alongside the existing WHOOP/Hevy jobs.
 
-- **Tailscale network support** — API now binds to `0.0.0.0` (configurable) so the Tailscale interface can reach it from other devices. Host allowlist in the middleware validates `Host` against a separate allow-list, decoupled from the bind address.
+- **Tailscale network support**. API now binds to `0.0.0.0` (configurable) so the Tailscale interface can reach it from other devices. Host allowlist in the middleware validates `Host` against a separate allow-list, decoupled from the bind address.
 
-- **WHOOP full V2 API coverage** — Ingests `body_measurement` (height, weight, measured max HR), `whoop_user_profile`, and the full `daily_cycle` (strain, kcal, avg/max HR, score state). HR zone durations (`zone_two_min`–`zone_five_min`) and SpO2 now pulled from the dedicated columns rather than inferred.
+- **WHOOP full V2 API coverage**. Ingests `body_measurement` (height, weight, measured max HR), `whoop_user_profile`, and the full `daily_cycle` (strain, kcal, avg/max HR, score state). HR zone durations (`zone_two_min`, `zone_five_min`) and SpO2 now pulled from the dedicated columns rather than inferred.
 
-- **Slim daily-brief endpoint** — `GET /api/daily/brief` returns a single ~24KB payload replacing the prior multi-endpoint pattern (~293KB across 6+ calls). Combines DailyState, top-5 signal-ranked vault notes, last 7 training sessions, top 20 working weights, full Hevy exercise catalog, and mesocycle state. The `shc-workout` skill fetches context in ~500ms via this endpoint.
+- **Slim daily-brief endpoint**, `GET /api/daily/brief` returns a single ~24KB payload replacing the prior multi-endpoint pattern (~293KB across 6+ calls). Combines DailyState, top-5 signal-ranked vault notes, last 7 training sessions, top 20 working weights, full Hevy exercise catalog, and mesocycle state. The `shc-workout` skill fetches context in ~500ms via this endpoint.
 
-- **Concurrent training pickleball signal** — `build_training_context()` now emits `pickleball_focus` (≥60 min/7d) and `concurrent_training` (≥150 min/7d) signals that gate finisher selection and lower-body volume targets per Wilson 2012 / Coffey & Hawley 2017.
+- **Concurrent training pickleball signal**, `build_training_context()` now emits `pickleball_focus` (≥60 min/7d) and `concurrent_training` (≥150 min/7d) signals that gate finisher selection and lower-body volume targets per Wilson 2012 / Coffey & Hawley 2017.
 
 ### Fixed
 
-- **Respiratory rate backfill** — Implausible RR values (outside 8–30 bpm) from earlier schema iterations cleaned via a targeted WHOOP resync. Migration `0022` applies the clamp to stored rows.
+- **Respiratory rate backfill**. Implausible RR values (outside 8-30 bpm) from earlier schema iterations cleaned via a targeted WHOOP resync. Migration `0022` applies the clamp to stored rows.
 
-- **`/api/sleep/recent` column reference** — Referenced the dropped `sleep.rhr` column after the schema was normalized; updated to use `recovery.rhr`.
+- **`/api/sleep/recent` column reference**. Referenced the dropped `sleep.rhr` column after the schema was normalized; updated to use `recovery.rhr`.
 
 ---
 
@@ -666,35 +666,35 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Clinical Research Signals panel** — Six peer-reviewed tiles layered above the standard Insights pane, each with a primary citation tooltip: Sleep Regularity Index (Phillips 2017), lnRMSSD rolling mean with 4-week delta (Buchheit 2014), consecutive-red-recovery streak (WHOOP 2022), Allostatic Load composite (Seeman 2001), drug-adjusted HRV (Kemp 2010 / Mølgaard 1991), Z2 HR drift coefficient of variation (Maffetone).
+- **Clinical Research Signals panel**. Six peer-reviewed tiles layered above the standard Insights pane, each with a primary citation tooltip: Sleep Regularity Index (Phillips 2017), lnRMSSD rolling mean with 4-week delta (Buchheit 2014), consecutive-red-recovery streak (WHOOP 2022), Allostatic Load composite (Seeman 2001), drug-adjusted HRV (Kemp 2010 / Mølgaard 1991), Z2 HR drift coefficient of variation (Maffetone).
 
-- **Research Lab (initial)** — Pre-registered N-of-1 hypothesis catalogue: 6 standing questions with fixed test types and thresholds to prevent p-hacking. Wired through `GET /api/lab/questions`, `GET /api/lab/findings`, `POST /api/lab/run`. Frontend `LabPanel` renders one verdict-coded card per question.
+- **Research Lab (initial)**. Pre-registered N-of-1 hypothesis catalogue: 6 standing questions with fixed test types and thresholds to prevent p-hacking. Wired through `GET /api/lab/questions`, `GET /api/lab/findings`, `POST /api/lab/run`. Frontend `LabPanel` renders one verdict-coded card per question.
 
-- **Fueling panel** — `/api/fueling/today` endpoint computes kcal balance (dietary in − active + basal out), protein g/kg vs 1.6–2.2 g/kg hypertrophy band, hydration in oz + sodium, and body composition (weight / BF% / lean mass). Empty-state shows weight-adjusted targets from day one.
+- **Fueling panel**, `/api/fueling/today` endpoint computes kcal balance (dietary in − active + basal out), protein g/kg vs 1.6-2.2 g/kg hypertrophy band, hydration in oz + sodium, and body composition (weight / BF% / lean mass). Empty-state shows weight-adjusted targets from day one.
 
-- **Periodization strip + Banister CTL/ATL/TSB** — Mesocycle phase strip (current week glows, deload week amber) backed by `ensure_active_mesocycle()`. Banister fitness-fatigue model layered on top: CTL (42d EWMA), ATL (7d EWMA), TSB (form = CTL − ATL) with color-coded zone labels.
+- **Periodization strip + Banister CTL/ATL/TSB**. Mesocycle phase strip (current week glows, deload week amber) backed by `ensure_active_mesocycle()`. Banister fitness-fatigue model layered on top: CTL (42d EWMA), ATL (7d EWMA), TSB (form = CTL − ATL) with color-coded zone labels.
 
-- **After-Action autoregulation panel** — Per-exercise actuals vs plan target computed from post-Hevy-sync data. Next-session weight suggestion via Helms 2018 + RP RPE rules: −10% if RPE ≥ target+2, +2.5% if under. Rounded to nearest 2.5 lbs. Read-only — no double-logging.
+- **After-Action autoregulation panel**. Per-exercise actuals vs plan target computed from post-Hevy-sync data. Next-session weight suggestion via Helms 2018 + RP RPE rules: −10% if RPE ≥ target+2, +2.5% if under. Rounded to nearest 2.5 lbs. Read-only, no double-logging.
 
-- **Sleep architecture depth** — 7-night stacked bar now surfaces sleep efficiency %, wakes (disturbance count), and midpoint consistency (σ). Null deep/REM guards added; prior schema stored nulls for some WHOOP sync windows.
+- **Sleep architecture depth**, 7-night stacked bar now surfaces sleep efficiency %, wakes (disturbance count), and midpoint consistency (σ). Null deep/REM guards added; prior schema stored nulls for some WHOOP sync windows.
 
-- **Vault index system + mesocycle tracking** — `mesocycles` and `muscle_volume_targets` tables added (migration `0017`/`0018`). Vault signals for concurrent training interference, power development, and maximal strength wired into the retrieval scorer.
+- **Vault index system + mesocycle tracking**, `mesocycles` and `muscle_volume_targets` tables added (migration `0017`/`0018`). Vault signals for concurrent training interference, power development, and maximal strength wired into the retrieval scorer.
 
-- **Science-first exercise selection** — Planner enforces Hevy catalog membership before naming any exercise. Habit-bias broken by rotating selection within movement pattern categories.
+- **Science-first exercise selection**. Planner enforces Hevy catalog membership before naming any exercise. Habit-bias broken by rotating selection within movement pattern categories.
 
-- **Body diagram per-muscle soreness** — Anatomical body model on the check-in form; clickable regions set per-muscle soreness directly instead of a single global value.
+- **Body diagram per-muscle soreness**. Anatomical body model on the check-in form; clickable regions set per-muscle soreness directly instead of a single global value.
 
 ### Fixed
 
-- **Lab runner column names** — `cardio_sessions.modality` (not `sport`), `cardio_sessions.date` (not `started_at`), `daily_cycle.strain` (not `workouts.strain`), `medications.valid_to` (not `expired_at`). Runners rewritten as CTE + LEFT JOIN; `log(0)` guard added.
+- **Lab runner column names**, `cardio_sessions.modality` (not `sport`), `cardio_sessions.date` (not `started_at`), `daily_cycle.strain` (not `workouts.strain`), `medications.valid_to` (not `expired_at`). Runners rewritten as CTE + LEFT JOIN; `log(0)` guard added.
 
-- **Clinical Research panel** — `kaiser_summary` table never existed; vitals now pulled from `measurements` + `labs` tables.
+- **Clinical Research panel**, `kaiser_summary` table never existed; vitals now pulled from `measurements` + `labs` tables.
 
-- **Hevy catalog enforcement** — Exercise selection was referencing non-Hevy names in some edge paths; strict catalog check now gated at validation.
+- **Hevy catalog enforcement**. Exercise selection was referencing non-Hevy names in some edge paths; strict catalog check now gated at validation.
 
-- **Imperial units for skin temp** — `DailyState` now returns skin temp Δ in °F; prior ingest stored Celsius delta.
+- **Imperial units for skin temp**, `DailyState` now returns skin temp Δ in °F; prior ingest stored Celsius delta.
 
-- **`rest_seconds` in workout prompt** — Vault-aware prompt now includes coaching-cue rest times sourced from the plan schema.
+- **`rest_seconds` in workout prompt**. Vault-aware prompt now includes coaching-cue rest times sourced from the plan schema.
 
 ---
 
@@ -702,57 +702,57 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Rebrand: Savage Health Center → Savage Labs** — App name, wordmark, and all internal references updated. WHOOP Obsidian wordmarks applied to vault-sourced UI surfaces.
+- **Rebrand: Savage Health Center -> Savage Labs**. App name, wordmark, and all internal references updated. WHOOP Obsidian wordmarks applied to vault-sourced UI surfaces.
 
-- **Ambient state-reactive background** — Page hue shifts with readiness tier (greenish at GREEN, reddish at RED, neutral at YELLOW). `oklch` color space ensures perceptual uniformity across hues.
+- **Ambient state-reactive background**. Page hue shifts with readiness tier (greenish at GREEN, reddish at RED, neutral at YELLOW). `oklch` color space ensures perceptual uniformity across hues.
 
-- **Mission-control clock** — Orbitron live clock with seconds tick and date eyebrow in the command bar dead space.
+- **Mission-control clock**. Orbitron live clock with seconds tick and date eyebrow in the command bar dead space.
 
-- **Anatomical check-in body model** — `react-body-highlighter` integration replaces the global soreness slider. Clickable anterior/posterior muscle map writes per-muscle soreness to `daily_checkin`.
+- **Anatomical check-in body model**, `react-body-highlighter` integration replaces the global soreness slider. Clickable anterior/posterior muscle map writes per-muscle soreness to `daily_checkin`.
 
-- **Biometric HUD strip** — Always-on header bar showing live WHOOP/Hevy sync status, today's key vitals, and data freshness per source.
+- **Biometric HUD strip**. Always-on header bar showing live WHOOP/Hevy sync status, today's key vitals, and data freshness per source.
 
-- **Security hardening** — CORS locked to `localhost:3000`; personal clinical context moved from source into a gitignored runtime file loaded at startup; DuckDB key validated at boot; Anthropic SDK + chat advisor removed (all AI is now clipboard-driven via the skill workflow).
+- **Security hardening**. CORS locked to `localhost:3000`; personal clinical context moved from source into a gitignored runtime file loaded at startup; DuckDB key validated at boot; Anthropic SDK + chat advisor removed (all AI is now clipboard-driven via the skill workflow).
 
-- **WHOOP SPO2, full sleep stages, daily cycle** — Extended WHOOP ingest to capture SpO2, SWS/REM/light/awake minutes, efficiency, disturbances, respiratory rate, sleep cycles, and daily cycle strain.
+- **WHOOP SPO2, full sleep stages, daily cycle**. Extended WHOOP ingest to capture SpO2, SWS/REM/light/awake minutes, efficiency, disturbances, respiratory rate, sleep cycles, and daily cycle strain.
 
 ### Fixed
 
-- **WHOOP OAuth error handling** — `needs_reauth` flag now only set on auth-class failures (401/403), not transient network errors. Prevents spurious reauth banners.
+- **WHOOP OAuth error handling**, `needs_reauth` flag now only set on auth-class failures (401/403), not transient network errors. Prevents spurious reauth banners.
 
-- **Body weight trend** — Daily check-in weights now included alongside Apple Health smart-scale readings in the weight chart.
+- **Body weight trend**. Daily check-in weights now included alongside Apple Health smart-scale readings in the weight chart.
 
-- **Skin-temp illness gate direction** — Gate previously fired when skin temp was *below* baseline; corrected to fire when Δ is positive (elevated = illness sentinel).
-
----
-
-## 2026-05-04 — 2026-05-05
-
-### Added
-
-- **Check-in notes field + date override** — Allows back-filling illness or travel days with context from the past; surfaced on the morning check-in form.
-
-- **Health story personal trainer tone** — `STORY_PROMPT` rewritten: direct address, conclusions first, no hedging. Full workout plan schema injected into the prompt to let Claude reference it when explaining the brief.
-
-- **Futuristic gradient pass** — Page bloom, card sheen, and hero glow applied via Tailwind `oklch` gradient utilities. Scatter/bar tooltips made legible on dark surfaces.
+- **Skin-temp illness gate direction**. Gate previously fired when skin temp was *below* baseline; corrected to fire when Δ is positive (elevated = illness sentinel).
 
 ---
 
-## 2026-05-01 — 2026-05-02
+## 2026-05-04: 2026-05-05
 
 ### Added
 
-- **Cardio weekly zone-stacked volume + pickleball HR efficiency** — Zone-stacked bar chart (Z0–Z5) per week over 28 days. Separate pickleball HR efficiency tile (avg HR in session vs 28d cardio baseline).
+- **Check-in notes field + date override**. Allows back-filling illness or travel days with context from the past; surfaced on the morning check-in form.
 
-- **launchd sync agent** — `com.savage-labs.sync.plist` runs WHOOP + Hevy + adherence jobs 4× per day without the API server running. Registered at `/Library/LaunchAgents/`.
+- **Health story personal trainer tone**, `STORY_PROMPT` rewritten: direct address, conclusions first, no hedging. Full workout plan schema injected into the prompt to let Claude reference it when explaining the brief.
 
-- **e1RM trajectory sparklines** — Per-exercise Epley 1RM sparklines rendered in the dead space below the weekly volume chart in the Strength panel.
+- **Futuristic gradient pass**. Page bloom, card sheen, and hero glow applied via Tailwind `oklch` gradient utilities. Scatter/bar tooltips made legible on dark surfaces.
 
-- **Qualitative + paneled lab results** — Clinical panel now renders lab values with reference ranges, abnormal flags, and trend arrows. Qualitative results (e.g. "Reactive" / "Non-reactive") supported alongside numeric.
+---
 
-- **WHOOP as authoritative cardio source** — Apple Health workout import removed; WHOOP `workout_activities` mirrored into `cardio_sessions` as the single source of truth.
+## 2026-05-01: 2026-05-02
 
-- **Workout planning when today already logged** — Planner now targets the *next* session when a workout has already been recorded today.
+### Added
+
+- **Cardio weekly zone-stacked volume + pickleball HR efficiency**. Zone-stacked bar chart (Z0, Z5) per week over 28 days. Separate pickleball HR efficiency tile (avg HR in session vs 28d cardio baseline).
+
+- **launchd sync agent**, `com.savage-labs.sync.plist` runs WHOOP + Hevy + adherence jobs 4× per day without the API server running. Registered at `/Library/LaunchAgents/`.
+
+- **e1RM trajectory sparklines**. Per-exercise Epley 1RM sparklines rendered in the dead space below the weekly volume chart in the Strength panel.
+
+- **Qualitative + paneled lab results**. Clinical panel now renders lab values with reference ranges, abnormal flags, and trend arrows. Qualitative results (e.g. "Reactive" / "Non-reactive") supported alongside numeric.
+
+- **WHOOP as authoritative cardio source**. Apple Health workout import removed; WHOOP `workout_activities` mirrored into `cardio_sessions` as the single source of truth.
+
+- **Workout planning when today already logged**. Planner now targets the *next* session when a workout has already been recorded today.
 
 ---
 
@@ -760,37 +760,37 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **WhoopVitals card** — Premium dark-gradient card (linear-gradient with subtle oklch blue shift) anchored to the official WHOOP wordmark SVG. Four-up KPI strip in Orbitron: Recovery score/100 with σ-colored glow, Strain as cardio min/wk, Sleep hours color-coded (≥7.5h green, ≥6.5h yellow, <6.5h red), and HRV σ deviation from 28d baseline. Live sync-status chip flags last sync time or OAuth reauth. Beta-blocker days annotated `β-adj` on HRV tile. "How to read this" footer covers all four metrics.
+- **WhoopVitals card**. Premium dark-gradient card (linear-gradient with subtle oklch blue shift) anchored to the official WHOOP wordmark SVG. Four-up KPI strip in Orbitron: Recovery score/100 with σ-colored glow, Strain as cardio min/wk, Sleep hours color-coded (≥7.5h green, ≥6.5h yellow, <6.5h red), and HRV σ deviation from 28d baseline. Live sync-status chip flags last sync time or OAuth reauth. Beta-blocker days annotated `β-adj` on HRV tile. "How to read this" footer covers all four metrics.
 
-- **Orbitron typography system** — Consistent application of Orbitron across the entire UI: all section eyebrows (`.eyebrow`), section titles (`.shc-section-title`), metric numerals (`.metric-xl/lg/md`), tab switchers, and KPI labels. Adds `SectionTitle` and `HowToRead` components to `ui/metric.tsx`.
+- **Orbitron typography system**. Consistent application of Orbitron across the entire UI: all section eyebrows (`.eyebrow`), section titles (`.shc-section-title`), metric numerals (`.metric-xl/lg/md`), tab switchers, and KPI labels. Adds `SectionTitle` and `HowToRead` components to `ui/metric.tsx`.
 
-- **Clinical timeline** — Replaced the three-card clinical overview (conditions list, medications list, labs list) with a unified descending-date event lane. Color-coded dots by event type (medication = chart-line blue, condition = neutral, lab = positive green). Merges all event types into a single scannable clinical narrative.
+- **Clinical timeline**. Replaced the three-card clinical overview (conditions list, medications list, labs list) with a unified descending-date event lane. Color-coded dots by event type (medication = chart-line blue, condition = neutral, lab = positive green). Merges all event types into a single scannable clinical narrative.
 
-- **Cardio trend KPIs** — `TrendKpi` sub-component: Orbitron number + directional delta badge comparing last 14 days vs prior 14 days. Four KPIs above the session log: cardio min/wk, avg HR, avg RPE, kcal/wk. Directional arrows and colors (positive/neutral/negative) match the same threshold system as recovery metrics.
+- **Cardio trend KPIs**, `TrendKpi` sub-component: Orbitron number + directional delta badge comparing last 14 days vs prior 14 days. Four KPIs above the session log: cardio min/wk, avg HR, avg RPE, kcal/wk. Directional arrows and colors (positive/neutral/negative) match the same threshold system as recovery metrics.
 
-- **Cardio table truncation** — Session log defaults to 8 most-recent rows; "Show all" toggle reveals the full history. Keeps the log form accessible without infinite scroll.
+- **Cardio table truncation**. Session log defaults to 8 most-recent rows; "Show all" toggle reveals the full history. Keeps the log form accessible without infinite scroll.
 
-- **PulseCard in right rail** — Replaces the empty space at the top of the 320px right column with a readiness orb (Orbitron score, radial oklch glow, tier-colored), plain-language tier interpretation, and a 2-col sync-age footer for WHOOP and Hevy. Fills dead space with signal-rich content.
+- **PulseCard in right rail**. Replaces the empty space at the top of the 320px right column with a readiness orb (Orbitron score, radial oklch glow, tier-colored), plain-language tier interpretation, and a 2-col sync-age footer for WHOOP and Hevy. Fills dead space with signal-rich content.
 
-- **Sleep panel improvements** — Per-night rows now show `wk md` date format (e.g. "Fri 4/25"). Footer row adds 7d sleep debt in hours alongside best-night date and deep%. Interpretation copy covers target bands (7.5h, 15–20% deep, 20–25% REM, consistency < 1.0σ, debt > 5h flag).
+- **Sleep panel improvements**. Per-night rows now show `wk md` date format (e.g. "Fri 4/25"). Footer row adds 7d sleep debt in hours alongside best-night date and deep%. Interpretation copy covers target bands (7.5h, 15-20% deep, 20-25% REM, consistency < 1.0σ, debt > 5h flag).
 
-- **Patterns pane helptext** — Added interpretation paragraph before scatter charts explaining how to read sleep-vs-recovery and HRV-vs-recovery correlations.
+- **Patterns pane helptext**. Added interpretation paragraph before scatter charts explaining how to read sleep-vs-recovery and HRV-vs-recovery correlations.
 
-- **Correlation cards empty state** — Richer empty state: shows days collected, days remaining to unlock, and three actionable tips (check-in regularly, maintain consistent sleep, log cardio). When data is present, adds helptext on how to interpret Pearson-r and confidence ranges.
+- **Correlation cards empty state**. Richer empty state: shows days collected, days remaining to unlock, and three actionable tips (check-in regularly, maintain consistent sleep, log cardio). When data is present, adds helptext on how to interpret Pearson-r and confidence ranges.
 
-- **Trend Intelligence tab redesign** — Section header upgraded from `Eyebrow` to `shc-section-title`. Tab switcher replaced with a pill-style framed container (`oklch(1 0 0 / 0.025)` background, hairline border); each tab uses Orbitron uppercase with `tracking-[0.16em]`.
+- **Trend Intelligence tab redesign**. Section header upgraded from `Eyebrow` to `shc-section-title`. Tab switcher replaced with a pill-style framed container (`oklch(1 0 0 / 0.025)` background, hairline border); each tab uses Orbitron uppercase with `tracking-[0.16em]`.
 
-- **Analysis persistence and WHOOP sync counts** — Vault analysis results persist across app restarts; WHOOP background sync now logs ingested record counts per run.
+- **Analysis persistence and WHOOP sync counts**. Vault analysis results persist across app restarts; WHOOP background sync now logs ingested record counts per run.
 
-- **Vault signal coverage** — New vault signals for body recomposition (strength gain vs weight delta), push/pull imbalance, and 4-week volume spikes.
+- **Vault signal coverage**. New vault signals for body recomposition (strength gain vs weight delta), push/pull imbalance, and 4-week volume spikes.
 
 ### Fixed
 
-- **Cooldown object array crash** — Workout renderer no longer crashes when the cooldown field is an object instead of an array.
+- **Cooldown object array crash**. Workout renderer no longer crashes when the cooldown field is an object instead of an array.
 
-- **Block label undefined crash** — Guard for undefined block labels in workout plan renderer; validates block/exercise field names before rendering.
+- **Block label undefined crash**. Guard for undefined block labels in workout plan renderer; validates block/exercise field names before rendering.
 
-- **DuckDB WAL path mismatch** — Prevents startup crash when WAL file path doesn't match the DB path after a directory move.
+- **DuckDB WAL path mismatch**. Prevents startup crash when WAL file path doesn't match the DB path after a directory move.
 
 ---
 
@@ -798,35 +798,35 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Hevy integration — full push/pull** — Sync workouts from Hevy into DuckDB (`GET /api/hevy/sync`), refresh exercise template cache (`GET /api/hevy/sync-templates`), push AI plan as a Hevy routine (`POST /api/hevy/push-routine`). Hevy API key stored in macOS Keychain with env fallback.
+- **Hevy integration, full push/pull**. Sync workouts from Hevy into DuckDB (`GET /api/hevy/sync`), refresh exercise template cache (`GET /api/hevy/sync-templates`), push AI plan as a Hevy routine (`POST /api/hevy/push-routine`). Hevy API key stored in macOS Keychain with env fallback.
 
-- **Cardio & Sports panel** — 28-day summary card: session count, total minutes, top sport, zone-mix bar. Manual log form (sport, duration, avg HR, RPE) with hover-to-delete. Supports pickleball, cycling, rowing, ski-erg, walking, elliptical, and swimming.
+- **Cardio & Sports panel**, 28-day summary card: session count, total minutes, top sport, zone-mix bar. Manual log form (sport, duration, avg HR, RPE) with hover-to-delete. Supports pickleball, cycling, rowing, ski-erg, walking, elliptical, and swimming.
 
-- **Workout plan redesign** — Replaced flat table with `ExerciseBlock` card grid. Cards show sets×reps + weight, RPE badge, last-session history stamp with delta. Block section headers with colored accent bars. Auto-detected superset pills. Source badge (Claude Code / Claude / fallback). "Generate via Claude" and "Copy CC prompt" buttons.
+- **Workout plan redesign**. Replaced flat table with `ExerciseBlock` card grid. Cards show sets×reps + weight, RPE badge, last-session history stamp with delta. Block section headers with colored accent bars. Auto-detected superset pills. Source badge (Claude Code / Claude / fallback). "Generate via Claude" and "Copy CC prompt" buttons.
 
-- **Progression drawer** — Slide-in panel per exercise: Epley 1RM chart (est vs max lbs) over 30 sessions, full session table (date, top set, volume, RPE, est 1RM). Opens from PR rows, top-exercise rows, and plan exercise cards.
+- **Progression drawer**. Slide-in panel per exercise: Epley 1RM chart (est vs max lbs) over 30 sessions, full session table (date, top set, volume, RPE, est 1RM). Opens from PR rows, top-exercise rows, and plan exercise cards.
 
-- **Beta-blocker-aware readiness** (`lib/readiness.ts`) — Single source of truth for composite readiness. Detects propranolol/metoprolol/etc. from medications list and shifts weights: HRV 20% / Sleep 40% / RHR 25% / Subj 15% vs default 40/30/20/10. Sigma-based HRV scoring replaces old saturation hack.
+- **Beta-blocker-aware readiness** (`lib/readiness.ts`). Single source of truth for composite readiness. Detects propranolol/metoprolol/etc. from medications list and shifts weights: HRV 20% / Sleep 40% / RHR 25% / Subj 15% vs default 40/30/20/10. Sigma-based HRV scoring replaces old saturation hack.
 
-- **Workout AI endpoints** — `POST /api/workout/generate` (Claude Opus 4.7 with full clinical context), `DELETE /api/workout/plan`, `GET /api/training/muscle-balance`, `GET /api/training/exercise-last`, `GET /api/cardio/recent`, `POST /api/cardio/log`, `DELETE /api/cardio/log/{id}`.
+- **Workout AI endpoints**, `POST /api/workout/generate` (Claude Opus 4.7 with full clinical context), `DELETE /api/workout/plan`, `GET /api/training/muscle-balance`, `GET /api/training/exercise-last`, `GET /api/cardio/recent`, `POST /api/cardio/log`, `DELETE /api/cardio/log/{id}`.
 
-- **`shc-workout` Claude Code skill** — Mode A (generate): pulls context, applies GREEN/YELLOW/RED intensity matrix, picks real exercises, POSTs validated JSON plan. Mode B (analyze): read-only prose with cited numbers. Includes skin-temp veto, sleep veto, push:pull bias, no-plyometrics rule.
+- **`shc-workout` Claude Code skill**. Mode A (generate): pulls context, applies GREEN/YELLOW/RED intensity matrix, picks real exercises, POSTs validated JSON plan. Mode B (analyze): read-only prose with cited numbers. Includes skin-temp veto, sleep veto, push:pull bias, no-plyometrics rule.
 
-- **Training context enrichment** — `build_training_context()` now includes 28d cardio mix, push:pull balance, skin temp delta, and goals block.
+- **Training context enrichment**, `build_training_context()` now includes 28d cardio mix, push:pull balance, skin temp delta, and goals block.
 
 ### Fixed
 
-- **Hevy weight round-trip** — `lbs → kg` conversion now uses 4 decimal places instead of 2. Prevents `85 lbs → 38.56 kg → 85.01 lbs` display artifact in the Hevy mobile app.
+- **Hevy weight round-trip**, `lbs -> kg` conversion now uses 4 decimal places instead of 2. Prevents `85 lbs -> 38.56 kg -> 85.01 lbs` display artifact in the Hevy mobile app.
 
-- **Hevy `rpe` rejection** — Hevy's `POST /routines` schema rejects `rpe` on set objects. RPE is now folded into exercise notes (`"RPE 7 · Superset with previous"`).
+- **Hevy `rpe` rejection**. Hevy's `POST /routines` schema rejects `rpe` on set objects. RPE is now folded into exercise notes (`"RPE 7 · Superset with previous"`).
 
-- **Hevy `folder_id` on PUT** — `PUT /routines/{id}` rejects `folder_id`; it is now only sent on the initial `POST`.
+- **Hevy `folder_id` on PUT**, `PUT /routines/{id}` rejects `folder_id`; it is now only sent on the initial `POST`.
 
-- **Hevy list-wrapped response** — `_extract_routine_id()` now handles `{"routine": [{"id": "..."}]}` list-wrapped shape in addition to flat dict and top-level list.
+- **Hevy list-wrapped response**, `_extract_routine_id()` now handles `{"routine": [{"id": "..."}]}` list-wrapped shape in addition to flat dict and top-level list.
 
-- **Hevy API key from Keychain** — Key is loaded via `keyring` with `HEVY_API_KEY` env var as fallback.
+- **Hevy API key from Keychain**. Key is loaded via `keyring` with `HEVY_API_KEY` env var as fallback.
 
-- **Migration version conflict** — Renamed `0002_hevy.sql` → `0006_hevy.sql` to avoid collision with existing WHOOP migration.
+- **Migration version conflict**. Renamed `0002_hevy.sql` -> `0006_hevy.sql` to avoid collision with existing WHOOP migration.
 
 ---
 
@@ -834,13 +834,13 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Fixed
 
-- **StrengthPanel null guards** (`41b91da`) — Guard `volume_kg` and `total_sets` fields against null before rendering; prevents chart crash when no training data is present for the selected window.
+- **StrengthPanel null guards** (`41b91da`). Guard `volume_kg` and `total_sets` fields against null before rendering; prevents chart crash when no training data is present for the selected window.
 
 ### Added
 
-- **V2 dashboard + AI next-workout coach** (`01ad062`) — Full V2 dashboard layout with all five zones wired: Command Briefing strip, four Pillars (Recovery, Sleep, Training Load, Readiness), Trend Intelligence tabs, Right Rail, and AI Advisor chat sheet (Cmd+K). Next-workout endpoint calls Claude Sonnet 4.6 with clinical context and caches the response.
+- **V2 dashboard + AI next-workout coach** (`01ad062`). Full V2 dashboard layout with all five zones wired: Command Briefing strip, four Pillars (Recovery, Sleep, Training Load, Readiness), Trend Intelligence tabs, Right Rail, and AI Advisor chat sheet (Cmd+K). Next-workout endpoint calls Claude Sonnet 4.6 with clinical context and caches the response.
 
-- **AI-powered next workout tab** (`94cce6b`) — Initial `next-workout.tsx` component with readiness-tier display (green/yellow/red), exercise blocks, RPE targets, warmup/cooldown sections, and clinical disclaimer notes.
+- **AI-powered next workout tab** (`94cce6b`). Initial `next-workout.tsx` component with readiness-tier display (green/yellow/red), exercise blocks, RPE targets, warmup/cooldown sections, and clinical disclaimer notes.
 
 ---
 
@@ -848,19 +848,19 @@ The trigger was a prescription that asked for a hammer curl at 95 lbs *in each h
 
 ### Added
 
-- **Real training, insights, and clinical data** (`9f23a8e`) — Wired production data into the dashboard: training heatmap, weekly volume, PRs, overload signal, correlation insights, clinical overview (meds, conditions, labs), and body-weight trend. All backed by live DuckDB queries.
+- **Real training, insights, and clinical data** (`9f23a8e`). Wired production data into the dashboard: training heatmap, weekly volume, PRs, overload signal, correlation insights, clinical overview (meds, conditions, labs), and body-weight trend. All backed by live DuckDB queries.
 
-- **Session-token auth layer** (`010bc73`) — Local PHI protection: dashboard requires a session token issued at startup. Prevents casual access to health data on shared machines.
+- **Session-token auth layer** (`010bc73`). Local PHI protection: dashboard requires a session token issued at startup. Prevents casual access to health data on shared machines.
 
-- **P1 baseline snapshot** (`b858655`) — Committed working P1 state as the v2 baseline. Three-card layout: recovery ring, HRV trend, sleep stacked bars.
+- **P1 baseline snapshot** (`b858655`). Committed working P1 state as the v2 baseline. Three-card layout: recovery ring, HRV trend, sleep stacked bars.
 
-- **P1 skeleton** (`13d31b9`) — Initial project scaffold: FastAPI backend, DuckDB schema (migrations 0001–0005), WHOOP OAuth client, Apple Health CCDA XML ingest, Next.js 15 frontend with shadcn/ui, TanStack Query, Recharts, and synthetic data seeder (90 days).
+- **P1 skeleton** (`13d31b9`). Initial project scaffold: FastAPI backend, DuckDB schema (migrations 0001-0005), WHOOP OAuth client, Apple Health CCDA XML ingest, Next.js 15 frontend with shadcn/ui, TanStack Query, Recharts, and synthetic data seeder (90 days).
 
 ---
 
 ## 2026-04-21 (project start)
 
-- **Initial commit** (`a2f1eed`) — Repository initialised.
+- **Initial commit** (`a2f1eed`). Repository initialised.
 
 ---
 
