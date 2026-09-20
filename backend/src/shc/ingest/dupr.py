@@ -67,7 +67,25 @@ def _extract_ratings(result: dict) -> tuple[float | None, float | None, bool | N
     return doubles, singles, doubles_prov, singles_prov
 
 
-async def _login(client: httpx.AsyncClient) -> str:
+class DuprVerificationRequired(RuntimeError):
+    """DUPR refused a password login and wants action before issuing a token."""
+
+
+async def _login_paused() -> bool:
+    async with write_ctx() as conn:
+        row = conn.execute("SELECT needs_reauth FROM oauth_state WHERE source = 'dupr'").fetchone()
+    return bool(row and row[0])
+
+
+async def _login(client: httpx.AsyncClient, *, force: bool = False) -> str:
+    # Each password login makes DUPR email Rob a verification code this client
+    # cannot submit. Once a login is refused, only a deliberate manual sync may
+    # retry; otherwise every scheduled or sync/all run sends another email.
+    if not force and await _login_paused():
+        raise DuprVerificationRequired(
+            "DUPR logins are paused until the account is re-verified — log in at "
+            "dupr.gg, then run a manual DUPR sync"
+        )
     email, password = _credentials()
     log.debug("DUPR login for %s", email)
     resp = await client.post(
@@ -75,6 +93,12 @@ async def _login(client: httpx.AsyncClient) -> str:
         json={"email": email, "password": password},
         timeout=_TIMEOUT,
     )
+    if resp.status_code == 428:
+        await _mark_state(needs_reauth=True)
+        raise DuprVerificationRequired(
+            "DUPR login needs an emailed verification code, which this client cannot "
+            "submit — automatic DUPR logins are paused"
+        )
     if resp.status_code in (401, 403):
         # The stored email/password itself is bad — this is the one failure
         # that genuinely needs Rob to do something, so it is the one that
@@ -207,7 +231,7 @@ def _parse_match_hit(hit: dict, user_id: int) -> dict[str, Any] | None:
     }
 
 
-async def sync_matches() -> dict[str, Any]:
+async def sync_matches(*, force_login: bool = False) -> dict[str, Any]:
     """Fetch full DUPR match history and upsert into dupr_matches.
 
     Pulls up to 200 matches (all known history). offset=0 is required by the
@@ -216,12 +240,12 @@ async def sync_matches() -> dict[str, Any]:
     token = load_token("dupr", "access_token")
     async with httpx.AsyncClient() as client:
         if not token:
-            token = await _login(client)
+            token = await _login(client, force=force_login)
 
         # Get user_id — retry once on expired token
         resp = await _get_profile(client, token)
         if resp.status_code in (401, 403):
-            token = await _login(client)
+            token = await _login(client, force=force_login)
             resp = await _get_profile(client, token)
         resp.raise_for_status()
         user_id: int = (resp.json().get("result") or {}).get("id") or 0
@@ -305,7 +329,7 @@ async def sync_matches() -> dict[str, Any]:
     return {"synced": len(rows), "total_api": len(hits)}
 
 
-async def sync_rating() -> dict[str, Any]:
+async def sync_rating(*, force_login: bool = False) -> dict[str, Any]:
     """Fetch the current DUPR rating and upsert today's snapshot.
 
     Returns the parsed doubles/singles rating. Raises RuntimeError on missing
@@ -320,11 +344,11 @@ async def sync_rating() -> dict[str, Any]:
     token = load_token("dupr", "access_token")
     async with httpx.AsyncClient() as client:
         if not token:
-            token = await _login(client)
+            token = await _login(client, force=force_login)
         resp = await _get_profile(client, token)
         if resp.status_code in (401, 403):
             log.info("DUPR token rejected (%s) — re-authenticating", resp.status_code)
-            token = await _login(client)
+            token = await _login(client, force=force_login)
             resp = await _get_profile(client, token)
         try:
             resp.raise_for_status()

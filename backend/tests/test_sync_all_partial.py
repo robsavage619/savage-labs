@@ -54,7 +54,13 @@ def test_failed_endpoints_ignores_non_dict_detail() -> None:
 
 @pytest.fixture
 def patched_sync(conn, monkeypatch):
-    """Wire sync_all's sources and read connection to the in-memory test DB."""
+    """Wire sync_all's sources and read connection to the in-memory test DB.
+
+    DUPR is deliberately absent: automatic DUPR logins are paused (a password
+    login DUPR refuses gets emailed a verification code this client cannot
+    submit), so `sync_all` no longer names it as a source. See
+    test_dupr_verification.py for the pause/resume state machine itself.
+    """
 
     def _apply(whoop_detail: object) -> None:
         async def _whoop() -> object:
@@ -63,12 +69,8 @@ def patched_sync(conn, monkeypatch):
         async def _hevy() -> dict:
             return {"workouts": 0}
 
-        async def _dupr() -> dict:
-            return {"rating": 3.457}
-
         monkeypatch.setattr(report.whoop, "sync_all", _whoop)
         monkeypatch.setattr(report.hevy, "sync_workouts", _hevy)
-        monkeypatch.setattr(report.dupr, "sync_rating", _dupr)
         monkeypatch.setattr(report, "get_read_conn", lambda: conn)
 
     return _apply
@@ -84,7 +86,20 @@ async def test_partial_endpoint_failure_is_not_ok(patched_sync) -> None:
     assert whoop_result["detail"] == INCIDENT_DETAIL
     # Sources that genuinely succeeded stay clean.
     assert out["results"]["hevy"]["ok"] is True
-    assert out["results"]["dupr"]["ok"] is True
+
+
+async def test_dupr_is_not_an_automatic_sync_source(patched_sync) -> None:
+    """DUPR must not reappear in sync_all by a future edit growing the tuple back.
+
+    A password login DUPR refuses gets Rob emailed a verification code this
+    client cannot submit, so re-adding it here would mean every sync/all call
+    (including the scheduled ones) sends another email. Re-enabling it requires
+    deciding what carries the verification code, not just restoring the line —
+    this pins the absence rather than trusting a docstring to say so.
+    """
+    patched_sync({**INCIDENT_DETAIL, "workout": 784})
+    out = await report.sync_all()
+    assert "dupr" not in out["results"]
 
 
 async def test_clean_sync_still_reports_ok(patched_sync) -> None:

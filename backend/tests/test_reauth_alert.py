@@ -142,15 +142,34 @@ def test_reports_staleness_in_hours_when_fresh(alert_env):
 
 
 def test_source_without_a_reauth_url_still_alerts(alert_env):
-    """DUPR has no OAuth redirect — it must not be silently skipped."""
+    """A source with no entry in `_REAUTH_URLS` must not be silently skipped.
+
+    Hevy is API-key based rather than OAuth, so it has no reconnect URL to
+    show — that must degrade to generic guidance, not to no alert at all.
+    """
     conn, run = alert_env
-    _set_state(conn, "dupr", needs_reauth=True)
+    _set_state(conn, "hevy", needs_reauth=True)
 
     sent = run()
 
     assert len(sent) == 1
-    assert "DUPR" in sent[0]["title"]
+    assert "HEVY" in sent[0]["title"]
     assert "http" not in sent[0]["message"]
+
+
+def test_dupr_never_alerts_while_logins_are_paused(alert_env):
+    """DUPR is excluded outright, not just missing a URL.
+
+    Automatic DUPR logins are paused because a refused password login gets Rob
+    emailed a verification code this client cannot submit (see
+    test_dupr_verification.py). Alerting on a source the scheduler has
+    deliberately stopped syncing would be pure noise — the fix is at the
+    source (dupr.gg), not at the reauth flow.
+    """
+    conn, run = alert_env
+    _set_state(conn, "dupr", needs_reauth=True)
+
+    assert run() == []
 
 
 def test_undelivered_alert_is_retried_not_swallowed(conn, monkeypatch):

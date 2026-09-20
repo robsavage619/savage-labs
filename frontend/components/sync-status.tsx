@@ -36,7 +36,8 @@ export function SyncStatus() {
           </a>
         ) : (
           <span className="text-[var(--text-muted)]">
-            Stored credentials were rejected — update them and re-run the sync.
+            Automatic logins are paused — the login was refused or needs an emailed code.
+            Sort it out at the source, then run a manual sync.
           </span>
         )}
       </span>

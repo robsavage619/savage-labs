@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from shc.api.deps import require_admin_key
 from shc.api.routers.training import dupr_rating
 from shc.db.schema import get_read_conn, write_ctx
-from shc.ingest import dupr, hevy, whoop
+from shc.ingest import hevy, whoop
 from shc.metrics import compute_daily_state
 
 router = APIRouter(tags=["daily-report"])
@@ -45,14 +45,16 @@ def failed_endpoints(detail: object) -> list[str]:
 async def sync_all() -> dict:
     """Force a fresh pull from every connected source before reporting.
 
-    Runs the same WHOOP / Hevy / DUPR syncs the scheduler does, on demand. Each
-    source is isolated — one failing (auth, network) never blocks the others; the
+    Runs the same WHOOP / Hevy syncs the scheduler does, on demand. Each source
+    is isolated — one failing (auth, network) never blocks the others; the
     per-source outcome is returned so failures are visible, not silent. A source
     that completes with some endpoints failed reports `ok: false` plus
     `partial: true` and `failed_endpoints`. Apple Health ingests automatically
-    via the file watcher, so it isn't pulled here.
+    via the file watcher, so it isn't pulled here. DUPR is disabled — logins are
+    paused until the account is re-verified at dupr.gg; sync it manually via
+    POST /pickleball/dupr/sync once that's done.
     """
-    sources = (("whoop", whoop.sync_all), ("hevy", hevy.sync_workouts), ("dupr", dupr.sync_rating))
+    sources = (("whoop", whoop.sync_all), ("hevy", hevy.sync_workouts))
     results: dict[str, dict] = {}
     partial: list[str] = []
     for name, fn in sources:

@@ -398,7 +398,7 @@ export function GoalScorecard() {
       )}
 
       <p className="text-[10px] text-[var(--text-faint)] pt-1 border-t border-[var(--hairline)]">
-        DUPR syncs daily at 05:30 from api.dupr.gg · Strength from Hevy · Body weight from morning check-in
+        DUPR syncs manually from api.dupr.gg (auto-sync paused) · Strength from Hevy · Body weight from morning check-in
       </p>
     </div>
   );

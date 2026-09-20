@@ -803,7 +803,7 @@ async def dupr_sync() -> dict[str, Any]:
     from shc.ingest import dupr
 
     try:
-        return await dupr.sync_rating()
+        return await dupr.sync_rating(force_login=True)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
@@ -816,7 +816,7 @@ async def dupr_sync_matches() -> dict[str, Any]:
     from shc.ingest import dupr
 
     try:
-        return await dupr.sync_matches()
+        return await dupr.sync_matches(force_login=True)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:

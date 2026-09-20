@@ -206,6 +206,10 @@ async def _check_reauth_alerts() -> None:
         due = conn.execute(
             "SELECT source, last_sync_at, reauth_alerted_at FROM oauth_state "
             "WHERE needs_reauth = TRUE "
+            # DUPR syncing is disabled (see _dupr_sync_safe / sync_all) while
+            # logins are paused pending re-verification at dupr.gg — alerting
+            # on a source we've deliberately stopped syncing is just noise.
+            "  AND source != 'dupr' "
             "  AND (reauth_alerted_at IS NULL OR reauth_alerted_at < ?)",
             [cutoff],
         ).fetchall()
@@ -308,16 +312,17 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
-    # DUPR rating snapshot — once daily; ratings only move after matches post.
-    scheduler.add_job(
-        _dupr_sync_safe,
-        "cron",
-        hour=5,
-        minute=30,
-        id="dupr_sync",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
+    # DUPR rating snapshot — disabled: logins are paused until the account is
+    # re-verified at dupr.gg. Re-enable this job once that's done.
+    # scheduler.add_job(
+    #     _dupr_sync_safe,
+    #     "cron",
+    #     hour=5,
+    #     minute=30,
+    #     id="dupr_sync",
+    #     replace_existing=True,
+    #     misfire_grace_time=3600,
+    # )
     # A dead OAuth token is silent by construction: the API keeps serving the
     # last-known numbers. Poll often enough that a break costs minutes, not days.
     scheduler.add_job(
