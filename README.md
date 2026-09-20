@@ -353,6 +353,40 @@ score_prescription_outcomes()  → grade logged calls 3 weeks later
 
 ---
 
+### The Engine Grades Itself, And Publishes the Null
+
+Every section above describes something the system *does*. This one is the only section that asks whether any of it works, and the answer is split.
+
+**Calibration: does a prescription land where it says it will?** When the planner writes "3 x 11 @ 55 lb, RPE 8", does that set come back logged at RPE 8? Over 612 prescriptions carrying an `rpe_target`, 234 matched to a logged actual:
+
+```
+bias   +0.03 RPE   95% CI -0.04 to +0.10
+SD      0.56
+within 0.5 of target:  86%
+```
+
+The load model is good. Nobody had ever measured it.
+
+**Predictive validity: does the morning readiness score relate to the session that follows?** Against volume-load r = -0.07, mean RPE +0.21, working sets +0.04. Every interval spans zero at n = 54. The gate's authority rests on readiness carrying information about capacity, and it currently **cannot be shown to**.
+
+Splitting the composite by input says where the dead weight sits:
+
+```
+hrv     weight 0.40    no signal    (best r +0.21, CI spans zero)
+sleep   weight 0.30    PREDICTS     (r +0.30 vs session RPE, CI +0.02 to +0.53)
+rhr     weight 0.20    no signal    (best r +0.07, CI spans zero)
+```
+
+0.60 of the score sits on inputs with no detectable relationship to the session. HRV and RHR also correlate at about -0.75 across 913 days, largely one underlying signal wearing two hats.
+
+**I did not re-weight anything.** Re-weighting readiness is a gate change. It needs an invariant update and a decision record, and n = 54 with one marginal correlation is not that. Measuring something is not the same as having earned the right to act on it.
+
+I report both numbers together on purpose. The planner prescribes accurately and predicts nothing, and either one alone tells the wrong story about this engine. A dashboard that only shows the flattering half of its own evaluation is a marketing asset, not an instrument.
+
+The same discipline produced `shc.stats.noise_floor`, one definition of the smallest worthwhile change for the whole app. This system has one subject, so a population threshold answers "where does he sit among people?" when the question is "did this move?" Half his own baseline SD can separate a real shift from ordinary day-to-day variation. A fixed band cannot. Two traps are encoded in the function rather than left to callers, because both were live in the first version: an SWC of exactly 0.0 is an *answer*, not an absence, and the floor has to come from the same window as the baseline it bands.
+
+---
+
 ### Exercise Intelligence — Per-Hand Loads, Muscle Heads, One Canonical Model
 
 A prescription once told me to hammer-curl 95 lbs *in each hand* — a weight I've never touched. It was a units bug, and chasing it exposed a whole layer worth getting right.
@@ -364,6 +398,16 @@ A prescription once told me to hammer-curl 95 lbs *in each hand* — a weight I'
 **The rotation has to speak a vocabulary I can actually log in.** For months I kept seeing the same lifts and assumed selection wasn't smart. It was: it ranked, it rotated, it fired its plateau and tenure triggers on schedule — and then emitted an exercise name that doesn't exist in my logging app's catalog, so the plan couldn't write it and the lift it was meant to replace stayed in. Four of seven rotations on the day I measured it named an unwritable movement, and two of those were the *same* exercise under a different spelling, because the curated science catalog and the app catalog had diverged into two namespaces nobody was reconciling. A movement's legal vocabulary is now an explicit, testable set — the app's own catalog plus what I've logged through it, deliberately excluding a decade of imported strings from a previous app that must still credit historical volume but can no longer be selected. A movement-identity key collapses spelling duplicates while keeping equipment words distinct (a machine press is not a dumbbell press), the plan validator rejects anything outside the set instead of silently skipping its load checks, and a test asserts every muscle has *more* curated movements than menu slots — because a muscle with exactly as many options as slots can never rotate at all, which is precisely what had happened to my rear and side delts.
 
 The general lesson: the interesting failure wasn't in the algorithm, it was in the seam between two data sources that were each internally consistent. Nothing errored. The system just quietly did nothing.
+
+**And the same seam was hiding a much larger one.** My training history from a previous app had been imported into the current one, so the same physical session existed in the database twice, same day, same reps, same weight to five decimals, under two different names. The deduplication view that was supposed to catch this elected one source per (day, canonical exercise), but its canonical key only stripped a trailing parenthetical, so it matched **1 of 17 real twin pairs**. 27% of all-time sets were duplicates.
+
+It hid for years behind a floating-point detail. An exact-match join on `(day, reps, weight_kg)` returns *zero* duplicates, because one source stored `61.235` and the other `61.23497000135107`. Round to 0.1 kg first and twelve thousand appear.
+
+Rolling 7/28/90-day windows were never affected, so no live decision was ever wrong. I verified that rather than assuming it: set counts and tonnage are byte-identical across all three windows before and after the fix. But the volume-landmark fit looks back 104 weeks, so every fitted MEV/MAV/MRV was built on inflated input. Chest +57%, front delts +53%, adductors +50%. Targets I could never hit, for a reason that had nothing to do with training.
+
+The fix needed two mechanisms, because neither alone reaches far enough. A stronger canonical key (strip, lowercase, depunctuate, singularize, then *sort* the tokens) covers the punctuation and word-order family. An evidence-derived twin table covers the word-choice renames no normalizer can touch. Every row in that table was derived from **behaviour, not string similarity**: both names logged on the same day with an identical full set sequence. Residual duplication went from 29.1% to 6.2%.
+
+Two things I got wrong on the way, both recorded in the changelog. I reported that rotation and e1RM were fragmented by the same twins, which turned out to be false, because that boundary was already handled. And I nearly promoted the exercise menu's identity function into the ledger, which token-sorts and would have merged `Cable Twist (Down to up)` with `(Up to down)`. Two real, distinct lifts.
 
 **Two authorities for the same number, and the lower one silently won.** Weekly volume targets come from a fitted per-muscle model; the evidence-based dose comes from a curated research brief. Both were rendered into the same block of planner context, two lines apart, and where they disagreed the prescription followed the fitted one — abs asked for 12–20 sets a week and drew 6, which across four sessions is one exercise per session. The fit is a percentile of weeks I actually performed, so it measures habit and reports it as physiology: a muscle never trained hard can never be prescribed hard. There's a guard that floors an obviously habit-driven fit to population norms, but it compared with a strict `<` and my quads sat at exactly half the population ceiling, so it missed. Fitted landmarks are now floored against the curated brief as well, and the engine publishes its weekly set budget — measured capacity vs. demand — instead of leaving over-prescription to be triaged silently.
 
@@ -512,9 +556,9 @@ Empty-state UX: when no diet data is logged yet, the card shows targets sized to
 
 ---
 
-### Clinical Research Signals — Six Peer-Reviewed Tiles
+### Clinical Research Signals — Four Tiles That Survived an Audit
 
-A new panel layered on top of the standard Insights pane. Each tile is anchored to a primary citation surfaced via tooltip hover:
+A panel layered on top of the standard Insights pane. Each tile is anchored to a primary citation surfaced via tooltip hover:
 
 | Tile | What it computes | Threshold | Reference |
 |---|---|---|---|
@@ -522,10 +566,10 @@ A new panel layered on top of the standard Insights pane. Each tile is anchored 
 | **lnRMSSD** | log-transformed HRV mean rolling 7d, with 4w-avg delta + CV% | + delta = autonomic adaptation | Buchheit 2014 |
 | **Red-streak** | Consecutive recovery <34 days | 3+ doubles soft-tissue injury risk | WHOOP 2022 internal cohort |
 | **Allostatic Load** | Composite of BP, BMI, LDL, HDL, trig, A1c each scored 0/1/2 | <3 low, <6 moderate, ≥6 elevated | Seeman 2001 *JAMA* |
-| **Adj. HRV** | Raw HRV uplifted ~15% on propranolol days, ~7% on SSRI | strips medication shadow | Kemp 2010 meta + Mølgaard 1991 |
-| **Z2 HR drift** | Coefficient-of-variation across recent Z2 cardio sessions | <5% stable, ≥7% drifting | Maffetone |
 
-This was the layer that took the platform from "consumer wearable dashboard" to "research-grade single-subject panel."
+**This panel used to have six tiles, and the other two were fiction.** An audit against the live database found that two had *never once rendered a value*, both swallowed by a bare `except Exception`. A Z2 heart-rate-drift tile queried a column name that doesn't exist, and would have been wrong anyway: it computed variance *across* sessions, which is not within-session cardiac drift, and no minute-level HR exists in this database to compute the real thing from. A drug-adjusted HRV tile queried `medications.generic_name` when the column is `name`, so its branch was permanently false and the adjustment factor was 1.000 essentially always. Raw HRV wearing a citation. A third reported a materially wrong number, and a blanket PEER-REVIEWED badge sat over two sources that are not peer-reviewed.
+
+Both dead tiles were removed rather than repaired. A number nobody can compute honestly is worse than a blank space, because a blank space doesn't get cited back to you six months later. That audit is why this section no longer claims a count it can't defend.
 
 ---
 

@@ -4,6 +4,190 @@ All notable changes to this project. Dates are commit dates (Pacific time).
 
 ---
 
+## 2026-09-19 (one movement identity: 27% of my training history was logged twice)
+
+I asked whether the exercise-recognition layer still needed work, expecting a naming cleanup. What I found was that the same physical session existed twice in the database, same day, same reps, same weight to five decimals, under two different names:
+
+```
+hevy    Cable Fly Crossovers  4x6 @ 61.235kg
+fitbod  Cable Crossover Fly   4x6 @ 61.23497000135107kg
+```
+
+My Fitbod history had been imported into Hevy, so both apps carried the same decade of training. `workout_sets_dedup` already elected one source per (day, canonical exercise). But its canonical key only stripped a trailing parenthetical, so it matched **1 of 17 real twin pairs**. 27% of all-time sets and 21% of the last 365 days survived as duplicates.
+
+The float rounding is why this hid for so long. An exact-match join on `(day, reps, weight_kg)` returns **zero** duplicates. Round to 0.1 kg first and 12,166 appear.
+
+### Where it did and didn't matter
+
+Rolling 7/28/90-day windows were never affected. There are no Fitbod rows after 2026-04-22, so no live gate was ever wrong. I verified that rather than assuming it: set counts and tonnage are byte-identical across all three windows before and after the fix.
+
+But `fit_volume_landmarks` looks back 104 weeks, so every fitted MEV/MAV/MRV was built on inflated input. Chest +57%, front_delts +53%, adductors +50%, forearms +41%, traps +38%. Targets I could never hit, for a reason that had nothing to do with training.
+
+### Two mechanisms, because neither alone is enough
+
+1. **A stronger canonical key.** Strip trailing parenthetical, lowercase, drop punctuation, singularize, then *sort* the tokens. Catches `T-Bar Row` = `T Bar Row` and `Hammer Curls` = `Hammer Curl (Dumbbell)`. Four of ten twins.
+2. **`exercise_source_twin`** for the word-choice renames no normalizer can reach, like `Low Cable Chest Fly` = `Low Cable Fly Crossovers`. Every one of its 37 rows is **derived from evidence**, not string similarity: both names logged on the same day with an identical full set sequence, at least two sets deep.
+
+A key collision is safe here because the view elects a **source**, not a name. Two Hevy lifts that token-sort together, `Cable Twist (Down to up)` and `(Up to down)`, are both kept, because they share a source. Only a cross-source collision drops a row, which is the duplicate case this targets.
+
+Residual duplication went from 29.1% to 6.2% all-time, and from 23.6% to 3.4% over 365 days. Of 15,382 removed work-sets, 15,243 have a confirmed Hevy counterpart at matching reps and weight that day. The remaining 139 are real losses from partial-overlap days where Fitbod logged more sets than Hevy. 131 of those fall in 2017-2020, and only **8** land inside the 104-week window, which is why I kept source election rather than replacing it with a row-level anti-join.
+
+### What I got wrong
+
+My first read was that rotation and e1RM were fragmented too, that the engine saw `Hammer Curls` and `Hammer Curl (Dumbbell)` as two different lifts, so tenure looked fresh and the e1RM series split in two. I wrote that up before checking it, and it is **false**. Fitbod names are not in `loggable_names()`, so rotation never sees them. `exercise_weekly_e1rm` holds 165 distinct names, none of them non-loggable. 0 of 39 live tenure entries are non-loggable. That boundary was already doing its job. The "two e1RMs disagree" problem is still unexplained and still open.
+
+I also nearly promoted `_movement_key`, the menu's identity function, into the ledger wholesale. It token-sorts, so it would have merged `Cable Twist (Down to up)` with `(Up to down)`: two real, distinct lifts. It stays where it is.
+
+### The refit, including the part that surprised me
+
+Landmarks refitted against the corrected corpus moved nine muscles. Mostly down, as the inflation came out. Front delts went 12/19/27 to 8/11/15, traps 12/16/20 to 8/10/12, triceps 12/18/25 to 10/14/19.
+
+But chest MRV went **up**, 17 to 22, and side delts 12 to 22. Chest had the single largest inflation and its ceiling rose. The fit is a dose-response, not an average: phantom volume had been making moderate, productive weeks look like high-volume mediocre ones, which fitted the ceiling artificially low. Removing it revealed the real shape.
+
+> Worth knowing for anyone reading the scheduler: `fit_all` only runs nightly **conditionally**, on detected accuracy degradation with new ACWR data. These landmarks would not have self-corrected. A data fix that leaves its derived artifacts stale is half a fix.
+
+Four twin pairs are deliberately **not** mapped. Three disagree with an existing `exercise_alias` row, and one (`Seated Tricep Press`) has 67 days of evidence but only 32% coverage, and a seated press is not a dumbbell extension. They are listed in the migration header as a judgment call rather than guessed at.
+
+---
+
+## 2026-09-15 (the Apple import was two orders of magnitude wrong, and 2 hours slow)
+
+Apple's Health export stores every HealthKit `percentUnit` field as a 0-1 fraction, not a number out of 100. Nothing converted it, so those metrics sat in the database a hundred times below their plausible physiological range, and `walking_asymmetry_pct` would have rendered a fraction where a percentage belongs. Fixed at all three ingestion points (XML importer, HAE webhook, Shortcut webhook), plus a backfill of what was already stored.
+
+The import was also unusable at scale, for a reason worth naming. Per-row inserts against a 4-column composite primary key ran at roughly **500 rows per 0.95s** against the populated table, over two hours for this file's 4.3M records, because incremental constraint checks are the wrong shape for a columnar engine. Each batch now bulk-loads into an unconstrained staging table and does one set-based anti-join insert: **2,655 rows/sec, 27 minutes end to end**. `DISTINCT ON` dedupes within the batch, which the old per-row `ON CONFLICT DO NOTHING` had been absorbing for free.
+
+Five previously-unmapped metrics with real volume now land: physical effort, time in daylight, walking steadiness, six-minute walk test, height.
+
+---
+
+## 2026-09-04 to 09-06 (the engine grades itself; a console rebuild; three dead research tiles)
+
+The largest stretch of work in this log, and the part I would point at first.
+
+### A report card, and a null I published anyway
+
+Two questions this system had never asked about itself, on two axes it scores very differently on.
+
+**Calibration.** When the planner writes "3 x 11 @ 55 lb, RPE 8", does that set land at RPE 8? Over 612 prescriptions carrying an `rpe_target`, 234 matched to a logged actual: bias **+0.03 RPE** (95% CI -0.04 to +0.10), SD 0.56, and **86% land within 0.5 of target**. The load model is good, and nobody had ever measured it.
+
+**Predictive validity.** Does the morning readiness score relate to the session that follows? Against volume-load r = -0.07, mean RPE +0.21, working sets +0.04. Every interval spans zero at n = 54. The gate's authority rests on readiness carrying information about capacity, and it currently cannot be shown to.
+
+I report both together on purpose. The planner prescribes accurately and predicts nothing, and either number alone tells the wrong story about this engine.
+
+Following that null downstream, I split readiness by input:
+
+```
+hrv     weight 0.40    no signal    (best r +0.21, CI spans zero)
+sleep   weight 0.30    PREDICTS     (r +0.30 vs session RPE, CI +0.02 to +0.53)
+rhr     weight 0.20    no signal    (best r +0.07, CI spans zero)
+```
+
+0.60 of the composite sits on inputs with no detectable relationship to the session. HRV and RHR also correlate at about -0.75 across 913 days, largely one underlying signal wearing two hats. The payload reports that share as `weight_on_silent_components`.
+
+**I did not change the weights.** Re-weighting readiness is a gate change requiring an invariant update and a decision record, and n = 54 with one marginal correlation is not that. Measuring something is not the same as having earned the right to act on it.
+
+### A personal noise floor
+
+`shc.stats.noise_floor` is now one definition of the smallest worthwhile change for the whole app. This system has one subject, so a population threshold answers "where does he sit among people?" when the question is "did this move?" Half his own baseline SD can separate a real shift from ordinary variation. A fixed band cannot.
+
+Two traps are encoded rather than left to callers, because both were live in the first cut. An SWC of exactly 0.0 is an **answer** (a flat baseline means any movement is outside the noise), not an absence, so callers must test `is not None`. And the floor must come from the same window as the baseline it bands. Deriving it from 28 days while comparing against a 7-day mean answers two questions in one verdict.
+
+### Three of six research tiles were dead or wrong
+
+An audit of the clinical-research panel against the live database found two tiles that had **never once rendered a value**, one reporting a materially wrong number, one silently dropping its highest-scoring input, and a blanket PEER-REVIEWED badge over two citations that are not peer-reviewed.
+
+Both dead tiles were swallowed by a bare `except Exception`. The Z2 HR-drift tile queried `cardio_sessions.started_at`, and the column is `date`. It also computed the CV of mean HR *across* sessions, which is not within-session cardiac drift, and hardcoded an HR band against the "zones come from WHOOP, not percentages" invariant. No minute-level HR exists in this database to compute real drift from, so it was removed rather than repaired. The drug-adjusted HRV tile queried `medications.generic_name`, and the column is `name`, so its branch was permanently false and the adjustment factor was 1.000 essentially always. Raw HRV wearing a citation. Also removed.
+
+Rebuilding beats repairing when the thing was never right.
+
+### Pre-registering the dose-response instead of re-exploring it
+
+The pooled analysis showed 3-5 sets/week producing +1.52 kg of two-week e1RM against +0.86 kg at 6-9 sets, the MEV/MAV shape, from my own data. Centring within exercise shrank it to +0.68 kg, 95% CI -0.04 to +1.40. Suggestive, not established, and exactly the thing that should stop being re-explored and start being tested. It is now a pre-registered study.
+
+Making it expressible needed an `e1rm_delta_2wk` outcome, because the dose question is about *change*. e1RM drifts upward across a block, so comparing levels measures the trend, and whichever arm fell later wins regardless of dose. It also needed a `weekly_set_dose` classifier that fires **only on the week's Monday**, because classifying all seven days would write seven perfectly correlated copies of one observation and shrink a p-value on data that does not exist.
+
+### Observational studies, and the arm-assignment trap
+
+Four studies that had never scored now accumulate days. The trap worth recording: `arm_for_day()` assigns arms by hashing the date and never looks at behaviour, but these studies' arms describe **observable conditions** like "<7h sleep" or "2 pickleball sessions in 3 days". Auto-logging adherence against that hash would have filed an 8.4-hour night into the "<7h sleep" arm and produced a confident null, which is worse than the silence it replaced. The `design` field already existed, defaulted to `randomized_alternating`, and nothing branched on it. It is now load-bearing, and the observational backfill refuses randomized studies outright.
+
+Day alignment is the easy silent error here. Classifiers return the **behaviour** day and outcome extractors read day+1. That is natural for activity (train on D, HRV responds on D+1) but not for sleep, where `sleep.night_date` is the morning you woke.
+
+### Also in this stretch
+
+- **The whole UI moved to one visual system**, four surfaces on a four-column board with a section manifest and Cmd-K navigation, after a prototype pass that tried three type systems before committing to one.
+- **FIB-4 hepatic fibrosis index** computed per blood draw, cited to Shah 2009 for the cut-offs rather than Sterling. The wrong attribution was in the first version.
+- **Atherogenic lipids beyond LDL-C**, and the hepatic screen rendered.
+- **Four averages in `/stats/summary` were counting the wrong things.**
+- **The daily-report prompt was handing the model a plan schema the validator rejects.** Now guarded by a test against schema drift.
+- **`shc seed` now refuses to write synthetic rows into a database holding real data.** It had previously written 90 fake WHOOP nights tagged `source='whoop'` into the live store.
+- **A privacy pass** across fixtures and comments, because this repo is public. Synthetic from the start, like `test_fib4.py`.
+
+---
+
+## 2026-08-15 to 08-21 (volume accounting: the credit model was quietly wrong in three directions)
+
+### Synergist credit is 1:1, and the floor is what makes that safe
+
+Secondary credit was 0.5 (0.3 for arms) with no backing anywhere in my research corpus. Helms states the ratio plainly: count secondary at 1:1 with primary, and don't rely entirely on indirect volume for any muscle group. The only ~0.5 in the corpus is an EMG ratio for hamstrings, attached to a conclusion that the compound is insufficient anyway.
+
+The two halves of that sentence are not separable. Taking 1:1 alone lets spillover satisfy a muscle and stop it being trained. Measured over the eight weeks to 2026-08-20, biceps (my emphasis muscle) would read 16.6 credited sets/week against a target of 12 while only 11.1 were direct. Forearms would read satisfied on **100% indirect work**, zero direct.
+
+So floors are judged on **direct** sets and ceilings on the **credited total**. Indirect volume genuinely costs recovery, so it belongs in MRV, but it does not reliably supply stimulus, so it cannot fill MEV. On a compound the synergist is by construction not the limiting factor.
+
+### Selection can now see what a lift pays into elsewhere
+
+The accounting layer has always known. 359 secondary rows, and indirect work is the *majority* of several muscles' volume: forearms 100%, mid-back 76%, traps 61%, triceps 57%, front delts 56%. Selection could not see any of it, because the candidate pool is built per muscle. Picking for lats could not tell that a chin-up buys biceps volume a lat pulldown does not. Under an hour that fits about 20 sets, that is the difference between covering a muscle and skipping it.
+
+Cross-muscle payoff now breaks ties, but only *below* every key that speaks for the muscle being programmed. A lift must never be chosen for what it does elsewhere at this muscle's expense. It binds often precisely because it is last: every curated muscle has candidates tied on region, length bias and SFR, which is where "and it also feeds the lagging muscle" is free rather than a compromise.
+
+### Rotation could not rotate, because every alternative arrived without a number
+
+The rotation trigger fires on a lift that has led its head 6+ weeks, and selection then proposes an alternative that is by definition **not** in current rotation. `next_prescriptions` looked back 14 days. The two windows were mutually exclusive by construction, so every proposed swap arrived at plan time with no load target while the incumbent arrived with a bolded one.
+
+Measured 2026-08-20: **2 of 17 menu leads had an anchor, both incumbents.** The planner then rationally programmed the incumbent, since it had a number and passed the validators first try. The incumbent got fresher, the alternative got staler, and distinct lifts per week fell from 16 to 9 to 3.
+
+Two windows now, because reaching further is not free. The default lookback goes from 14 to 90 days, matching `e1rm_by_exercise`. Inside it a lift has both a logged top set and an e1RM ceiling, so the advance rule runs under a real cap and the RPE-coherence check is live. That band alone was 26 lifts, all previously numberless. A separate 365-day reach covers this week's menu, where there is no ceiling and no coherence check, so the advance rule is deliberately *not* applied out there. It would advance off a six-month-old set with nothing able to object.
+
+### Also
+
+- **Antagonist crediting removed.** Hip abduction was crediting adductors, which are abduction's antagonist and lengthen under the movement rather than working against it. That put 45 phantom sets in the adductor ledger, which both inflates weekly volume and biases the fitted landmarks, since those are refitted from the same credit path over 104 weeks.
+- **Detraining is never answered with a deload.** The gate had one response to a bad signal and it was the wrong one for a muscle that was already undertrained.
+- **Every muscle gets a menu**, and the load table stopped being ranked by recency.
+
+---
+
+## 2026-08-10 to 08-16 (WHOOP's private API, and the daily-logout root cause)
+
+### Why the connection died every single day
+
+WHOOP rotates the refresh token on every use, and its refresh endpoint lists `scope` as a required body parameter. The `offline` scope is what returns a *new refresh token* alongside the access token. `_refresh()` sent `grant_type`, `refresh_token`, `client_id` and `client_secret`. No scope.
+
+So every refresh spent the current token and got back an access token with no replacement. The lookup for the new refresh token raised `KeyError`, the access token was never stored, and the old refresh token was already dead server-side. The connection worked for exactly one access-token lifetime, about an hour, and was then permanently dead. With syncs 12 hours apart, that reads as "WHOOP logs out daily".
+
+Deterministic, not a race, which is why an earlier graceful-shutdown fix narrowed the window but never closed it.
+
+The rotation hand-off is unrecoverable if lost, so it is now hardened around that. Store the refresh token **before** the access token, irreplaceable half first. A response with no refresh token keeps the stored one and logs loudly rather than raising mid-rotation. And a 5xx raises a distinct error from an auth failure, because a gateway 502 on the token endpoint leaves rotation state genuinely *unknown* rather than failed.
+
+### Four signals the public API doesn't expose
+
+Read through WHOOP's private iOS API and folded into `DailyState` rather than parked in a table: a per-minute autonomic **stress curve** (about 1,400 samples/day), **sleep need** plus WHOOP's own recommended sleep window, **behavior impact** (their server-side correlations, where the automated ones populate without any journal data), and **HR zone boundaries**.
+
+That last one mattered more than it sounds. The zone minutes already in `cardio_sessions` were computed against boundaries that are **not** the documented 50/60/70/80/90% of max. Z5 starts at 93%. Without them the z0-z5 columns were uninterpretable, and a session was displaying a full zone hotter than the zone minutes WHOOP reported for it. Three of fourteen recent sessions were mislabelled.
+
+A second correction fell out of the same work. The Zone-2 field reports WHOOP's Z2 band alone, but the *metabolic* zone-2 dose the literature prescribes about 180 min/week of spans WHOOP Z2 **and** Z3. Reporting Z2 alone undercounts the aerobic base by about 40%, 83 minutes against 144 in the week I checked, which is why briefs kept calling the aerobic base light when it was near target. I added a separate field rather than widening the existing one, because gates and the planner read that one and silently moving it would shift thresholds nobody re-tuned.
+
+### Sync stopped re-walking the whole account
+
+Every endpoint paged the entire account on every run. `sync_cycle` alone walked 800+ cycles, adding load onto the same WHOOP infrastructure whose 502s cause the token-desync bug. Each now resumes from a stored per-endpoint high-water-mark cursor minus a 7-day overlap, since records can carry a pending score that finalizes late. `force_full=True` remains for manual backfills.
+
+### Also
+
+- **SpO2 was being ingested and never reaching anything.** Not the sleep score, not the brief, not the planner. Now surfaced, with chronic desaturation burden reported *without* gating on it.
+- **`v_sleep_era` labels the two sleep-staging regimes.** My sleep history has a discontinuity at 2025-03 where the staging changed. No live window reaches the seam, but any long-horizon analysis crosses it and would otherwise compare two different measurement regimes as though they were one.
+- **A desktop alert fires when a source needs reauthorization**, and retries an undelivered alert rather than consuming it. A dead OAuth token is silent by construction, since the API keeps serving the last-known numbers.
+
+---
+
 ## 2026-08-08 (exercise selection: the rotation was naming lifts I can't log)
 
 I kept seeing the same exercises and assumed the selection engine wasn't smart. It was — it ranked, it rotated, it fired plateau and tenure triggers on schedule. Then it emitted a name that doesn't exist in my Hevy catalog, the plan couldn't write it, and the lift it was supposed to replace stayed in. The intelligence was real and it was landing on the floor.
