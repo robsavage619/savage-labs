@@ -607,6 +607,14 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             f"{n.last_reps}{rpe_sfx} · window {n.rep_low}-{n.rep_high}]"
         )
 
+    try:
+        from shc.training.autoregulation import unavailable_exercises
+
+        _absent = set(unavailable_exercises(conn))
+    except Exception as _exc:  # noqa: BLE001 — validator #25 still enforces
+        log.warning("equipment exclusions unavailable for next prescriptions: %s", _exc)
+        _absent = set()
+    _nrx = [n for n in _nrx if n.exercise not in _absent]
     _anchored = [n for n in _nrx if not n.provisional]
     _provisional = [n for n in _nrx if n.provisional]
     if _anchored:
@@ -850,17 +858,20 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         if hevy_tmpl_rows:
             from collections import defaultdict
 
-            from shc.training.autoregulation import loggable_names
+            from shc.training.autoregulation import loggable_names, unavailable_exercises
 
+            # Validator #25 rejects these, so the list must not offer them.
+            absent = set(unavailable_exercises(conn))
             by_group: dict[str, list[str]] = defaultdict(list)
             for title, pmg in hevy_tmpl_rows:
-                by_group[pmg or "Other"].append(title)
+                if title not in absent:
+                    by_group[pmg or "Other"].append(title)
             # A few movements Rob logs are Hevy customs the template endpoint
             # doesn't return (e.g. Bulgarian Split Squat (Dumbbell)). Validator
             # #24 accepts them, so the list the planner picks from must show
             # them too — otherwise the context forbids what the validator allows.
             listed = {t for t, _ in hevy_tmpl_rows}
-            for extra in sorted(loggable_names(conn) - listed):
+            for extra in sorted(loggable_names(conn) - listed - absent):
                 by_group["Other (logged in Hevy, no template)"].append(extra)
             total = sum(len(v) for v in by_group.values())
             lines.append(f"\n## AVAILABLE HEVY EXERCISES ({total} total — use VERBATIM names)")
@@ -1884,6 +1895,29 @@ def validate_plan(
                     "volume crediting. Use a name exactly as it appears in AVAILABLE HEVY "
                     "EXERCISES."
                 )
+
+    # ── #25: every exercise must be one Rob's gym can actually run ────────────
+    # Loggable (#24) is not available: the Hevy catalog lists machines the gym
+    # lacks, and Seated Back Extension was prescribed three days running off the
+    # menu before migration 0103 declared it absent.
+    if conn is not None:
+        from shc.training.autoregulation import unavailable_exercises
+
+        absent = unavailable_exercises(conn)
+        named = sorted(
+            {
+                ex["name"]
+                for block in plan.get("blocks", [])
+                for ex in block.get("exercises", [])
+                if ex.get("name") in absent
+            }
+        )
+        if named:
+            detail = "; ".join(f"{n} ({absent[n]})" if absent[n] else n for n in named)
+            raise GateViolation(
+                f"Exercise(s) not available at Rob's gym: {detail}. Pick a movement "
+                "from THIS WEEK'S PRESCRIPTION menu instead (see equipment_unavailable)."
+            )
 
     # ── Session budget (#17): working-set cap + ~1h duration ──────────────────
     # Rob has ~1h to train. A plan that blows past the working-set cap or the

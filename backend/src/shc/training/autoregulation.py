@@ -813,7 +813,7 @@ def _exercise_menu(
         for r in conn.execute(
             "SELECT exercise FROM exercise_preferences WHERE status = 'no'"
         ).fetchall()
-    }
+    } | set(unavailable_exercises(conn))
     menu: dict[str, list[dict]] = {}
     for muscle in muscles:
         rows = conn.execute(
@@ -1386,6 +1386,20 @@ def loggable_names(conn: duckdb.DuckDBPyConnection) -> set[str]:
     return names
 
 
+def unavailable_exercises(conn: duckdb.DuckDBPyConnection) -> dict[str, str]:
+    """``exercise name -> note`` for equipment Rob's gym does not have (migration 0103).
+
+    Loggable is not the same as available: the Hevy catalog lists machines his
+    gym lacks. Exact-name match, like ``loggable_names``.
+    """
+    try:
+        rows = conn.execute("SELECT exercise_name, note FROM equipment_unavailable").fetchall()
+    except Exception as exc:  # noqa: BLE001 — pre-migration DB degrades to no exclusions
+        log.warning("equipment_unavailable unavailable — exclusions not applied: %s", exc)
+        return {}
+    return {r[0]: r[1] or "" for r in rows}
+
+
 def unloggable_curated(conn: duckdb.DuckDBPyConnection) -> list[str]:
     """Curated movements the planner is forbidden to name — the selection dead-list.
 
@@ -1478,6 +1492,9 @@ def evidence_menu(
     except Exception as exc:  # noqa: BLE001
         log.warning("exercise_preferences unavailable — 'no' list not applied: %s", exc)
         avoid = set()
+    # Absent equipment is excluded before selection, so it can neither hold a
+    # menu slot nor be "swapped in" by rotation.
+    avoid |= set(unavailable_exercises(conn))
     # This week's per-head trained volume steers selection toward the neglected
     # head; degrade to recency/quality-only if the region ledger is unavailable.
     try:
