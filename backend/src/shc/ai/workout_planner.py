@@ -44,6 +44,7 @@ from shc.training.load_mechanics import (
     classify_load,
     load_unit_label,
     per_hand_kg,
+    per_hand_sql,
 )
 
 
@@ -161,10 +162,16 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     # The all-time ratcheting max therefore advertises a load from a defunct
     # regime. Show a max drawn from the same 90d window the e1RM is fitted on so
     # the displayed number and the ceiling agree on what era they describe.
+    #
+    # The MAX runs over the PER-HAND value, dated: a raw MAX across a window that
+    # straddles a combined->per-hand logging switch picks the old combined total
+    # and prints it "each hand" (Seated Dumbbell Curl showed 100 when the lift is
+    # 50/hand). Downstream `per_hand_kg(ex, wkg)` is then the no-date identity.
+    _ph_dated = per_hand_sql("ws.weight_kg", "ws.exercise", "w.started_at::DATE")
     recent_max_by_ex = dict(
         conn.execute(
-            """
-            SELECT ws.exercise, MAX(ws.weight_kg)
+            f"""
+            SELECT ws.exercise, MAX({_ph_dated})
             FROM workout_sets ws
             JOIN workouts w ON w.id = ws.workout_id
             WHERE ws.is_warmup = FALSE
@@ -176,8 +183,8 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         ).fetchall()
     )
     top_exercises = conn.execute(
-        """
-        SELECT ws.exercise, COUNT(*) AS sets, MAX(ws.weight_kg) AS max_kg,
+        f"""
+        SELECT ws.exercise, COUNT(*) AS sets, MAX({_ph_dated}) AS max_kg,
                AVG(ws.rpe) AS avg_rpe
         FROM workout_sets ws
         JOIN workouts w ON w.id = ws.workout_id

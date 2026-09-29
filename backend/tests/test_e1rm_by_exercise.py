@@ -135,3 +135,20 @@ def test_rpe_10_gets_no_credit_and_over_10_never_subtracts(conn, seed, today: da
     ex2 = "Front Squat"
     seed.workout(days_ago(today, 3), ex2, [(100, 5)], rpe=11.0)  # nonsense input
     assert e1rm_by_exercise(conn, today)[ex2] == pytest.approx(100 * (1 + 5 / 30))
+
+
+def test_seated_curl_combined_history_does_not_inflate_the_per_hand_e1rm(conn, seed) -> None:
+    """A window straddling the switch must read both eras in per-hand units.
+
+    Before the fix, a two-dumbbell total taken as one hand's load set the e1RM
+    at twice the real working weight, and the RPE-coherence validator rejected
+    an honest per-hand set as implying a negative RPE.
+    """
+    from shc.training.load_mechanics import SEATED_CURL_COMBINED_LOGGING_ENDED as switch
+
+    ex = "Seated Dumbbell Curl"
+    seed.workout(switch - timedelta(days=20), ex, [(40.0, 6)], rpe=8.0)  # 20/hand
+    seed.workout(switch, ex, [(20.0, 6)], rpe=7.0)  # 20/hand, logged per-hand
+    today = switch + timedelta(days=5)
+    # Best is the per-hand 20 kg: eff reps 6 + 2 = 8 before, 6 + 3 = 9 after.
+    assert e1rm_by_exercise(conn, today)[ex] == pytest.approx(20.0 * (1 + 9 / 30))

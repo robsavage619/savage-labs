@@ -51,19 +51,6 @@ _PER_HAND = frozenset(
     }
 )
 
-# The narrow, EVIDENCE-BASED inverse of the per-hand default: exercises Rob
-# enters as the COMBINED weight of both dumbbells, verified case-by-case against
-# his own numbers. These halve to per-hand. Everything else is per-hand as logged
-# (Hevy's default). Confirmed 2026-07-12: Romanian Deadlift (Dumbbell) 150 = 75
-# each hand (his progression reads 15→20→30→45→75/hand; 150 lb dumbbells don't
-# exist). Match is exact (lower-cased) so "Single Leg Romanian Deadlift (Dumbbell)"
-# — logged per-hand with one bell — is NOT caught.
-_LOGGED_AS_COMBINED = frozenset(
-    {
-        "romanian deadlift (dumbbell)",
-    }
-)
-
 COMBINED_LOGGING_ENDED = _dt.date(2026, 7, 23)
 """The date Rob switched from logging RDL as a two-dumbbell TOTAL to per-hand.
 
@@ -92,6 +79,31 @@ A VALUE-based rule (halve anything implying more than the per-hand max) was
 considered and rejected: it fixes June but silently breaks May, where a logged
 90 is a combined 45/hand and sits well under the max.
 """
+
+SEATED_CURL_COMBINED_LOGGING_ENDED = _dt.date(2026, 9, 24)
+"""The date Rob switched Seated Dumbbell Curl from a two-dumbbell TOTAL to per-hand.
+
+Same failure as RDL, found later. The full history reads as one flat combined
+series for years (a steady 90-100 lb block through 2024-2026-09-04, i.e. 45-50
+per hand), then the first per-hand log on 2026-09-24 reads 50. Taken per-hand,
+the 100s set a ~133 lb e1RM, and the RPE-coherence validator rejected a real
+50 x 7 @RPE 7.5 as "implies RPE -33". Halved, the old block and the new log
+agree on the same ~50 lb working weight.
+"""
+
+# The narrow, EVIDENCE-BASED inverse of the per-hand default: exercises Rob
+# enters as the COMBINED weight of both dumbbells, verified case-by-case against
+# his own numbers, mapped to the date he switched to per-hand logging. Sets
+# before that date halve; sets on or after it are per-hand as logged (Hevy's
+# default), like every lift not listed here. Confirmed 2026-07-12: Romanian
+# Deadlift (Dumbbell) 150 = 75 each hand (his progression reads
+# 15→20→30→45→75/hand; 150 lb dumbbells don't exist). Match is exact
+# (lower-cased) so "Single Leg Romanian Deadlift (Dumbbell)" — logged per-hand
+# with one bell — is NOT caught.
+_LOGGED_AS_COMBINED: dict[str, _dt.date] = {
+    "romanian deadlift (dumbbell)": COMBINED_LOGGING_ENDED,
+    "seated dumbbell curl": SEATED_CURL_COMBINED_LOGGING_ENDED,
+}
 
 _SINGLE_ARM_KEYS = (
     "single arm",
@@ -149,7 +161,7 @@ def is_per_hand(name: str) -> bool:
     return classify_load(name) in _PER_HAND
 
 
-def _was_combined(logged_on: _dt.date | None) -> bool:
+def _was_combined(name: str, logged_on: _dt.date | None) -> bool:
     """Whether a set logged on this date used the two-dumbbell-total convention.
 
     ``None`` means the caller has no date, and resolves to the CURRENT convention
@@ -160,7 +172,8 @@ def _was_combined(logged_on: _dt.date | None) -> bool:
     manufactures the phantom regression this whole rule exists to stop. Prefer a
     visible wrong number over an invisible one.
     """
-    return logged_on is not None and logged_on < COMBINED_LOGGING_ENDED
+    ended = _LOGGED_AS_COMBINED.get(name.strip().lower())
+    return ended is not None and logged_on is not None and logged_on < ended
 
 
 def per_hand_kg(name: str, logged_kg: float, logged_on: _dt.date | None = None) -> float:
@@ -172,7 +185,7 @@ def per_hand_kg(name: str, logged_kg: float, logged_on: _dt.date | None = None) 
     halve. This is the single choke point every e1RM / ceiling / prescription
     path routes through.
     """
-    if name.strip().lower() in _LOGGED_AS_COMBINED and _was_combined(logged_on):
+    if _was_combined(name, logged_on):
         return logged_kg / 2.0
     return logged_kg
 
@@ -190,15 +203,17 @@ def per_hand_sql(
     so the same single choke point governs both paths — a query that skips it
     silently mixes per-hand and combined-total units into one e1RM/tonnage series.
     """
-    names = ", ".join(f"'{n}'" for n in sorted(_LOGGED_AS_COMBINED))
     # Pass `date_col` wherever the query has a date. Without it the expression
     # resolves to the CURRENT (per-hand) convention, matching `_was_combined`'s
     # no-date default — see that helper for why the failure modes are asymmetric.
-    when = f"lower(trim({exercise_col})) IN ({names})"
     if date_col:
-        when += f" AND {date_col} < DATE '{COMBINED_LOGGING_ENDED.isoformat()}'"
+        when = " OR ".join(
+            f"(lower(trim({exercise_col})) = '{n}' AND {date_col} < DATE '{d.isoformat()}')"
+            for n, d in sorted(_LOGGED_AS_COMBINED.items())
+        )
     else:
-        when = "FALSE AND " + when
+        names = ", ".join(f"'{n}'" for n in sorted(_LOGGED_AS_COMBINED))
+        when = f"FALSE AND lower(trim({exercise_col})) IN ({names})"
     return f"CASE WHEN {when} THEN {column} / 2.0 ELSE {column} END"
 
 

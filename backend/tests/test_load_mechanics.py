@@ -137,10 +137,47 @@ def test_ceiling_tolerates_missing_weight() -> None:
 # paths silently disagree on unit for the same lift.
 
 
+def test_combined_logging_cutoff_is_per_exercise() -> None:
+    # Each combined-logged lift switched to per-hand on its OWN date. A set
+    # logged between the two switches is per-hand for RDL but still a combined
+    # total for Seated Dumbbell Curl; one global cutoff would get one of them wrong.
+    from shc.training.load_mechanics import (
+        COMBINED_LOGGING_ENDED,
+        SEATED_CURL_COMBINED_LOGGING_ENDED,
+    )
+
+    between = COMBINED_LOGGING_ENDED + dt.timedelta(days=1)
+    assert between < SEATED_CURL_COMBINED_LOGGING_ENDED
+    assert per_hand_kg("Seated Dumbbell Curl", 40.0, between) == pytest.approx(20.0)
+    assert per_hand_kg("Romanian Deadlift (Dumbbell)", 40.0, between) == pytest.approx(40.0)
+    assert per_hand_kg(
+        "Seated Dumbbell Curl", 20.0, SEATED_CURL_COMBINED_LOGGING_ENDED
+    ) == pytest.approx(20.0)
+    # Similar names are not members: exact match only.
+    assert per_hand_kg("Seated Incline Curl (Dumbbell)", 40.0, between) == pytest.approx(40.0)
+
+
+@pytest.mark.parametrize(
+    "name,logged_on",
+    [
+        ("Seated Dumbbell Curl", dt.date(2026, 9, 4)),  # combined era
+        ("Seated Dumbbell Curl", dt.date(2026, 9, 24)),  # first per-hand day
+        ("Romanian Deadlift (Dumbbell)", dt.date(2026, 7, 22)),
+        ("Romanian Deadlift (Dumbbell)", dt.date(2026, 9, 4)),
+        ("Hammer Curl (Dumbbell)", dt.date(2026, 1, 1)),  # control
+    ],
+)
+def test_dated_per_hand_sql_matches_per_hand_kg(conn, name: str, logged_on: dt.date) -> None:
+    expected = per_hand_kg(name, 40.0, logged_on)
+    expr = per_hand_sql("$w", "$n", "$d")
+    got = conn.execute(f"SELECT {expr}", {"w": 40.0, "n": name, "d": logged_on}).fetchone()[0]
+    assert got == pytest.approx(expected)
+
+
 @pytest.mark.parametrize(
     "name,logged_kg",
     [
-        ("Romanian Deadlift (Dumbbell)", 68.0),  # the one _LOGGED_AS_COMBINED member
+        ("Romanian Deadlift (Dumbbell)", 68.0),  # a _LOGGED_AS_COMBINED member
         ("romanian deadlift (dumbbell)", 68.0),  # case-insensitivity
         ("Single Leg Romanian Deadlift (Dumbbell)", 13.6),  # control: NOT combined
         ("Hammer Curl (Dumbbell)", 15.9),  # control: per-hand as logged
