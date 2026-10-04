@@ -595,6 +595,52 @@ def test_a_hold_holds_at_last_weeks_volume_not_at_zero(conn, seed) -> None:
     assert quads.action == "hold"
 
 
+def test_capacity_is_measured_over_completed_non_deload_weeks(conn, seed) -> None:
+    """A deload week and the week in progress are short on purpose or by
+    construction; neither says what a normal week delivers."""
+    from shc.training.autoregulation import _weekly_capacity
+
+    this_week = _iso_week_start(date.today())
+    for wk in (1, 2, 3):
+        seed.workout(this_week - timedelta(weeks=wk), "Squat (Barbell)", [(60.0, 8)] * 20)
+    deload_week = this_week - timedelta(weeks=4)
+    seed.workout(deload_week, "Squat (Barbell)", [(60.0, 8)] * 4)
+    conn.execute(
+        "INSERT INTO muscle_prescription_log (week_start, muscle, action, target_sets) "
+        "VALUES (?, 'quads', 'deload', 4)",
+        [deload_week],
+    )
+    seed.workout(this_week, "Squat (Barbell)", [(60.0, 8)] * 2)  # in progress
+
+    assert _weekly_capacity(conn, [])["capacity_working_sets"] == 20.0
+
+
+def test_direct_work_shortfall_is_owed_not_added_to_the_target(conn, seed) -> None:
+    """A muscle covered only by spillover owes DIRECT sets; its target stays put.
+
+    The floor used to raise the target to credited-so-far plus the shortfall,
+    which made the target a function of the week in progress.
+    """
+    this_week = _iso_week_start(date.today())
+    # Squats credit glutes as a synergist: plenty of credited volume, none direct.
+    seed.workout(this_week - timedelta(days=5), "Squat (Barbell)", [(60.0, 8)] * 12)
+    seed.workout(this_week, "Squat (Barbell)", [(60.0, 8)] * 12)
+
+    rx = weekly_prescription(conn)
+
+    glutes = next(m for m in rx.muscles if m.muscle == "glutes")
+    assert "glutes" in rx.direct_short
+    assert glutes.direct_owed > 0
+    assert glutes.target_sets <= glutes.current_sets, glutes.reason
+    owed = [
+        e["sets"]
+        for s in rx.remaining_week["sessions"]
+        for e in s["muscles"]
+        if e["muscle"] == "glutes"
+    ]
+    assert sum(owed) == glutes.direct_owed
+
+
 def test_weekly_prescription_reuses_passed_in_daily_state(conn, seed, monkeypatch) -> None:
     """Passing an already-computed `daily_state` must not trigger a second
     `compute_daily_state` call inside `_conditioning_pressure` — the redundant

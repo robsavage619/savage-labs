@@ -145,6 +145,11 @@ class MusclePrescription:
     # week — start at MEV, add ~2 sets/muscle/week toward MRV
     # (`volume-landmarks-mev-mav-mrv.md`) — and that needs last week as its input.
     baseline_sets: float = 0.0
+    # DIRECT (primary-role) sets still owed this week on a muscle whose credited
+    # total already reaches target — compounds paid into it, nothing trained it.
+    # Its own number rather than a raised target: see the direct-work floor in
+    # :func:`weekly_prescription`.
+    direct_owed: int = 0
 
 
 @dataclass
@@ -1928,7 +1933,7 @@ def remaining_split(
     unplaceable: list[dict] = []
 
     for rx in muscle_rx:
-        rem = rx.target_sets - round(rx.current_sets)
+        rem = max(rx.target_sets - round(rx.current_sets), rx.direct_owed)
         if rem <= 0:
             continue
         labels = lower_labels if rx.muscle in LOWER_BODY else upper_labels
@@ -2015,7 +2020,7 @@ def trainable_today(
         elif group in forbid_groups:
             status = "group_gated"
             detail = f"{group} group forbidden today"
-        elif m.action == "hold":
+        elif m.action == "hold" and not m.direct_owed:
             status = "held"
             detail = m.reason
         else:
@@ -2309,7 +2314,11 @@ def _weekly_capacity(
 
     Compares DEDICATED demand — muscle-sets that need a working set allocated to
     that muscle as its PRIMARY — against the median working sets/week measured
-    over ``lookback_weeks`` completed weeks. Both sides are in the same unit
+    over the last ``lookback_weeks`` COMPLETED, NON-DELOAD weeks. The window used
+    to be a rolling day count, which swept in the week in progress, a clipped
+    week at its far edge, and every deload week — three kinds of deliberately
+    or accidentally short week dragging a capacity figure down (39 against a
+    true 48 on 2026-10-03). Both sides are in the same unit
     (one working set buys one primary muscle-set), so the comparison is direct.
 
     The distinction matters and an earlier cut of this function got it wrong by
@@ -2348,8 +2357,12 @@ def _weekly_capacity(
             SELECT COUNT(*) AS n_sets
             FROM workout_sets w
             JOIN workouts k ON k.id = w.workout_id
-            WHERE k.started_at > CURRENT_DATE - INTERVAL (? || ' weeks')
+            WHERE k.started_at >= date_trunc('week', CURRENT_DATE) - INTERVAL (? || ' weeks')
+              AND k.started_at < date_trunc('week', CURRENT_DATE)
               AND COALESCE(w.is_warmup, FALSE) = FALSE
+              AND date_trunc('week', k.started_at)::DATE NOT IN (
+                  SELECT week_start FROM muscle_prescription_log WHERE action = 'deload'
+              )
             GROUP BY date_trunc('week', k.started_at)
             """,
             [str(lookback_weeks)],
@@ -2388,7 +2401,7 @@ def _weekly_capacity(
             # hold needs nothing new) or this week's spillover so far, whichever
             # is higher. Against the in-progress week alone, a Monday read every
             # held maintenance muscle as owing its full target.
-            top_up = max(0.0, t.target_sets - max(t.baseline_sets, t.current_sets))
+            top_up = max(0.0, t.target_sets - max(t.baseline_sets, t.current_sets), t.direct_owed)
             dedicated += top_up
             spillover_held += t.target_sets - top_up
         else:
@@ -2599,15 +2612,11 @@ def weekly_prescription(
         log.debug("read_muscle_prescription_accuracy unavailable: %s", exc)
 
     muscle_rx: list[MusclePrescription] = []
-    # Captured for the direct-work floor below: floors are judged on DIRECT sets,
-    # ceilings on the credited total, so both landmarks have to survive the loop.
+    # Captured for the direct-work floor below, which is judged on DIRECT sets.
     landmark_floor: dict[str, float] = {}
-    landmark_ceiling: dict[str, float] = {}
     for r in targeted:
         if r.mev is not None:
             landmark_floor[r.muscle] = float(r.mev)
-        if r.mrv is not None:
-            landmark_ceiling[r.muscle] = float(r.mrv)
         vt = targets.get(r.muscle)
         sq = signal_quality.get(r.muscle, {})
         acc_row = accuracy_by_muscle.get(r.muscle, {})
@@ -2769,24 +2778,21 @@ def weekly_prescription(
             # ships 1:1 WITH "don't rely entirely on indirect volume"; taking the
             # ratio without the constraint is what suppresses the muscle.
             #
-            # Raising the target (rather than rejecting at the validator) is what
-            # makes it SATISFIABLE: check #22 rejects a session that overshoots a
-            # muscle's target, so a direct-work requirement the target has no room
-            # for would be unmeetable by construction.
-            deficit = floor - direct
-            want = int(math.ceil(m.current_sets + deficit))
-            ceiling = landmark_ceiling.get(m.muscle)
-            if ceiling is not None:
-                want = min(want, int(ceiling))
-            if want > m.target_sets:
-                m.delta += want - m.target_sets
-                m.target_sets = want
-                m.action = "add"
-                m.reason += (
-                    f" [direct-work floor: {direct:g} of {floor:g} required direct sets — "
-                    "synergist credit is real volume but cannot supply the stimulus, "
-                    "so the target makes room for direct work]"
-                )
+            # It binds as its OWN number (`direct_owed`), which the reflow places
+            # and the capacity check counts. It used to bind by raising the
+            # credited target to `credited so far + shortfall`, because check #22
+            # capped the CREDITED total and a direct-work ask the target had no
+            # room for was unmeetable. #22 has counted direct sets only since
+            # 0cd3a44, and the floor never exceeds the target, so the room is
+            # there by construction — and the raise had become the wrong-week
+            # defect in a second place: a target built on the in-progress week,
+            # moving as the week was trained (glutes 8 → 13 on 2026-10-03).
+            m.direct_owed = int(math.ceil(floor - direct))
+            m.reason += (
+                f" [direct-work floor: {direct:g} of {floor:g} required direct sets — "
+                f"{m.direct_owed} direct set(s) still owed; synergist credit is real "
+                "volume but cannot supply the stimulus]"
+            )
     except Exception as exc:  # noqa: BLE001 — gate optional, degrade to no gate
         log.debug("direct-volume lookup unavailable: %s", exc)
 
@@ -2868,7 +2874,8 @@ def prescription_context_block(
             f"⚠ **OVER BUDGET — the full table does not fit this week.** It asks for "
             f"{cap['dedicated_demand_sets']:g} dedicated working sets against a measured "
             f"capacity of {cap['capacity_working_sets']:g}/wk "
-            f"(your median over the last 10 weeks) — over by {cap['over_by_sets']:g}.",
+            f"(your median over completed, non-deload weeks) — over by "
+            f"{cap['over_by_sets']:g}.",
             "  Do NOT silently drop the overflow. Work DOWN the table in order: ★ emphasis "
             "muscles get their full target first, then the other ADDs, then holds. Whatever "
             "does not fit is a deliberate shortfall — say which muscles you cut and by how "
