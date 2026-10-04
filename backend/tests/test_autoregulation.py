@@ -555,6 +555,46 @@ def test_weekly_prescription_smoke(conn, seed):
     assert "target" in rx.protein_gate
 
 
+def test_volume_target_is_built_on_last_week_not_the_week_in_progress(conn, seed) -> None:
+    """The progression tree's baseline is the last COMPLETED week.
+
+    It used to read the in-progress week, so on a Monday every muscle read 0 and
+    the target reset to MEV — last week's 12 sets of quads became "initialize at
+    8". The two quantities are now separate fields.
+    """
+    last_week = _iso_week_start(date.today()) - timedelta(days=5)
+    seed.workout(last_week, "Squat (Barbell)", [(60.0, 8)] * 12)
+
+    rx = weekly_prescription(conn)
+
+    quads = next(m for m in rx.muscles if m.muscle == "quads")
+    assert quads.baseline_sets == 12
+    assert quads.current_sets == 0
+    assert quads.target_sets >= 12, quads.reason
+    assert quads.delta == quads.target_sets - 12
+
+
+def test_a_hold_holds_at_last_weeks_volume_not_at_zero(conn, seed) -> None:
+    """Court-load interference holds legs where they WERE, not at sets-so-far.
+
+    Against the in-progress week a Monday "hold" resolved to a target of 0 and
+    the validator then refused any leg work for the week.
+    """
+    last_week = _iso_week_start(date.today()) - timedelta(days=5)
+    seed.workout(last_week, "Squat (Barbell)", [(60.0, 8)] * 10)
+    fake_state = {
+        "freshness": {"whoop_stale": False},
+        "training_load": {"conditioning_acwr": 1.7},
+    }
+
+    rx = weekly_prescription(conn, daily_state=fake_state)
+
+    quads = next(m for m in rx.muscles if m.muscle == "quads")
+    assert "court/cardio load high" in quads.reason
+    assert quads.target_sets == 10
+    assert quads.action == "hold"
+
+
 def test_weekly_prescription_reuses_passed_in_daily_state(conn, seed, monkeypatch) -> None:
     """Passing an already-computed `daily_state` must not trigger a second
     `compute_daily_state` call inside `_conditioning_pressure` — the redundant
@@ -1255,32 +1295,62 @@ def test_remaining_split_reflows_what_the_week_still_owes() -> None:
     assert out["unplaceable"] == []
 
 
-def test_remaining_split_on_monday_matches_the_full_week() -> None:
-    """With nothing trained yet and every session ahead, reflow IS the skeleton."""
+def test_remaining_split_counts_today_as_a_session_off_the_skeleton() -> None:
+    """A session planned on a day the skeleton has no slot for still gets a share.
+
+    The reflow is built when a session is being planned, so today IS a session.
+    Without it a Monday or weekend session was told every owed set belonged to
+    some other day.
+    """
     monday = date(2026, 8, 3)
     assert monday.weekday() == 0
     out = remaining_split([_rx("chest", 8, 0.0)], monday)
-    assert out["days_left"] == 4
+    assert out["days_left"] == 5
     allocs = {s["session"]: s["muscles"][0]["sets"] for s in out["sessions"]}
-    assert allocs == {"Upper-A": 4, "Upper-B": 4}
+    assert allocs == {"Today": 3, "Upper-A": 3, "Upper-B": 2}
 
 
-def test_remaining_split_surfaces_an_unreachable_target_instead_of_dropping_it() -> None:
-    """After Friday a leg target has no session left — it must be SAID, not lost.
+def test_remaining_split_never_strands_a_weekend_session() -> None:
+    """Saturday is past the default skeleton; the owed sets land on today.
 
-    And a single-session pile-up past the per-session cap is flagged over_cap,
+    A region with genuinely no session left is still SAID, not lost, and a
+    single-session pile-up past the per-session cap is flagged over_cap,
     mirroring _session_split's never-silently-truncate rule.
     """
     saturday = date(2026, 8, 8)
     assert saturday.weekday() == 5
     out = remaining_split([_rx("glutes", 8, 2.0, emphasis=True)], saturday)
-    assert out["sessions"] == []
-    assert out["unplaceable"] == [{"muscle": "glutes", "remaining": 6, "emphasis": True}]
+    (today_session,) = out["sessions"]
+    assert today_session["session"] == "Today"
+    assert today_session["muscles"] == [{"muscle": "glutes", "sets": 6, "over_cap": False}]
+    assert out["unplaceable"] == []
 
-    friday = date(2026, 8, 7)
+    friday = date(2026, 8, 7)  # Lower-B, the last skeleton day: no upper slot left
+    stranded = remaining_split([_rx("chest", 8, 2.0)], friday)
+    assert stranded["unplaceable"] == [{"muscle": "chest", "remaining": 6, "emphasis": False}]
+
     crammed = remaining_split([_rx("quads", 14, 2.0)], friday)
     (lower,) = crammed["sessions"]
     assert lower["muscles"] == [{"muscle": "quads", "sets": 12, "over_cap": True}]
+
+
+def test_observed_split_follows_the_days_actually_trained(conn, seed) -> None:
+    """The skeleton's weekdays come from the logged week, not from intent."""
+    from shc.training.autoregulation import WEEKLY_SPLIT, observed_split
+
+    today = date(2026, 8, 10)  # a Monday
+    assert observed_split(conn, today) == WEEKLY_SPLIT  # no history → default
+
+    # Three weeks of Wed / Thu / Sat / Sun, plus one stray Tuesday.
+    for wk in range(1, 4):
+        monday = today - timedelta(weeks=wk)
+        for offset in (2, 3, 5, 6):
+            seed.workout(monday + timedelta(days=offset), "Squat (Barbell)", [(60.0, 8)] * 2)
+    seed.workout(today - timedelta(days=6), "Squat (Barbell)", [(60.0, 8)] * 2)
+
+    split = observed_split(conn, today)
+    assert [s["weekday"] for s in split] == ["Wed", "Thu", "Sat", "Sun"]
+    assert [s["label"] for s in split] == [s["label"] for s in WEEKLY_SPLIT]
 
 
 def test_remaining_split_places_nothing_for_cut_or_satisfied_muscles() -> None:

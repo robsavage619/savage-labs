@@ -60,6 +60,55 @@ def rpe_drift_signed_mean(conn: Any, days: int = 14) -> float | None:
     return round(sum(diffs) / len(diffs), 2)
 
 
+def rpe_echo(conn: Any, days: int = 14) -> dict[str, int] | None:
+    """How many logged sets carry exactly the RPE the plan prescribed for them.
+
+    A logged RPE that always equals its target is the prescription echoed back,
+    not a measurement: every effort signal built on it (overreach, headroom,
+    the RPE slope in the perf score) then sees a constant and cannot move.
+    Measured 2026-10-03: 258 of 287 matched sets.
+
+    Returns ``{"matched": n, "echoed": k}`` over sets whose exercise appears in
+    that day's stored plan with an ``rpe_target``; ``None`` when unmeasurable.
+    """
+    try:
+        plans = conn.execute(
+            "SELECT date, plan_json FROM workout_plans WHERE date >= $cutoff",
+            {"cutoff": _cutoff(days)},
+        ).fetchall()
+        logged = conn.execute(
+            """
+            SELECT started_at::DATE, exercise, rpe
+            FROM workout_sets_dedup
+            WHERE started_at::DATE >= $cutoff AND NOT is_warmup
+              AND source = 'hevy' AND rpe IS NOT NULL
+            """,
+            {"cutoff": _cutoff(days)},
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — missing table/column → no metric
+        log.debug("rpe_echo skipped: %s", exc)
+        return None
+    targets: dict[tuple[str, str], float] = {}
+    for d, plan_json in plans:
+        try:
+            plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for block in (plan or {}).get("blocks", []):
+            for ex in block.get("exercises", []):
+                tgt = ex.get("rpe_target")
+                if isinstance(tgt, (int, float)) and ex.get("name"):
+                    targets[(str(d), ex["name"])] = float(tgt)
+    matched = echoed = 0
+    for d, exercise, rpe in logged:
+        tgt = targets.get((str(d), exercise))
+        if tgt is None:
+            continue
+        matched += 1
+        echoed += abs(float(rpe) - tgt) < 1e-6
+    return {"matched": matched, "echoed": echoed}
+
+
 def rpe_calibration_error(conn: Any, days: int = 14) -> float | None:
     """Mean absolute (avg_rpe_actual − avg_rpe_target) over the window.
 

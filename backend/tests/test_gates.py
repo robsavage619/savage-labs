@@ -236,6 +236,51 @@ def test_clean_inputs_leave_high() -> None:
     assert g.deload_required is False
 
 
+def _yellow(score: float, hrv: float | None = 50.0) -> ReadinessSnapshot:
+    return ReadinessSnapshot(
+        score=score, tier="yellow", components={"hrv": hrv, "sleep": 94.0, "rhr": 50.0}
+    )
+
+
+def test_baseline_day_is_yellow_by_arithmetic_and_does_not_cap() -> None:
+    """HRV and RHR exactly at baseline score 50 each, so even a perfect sleep
+    score totals 66.7 — yellow. That is the scale's centre, not a recovery
+    signal, and it must not cap effort."""
+    from shc.metrics import _hrv_subscore, _rhr_subscore, _tier
+
+    at_baseline = (0.4 * _hrv_subscore(0.0) + 0.3 * 100.0 + 0.2 * _rhr_subscore(50, 50)) / 0.9
+    assert _tier(at_baseline) == "yellow"
+
+    rec, sleep, load, chk, _ = _baseline_gate_inputs()
+    rec.hrv_sigma = 0.0
+    g = _gates(rec, sleep, load, chk, _yellow(round(at_baseline, 1)), None)
+    assert g.max_intensity == "high"
+    assert any("not capping" in r for r in g.reasons)
+
+
+def test_yellow_with_suppressed_hrv_caps_moderate() -> None:
+    rec, sleep, load, chk, _ = _baseline_gate_inputs()
+    rec.hrv_sigma = -1.2
+    g = _gates(rec, sleep, load, chk, _yellow(58.0, hrv=20.0), None)
+    assert g.max_intensity == "moderate"
+
+
+def test_yellow_below_the_score_floor_caps_moderate() -> None:
+    rec, sleep, load, chk, _ = _baseline_gate_inputs()
+    rec.hrv_sigma = -0.4
+    g = _gates(rec, sleep, load, chk, _yellow(46.0), None)
+    assert g.max_intensity == "moderate"
+
+
+def test_yellow_with_nothing_objective_behind_it_still_caps() -> None:
+    """Unknown fails toward the cap: a subjective-only score, or no score."""
+    rec, sleep, load, chk, _ = _baseline_gate_inputs()
+    subj_only = ReadinessSnapshot(score=80.0, tier="yellow", components={"subj": 80.0})
+    assert _gates(rec, sleep, load, chk, subj_only, None).max_intensity == "moderate"
+    no_score = ReadinessSnapshot(tier="yellow")
+    assert _gates(rec, sleep, load, chk, no_score, None).max_intensity == "moderate"
+
+
 def test_acwr_spike_caps_low_never_rest() -> None:
     # A resistance-ACWR spike is an overreaching signal, not an injury-validated
     # stop-gate: it caps LOAD (LOW), it does not forbid training. A full rest day

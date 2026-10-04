@@ -36,10 +36,10 @@ def test_fitted_mrv_at_exactly_half_population_is_floored(conn) -> None:
     assert vt.mrv >= 20
 
 
-def test_fitted_mev_below_curated_brief_is_floored(conn) -> None:
-    """Two volume authorities are printed in the same planner block; the lower
-    one was silently winning. Abs: brief 12-20, fitted MEV 6 -> ~6 sets/wk, which
-    is one exercise a session."""
+def test_block_starts_at_mev_not_at_the_curated_dose_range(conn) -> None:
+    """The curated brief (abs 12-20) is the range a block climbs INTO, not where
+    it starts. Lifting MEV to the brief put five grow muscles at 12 — more than
+    is delivered — so they sat "below MEV" permanently and never ramped."""
     from shc.training.mesocycle import volume_targets
 
     low = conn.execute(
@@ -48,8 +48,8 @@ def test_fitted_mev_below_curated_brief_is_floored(conn) -> None:
     assert low and low[0] >= 12, "fixture drift: abs brief no longer asks 12+"
     _seed_targets(conn, "abs", pop=(6, 12, 20), personal=(6, 13, 20))
     vt = volume_targets(conn, meso_id="m1")["abs"]
-    assert vt.source == "personal_floored"
-    assert vt.mev >= low[0]
+    assert vt.mev == 6
+    assert vt.mrv == 20
 
 
 def test_healthy_fit_is_left_alone(conn) -> None:

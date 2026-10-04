@@ -103,13 +103,16 @@ export function PrescriptionPanel() {
                   )}
                 </span>
                 <div className="flex shrink-0 items-center gap-2">
-                  <span className="tabular-nums text-[var(--text-faint)]">
+                  <span className="tabular-nums text-[var(--text-faint)]" title="Done this week">
                     {m.current_sets.toFixed(0)}
                   </span>
                   <span className="text-[var(--text-faint)] text-[10px]">→</span>
                   <span className="tabular-nums text-[var(--text-primary)]">{m.target_sets}</span>
                   {m.delta !== 0 && (
-                    <span className="tabular-nums text-[10px] text-[var(--text-faint)]">
+                    <span
+                      className="tabular-nums text-[10px] text-[var(--text-faint)]"
+                      title={`vs last week (${m.baseline_sets.toFixed(0)} sets)`}
+                    >
                       ({m.delta > 0 ? "+" : ""}
                       {m.delta})
                     </span>

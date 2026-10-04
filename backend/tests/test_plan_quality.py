@@ -14,6 +14,7 @@ from shc.ai.workout_planner import CitationError, validate_plan
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
 
+
 def _add_adherence(
     conn: duckdb.DuckDBPyConnection,
     day: date,
@@ -56,8 +57,14 @@ def _plan(*, vault_insights: list[str]) -> dict:
             {
                 "label": "A",
                 "exercises": [
-                    {"name": "Face Pull", "sets": 3, "reps": "8", "weight_lbs": 50,
-                     "rpe_target": 6, "rest_seconds": 120},
+                    {
+                        "name": "Face Pull",
+                        "sets": 3,
+                        "reps": "8",
+                        "weight_lbs": 50,
+                        "rpe_target": 6,
+                        "rest_seconds": 120,
+                    },
                 ],
             }
         ],
@@ -69,10 +76,11 @@ def _plan(*, vault_insights: list[str]) -> dict:
 
 # ── rpe_calibration_error ────────────────────────────────────────────────────
 
+
 def test_rpe_calibration_error_mean_abs(conn: duckdb.DuckDBPyConnection) -> None:
     today = date.today()
-    _add_adherence(conn, today - timedelta(days=1), actual=8.0, target=7.0)   # |+1|
-    _add_adherence(conn, today - timedelta(days=2), actual=6.0, target=8.0)   # |−2|
+    _add_adherence(conn, today - timedelta(days=1), actual=8.0, target=7.0)  # |+1|
+    _add_adherence(conn, today - timedelta(days=2), actual=6.0, target=8.0)  # |−2|
     assert rpe_calibration_error(conn, days=14) == pytest.approx(1.5)
 
 
@@ -87,6 +95,7 @@ def test_rpe_calibration_error_ignores_rows_outside_window(conn: duckdb.DuckDBPy
 
 
 # ── adherence_completion_trend ───────────────────────────────────────────────
+
 
 def test_completion_trend_improving(conn: duckdb.DuckDBPyConnection) -> None:
     today = date.today()
@@ -105,20 +114,24 @@ def test_completion_trend_empty(conn: duckdb.DuckDBPyConnection) -> None:
 
 # ── citation_validity_rate ───────────────────────────────────────────────────
 
+
 def test_citation_validity_rate(conn: duckdb.DuckDBPyConnection) -> None:
     allowed = {"real-note.md", "another.md"}
     today = date.today()
-    _add_stored_plan(conn, today - timedelta(days=1), ["grounded in `real-note.md`"])     # valid
+    _add_stored_plan(conn, today - timedelta(days=1), ["grounded in `real-note.md`"])  # valid
     _add_stored_plan(conn, today - timedelta(days=2), ["cites `ghost.md` which is fake"])  # invalid
-    _add_stored_plan(conn, today - timedelta(days=3), ["no citation at all"])              # invalid
+    _add_stored_plan(conn, today - timedelta(days=3), ["no citation at all"])  # invalid
     assert citation_validity_rate(conn, allowed, days=90) == pytest.approx(1 / 3, abs=1e-3)
 
 
-def test_citation_validity_rate_none_when_vault_unavailable(conn: duckdb.DuckDBPyConnection) -> None:
+def test_citation_validity_rate_none_when_vault_unavailable(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
     assert citation_validity_rate(conn, set(), days=90) is None
 
 
 # ── validate_plan citation enforcement (property) ────────────────────────────
+
 
 def test_citation_check_rejects_unknown_note() -> None:
     plan = _plan(vault_insights=["per `made-up-study.md` you should squat"])
@@ -141,3 +154,23 @@ def test_citation_check_skipped_when_not_requested() -> None:
     # Backwards-compat: omitting allowed_citations skips the check entirely.
     plan = _plan(vault_insights=["a", "b"])
     assert validate_plan(plan) is True
+
+
+def test_rpe_echo_counts_sets_logged_at_exactly_the_prescribed_rpe(conn, seed) -> None:
+    """A logged RPE that always equals its target is the plan echoed back."""
+    import json
+    from datetime import date, timedelta
+
+    from shc.ai.quality import rpe_echo
+
+    day = date.today() - timedelta(days=2)
+    plan = {"blocks": [{"exercises": [{"name": "Squat (Barbell)", "rpe_target": 8}]}]}
+    conn.execute(
+        "INSERT INTO workout_plans (date, plan_json, source) VALUES (?, ?, 'test')",
+        [day, json.dumps(plan)],
+    )
+    seed.workout(day, "Squat (Barbell)", [(60.0, 8)] * 3, rpe=8.0)
+    seed.workout(day, "Squat (Barbell)", [(60.0, 8)], rpe=9.0)
+    seed.workout(day, "Bicep Curl (Barbell)", [(20.0, 10)], rpe=8.0)  # not in the plan
+
+    assert rpe_echo(conn) == {"matched": 4, "echoed": 3}

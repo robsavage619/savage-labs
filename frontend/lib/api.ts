@@ -1209,6 +1209,7 @@ export const api = {
       muscles: {
         muscle: string;
         current_sets: number;
+        baseline_sets: number;
         target_sets: number;
         delta: number;
         action: "add" | "hold" | "cut" | "deload";

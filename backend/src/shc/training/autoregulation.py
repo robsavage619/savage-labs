@@ -115,8 +115,12 @@ MAX_WEEKLY_CUT = 4
 @dataclass
 class MusclePrescription:
     muscle: str
+    # Credited sets delivered so far in the IN-PROGRESS week — what the reflow and
+    # the direct-work floor subtract from the target.
     current_sets: float
     target_sets: int
+    # Week-over-week change: target minus LAST completed week's delivered volume
+    # (``baseline_sets``), never minus the in-progress week.
     delta: int
     action: str  # 'add' | 'hold' | 'cut' | 'deload'
     reason: str
@@ -133,6 +137,14 @@ class MusclePrescription:
     # target this mesocycle — it holds at MV so the weekly set budget can
     # concentrate on the grow tier. Explicit intent, never fitted or inferred.
     tier: str = "grow"
+    # Last COMPLETED week's credited sets — the baseline the set-progression tree
+    # adds to, holds at, or cuts from. The tree used to be fed the in-progress
+    # week instead, which made every target `max(MEV, done-so-far + step)`: it
+    # reset each Monday, moved as the week was trained, and a "hold" meant "hold
+    # at whatever is done so far" (zero on Monday). The vault's rule is week over
+    # week — start at MEV, add ~2 sets/muscle/week toward MRV
+    # (`volume-landmarks-mev-mav-mrv.md`) — and that needs last week as its input.
+    baseline_sets: float = 0.0
 
 
 @dataclass
@@ -1833,6 +1845,49 @@ def _session_split(
 
 
 _WEEKDAY_NUM = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
+_WEEKDAY_ABBR = {n: a for a, n in _WEEKDAY_NUM.items()}
+
+# How far back to read the real training week, and how many sessions it takes
+# to trust it over the default skeleton.
+_SPLIT_OBSERVE_DAYS = 56
+_SPLIT_MIN_SESSIONS = 8
+
+
+def observed_split(
+    conn: duckdb.DuckDBPyConnection, today: date | None = None
+) -> tuple[dict[str, str], ...]:
+    """:data:`WEEKLY_SPLIT`'s sessions, placed on the weekdays Rob actually trains.
+
+    The skeleton's Tue–Fri weekdays were a statement of intent, and the reflow
+    (:func:`remaining_split`) reads them literally: measured 2026-10-03 over 8
+    weeks the real week was Sat 7, Thu 6, Sun 4, Wed 3, Fri 3, Mon 2, Tue 1, so on
+    11 of 26 training days it reported every owed set as having no session left.
+    Takes the most-trained weekdays (ties to the earlier day), in week order, and
+    hands them the skeleton's labels and regions in order. Too little history, or
+    too few distinct days, keeps the default — never a guess.
+    """
+    today = today or date.today()
+    try:
+        rows = conn.execute(
+            """
+            SELECT isodow(started_at::DATE) - 1 AS wd, COUNT(DISTINCT started_at::DATE) AS n
+            FROM workout_sets_dedup
+            WHERE source = 'hevy' AND NOT is_warmup
+              AND started_at::DATE >= ? AND started_at::DATE < ?
+            GROUP BY 1
+            """,
+            [(today - timedelta(days=_SPLIT_OBSERVE_DAYS)).isoformat(), today.isoformat()],
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — history optional → default skeleton
+        log.debug("observed split unavailable: %s", exc)
+        return WEEKLY_SPLIT
+    counts = {int(wd): int(n) for wd, n in rows}
+    if sum(counts.values()) < _SPLIT_MIN_SESSIONS or len(counts) < len(WEEKLY_SPLIT):
+        return WEEKLY_SPLIT
+    top = sorted(sorted(counts, key=lambda wd: (-counts[wd], wd))[: len(WEEKLY_SPLIT)])
+    return tuple(
+        {**s, "weekday": _WEEKDAY_ABBR[wd]} for s, wd in zip(WEEKLY_SPLIT, top, strict=True)
+    )
 
 
 def remaining_split(
@@ -1859,8 +1914,15 @@ def remaining_split(
     place and is absent.
     """
     ahead = [s for s in split if _WEEKDAY_NUM.get(s["weekday"], 7) >= today.weekday()]
+    # This is built when a session is being planned, so today IS a session even
+    # when the skeleton has no slot on it — it takes either region.
+    if not any(_WEEKDAY_NUM.get(s["weekday"]) == today.weekday() for s in ahead):
+        ahead = [
+            {"label": "Today", "weekday": _WEEKDAY_ABBR[today.weekday()], "region": "any"},
+            *ahead,
+        ]
     upper_labels = [s["label"] for s in ahead if s["region"] != "lower"]
-    lower_labels = [s["label"] for s in ahead if s["region"] == "lower"]
+    lower_labels = [s["label"] for s in ahead if s["region"] in ("lower", "any")]
     meta = {s["label"]: s for s in ahead}
     split_map: dict[str, list[dict]] = {s["label"]: [] for s in ahead}
     unplaceable: list[dict] = []
@@ -2096,6 +2158,13 @@ def _rpe_headroom(conn: duckdb.DuckDBPyConnection, min_magnitude: float = 0.75) 
     return signed_mean is not None and signed_mean <= -min_magnitude
 
 
+# Logged RPE is flagged as an echo of the prescription past this share of
+# matched sets, once there are enough sets to say so. Visibility only: nulling
+# an echoed RPE would drop the RIR credit from e1RM and LOWER every ceiling
+# (~5%), which is a penalty for a logging habit, not a correction.
+_RPE_ECHO_MIN_SETS = 20
+_RPE_ECHO_SHARE = 0.8
+
 _OVERREACH_RPE_RISE = 0.5
 """How far weekly mean RPE must climb above the athlete's own norm to count."""
 _OVERREACH_RPE_FLOOR = 8.0
@@ -2315,7 +2384,11 @@ def _weekly_capacity(
     spillover_held = 0.0
     for t in targets:
         if t.tier == "maintain":
-            top_up = max(0.0, t.target_sets - t.current_sets)
+            # Growth over what the muscle already has: last week's volume (a
+            # hold needs nothing new) or this week's spillover so far, whichever
+            # is higher. Against the in-progress week alone, a Monday read every
+            # held maintenance muscle as owing its full target.
+            top_up = max(0.0, t.target_sets - max(t.baseline_sets, t.current_sets))
             dedicated += top_up
             spillover_held += t.target_sets - top_up
         else:
@@ -2453,7 +2526,31 @@ def weekly_prescription(
             "actuate for any muscle (verify recovery manually)"
         )
 
+    try:
+        from shc.ai.quality import rpe_echo
+
+        echo = rpe_echo(conn)
+    except Exception as exc:  # noqa: BLE001 — visibility only, never blocks
+        log.debug("rpe_echo unavailable: %s", exc)
+        echo = None
+    if (
+        echo
+        and echo["matched"] >= _RPE_ECHO_MIN_SETS
+        and echo["echoed"] / echo["matched"] >= _RPE_ECHO_SHARE
+    ):
+        data_gaps.append(
+            f"Logged RPE equals the prescribed target on {echo['echoed']} of "
+            f"{echo['matched']} sets (14d) — it is echoing the plan, so effort "
+            "drift is invisible (overreach, headroom and the effort-trend checks "
+            "see a constant). Rate the LAST set of each exercise by feel, even "
+            "when it differs from the target"
+        )
+
     targeted = [r for r in report if r.mev is not None and r.mav is not None and r.mrv is not None]
+    # Progression baseline: the last COMPLETED week (see MusclePrescription.
+    # baseline_sets). `report` stays on the in-progress week — the MRV deload
+    # count and the reflow both want what has actually been done this week.
+    baseline = weekly_muscle_volume(conn, this_week - timedelta(days=7), this_week)
 
     # Protein gate: flag if recent intake is inadequate for hypertrophy.
     protein = _protein_gate(conn)
@@ -2523,7 +2620,7 @@ def weekly_prescription(
         accuracy = float(acc_val) if isinstance(acc_val, (int, float)) else None
         rx = _decide(
             muscle=r.muscle,
-            current=r.actual_sets,
+            current=baseline.get(r.muscle, 0.0),
             mev=r.mev,  # type: ignore[arg-type]
             mav=r.mav,  # type: ignore[arg-type]
             mrv=r.mrv,  # type: ignore[arg-type]
@@ -2543,6 +2640,10 @@ def weekly_prescription(
             tier=vt.tier if vt else "grow",
             mv=vt.mv if vt else 2,
         )
+        # `_decide` reports its input as current_sets; split it back into the two
+        # quantities consumers actually ask for.
+        rx.baseline_sets = rx.current_sets
+        rx.current_sets = r.actual_sets
         # If protein is inadequate, cap "add" actions at "hold" for non-emphasis muscles.
         if rx.action == "add" and not rx.emphasis and protein.get("adequate") is False:
             rx.action = "hold"
@@ -2689,6 +2790,7 @@ def weekly_prescription(
     except Exception as exc:  # noqa: BLE001 — gate optional, degrade to no gate
         log.debug("direct-volume lookup unavailable: %s", exc)
 
+    split = observed_split(conn)
     science = evidence_menu(
         conn, need_volume, muscle_deficit=muscle_deficit, direct_short=direct_short
     )
@@ -2710,11 +2812,11 @@ def weekly_prescription(
         exercise_science=science,
         region_coverage=region_coverage,
         development=development,
-        session_split=_session_split(muscle_rx),
+        session_split=_session_split(muscle_rx, split),
         protein_gate=protein,
         data_gaps=data_gaps,
         capacity=_weekly_capacity(conn, muscle_rx),
-        remaining_week=remaining_split(muscle_rx, date.today()),
+        remaining_week=remaining_split(muscle_rx, date.today(), split),
         direct_short=sorted(direct_short),
     )
 
@@ -2784,13 +2886,13 @@ def prescription_context_block(
 
     lines += [
         "",
-        "| Muscle | Now | → Target | Action | Why |",
-        "|--------|-----|----------|--------|-----|",
+        "| Muscle | Last wk | Done this wk | → Target (vs last wk) | Action | Why |",
+        "|--------|---------|--------------|-----------------------|--------|-----|",
     ]
     for m in rx.muscles:
         star = " ★" if m.emphasis else ""
         lines.append(
-            f"| {m.muscle}{star} | {m.current_sets:g} | {m.target_sets} "
+            f"| {m.muscle}{star} | {m.baseline_sets:g} | {m.current_sets:g} | {m.target_sets} "
             f"({m.delta:+d}) | {m.action.upper()} | {m.reason} |"
         )
     if rx.exercise_menu or rx.exercise_science:

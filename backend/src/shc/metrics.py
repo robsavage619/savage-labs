@@ -1650,6 +1650,42 @@ _SPO2_BURDEN_MIN_NIGHTS = 10  # too few scored nights to call a 14d burden
 _SPO2_BURDEN_FLAG_NIGHTS = 8  # clear majority of the window below the screening line
 
 
+# A yellow readiness tier caps intensity only at/below these. The score is a
+# weighted mean whose HRV and RHR subscores read 50 AT personal baseline
+# (_hrv_subscore: 50 + 25σ; _rhr_subscore: 50 at 0% elevation), so a day with
+# both exactly at baseline and a PERFECT sleep score totals 66.7 — yellow, one
+# third of a point under the green line. Yellow was therefore the default state,
+# not a signal: 32 of 39 stored plans from 2026-08-03 to 2026-10-03 were capped
+# MODERATE (RPE ≤ 8), no set was prescribed at RPE 9+, and the mesocycle RIR
+# ramp (mesocycle.meso_rpe_band, 8.5-9.5 in the final weeks) and the HIGH-day-only
+# PR re-anchor almost never actuated. The vault's overload rule is RIR descending
+# to ~1-0 by the last accumulation week (`overload-principle-hypertrophy.md`),
+# and its HRV-guided evidence is endurance-based with modest effects
+# (`manresa-rocamora-2021-hrv-guided-training-meta.md`).
+#
+# 50 is what a baseline-HRV, baseline-RHR day scores on a genuinely poor night
+# (sleep subscore ~50), so below it something measurable is off. -1.0σ HRV is
+# the graded step under the existing -1.5σ → LOW gate.
+_YELLOW_CAP_SCORE = 50.0
+_YELLOW_CAP_HRV_SIGMA = -1.0
+
+
+def _yellow_is_deviation(readiness: ReadinessSnapshot, rec: RecoveryMetrics) -> bool:
+    """Whether a yellow tier reflects a real negative deviation worth capping on.
+
+    Unknown fails toward the pre-existing cap: no score, or no objective
+    component behind it (the subjective-only case _readiness_snapshot already
+    demotes to yellow), still caps.
+    """
+    if rec.hrv_sigma is not None and rec.hrv_sigma <= _YELLOW_CAP_HRV_SIGMA:
+        return True
+    if readiness.score is None:
+        return True
+    if not any(readiness.components.get(k) is not None for k in ("hrv", "sleep", "rhr")):
+        return True
+    return readiness.score < _YELLOW_CAP_SCORE
+
+
 def _illness_gate_corroborated(rec: RecoveryMetrics) -> bool:
     """Whether a skin-temp / resp-rate rise should be treated as possible illness.
 
@@ -1993,10 +2029,17 @@ def _gates(
     elif cond is not None and cond > 1.3:
         reasons.append(f"Conditioning ACWR {cond} > 1.3 — ease off added pickleball/cardio volume")
 
-    # Yellow tier softens the cap.
+    # Yellow tier softens the cap — but only when it reflects a real negative
+    # deviation (see _yellow_is_deviation). A yellow that is just the baseline
+    # arithmetic is noted and does not cap.
     if readiness.tier == "yellow" and g.max_intensity == "high":
-        g.max_intensity = "moderate"
-        reasons.append("Readiness yellow — cap intensity MODERATE")
+        if _yellow_is_deviation(readiness, rec):
+            g.max_intensity = "moderate"
+            reasons.append("Readiness yellow — cap intensity MODERATE")
+        else:
+            reasons.append(
+                "Readiness yellow but at personal baseline (no negative deviation) — not capping"
+            )
     if readiness.tier == "red" and g.max_intensity in ("high", "moderate"):
         g.max_intensity = "low"
         reasons.append("Readiness red — cap intensity LOW")
