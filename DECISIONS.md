@@ -4,12 +4,13 @@ Why things are the way they are. Each entry records the problem, what was
 considered, what was chosen, and what it cost. Split by month; this page is the
 index.
 
-46 decisions recorded, 2026-04 to 2026-10.
+47 decisions recorded, 2026-04 to 2026-10.
 
 ---
 
 ## October 2026
 
+- **2026-10-03** [A last-set rep-out, stamped in code, late in the block only](docs/decisions/2026-10.md#2026-10-03-a-last-set-rep-out-stamped-in-code-late-in-the-block-only)
 - **2026-10-03** [The volume ramp read the wrong week, and yellow was the scale's centre](docs/decisions/2026-10.md#2026-10-03-the-volume-ramp-read-the-wrong-week-and-yellow-was-the-scales-centre)
 
 ## September 2026

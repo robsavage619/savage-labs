@@ -325,6 +325,16 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "on the table. Prescribe enough weight to actually reach the target RPE at "
         "your chosen rep count."
     )
+    from shc.training.prescriptor import rep_out_active
+
+    if rep_out_active(gates, _meso_state):
+        lines.append(
+            "- **REP-OUTS ARE ON TODAY**: at save, the engine marks the LAST set of every "
+            "machine, cable and single-joint lift as a rep-out (as many clean reps as "
+            "possible, 1 left in reserve). Do not add your own and do not raise "
+            "`rpe_target` for it — prescribe sets × reps as usual; free-weight compounds "
+            "and hinges are left alone."
+        )
     lines.append(
         "- **RPE LOGGING**: ask Rob to tag an RPE on at least the FINAL working set "
         "of every exercise in Hevy — the engine's effort machinery (headroom, "

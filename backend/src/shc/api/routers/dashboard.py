@@ -3621,6 +3621,16 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
         except Exception:
             log.exception("loadable snapping failed for %s — plan saved unsnapped", plan_date)
             snapped = []
+        # Last-set rep-outs, stamped in code for the same reason the snap is:
+        # never a validator, never a rejected plan.
+        try:
+            from shc.training.mesocycle import active_mesocycle
+            from shc.training.prescriptor import apply_rep_outs
+
+            rep_outs = apply_rep_outs(body.plan, gates, active_mesocycle(conn))
+        except Exception:
+            log.exception("rep-out stamping failed for %s — plan saved without", plan_date)
+            rep_outs = []
     except GateViolation as exc:
         raise HTTPException(status_code=409, detail=f"Auto-regulation gate: {exc}") from exc
     except ValueError as exc:
@@ -3698,6 +3708,7 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
             }
             for s in snapped
         ],
+        "rep_outs": rep_outs,
     }
 
 

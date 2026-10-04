@@ -30,11 +30,15 @@ of beating a stale e1RM; this is the first thing that *asks* for it.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
+import statistics
 from collections import defaultdict
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Any
 
 import duckdb
 
@@ -276,6 +280,31 @@ def _rep_windows(conn: duckdb.DuckDBPyConnection) -> dict[str, tuple[int, int]]:
     return windows
 
 
+def _rep_out_sessions(conn: duckdb.DuckDBPyConnection, days: Collection[date]) -> set[tuple]:
+    """``(date, exercise)`` pairs whose stored plan marked the last set a rep-out."""
+    if not days:
+        return set()
+    try:
+        rows = conn.execute(
+            "SELECT date, plan_json FROM workout_plans WHERE date >= ? AND date <= ?",
+            [min(days).isoformat(), max(days).isoformat()],
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — no plans table → no rep-outs
+        log.debug("workout_plans unavailable for rep-out lookup: %s", exc)
+        return set()
+    out: set[tuple] = set()
+    for d, plan_json in rows:
+        try:
+            plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for block in (plan or {}).get("blocks", []):
+            for ex in block.get("exercises", []):
+                if ex.get("rep_out") and ex.get("name"):
+                    out.add((d, ex["name"]))
+    return out
+
+
 def _extended_names(conn: duckdb.DuckDBPyConnection, names: Collection[str] | None) -> set[str]:
     """``names`` plus the strings Rob actually logs them under, lowercased.
 
@@ -371,15 +400,24 @@ def next_prescriptions(
         by_ex[ex].append((w_lb, int(reps), float(rpe) if rpe is not None else None, d))
 
     windows = _rep_windows(conn)
+    rep_outs = _rep_out_sessions(conn, {s[3] for sets in by_ex.values() for s in sets})
     out: list[NextRx] = []
     for ex, sets in by_ex.items():
         top_w = max(w for w, _r, _p, _d in sets)
         at_top = [s for s in sets if abs(s[0] - top_w) <= _TOL_LB]
         top_reps = max(r for _w, r, _p, _d in at_top)
+        rep_low, rep_high = windows.get(ex.strip().lower(), _DEFAULT_REP_WINDOW)
+        if (at_top[0][3], ex) in rep_outs and len(at_top) >= 2:
+            # The best set was a rep-out, not a straight set, and progressing off
+            # it as if it were would prescribe every set at the near-failure
+            # count. Read it as the test it is: a rep-out that fills the window
+            # steps the load; one that doesn't leaves the straight sets — the
+            # reps the OTHER sets held — as the base to add a rep to.
+            straight = sorted(r for _w, r, _p, _d in at_top)[:-1]
+            top_reps = rep_high if top_reps >= rep_high else statistics.median_low(straight)
         rpes = [p for _w, _r, p, _d in at_top if p is not None]
         top_rpe = max(rpes) if rpes else None
         last_date = max(d for _w, _r, _p, d in sets)
-        rep_low, rep_high = windows.get(ex.strip().lower(), _DEFAULT_REP_WINDOW)
         e1 = e1rm_by_ex.get(ex)
 
         def _ceiling_lb_at(reps: int, _e1: float | None = e1) -> float | None:
@@ -490,3 +528,91 @@ def pr_reanchor_due(
         )
     due.sort(key=lambda d: -d["weeks_since_peak"])
     return due[:_PR_MAX_ASKS]
+
+
+# ── Last-set rep-out ─────────────────────────────────────────────────────────
+# A measured effort anchor. Logged RPE had become the prescription echoed back
+# (258 of 287 sets on 2026-10-03), and the vault is specific about where
+# self-rated effort can be trusted: RIR estimates are least accurate far from
+# failure and most accurate near it (`helms-2016-rir-rpe-resistance-training.md`).
+# One set per lift taken to a single rep in reserve replaces a rating with a rep
+# count, and :func:`next_prescriptions` already reads the most reps achieved at
+# the top weight — a rep-out that fills the window steps the load next session.
+#
+# Two limits, both from `intensity-of-effort-hypertrophy.md`. Near-failure work
+# is for the LAST set, on single-joint and fixed-path lifts, and "more
+# conservatively" on multi-joint free-weight compounds — so those and every
+# hinge are excluded. And failure density is periodized across a block, so the
+# rep-out only runs once the mesocycle's own effort band has climbed to it.
+REP_OUT_RPE = 9.0
+REP_OUT_NOTE = (
+    "LAST SET = REP-OUT: as many clean reps as you can, stop with 1 left in the "
+    "tank. Log the reps you actually got."
+)
+# A machine or cable fixes the bar path and can be bailed out of safely.
+_FIXED_PATH = ("machine", "cable", "hammerstrength", "iso-lateral", "pec deck", "smith")
+# Multi-joint patterns. Whole words only (invariant 16): "press" must not match
+# "pressdown", nor "row" "narrow".
+_COMPOUND_RE = re.compile(
+    r"\b(press|squat|deadlift|row|lunge|pull[ -]?up|chin[ -]?up|dip|thrust|clean|snatch|"
+    r"good morning|step[ -]?up)(e?s)?\b"
+)
+_HINGE_RE = re.compile(r"\b(deadlift|rdl|romanian|good morning|stiff[ -]legged)\b")
+
+
+def rep_out_eligible(exercise: str) -> bool:
+    """Whether a lift may take its last set to one rep in reserve."""
+    e = exercise.lower()
+    if _HINGE_RE.search(e):
+        return False
+    if any(marker in e for marker in _FIXED_PATH):
+        return True
+    return not _COMPOUND_RE.search(e)
+
+
+def rep_out_active(gates: dict, meso_state: Any | None) -> bool:
+    """Whether today is a rep-out day: late in an accumulation block, uncapped.
+
+    Requires an active, non-deload mesocycle whose effort band for this week
+    already reaches :data:`REP_OUT_RPE`, and a day whose own effort cap allows
+    it. No block, a deload, or a capped day all mean no rep-out — absence fails
+    toward the easier session.
+    """
+    from shc.ai.workout_planner import rpe_cap_for  # lazy — avoids a cycle
+    from shc.training.mesocycle import meso_rpe_band
+
+    if meso_state is None or getattr(meso_state, "is_deload_week", True):
+        return False
+    if gates.get("deload_required") or rpe_cap_for(gates) < REP_OUT_RPE:
+        return False
+    return meso_rpe_band(meso_state.week_number, meso_state.planned_weeks)[1] >= REP_OUT_RPE
+
+
+def apply_rep_outs(plan: dict, gates: dict, meso_state: Any | None) -> list[str]:
+    """Stamp the rep-out onto every eligible lift in ``plan``, in place.
+
+    Runs at plan save, after validation, beside the loadable snap — in code
+    rather than in the prompt or the validator, so it lands on the same lifts
+    every time and can never cost Rob a rejected plan. Returns the stamped names.
+    """
+    if not rep_out_active(gates, meso_state):
+        return []
+    # A session the planner itself wrote below HIGH is a lighter day by choice.
+    if plan.get("recommendation", {}).get("intensity", "high") != "high":
+        return []
+    stamped: list[str] = []
+    for block in plan.get("blocks", []):
+        for ex in block.get("exercises", []):
+            name = ex.get("name")
+            sets, weight = ex.get("sets"), ex.get("weight_lbs")
+            if not name or not isinstance(sets, (int, float)) or sets < 2:
+                continue
+            if not isinstance(weight, (int, float)) or weight <= 0:
+                continue
+            if not rep_out_eligible(name):
+                continue
+            ex["rep_out"] = True
+            notes = (ex.get("notes") or "").strip()
+            ex["notes"] = f"{REP_OUT_NOTE} {notes}".strip()
+            stamped.append(name)
+    return stamped
