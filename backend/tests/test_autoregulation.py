@@ -500,6 +500,40 @@ def test_no_deload_without_systemic_signal():
     assert deload_check(perfs, report)["recommended"] is False
 
 
+def test_deload_does_not_count_muscles_that_were_never_trained(conn, seed) -> None:
+    """A falling perf score on a muscle that got no direct work is detraining.
+
+    Halving volume is the opposite of the remedy, so those muscles stay out of
+    the regression count. Three regressing muscles that WERE trained still fire.
+    """
+    from shc.training.autoregulation import _detrained_muscles
+    from shc.training.mesocycle import volume_targets
+
+    trained = {
+        "chest": "Bench Press (Barbell)",
+        "triceps": "Overhead Triceps Extension (Cable)",
+        "quads": "Leg Extension (Machine)",
+    }
+    skipped = ("hamstrings", "lower_back", "adductors")
+    monday = _iso_week_start(date.today())
+    for wk in (1, 2, 3):
+        for exercise in trained.values():
+            seed.workout(monday - timedelta(weeks=wk, days=-1), exercise, [(40.0, 10)] * 4)
+
+    detrained = _detrained_muscles(conn, volume_targets(conn, ""))
+    assert detrained.isdisjoint(trained)
+    assert detrained.issuperset(skipped)
+
+    absent = deload_check(dict.fromkeys(skipped, 2), [], detrained=detrained)
+    assert absent["recommended"] is False
+    assert absent["detrained"] == sorted(skipped)
+    assert deload_check(dict.fromkeys(trained, 2), [], detrained=detrained)["recommended"] is True
+    # A hard week is not corroborated by a muscle that regressed from absence.
+    grinding = {"overreaching": True, "recent_rpe": 8.6, "baseline_rpe": 7.2}
+    lone = deload_check({skipped[0]: 2}, [], effort=grinding, detrained=detrained)
+    assert lone["recommended"] is False
+
+
 def test_regressing_below_mev_adds_not_cuts():
     # current=4 < MEV=10 while regressing (perf=2) → action must be add (toward MEV),
     # not cut (which would drive volume negative). Reason must not say "cut".

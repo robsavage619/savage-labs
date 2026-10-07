@@ -114,6 +114,29 @@ def _iso_week_start(d: date) -> date:
 _MAINTENANCE_LOOKBACK_WEEKS = 4
 
 
+def direct_sets_by_week(
+    conn: duckdb.DuckDBPyConnection, start: date
+) -> dict[tuple[str, date], float]:
+    """DIRECT (primary-role) working sets per (muscle, ISO week start) since ``start``."""
+    rows = conn.execute(
+        """
+        SELECT em.muscle, date_trunc('week', ws.started_at::DATE) AS wk, COUNT(*)::DOUBLE
+        FROM workout_sets_dedup ws
+        JOIN exercise_muscle em
+          ON em.exercise_name = ws.exercise AND em.role = 'primary'
+        WHERE ws.started_at::DATE >= ?
+          AND NOT ws.is_warmup AND ws.weight_kg > 0
+        GROUP BY 1, 2
+        """,
+        [start.isoformat()],
+    ).fetchall()
+    direct: dict[tuple[str, date], float] = {}
+    for muscle, wk, n in rows:
+        wk_date = wk.date() if hasattr(wk, "date") else wk
+        direct[(muscle, wk_date)] = float(n)
+    return direct
+
+
 def _maintenance_delivery_block(
     conn: duckdb.DuckDBPyConnection,
     targets: dict[str, VolumeTarget],
@@ -136,26 +159,10 @@ def _maintenance_delivery_block(
     this_week = _iso_week_start(date.today())
     start = this_week - timedelta(weeks=weeks - 1)
     try:
-        rows = conn.execute(
-            """
-            SELECT em.muscle, date_trunc('week', ws.started_at::DATE) AS wk, COUNT(*)::DOUBLE
-            FROM workout_sets_dedup ws
-            JOIN exercise_muscle em
-              ON em.exercise_name = ws.exercise AND em.role = 'primary'
-            WHERE ws.started_at::DATE >= ?
-              AND NOT ws.is_warmup AND ws.weight_kg > 0
-            GROUP BY 1, 2
-            """,
-            [start.isoformat()],
-        ).fetchall()
+        direct = direct_sets_by_week(conn, start)
     except Exception as exc:  # noqa: BLE001 — report is advisory, never blocks
         log.debug("maintenance delivery unavailable: %s", exc)
         return []
-
-    direct: dict[tuple[str, date], float] = {}
-    for muscle, wk, n in rows:
-        wk_date = wk.date() if hasattr(wk, "date") else wk
-        direct[(muscle, wk_date)] = float(n)
 
     week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
     headers = [f"wk-{weeks - 1 - i}" if i < weeks - 1 else "this" for i in range(weeks)]

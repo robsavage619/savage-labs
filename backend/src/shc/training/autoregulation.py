@@ -31,17 +31,19 @@ import math
 import re
 import statistics
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 import duckdb
 
 from shc.training.mesocycle import (
+    _MAINTENANCE_LOOKBACK_WEEKS,
     MesocycleState,
     VolumeTarget,
     _iso_week_start,
     active_mesocycle,
+    direct_sets_by_week,
     score_exercise,
     volume_targets,
 )
@@ -236,6 +238,7 @@ def deload_check(
     report: list[MuscleVolume],
     threshold: int | None = None,
     effort: dict | None = None,
+    detrained: Collection[str] = (),
 ) -> dict:
     """Decide whether a fatigue-driven deload is warranted from real signals.
 
@@ -258,25 +261,69 @@ def deload_check(
     interrupt for no reason — so it fires only with at least one muscle actually
     regressing to corroborate it. "Working harder AND getting less" is the
     signal; "working harder" alone is just training.
+
+    ``detrained`` (from :func:`_detrained_muscles`) names muscles that were not
+    given enough direct work to accumulate fatigue. Their falling perf score is
+    absence, not overreach, so they do not count toward the regression
+    threshold — invariant 21 applied to the per-muscle count. It only ever
+    removes a muscle from that count; it cannot cause a deload.
     """
     thr = threshold if threshold is not None else DELOAD_MUSCLE_THRESHOLD
     regressing = sorted(m for m, p in perfs.items() if p is not None and p <= 2)
+    undertrained = [m for m in regressing if m in detrained]
+    fatigued = [m for m in regressing if m not in detrained]
     at_mrv = sorted(r.muscle for r in report if r.mrv is not None and r.actual_sets >= r.mrv)
     triggers: list[str] = []
-    if len(regressing) >= thr:
-        triggers.append(f"{len(regressing)} muscles regressing ({', '.join(regressing[:5])})")
+    if len(fatigued) >= thr:
+        triggers.append(f"{len(fatigued)} muscles regressing ({', '.join(fatigued[:5])})")
     if len(at_mrv) >= thr:
         triggers.append(f"{len(at_mrv)} muscles at/over MRV ({', '.join(at_mrv[:5])})")
-    if effort and effort.get("overreaching") and regressing:
+    if effort and effort.get("overreaching") and fatigued:
         triggers.append(
             f"effort overreach — weekly mean RPE {effort['recent_rpe']} vs "
-            f"{effort['baseline_rpe']} baseline, with {len(regressing)} muscle(s) regressing"
+            f"{effort['baseline_rpe']} baseline, with {len(fatigued)} muscle(s) regressing"
+        )
+    reason = "; ".join(triggers) if triggers else "no systemic fatigue signal"
+    if undertrained:
+        reason += (
+            f" ({', '.join(undertrained)} regressing from too little direct work, "
+            "not fatigue: rebuild volume, not counted toward a deload)"
         )
     return {
         "recommended": bool(triggers),
-        "reason": "; ".join(triggers) if triggers else "no systemic fatigue signal",
+        "reason": reason,
         "triggers": triggers,
+        "detrained": undertrained,
     }
+
+
+def _detrained_muscles(
+    conn: duckdb.DuckDBPyConnection,
+    targets: Mapping[str, VolumeTarget],
+    weeks: int = _MAINTENANCE_LOOKBACK_WEEKS,
+) -> set[str]:
+    """Muscles whose recent DIRECT work was too thin to have accumulated fatigue.
+
+    Same data and window as the MAINTENANCE DELIVERY table (closed weeks only),
+    and the same two tests ``metrics._regression_cause`` applies per lift
+    (invariant 21): averaging under MV, or two consecutive weeks at zero. MV is
+    the bar for both tiers. Under-training a grow muscle between MV and MEV can
+    still leave it fatigued, so only a sub-maintenance dose reads as absence.
+    """
+    this_week = _iso_week_start(date.today())
+    closed = [this_week - timedelta(weeks=i) for i in range(weeks - 1, 0, -1)]
+    try:
+        direct = direct_sets_by_week(conn, closed[0])
+    except Exception as exc:  # noqa: BLE001 — suppress-only evidence; absent means no exclusion
+        log.warning("direct-set delivery unavailable, deload check runs without it: %s", exc)
+        return set()
+    out: set[str] = set()
+    for muscle, vt in targets.items():
+        counts = [direct.get((muscle, w), 0.0) for w in closed]
+        gap = any(a == 0 and b == 0 for a, b in zip(counts, counts[1:], strict=False))
+        if gap or sum(counts) / len(counts) < vt.mv:
+            out.add(muscle)
+    return out
 
 
 def _recent_soreness(conn: duckdb.DuckDBPyConnection, days: int = 7) -> dict[str, float]:
@@ -2444,6 +2491,7 @@ def _weekly_deload_context(
         targeted,
         threshold=read_deload_threshold(conn),
         effort=_effort_overreach(conn, meso_state=state),
+        detrained=_detrained_muscles(conn, targets),
     )
     if signal_deload["recommended"] and _deload_in_cooldown(conn, date.today()):
         signal_deload = {
