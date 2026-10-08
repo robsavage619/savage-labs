@@ -2773,6 +2773,56 @@ def load_latest_plan() -> tuple[dict[str, Any], str] | None:
     return json.loads(row[0]), str(row[1])
 
 
+def routine_status(conn) -> dict[str, Any]:
+    """Report what the unattended coach routine still owes: a plan, a grade, or nothing.
+
+    A plan is due only on the morning it is for, once today's recovery has landed,
+    so it is never built on the previous night's readiness. A grade is due for the
+    latest session while it is at most a day old.
+    """
+    today = date.today()
+    planning_date = today + timedelta(days=1) if _workout_logged_today(conn) else today
+    plan_loaded = bool(
+        conn.execute("SELECT 1 FROM workout_plans WHERE date = ?", [planning_date]).fetchone()
+    )
+    recovery_today = bool(
+        conn.execute(
+            "SELECT 1 FROM recovery WHERE date = ? AND score IS NOT NULL", [today]
+        ).fetchone()
+    )
+    if plan_loaded:
+        plan_hold = "plan already loaded"
+    elif planning_date != today:
+        plan_hold = "already trained today; tomorrow's plan waits for tomorrow's recovery"
+    elif not recovery_today:
+        plan_hold = "waiting on today's WHOOP recovery"
+    else:
+        plan_hold = None
+
+    session = conn.execute(
+        """
+        SELECT w.id, w.started_at::DATE, r.workout_id IS NOT NULL
+        FROM workouts w
+        LEFT JOIN workout_retrospectives r ON r.workout_id = w.id
+        WHERE EXISTS (
+            SELECT 1 FROM workout_sets ws WHERE ws.workout_id = w.id AND NOT ws.is_warmup
+        )
+        ORDER BY w.started_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    grade_due = bool(session and not session[2] and (today - session[1]).days <= 1)
+    return {
+        "today": today.isoformat(),
+        "planning_date": planning_date.isoformat(),
+        "plan_due": plan_hold is None,
+        "plan_hold": plan_hold,
+        "grade_due": grade_due,
+        "workout_id": session[0] if session else None,
+        "session_date": session[1].isoformat() if session else None,
+    }
+
+
 def plan_execution_status(conn, plan_date: str) -> dict[str, Any] | None:
     """Report whether the plan stored for ``plan_date`` has already been trained.
 

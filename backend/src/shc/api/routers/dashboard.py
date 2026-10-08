@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from shc.ai.briefing import build_daily_context, store_briefing
@@ -19,6 +20,7 @@ from shc.ai.workout_planner import (
     load_latest_plan,
     load_plan,
     plan_execution,
+    routine_status,
     save_plan,
     validate_plan,
 )
@@ -3498,6 +3500,26 @@ async def workout_context() -> dict:
     finally:
         conn.close()
     return {"context": context, "plan_date": plan_date.isoformat()}
+
+
+@router.get("/workout/context/text", response_class=PlainTextResponse)
+async def workout_context_text() -> str:
+    """Return the bare training context, which a file reader can page through."""
+    conn = get_read_conn()
+    try:
+        return build_training_context(conn)[0]
+    finally:
+        conn.close()
+
+
+@router.get("/workout/routine-status")
+async def workout_routine_status() -> dict:
+    """Report whether the unattended coach routine owes a plan or a grade. Read-only."""
+    conn = get_read_conn()
+    try:
+        return routine_status(conn)
+    finally:
+        conn.close()
 
 
 @router.post("/workout/plan", dependencies=[Depends(require_admin_key)])
