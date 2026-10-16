@@ -277,6 +277,7 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
                 reps                 = EXCLUDED.reps,
                 weight_kg            = EXCLUDED.weight_kg,
                 rpe                  = EXCLUDED.rpe,
+                is_warmup            = EXCLUDED.is_warmup,
                 exercise_notes       = EXCLUDED.exercise_notes,
                 exercise_template_id = EXCLUDED.exercise_template_id,
                 superset_id          = EXCLUDED.superset_id,
