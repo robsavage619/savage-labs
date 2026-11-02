@@ -137,6 +137,51 @@ def direct_sets_by_week(
     return direct
 
 
+# Rob's weekly direct-set allocation, chosen 2026-11-01 from the growth review
+# (docs/audits). About 16 sets a session across 3.3 sessions; other muscles share
+# the remaining 8 sets through the normal prescription.
+WEEKLY_DIRECT_SET_BUDGET: dict[str, int] = {
+    "chest": 10,
+    "quads": 8,
+    "biceps": 8,
+    "glutes": 6,
+    "abs": 4,
+    "lats": 3,
+    "mid_back": 3,
+    "hamstrings": 3,
+}
+SESSION_SET_TARGET = 16
+
+
+def weekly_budget_block(conn: duckdb.DuckDBPyConnection, week_start: date) -> list[str]:
+    """Context lines showing the direct-set budget against this week's logged sets."""
+    done = dict(
+        conn.execute(
+            """
+            SELECT em.muscle, COUNT(*)
+            FROM workout_sets_dedup ws
+            JOIN exercise_muscle em
+              ON em.exercise_name = ws.exercise AND em.role = 'primary'
+            WHERE ws.started_at::DATE >= ? AND NOT ws.is_warmup
+            GROUP BY 1
+            """,
+            [week_start.isoformat()],
+        ).fetchall()
+    )
+    lines = [
+        "\n## WEEKLY DIRECT-SET BUDGET (Rob's allocation; use it to choose among muscles)",
+        f"Write about {SESSION_SET_TARGET} working sets, the amount he finishes, and spend them "
+        "on the largest remaining lines first. Gates, rest locks, deloads and engine caps still "
+        "win. On a capped day, do less rather than force the budget. Where it differs from the "
+        "order or targets in the prescription below, the budget decides how sets are divided, "
+        "and those targets act as upper limits.",
+    ]
+    for muscle, budget in WEEKLY_DIRECT_SET_BUDGET.items():
+        logged = int(done.get(muscle, 0))
+        lines.append(f"- {muscle}: {logged}/{budget} done, {max(budget - logged, 0)} left")
+    return lines
+
+
 def _maintenance_delivery_block(
     conn: duckdb.DuckDBPyConnection,
     targets: dict[str, VolumeTarget],

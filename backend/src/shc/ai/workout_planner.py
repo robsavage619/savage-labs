@@ -913,6 +913,11 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     try:
         from shc.training.autoregulation import prescription_context_block
 
+        from shc.training.mesocycle import weekly_budget_block
+
+        lines.extend(
+            weekly_budget_block(conn, planning_date - timedelta(days=planning_date.weekday()))
+        )
         rx_block = prescription_context_block(conn, daily_state=state, prescription=_rx)
         if rx_block:
             lines.append("\n" + rx_block)

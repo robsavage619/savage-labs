@@ -66,8 +66,8 @@ log = logging.getLogger(__name__)
 # engine's physique_volume_bias() so emphasis shifts as muscles catch up — a
 # muscle the silhouette/critique trend no longer flags drops out; a softening
 # taper muscle (e.g. side_delts, lats) is promoted. This prior is Rob's stated
-# focus set (biceps/glutes/traps) and applies when the physique signal is absent.
-EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes", "abs"})
+# focus set (biceps/glutes) and applies when the physique signal is absent.
+EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes"})
 
 # A physique-bias factor at/above this promotes a muscle into the emphasis set
 # even if it isn't in the biceps/glutes prior. The factor is in

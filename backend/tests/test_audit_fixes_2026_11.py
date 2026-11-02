@@ -11,6 +11,7 @@ import yaml
 from shc import lab, selflab
 from shc.db import schema
 from shc.ingest import clinical_profile, hevy
+from shc.training.mesocycle import volume_targets, weekly_budget_block
 from shc.training.self_learning import accuracy_baseline
 
 
@@ -193,3 +194,33 @@ def test_accuracy_baseline_exposes_a_call_with_no_skill(conn):
     assert baseline is not None and baseline["n"] == 60
     assert abs(baseline["logged"] - baseline["shuffled"]) < 0.1
     assert baseline["always_hold"] == pytest.approx(40 / 60, abs=0.001)
+
+
+def test_budget_block_counts_this_weeks_direct_sets_including_bodyweight(conn):
+    monday = date(2026, 11, 2)
+    conn.execute(
+        "INSERT INTO workouts (id, source, started_at, kind, content_hash) "
+        "VALUES ('w', 'hevy', ?, 'strength', 'h')",
+        [datetime(2026, 11, 3)],
+    )
+    conn.execute(
+        "INSERT INTO exercise_muscle (exercise_name, muscle, role) "
+        "VALUES ('Test Dip', 'chest', 'primary')"
+    )
+    for i in range(3):
+        conn.execute(
+            "INSERT INTO workout_sets (id, workout_id, set_idx, exercise, weight_kg, reps, "
+            "is_warmup, content_hash) VALUES (?, 'w', ?, 'Test Dip', 0, 10, FALSE, ?)",
+            [f"s{i}", i, f"c{i}"],
+        )
+    lines = weekly_budget_block(conn, monday)
+    assert "- chest: 3/10 done, 7 left" in lines
+    assert "- quads: 0/8 done, 8 left" in lines
+
+
+def test_budget_tiers_hold_abs_and_raise_back_after_migration(conn):
+    targets = volume_targets(conn)
+    assert targets["abs"].tier == "maintain" and targets["abs"].mv == 4
+    assert all(targets[m].mv == 3 for m in ("lats", "mid_back", "hamstrings"))
+    emphasis = {r[0] for r in conn.execute("SELECT muscle FROM muscle_emphasis").fetchall()}
+    assert "abs" not in emphasis
