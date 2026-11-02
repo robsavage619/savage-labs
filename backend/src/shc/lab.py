@@ -915,6 +915,9 @@ def _run_lift_volume_hrv_drop(conn, q: dict) -> LabFinding:
     )
 
 
+_MIN_RATE_LIFT = 0.15
+
+
 def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
     """Rising 7d RHR trend (≥2 bpm) predicts HRV below 28d mean within 3 days."""
     since = (date.today() - timedelta(days=q["window_days"])).isoformat()
@@ -931,7 +934,8 @@ def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
     # explicitly, and hoist out of the inner loop.
     hrv_by_day = {r[0]: r[1] for r in rows}
     days_sorted = [r[0] for r in rows]
-    triggers, trigger_hits, total_triggers, evidence = 0, 0, 0, []
+    trigger_hits, total_triggers, evidence = 0, 0, []
+    other_days_hits, other_days = 0, 0
     for i, d in enumerate(days_sorted):
         if i < 7:
             continue
@@ -949,10 +953,7 @@ def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
             continue
         avg_prior_14_7 = sum(prior_14_7) / len(prior_14_7)
         rhr_trend = avg_prior_7 - avg_prior_14_7
-        if rhr_trend < 2.0:
-            continue
-        # Rising trend — check HRV over next 3 days
-        total_triggers += 1
+        # Check HRV over next 3 days, on trigger days and on the comparison days
         hit = False
         for j in range(1, 4):
             if i + j >= len(days_sorted):
@@ -963,6 +964,11 @@ def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
             if future_hrv and future_baseline and float(future_hrv) < future_baseline:
                 hit = True
                 break
+        if rhr_trend < 2.0:
+            other_days += 1
+            other_days_hits += hit
+            continue
+        total_triggers += 1
         evidence.append({"trigger_date": str(d), "rhr_trend": round(rhr_trend, 1), "hrv_drop_within_3d": hit})
         if hit:
             trigger_hits += 1
@@ -971,7 +977,10 @@ def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
                           f"Only {total_triggers} rising-RHR-trend events.", evidence)
     rate = trigger_hits / total_triggers if total_triggers > 0 else 0.0
     threshold = float(q["threshold"])
-    if rate >= threshold:
+    # HRV sits below its own mean within any 3-day window most of the time, so a
+    # hit rate only means something relative to days without the trigger.
+    other_rate = other_days_hits / other_days if other_days else 0.0
+    if rate >= threshold and other_days and rate - other_rate >= _MIN_RATE_LIFT:
         verdict = "confirmed"
     elif rate < 0.2:
         verdict = "refuted"
@@ -980,7 +989,7 @@ def _run_rhr_trend_hrv_drop(conn, q: dict) -> LabFinding:
     return LabFinding(
         q["id"], total_triggers, round(rate, 3), "rate", None, verdict,
         f"{trigger_hits}/{total_triggers} rising-RHR events were followed by HRV below baseline within 3 days "
-        f"({rate:.0%} hit rate).",
+        f"({rate:.0%} hit rate, vs {other_rate:.0%} on other days).",
         evidence[-60:],
     )
 

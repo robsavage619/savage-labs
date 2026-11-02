@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Vault search — grep Rob's Obsidian knowledge graph from the API."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from shc.ai.vault import search_notes
 from shc.config import settings
@@ -30,10 +30,12 @@ async def vault_notes(subdir: str | None = None) -> list[dict]:
     if not vault_path.exists():
         return []
 
-    base = vault_path / subdir if subdir else vault_path
+    base = (vault_path / subdir).resolve() if subdir else vault_path
+    if not base.is_relative_to(vault_path.resolve()):
+        raise HTTPException(status_code=400, detail="subdir must stay inside the vault")
     notes = []
     for md_file in sorted(base.rglob("*.md")):
-        relative = md_file.relative_to(vault_path)
+        relative = md_file.relative_to(vault_path.resolve() if subdir else vault_path)
         notes.append(
             {
                 "path": str(relative),

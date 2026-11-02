@@ -41,11 +41,11 @@ export function EngineStatusPanel() {
 
   if (status.isLoading || status.isError || !status.data) return null;
 
-  const { prescription_accuracy, accuracy_history, deload_calibration, acwr_bands, volume_landmarks } =
+  const { prescription_accuracy, accuracy_history, deload_calibration, acwr_bands, volume_landmarks_fitted: personalLandmarks } =
     status.data;
 
   const overall = prescription_accuracy.overall;
-  const personalLandmarks = volume_landmarks.filter((l) => l.source !== "population").length;
+  const baseline = prescription_accuracy.baseline;
   const deloadFitted = !deload_calibration.using_population_defaults;
 
   return (
@@ -60,14 +60,20 @@ export function EngineStatusPanel() {
         <div>
           <div className="text-[11px] text-[var(--text-muted)]">Prescription accuracy</div>
           <div className="text-[10px] text-[var(--text-faint)]">
-            {prescription_accuracy.n_scored} call{prescription_accuracy.n_scored === 1 ? "" : "s"} backtested
+            {baseline
+              ? `excl. deloads ${Math.round(baseline.logged * 100)}% · shuffled calls ${Math.round(baseline.shuffled * 100)}% · always-hold ${Math.round(baseline.always_hold * 100)}%`
+              : `${prescription_accuracy.n_scored} call${prescription_accuracy.n_scored === 1 ? "" : "s"} backtested`}
           </div>
         </div>
         <div className="flex items-center gap-3">
           <Sparkline points={accuracy_history} />
           <span
             className="tabular-nums text-[18px] font-medium"
-            style={{ color: overall != null ? accuracyColor(overall) : "var(--text-faint)" }}
+            style={{
+              color: overall == null || (baseline && baseline.logged - baseline.shuffled < 0.03)
+                ? "var(--text-faint)"
+                : accuracyColor(overall),
+            }}
           >
             {overall != null ? `${Math.round(overall * 100)}%` : "—"}
           </span>

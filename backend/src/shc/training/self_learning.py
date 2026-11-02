@@ -16,6 +16,7 @@ parameter overrides a population default (audit trail).
 """
 
 import logging
+import random
 
 import duckdb
 
@@ -1379,14 +1380,7 @@ def score_prescription_outcomes(conn: duckdb.DuckDBPyConnection) -> int:
             continue  # no data for this muscle that week
 
         outcome_perf = round(float(outcome_perf_row[0]))
-        if action == "deload":
-            correct = True
-        elif action == "add":
-            correct = outcome_perf >= 4  # progression must be sustained, not just stalled
-        elif action == "hold":
-            correct = outcome_perf >= 3  # maintained, not slid into regression
-        else:  # cut — must clear the regression band
-            correct = outcome_perf >= 3
+        correct = _call_correct(action, outcome_perf)
 
         conn.execute(
             """
@@ -1408,6 +1402,50 @@ def _iso_week_start_str(d: object) -> object:
     from datetime import timedelta
 
     return d - timedelta(days=d.weekday())  # type: ignore[operator]
+
+
+def _call_correct(action: str, outcome_perf: int) -> bool:
+    """Whether a logged call held up against the following week's performance."""
+    if action == "deload":
+        return True
+    if action == "add":
+        return outcome_perf >= 4  # progression must be sustained, not just stalled
+    # hold is maintained, not slid into regression; cut must clear the regression band
+    return outcome_perf >= 3
+
+
+def accuracy_baseline(conn: duckdb.DuckDBPyConnection) -> dict[str, float | int] | None:
+    """Compare logged calls with chance, excluding deloads (always scored correct).
+
+    Returns:
+        Logged accuracy, the mean accuracy of the same calls shuffled across weeks,
+        and an always-hold policy's accuracy, or None with too few scored calls.
+    """
+    rows = conn.execute(
+        """
+        SELECT action, outcome_perf FROM muscle_prescription_log
+        WHERE correct IS NOT NULL AND action <> 'deload' AND outcome_perf IS NOT NULL
+        """
+    ).fetchall()
+    if len(rows) < 30:
+        return None
+    actions = [r[0] for r in rows]
+    perfs = [r[1] for r in rows]
+
+    def score(calls: list[str]) -> float:
+        return sum(map(_call_correct, calls, perfs)) / len(perfs)
+
+    rng = random.Random(0)
+    shuffled = []
+    for _ in range(200):
+        rng.shuffle(actions)
+        shuffled.append(score(actions))
+    return {
+        "logged": round(sum(_call_correct(r[0], r[1]) for r in rows) / len(rows), 3),
+        "shuffled": round(sum(shuffled) / len(shuffled), 3),
+        "always_hold": round(score(["hold"] * len(rows)), 3),
+        "n": len(rows),
+    }
 
 
 def prescription_accuracy(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
@@ -1457,7 +1495,12 @@ def prescription_accuracy(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:
         if isinstance(v.get("accuracy"), float)
     )
     overall = round(total_correct / total_scored, 2) if total_scored else None
-    return {"overall": overall, "n_scored": total_scored, "per_muscle": merged}
+    return {
+        "overall": overall,
+        "n_scored": total_scored,
+        "per_muscle": merged,
+        "baseline": accuracy_baseline(conn),
+    }
 
 
 def snapshot_accuracy(conn: duckdb.DuckDBPyConnection) -> dict[str, object]:

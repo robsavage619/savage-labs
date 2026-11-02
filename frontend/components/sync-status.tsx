@@ -19,7 +19,19 @@ export function SyncStatus() {
     refetchInterval: 60_000,
   });
 
+  const failing = data?.find((s) => s.last_error);
   const needsReauth = data?.find((s) => s.needs_reauth);
+  if (failing && !needsReauth) {
+    return (
+      <div className="rounded-lg border border-[oklch(0.75_0.18_75/0.3)] bg-[oklch(0.75_0.18_75/0.08)] px-4 py-2 text-sm text-[oklch(0.75_0.18_75)] flex items-center gap-2">
+        <WarningIcon size={14} />
+        <span>
+          {failing.source.toUpperCase()} sync is failing, so new data may be missing.{" "}
+          <span className="text-[var(--text-muted)]">{failing.last_error}</span>
+        </span>
+      </div>
+    );
+  }
   if (!needsReauth) return null;
 
   const source = needsReauth.source;

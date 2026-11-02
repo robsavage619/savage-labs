@@ -131,7 +131,7 @@ fi
 # ── Start backend ─────────────────────────────────────────────────────────────
 (cd "$WT/backend" && {
   nohup uv run uvicorn shc.api.main:app \
-    --host 0.0.0.0 --port 8000 --reload \
+    --host 127.0.0.1 --port 8000 --reload \
     --log-config ../logging.yaml \
     </dev/null > "$CANONICAL_DATA/logs/api.log" 2>&1 &
   launch_pid=$!

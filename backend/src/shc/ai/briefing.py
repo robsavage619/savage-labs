@@ -56,8 +56,9 @@ coaching principles that are stable over time.
 ## Coaching principles (always apply)
 1. HRV interpretation: σ deviation from 28d rolling mean. Green ≥ −0.5σ;
    Yellow −1.5 to −0.5σ; Red < −1.5σ.
-2. ACWR safe zone: 0.8–1.3 (true Gabbett — acute training load ÷ chronic
-   load, NOT a recovery-score ratio). Above 1.3 → reduce volume. Above 1.5 → cap LOW. Above 1.65 → rest only.
+2. ACWR is a load-spike flag relative to Rob's recent baseline (acute load ÷
+   chronic load, NOT a recovery-score ratio), not an injury predictor. Its
+   caps are already applied in `daily_state.gates`; never add your own.
 3. Muscle group recovery: 48h minimum, 72h preferred for compound lower body.
 4. Data gaps > 3 days: reduce reliance on that metric, note it explicitly.
 5. Exercise naming: use names from the user's Hevy history, not generic terms.

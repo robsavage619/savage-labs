@@ -12,10 +12,10 @@ import { loadRead } from "@/lib/reads";
 
 function acwrZone(ratio: number | null | undefined): { label: string; tone: "positive" | "neutral" | "negative"; color: string } {
   if (ratio == null) return { label: "Awaiting load data", tone: "neutral", color: "var(--neutral)" };
-  if (ratio >= 0.8 && ratio <= 1.3) return { label: "Optimal adaptation", tone: "positive", color: "var(--positive)" };
-  if (ratio > 1.3 && ratio <= 1.5) return { label: "Overreach risk", tone: "neutral", color: "var(--neutral)" };
-  if (ratio > 1.5) return { label: "Injury risk zone", tone: "negative", color: "var(--negative)" };
-  return { label: "Undertraining", tone: "negative", color: "var(--negative)" };
+  if (ratio >= 0.8 && ratio <= 1.3) return { label: "Usual range", tone: "positive", color: "var(--positive)" };
+  if (ratio > 1.3 && ratio <= 1.5) return { label: "Above usual", tone: "neutral", color: "var(--neutral)" };
+  if (ratio > 1.5) return { label: "Load spike", tone: "negative", color: "var(--negative)" };
+  return { label: "Below usual", tone: "neutral", color: "var(--neutral)" };
 }
 
 /**
@@ -127,8 +127,8 @@ export function PillarTrainingLoad() {
   return (
     <div className="@container shc-card shc-enter p-6 flex flex-col">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <Eyebrow className="min-w-0">Training load · recovery proxy</Eyebrow>
-        <span className="text-[10.5px] text-[var(--text-dim)] min-w-0">7d ÷ 28d avg recovery</span>
+        <Eyebrow className="min-w-0">Training load</Eyebrow>
+        <span className="text-[10.5px] text-[var(--text-dim)] min-w-0">7d ÷ prior 21d load</span>
       </div>
 
       <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 min-w-0">

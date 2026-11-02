@@ -202,12 +202,12 @@ export function loadRead(s: DailyState): ChannelRead {
 
   const read =
     acwr < 0.8
-      ? `${vs}That is less than your body is used to — you have room to add work.`
+      ? `${vs}That is less than your recent norm. Today's call decides whether to add work.`
       : acwr <= 1.3
-        ? `${vs}That is the range where fitness builds without piling up injury risk.`
+        ? `${vs}That is close to your recent norm.`
         : acwr <= 1.5
           ? `${vs}You are ramping faster than usual. Fine for a week, not a month.`
-          : `${vs}That is a sharp spike above what you are conditioned for — the zone where injuries happen.`;
+          : `${vs}That is a sharp spike above your recent norm, so ease in.`;
 
   return {
     label: "Training load balance",

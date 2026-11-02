@@ -391,9 +391,9 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         avg = f" · 7d avg {sleep['avg_7d']:.1f}h" if sleep["avg_7d"] else ""
         lines.append(f"- Sleep last night: {sleep['last_hours']:.1f}h{deep}{spo2}{avg}")
     if load["acwr"] is not None:
-        zone = "safe" if 0.8 <= load["acwr"] <= 1.3 else ("⚠ HIGH" if load["acwr"] > 1.3 else "low")
+        zone = "usual" if 0.8 <= load["acwr"] <= 1.3 else ("above usual" if load["acwr"] > 1.3 else "low")
         lines.append(
-            f"- ACWR (true Gabbett, pooled): {load['acwr']} ({zone}) — "
+            f"- ACWR (uncoupled 7:21 load ratio, pooled): {load['acwr']} ({zone}) — "
             f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_21d']:.1f}"
         )
 
@@ -2736,16 +2736,16 @@ def build_midday_context(conn) -> str:
     )
     lines.append("- Total activity duration_min must sum to ≤ 60 (leave 5 min for transition).")
     lines.append(
-        "- Accessory lift (2-a-day strength): ONLY valid when ACWR ≤ 1.3 AND recovery GREEN AND no deload."
+        "- Accessory lift (2-a-day strength): ONLY valid when today's gates allow HIGH AND recovery GREEN AND no deload."
     )
     lines.append("  Must target a different muscle group than this morning. Cap at 8–10 work sets.")
     lines.append(
         "  For lift activities, use notes to prescribe: exercise, sets × reps, weight/RPE target."
     )
     lines.append("  Rob logs these in Hevy — use exact Hevy exercise names where possible.")
-    lines.append("- If ACWR > 1.5: session_type must be 'recovery', intensity must be 'passive'.")
     lines.append(
-        "- If ACWR > 1.3: session_type must be 'recovery' or 'mixed', intensity ≤ 'low'. No lifting."
+        "- If today's gates cap intensity at LOW: session_type must be 'recovery' or 'mixed', "
+        "intensity ≤ 'low'. No lifting."
     )
     lines.append(
         "- Never prescribe recovery when a lift or workout is the right call — push the build."

@@ -1,3 +1,10 @@
+export interface AccuracyBaseline {
+  logged: number;
+  shuffled: number;
+  always_hold: number;
+  n: number;
+}
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 const SHC_KEY = process.env.NEXT_PUBLIC_SHC_KEY ?? "";
 
@@ -68,6 +75,7 @@ export interface OAuthStatus {
   source: string;
   last_sync_at: string;
   needs_reauth: boolean;
+  last_error: string | null;
 }
 
 export interface StatsSummary {
@@ -698,6 +706,7 @@ export interface SubjectProfile {
   phenotype: string[];
   experiments: { registered: number; confirmed: number; active_priors: number };
   engine_accuracy: {
+    baseline: AccuracyBaseline | null;
     current: number | null;
     n_scored: number | null;
     trend: number | null;
@@ -982,6 +991,8 @@ export const api = {
         bias_ci95?: [number, number];
         sd_rpe?: number;
         within_target_pct?: number;
+        echo_pct?: number;
+        non_echo_within_target_pct?: number | null;
         harder_than_programmed_pct?: number;
         easier_than_programmed_pct?: number;
         verdict: "calibrated" | "biased" | "insufficient";
@@ -1230,7 +1241,8 @@ export const api = {
     get<{
       acwr_bands: { source: "personal" | "population"; sample_weeks: number | null };
       volume_landmarks: { muscle: string; source: string }[];
-      prescription_accuracy: { overall: number | null; n_scored: number };
+      volume_landmarks_fitted: number;
+      prescription_accuracy: { overall: number | null; n_scored: number; baseline: AccuracyBaseline | null };
       accuracy_history: { week_start: string; overall: number | null; n_scored: number }[];
       deload_calibration: {
         status: string;

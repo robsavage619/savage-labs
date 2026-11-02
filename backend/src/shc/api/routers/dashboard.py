@@ -3436,10 +3436,14 @@ async def training_monotony(weeks: int = 12) -> dict:
 async def oauth_status() -> list[dict]:
     conn = get_read_conn()
     try:
-        rows = conn.execute("SELECT source, last_sync_at, needs_reauth FROM oauth_state").fetchall()
+        rows = conn.execute("SELECT source, last_sync_at, needs_reauth, last_error FROM oauth_state"
+        ).fetchall()
     finally:
         conn.close()
-    return [{"source": r[0], "last_sync_at": str(r[1]), "needs_reauth": r[2]} for r in rows]
+    return [
+        {"source": r[0], "last_sync_at": str(r[1]), "needs_reauth": r[2], "last_error": r[3]}
+        for r in rows
+    ]
 
 
 @router.get("/briefing")
@@ -4323,7 +4327,8 @@ def _fallback_plan(rec_score, days_since, hrv_sigma, acwr, sleep_hours, today) -
         "cooldown": "5 min mobility — target trained muscle groups",
         "clinical_notes": [],
         "vault_insights": [
-            "ACWR 0.8–1.3 minimizes injury risk (`gabbett-2016-training-injury-prevention-paradox.md`) — current: "
+            "ACWR, a load-spike flag relative to recent baseline "
+            "(`gabbett-2016-training-injury-prevention-paradox.md`) — current: "
             + (f"{acwr:.2f}" if acwr else "unknown"),
             "HRV-guided training outperforms fixed-load programs (`kiviniemi-2007-hrv-guided-endurance-training.md`)",
             f"{int(weight_pct * 100)}% of working weight at {sets}×{reps_str} matches DUP {tier} day prescription "

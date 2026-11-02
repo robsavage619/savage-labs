@@ -46,7 +46,8 @@ def _days_observed(conn: duckdb.DuckDBPyConnection, enrolled_on: str | None) -> 
 
 
 def _personalization(conn: duckdb.DuckDBPyConnection) -> dict:
-    from shc.training.mesocycle import active_mesocycle
+    from shc.metrics import COND_ACWR_FORBID_LEGS
+    from shc.training.mesocycle import active_mesocycle, volume_targets
     from shc.training.self_learning import read_acwr_bands, read_deload_calibration, read_sleep_bands
 
     state = active_mesocycle(conn)
@@ -57,13 +58,21 @@ def _personalization(conn: duckdb.DuckDBPyConnection) -> dict:
     ).fetchone()
     total_muscles = int(total_row[0]) if total_row else 0
 
-    fitted_row = conn.execute(
-        "SELECT COUNT(DISTINCT muscle_group) FROM muscle_volume_targets WHERE mesocycle_id = ?",
-        [meso_id],
-    ).fetchone()
-    fitted_muscles = int(fitted_row[0]) if (fitted_row and meso_id) else 0
+    # "Fitted" means the value differs from population, not that a row exists:
+    # a fit floored back to the population number changes nothing. MAV is left
+    # out because set targets move on MEV and MRV.
+    population = volume_targets(conn)
+    fitted_muscles = sum(
+        1
+        for muscle, vt in volume_targets(conn, meso_id).items()
+        if vt.source == "personal"
+        and muscle in population
+        and (vt.mev, vt.mrv) != (population[muscle].mev, population[muscle].mrv)
+    )
 
     acwr_bands = read_acwr_bands(conn)
+    if acwr_bands and acwr_bands.get("COND_ACWR_FORBID_LEGS") == COND_ACWR_FORBID_LEGS:
+        acwr_bands = None
     sleep_bands = read_sleep_bands(conn)
     deload_cal = read_deload_calibration(conn)
     deload_fitted = not deload_cal.get("using_population_defaults", True)
@@ -114,11 +123,11 @@ def _phenotype_tags(
             n_wk = f" ({int(row[0])} wk)" if row and row[0] else ""
             tags.append(f"Load tolerance {direction} than population by {pct}%{n_wk}")
 
-    overall = accuracy.get("overall")
-    n_scored = accuracy.get("n_scored", 0)
-    if overall is not None and isinstance(n_scored, int) and n_scored >= 100:
+    baseline = accuracy.get("baseline")
+    if isinstance(baseline, dict) and baseline["logged"] - baseline["shuffled"] >= 0.03:
         tags.append(
-            f"Engine self-accuracy {round(overall * 100)}% over {n_scored:,} scored prescriptions"
+            f"Engine calls beat chance: {round(baseline['logged'] * 100)}% vs "
+            f"{round(baseline['shuffled'] * 100)}% over {baseline['n']:,} scored calls"
         )
 
     try:
@@ -190,6 +199,7 @@ def build_subject_profile(conn: duckdb.DuckDBPyConnection) -> dict:
         },
         "engine_accuracy": {
             "current": accuracy.get("overall"),
+            "baseline": accuracy.get("baseline"),
             "n_scored": accuracy.get("n_scored"),
             "trend": degradation.get("delta"),
             "degrading": degradation.get("degrading"),

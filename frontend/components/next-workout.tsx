@@ -385,7 +385,9 @@ function ExerciseCard({
                 <span className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider">lbs</span>
               </div>
             ) : (
-              <span className="text-[14px] text-[var(--text-faint)]">bodyweight</span>
+              !String(ex.reps).includes("min") && (
+                <span className="text-[14px] text-[var(--text-faint)]">pick load</span>
+              )
             )}
 
             <div className="flex items-baseline gap-1">

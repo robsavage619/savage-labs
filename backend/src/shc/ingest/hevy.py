@@ -324,7 +324,46 @@ async def _update_working_weights_from_hevy(conn: Any) -> None:
     """)
 
 
+def _delete_workout(conn: Any, workout_id: str) -> None:
+    """Delete a workout and everything keyed to it, or nothing at all."""
+    conn.execute("BEGIN")
+    try:
+        for table in ("plan_adherence", "workout_retrospectives", "workout_sets"):
+            conn.execute(f"DELETE FROM {table} WHERE workout_id = $id", {"id": workout_id})
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    # DuckDB's FK check doesn't see same-transaction child deletes, so the parent
+    # goes in its own statement. A failure here leaves an empty workout that the
+    # next delete event cleans up, never lost sets beside a live workout.
+    conn.execute("DELETE FROM workouts WHERE id = $id", {"id": workout_id})
+
+
+async def _record_sync_error(error: Exception) -> None:
+    async with write_ctx() as conn:
+        conn.execute(
+            """
+            INSERT INTO oauth_state (source, last_error, last_error_at)
+            VALUES ('hevy', $e, now())
+            ON CONFLICT (source) DO UPDATE SET
+                last_error = EXCLUDED.last_error,
+                last_error_at = EXCLUDED.last_error_at
+            """,
+            {"e": f"{type(error).__name__}: {error}"[:500]},
+        )
+
+
 async def sync_workouts() -> dict[str, int]:
+    """Sync Hevy, recording any failure so the app can show it, then re-raising."""
+    try:
+        return await _sync_workouts()
+    except Exception as exc:
+        await _record_sync_error(exc)
+        raise
+
+
+async def _sync_workouts() -> dict[str, int]:
     """Pull workouts from Hevy and upsert into the local DB.
 
     Uses GET /v1/workouts/events for incremental sync after initial load.
@@ -362,8 +401,7 @@ async def sync_workouts() -> dict[str, int]:
                     ev_type = ev.get("type")
                     if ev_type == "deleted":
                         wid = f"hevy_{ev.get('workout_id', '')}"
-                        conn.execute("DELETE FROM workout_sets WHERE workout_id = $id", {"id": wid})
-                        conn.execute("DELETE FROM workouts WHERE id = $id", {"id": wid})
+                        _delete_workout(conn, wid)
                         deleted += 1
                     elif ev_type == "updated":
                         workout_row, set_rows, bad = _map_workout_to_db(ev["workout"])
@@ -404,7 +442,9 @@ async def sync_workouts() -> dict[str, int]:
             ON CONFLICT (source) DO UPDATE SET
                 last_sync_at = EXCLUDED.last_sync_at,
                 cursor = EXCLUDED.cursor,
-                needs_reauth = FALSE
+                needs_reauth = FALSE,
+                last_error = NULL,
+                last_error_at = NULL
             """,
             {"ts": before_sync.isoformat(), "cursor": before_sync.isoformat()},
         )

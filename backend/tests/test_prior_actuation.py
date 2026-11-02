@@ -161,8 +161,8 @@ def test_actuation_never_breaches_mev(conn, seed) -> None:
     seed.workout(today, "Bench Press (Barbell)", [(100.0, 8)] * 3)
 
     exp_id = _prereg_with_actuation(
-        conn, slug="stress-chest", actuation_direction="-", actuation_magnitude_pct=50.0,
-        actuation_cap_pct=50.0,
+        conn, slug="stress-chest", outcome_direction="lower_better", actuation_direction="-",
+        actuation_magnitude_pct=50.0, actuation_cap_pct=50.0,
     )
     _fill(conn, exp_id, [100, 101, 99, 100, 102, 98], [90, 89, 91, 88, 92, 90])
     result = selflab.score(conn, exp_id)

@@ -36,10 +36,16 @@ class Settings(BaseSettings):
 
     # Paths — anchored to backend/ so cwd doesn't matter
     data_dir: Path = Field(default=_BACKEND_ROOT / "data")
+    # Point BACKUP_PATH at another volume to survive disk loss, not just corruption.
+    backup_path: Path | None = Field(default=None)
 
     @property
     def db_path(self) -> Path:
         return self.data_dir / "shc.duckdb"
+
+    @property
+    def backup_dir(self) -> Path:
+        return self.backup_path or self.data_dir / "backups"
 
     @property
     def uploads_dir(self) -> Path:
@@ -102,7 +108,7 @@ class Settings(BaseSettings):
         return self.shc_admin_key or self.apple_webhook_key
 
     # Server
-    host: str = "127.0.0.1"  # uvicorn bind address; overridden to 0.0.0.0 in dev-restart.sh
+    host: str = "127.0.0.1"  # uvicorn bind address
     port: int = 8000
     frontend_origin: str = "http://localhost:3000"
     # Tailscale hostname (e.g. "my-mac.tail1234.ts.net") — added to allowed Host headers

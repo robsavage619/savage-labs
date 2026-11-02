@@ -196,7 +196,9 @@ export function SubjectDossier() {
                   className="text-[16px] font-medium tabular-nums"
                   style={{
                     color:
-                      profile.engine_accuracy.current != null
+                      profile.engine_accuracy.current != null &&
+                      !(profile.engine_accuracy.baseline &&
+                        profile.engine_accuracy.baseline.logged - profile.engine_accuracy.baseline.shuffled < 0.03)
                         ? profile.engine_accuracy.current >= 0.7
                           ? "var(--positive)"
                           : profile.engine_accuracy.current >= 0.5
@@ -219,6 +221,8 @@ export function SubjectDossier() {
               {profile.engine_accuracy.n_scored != null && (
                 <div className="text-[9.5px] text-[var(--text-faint)] mt-0.5">
                   {profile.engine_accuracy.n_scored.toLocaleString()} scored
+                  {profile.engine_accuracy.baseline &&
+                    ` · chance ${Math.round(profile.engine_accuracy.baseline.shuffled * 100)}%`}
                 </div>
               )}
             </div>

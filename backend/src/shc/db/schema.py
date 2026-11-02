@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
+import subprocess
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -47,13 +50,19 @@ def _apply_migrations(conn: duckdb.DuckDBPyConnection) -> None:
         if version in applied:
             continue
         log.info("applying migration %s", path.name)
-        conn.execute(path.read_text())
-        # Authoritative: record the filename version even if the SQL body
-        # inserted a different one (or none). ON CONFLICT keeps body inserts safe.
-        conn.execute(
-            "INSERT INTO schema_version (version) VALUES (?) ON CONFLICT DO NOTHING",
-            [version],
-        )
+        conn.execute("BEGIN")
+        try:
+            conn.execute(path.read_text())
+            # Authoritative: record the filename version even if the SQL body
+            # inserted a different one (or none). ON CONFLICT keeps body inserts safe.
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?) ON CONFLICT DO NOTHING",
+                [version],
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
         log.info("migration %s applied (recorded version %d)", path.name, version)
 
 
@@ -103,6 +112,31 @@ def init_db() -> None:
     _write_conn = conn
     _write_lock = asyncio.Lock()
     log.info("DuckDB ready at %s", resolved_path)
+
+
+def backup_database(conn: duckdb.DuckDBPyConnection, dest_dir: Path, keep: int = 7) -> Path:
+    """Copy the checkpointed database to ``dest_dir``, verify it opens, prune old copies.
+
+    The caller must hold the write lock so nothing writes mid-copy.
+
+    Returns:
+        Path of the new backup.
+    """
+    conn.execute("CHECKPOINT")
+    source = Path(conn.execute("SELECT path FROM duckdb_databases() WHERE NOT internal").fetchone()[0])
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"shc-{date.today().isoformat()}.duckdb"
+    # cp -c clones on APFS (instant, shares blocks); plain cp when crossing volumes.
+    if subprocess.run(["cp", "-c", str(source), str(dest)], capture_output=True).returncode:
+        shutil.copyfile(source, dest)
+    check = duckdb.connect(str(dest), read_only=True)
+    try:
+        check.execute("SELECT COUNT(*) FROM schema_version").fetchone()
+    finally:
+        check.close()
+    for old in sorted(dest_dir.glob("shc-*.duckdb"))[:-keep]:
+        old.unlink()
+    return dest
 
 
 def get_write_conn() -> duckdb.DuckDBPyConnection:

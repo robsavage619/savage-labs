@@ -637,12 +637,12 @@ function RecoveryCorrelation() {
 
   let insight = "";
   if (nextDayDelta != null) {
-    if (nextDayDelta >= 3) insight = `Training boosts next-day recovery by ${nextDayDelta.toFixed(0)} pts on average.`;
-    else if (nextDayDelta <= -5) insight = `Training suppresses next-day recovery by ${Math.abs(nextDayDelta).toFixed(0)} pts on average.`;
+    if (nextDayDelta >= 3) insight = `Recovery ran ${nextDayDelta.toFixed(0)} pts higher the day after training than after rest. You choose when to train, so this is not cause and effect.`;
+    else if (nextDayDelta <= -5) insight = `Recovery ran ${Math.abs(nextDayDelta).toFixed(0)} pts lower the day after training than after rest.`;
     else insight = `Next-day recovery after training is roughly neutral (${nextDayDelta >= 0 ? "+" : ""}${nextDayDelta.toFixed(0)} pts vs rest days).`;
   }
   if (trainAvg != null && restAvg != null && trainAvg > restAvg + 5) {
-    insight += (insight ? " " : "") + "You tend to train on higher-recovery days — good self-regulation.";
+    insight += (insight ? " " : "") + "You tend to train on higher-recovery days.";
   }
 
   const deltaColor =

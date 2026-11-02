@@ -415,13 +415,21 @@ async def get_self_learning_status() -> dict[str, Any]:
             "SELECT fitted_at, sample_weeks FROM personal_acwr_bands "
             "WHERE arm = 'conditioning' AND threshold_name = 'forbid_legs'"
         ).fetchone()
+        from shc.api.routers.subject import _personalization
+
         return {
             "acwr_bands": {
                 # Top-level fields are conditioning-only in practice — resistance
                 # is never fitted (floor_only downstream, see
                 # self_learning.fit_acwr_bands' docstring), so personal_bands
                 # only ever contains COND_ACWR_FORBID_LEGS.
-                "source": "personal" if personal_bands else "population",
+                # A fit that landed on the population value is not personalization.
+                "source": (
+                    "personal"
+                    if personal_bands
+                    and any(population_bands.get(k) != v for k, v in personal_bands.items())
+                    else "population"
+                ),
                 "active": personal_bands or population_bands,
                 "population": population_bands,
                 "fitted_at": str(acwr_meta_row[0]) if acwr_meta_row and acwr_meta_row[0] else None,
@@ -433,7 +441,7 @@ async def get_self_learning_status() -> dict[str, Any]:
                 "resistance": {
                     "source": "population (by design)",
                     "reason": (
-                        "REST/LOW/MOD are absolute injury-spike ceilings applied "
+                        "REST/LOW/MOD are fixed load-spike ceilings applied "
                         "floor_only — a personal fit sits below the population "
                         "threshold by construction and can never tighten or "
                         "loosen the gate, so it is not fitted"
@@ -453,6 +461,9 @@ async def get_self_learning_status() -> dict[str, Any]:
                 ),
             },
             "volume_landmarks": landmarks,
+            "volume_landmarks_fitted": _personalization(conn)["families"]["volume_landmarks"][
+                "fitted"
+            ],
             "prescription_accuracy": accuracy,
             "accuracy_degradation": degradation,
             "accuracy_history": read_accuracy_history(conn),

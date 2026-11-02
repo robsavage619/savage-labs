@@ -43,6 +43,9 @@ _ON_TARGET_RPE = 0.5
 _MIN_PAIRS = 12
 
 
+_ECHO_MASKS_PCT = 30.0
+
+
 def prescription_calibration(conn, days: int = 365) -> dict:
     """Did prescribed RPE match logged RPE? Bias, spread, and hit rate.
 
@@ -110,6 +113,10 @@ def prescription_calibration(conn, days: int = 365) -> dict:
     se = sd / (len(errors) ** 0.5)
     on_target = sum(1 for e in errors if abs(e) <= _ON_TARGET_RPE)
     biased = abs(bias) > 1.96 * se
+    # A logged RPE equal to its target may be the plan echoed back, not a
+    # measurement, so the headline is only meaningful beside this share.
+    non_echo = [e for e in errors if abs(e) >= 0.05]
+    non_echo_on_target = sum(1 for e in non_echo if abs(e) <= _ON_TARGET_RPE)
 
     return {
         "n_prescribed": len(targets),
@@ -118,6 +125,10 @@ def prescription_calibration(conn, days: int = 365) -> dict:
         "bias_ci95": [round(bias - 1.96 * se, 3), round(bias + 1.96 * se, 3)],
         "sd_rpe": round(sd, 3),
         "within_target_pct": round(100.0 * on_target / len(errors), 1),
+        "echo_pct": round(100.0 * (len(errors) - len(non_echo)) / len(errors), 1),
+        "non_echo_within_target_pct": (
+            round(100.0 * non_echo_on_target / len(non_echo), 1) if non_echo else None
+        ),
         "harder_than_programmed_pct": round(
             100.0 * sum(1 for e in errors if e > _ON_TARGET_RPE) / len(errors), 1
         ),
@@ -300,6 +311,8 @@ def _summarise(cal: dict, val: dict) -> str:
         if cal["verdict"] == "calibrated"
         else f"runs {cal['bias_rpe']:+.2f} RPE off target systematically"
     )
+    if cal.get("echo_pct", 0) >= _ECHO_MASKS_PCT:
+        c += f" ({cal['echo_pct']:.0f}% of logged RPEs exactly match the target)"
     v = (
         "and readiness predicts the session that follows"
         if val.get("informative")

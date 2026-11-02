@@ -122,10 +122,9 @@ export default function LabPage() {
               </p>
               <p>
                 <strong>Engine accuracy</strong> is the share of past calls that held up when
-                replayed against what actually happened. Roughly: 70%+ means the daily
-                prescription has earned trust, under 50% means treat it as a suggestion. The
-                count beneath it is how many calls that percentage is based on — a high score
-                over a handful of days means very little.
+                replayed against what actually happened. On its own it says little: compare it with
+                the shuffled-calls chance rate shown beside it. Only a clear gap above chance
+                means the calls are carrying information.
               </p>
               <p>
                 Source chips at the bottom show which feeds are still streaming. A dark chip
@@ -213,11 +212,9 @@ export default function LabPage() {
             <>
               <p>
                 <strong>Prescription accuracy</strong> replays past calls against what actually
-                happened. Green from about 70% up, amber 50–70%, red below — and the
-                &quot;backtested&quot; count is how much that number rests on. The sparkline is
-                the more useful signal: a falling line means the engine is drifting away from
-                you, usually because something changed in your training that it has not
-                absorbed yet.
+                happened. Read it against the chance rate from shuffled calls, because most weeks
+                score as correct whatever was prescribed. The &quot;backtested&quot; count is how
+                much the number rests on.
               </p>
               <p>
                 The three tiles beneath say where each family of thresholds came from. A value

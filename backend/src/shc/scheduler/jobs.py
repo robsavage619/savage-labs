@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -53,6 +54,16 @@ async def _recompute_scores() -> None:
                     "ACWR fit — skipping re-fit (would be a no-op): %s",
                     deg.get("message"),
                 )
+
+
+async def _backup_db() -> None:
+    """Nightly job: keep a week of verified database copies."""
+    from shc.config import settings
+    from shc.db.schema import backup_database, write_ctx
+
+    async with write_ctx() as conn:
+        dest = await asyncio.to_thread(backup_database, conn, settings.backup_dir)
+    log.info("database backed up to %s", dest)
 
 
 async def _recompute_adherence() -> None:
@@ -277,6 +288,10 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         id="hevy_sync",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        _backup_db, "cron", hour=3, minute=30, id="db_backup", replace_existing=True,
+        misfire_grace_time=6 * 3600,
     )
     # Closes the prescription→execution loop — runs after Hevy has synced,
     # writes plan_adherence row that build_training_context reads tomorrow.

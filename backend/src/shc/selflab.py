@@ -671,7 +671,11 @@ def _score_raw(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
         and ci_high < exp.min_effect
     )
 
-    if significant and meaningful and ci_excludes_zero:
+    # outcome_direction carries the hypothesized sign of B - A. A clear effect the
+    # other way is a finding against the hypothesis, never a confirmation of it.
+    in_hypothesized_direction = effect < 0 if exp.outcome_direction == "lower_better" else effect > 0
+
+    if significant and meaningful and ci_excludes_zero and in_hypothesized_direction:
         verdict = "CONFIRMED"
     elif refuted:
         verdict = "REFUTED"
@@ -695,7 +699,8 @@ def _finalize_score(conn: duckdb.DuckDBPyConnection, exp: Experiment, result: di
     and `score_all()`, called AFTER any cross-experiment correction has already
     settled the final verdict."""
     _persist_result(conn, result)
-    if result["verdict"] == "CONFIRMED":
+    # Observational data can't support a causal prior the planner would act on.
+    if result["verdict"] == "CONFIRMED" and exp.design != "observational":
         _emit_prior(
             conn, exp, result["effect"], result["effect_ci_low"], result["effect_ci_high"],
             result["mean_a"],

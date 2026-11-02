@@ -87,6 +87,9 @@ export function DailyReport() {
   };
 
   const r = data?.report;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const stale = r != null && r.report_date !== today;
   const rc = state?.recovery;
   const rhrDelta = rc?.rhr != null && rc?.rhr_baseline_28d != null ? +(rc.rhr - rc.rhr_baseline_28d).toFixed(0) : undefined;
   const acwr = state?.training_load?.acwr ?? null;
@@ -136,11 +139,15 @@ export function DailyReport() {
         </div>
 
         {/* Readiness headline */}
-        {r?.readiness_headline && (
+        {r?.readiness_headline && (stale ? (
+          <p className="text-[14px] leading-snug max-w-3xl" style={{ color: "var(--text-muted)" }}>
+            No report for today. The latest is from {r.report_date}, so its advice below may not apply.
+          </p>
+        ) : (
           <p className="text-[16px] font-medium leading-snug max-w-3xl" style={{ color: "var(--text-primary)" }}>
             {r.readiness_headline}
           </p>
-        )}
+        ))}
 
         {/* Data strip */}
         {state && (

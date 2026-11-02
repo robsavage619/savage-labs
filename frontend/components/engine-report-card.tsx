@@ -81,7 +81,9 @@ export function EngineReportCard() {
                 unit="%"
                 size="lg"
                 tone={
-                  (cal.within_target_pct ?? 0) >= 75
+                  (cal.echo_pct ?? 0) >= 30
+                    ? "neutral"
+                    : (cal.within_target_pct ?? 0) >= 75
                     ? "positive"
                     : (cal.within_target_pct ?? 0) >= 55
                     ? "neutral"
@@ -91,6 +93,13 @@ export function EngineReportCard() {
               <p className="text-[10.5px] tabular-nums text-[var(--text-muted)]">
                 within ±{cal.on_target_window_rpe} RPE of target · n={cal.n_matched}
               </p>
+              {(cal.echo_pct ?? 0) >= 30 && (
+                <p className="mt-1 text-[11px] leading-snug" style={{ color: "var(--warn)" }}>
+                  {cal.echo_pct?.toFixed(0)}% of logged RPEs exactly match the target, so this may
+                  measure logging, not load. The rest land on target{" "}
+                  {cal.non_echo_within_target_pct?.toFixed(0)}% of the time.
+                </p>
+              )}
               <p className="mt-1 text-[11px] text-[var(--text-muted)] leading-snug">
                 When the planner writes an RPE target, does the load it picked actually land there?
               </p>
