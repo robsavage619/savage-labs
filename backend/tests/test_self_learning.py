@@ -636,7 +636,7 @@ def _insert_night(conn, night_date: date, disturbance_count: int, sleep_cycle_co
 
 
 def test_fit_sleep_bands_returns_none_below_min_nights(conn) -> None:
-    today = date(2026, 6, 1)
+    today = date.today()
     for i in range(20):  # below the 30-night minimum
         _insert_night(conn, today - timedelta(days=i), disturbance_count=14, sleep_cycle_count=2)
     assert fit_sleep_bands(conn, min_nights=30) is None
@@ -646,7 +646,7 @@ def test_fit_sleep_bands_reflects_chronic_osa_baseline(conn) -> None:
     """A consistently high-disturbance/low-cycle history (simulated untreated
     OSA) should fit a personal band well above/below the population default,
     not just reproduce it."""
-    today = date(2026, 6, 1)
+    today = date.today()
     for i in range(40):
         _insert_night(conn, today - timedelta(days=i), disturbance_count=14, sleep_cycle_count=2)
     result = fit_sleep_bands(conn, min_nights=30)
@@ -665,7 +665,7 @@ def test_read_sleep_bands_empty_table_returns_none(conn) -> None:
 
 
 def test_persist_and_read_sleep_bands_roundtrip(conn) -> None:
-    today = date(2026, 6, 1)
+    today = date.today()
     for i in range(40):
         _insert_night(conn, today - timedelta(days=i), disturbance_count=14, sleep_cycle_count=2)
 
