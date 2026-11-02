@@ -84,6 +84,8 @@ _EXTENDED_ANCHOR_DAYS = 365
 # the RPE-8 stop in the note is what actually governs the session.
 _REENTRY_HAIRCUT_PER_MONTH = 0.05
 _REENTRY_HAIRCUT_MAX = 0.20
+_LAYOFF_HAIRCUT = 0.10  # judgment, not a measured value; the RPE stop does the governing
+_LAYOFF_DAYS = 14
 _DAYS_PER_MONTH = 30.4
 
 # An e1RM whose underlying peak week is at least this old is a stale reference
@@ -211,6 +213,7 @@ def _reentry(
     age_days: int,
     grids: LoadableGrids,
     ceiling_lb_at: Callable[[int], float | None],
+    min_haircut: float = 0.0,
 ) -> tuple[str, float, int, str]:
     """A provisional target for a lift coming back after a layoff.
 
@@ -228,7 +231,7 @@ def _reentry(
     The note carries the RPE-8 stop that does the real governing.
     """
     months_off = max(0.0, (age_days - _FRESH_ANCHOR_DAYS) / _DAYS_PER_MONTH)
-    haircut = min(_REENTRY_HAIRCUT_MAX, _REENTRY_HAIRCUT_PER_MONTH * months_off)
+    haircut = max(min_haircut, min(_REENTRY_HAIRCUT_MAX, _REENTRY_HAIRCUT_PER_MONTH * months_off))
     target = last_w_lb * (1.0 - haircut)
     reps = min(rep_low, rep_high)
     ceil = ceiling_lb_at(reps)
@@ -432,13 +435,21 @@ def next_prescriptions(
         fresh = age_days <= lookback_days
         if not fresh and ex.strip().lower() not in extended:
             continue  # only a named rotation candidate earns a dug-up anchor
-        if fresh:
-            action, w, reps, note = _advance(
-                ex, top_w, top_reps, top_rpe, rep_low, rep_high, grids, _ceiling_lb_at
+        layoff = bool(gates.get("reentry")) and age_days >= _LAYOFF_DAYS
+        if layoff or not fresh:
+            action, w, reps, note = _reentry(
+                ex,
+                top_w,
+                rep_low,
+                rep_high,
+                age_days,
+                grids,
+                _ceiling_lb_at,
+                min_haircut=_LAYOFF_HAIRCUT if layoff else 0.0,
             )
         else:
-            action, w, reps, note = _reentry(
-                ex, top_w, rep_low, rep_high, age_days, grids, _ceiling_lb_at
+            action, w, reps, note = _advance(
+                ex, top_w, top_reps, top_rpe, rep_low, rep_high, grids, _ceiling_lb_at
             )
         out.append(
             NextRx(
@@ -454,7 +465,7 @@ def next_prescriptions(
                 next_reps=reps,
                 note=note,
                 anchor_age_days=age_days,
-                provisional=not fresh,
+                provisional=layoff or not fresh,
             )
         )
     return sorted(out, key=lambda n: n.exercise)

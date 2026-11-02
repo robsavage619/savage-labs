@@ -9,6 +9,7 @@ import { CardHelp } from "@/components/card-help";
 import { ClinicalOverview } from "@/components/clinical-overview";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { FuelingPanel } from "@/components/fueling-panel";
+import { TapeCard } from "@/components/tape-card";
 import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
 import type { Span } from "@/lib/sections";
 
@@ -96,6 +97,9 @@ export default function BodyPage() {
           }
         >
           <FuelingPanel />
+          <div className="mt-4">
+            <TapeCard />
+          </div>
         </BoardCard>
 
         <BoardCard

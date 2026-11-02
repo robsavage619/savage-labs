@@ -358,6 +358,8 @@ class AutoRegGates:
     # soreness) still write forbid_muscle_groups directly.
     forbid_muscles: list[str] = field(default_factory=list)
     z2_only: bool = False  # possible illness: easy aerobic work only
+    # Back from a long break: the block's effort ramp and calendar don't apply yet.
+    reentry: bool = False
     deload_required: bool = False
     deload_reason: str | None = None
     hr_zone_shift_bpm: int = 0  # subtract from prescribed HR zones (propranolol days)
@@ -1743,6 +1745,37 @@ def _sleep_stale(sleep: SleepMetrics, today: date) -> bool:
     return sleep.last_date is not None and (today - date.fromisoformat(sleep.last_date)).days > 2
 
 
+_LAYOFF_DAYS = 14
+_REENTRY_WEEK_DAYS = 7
+
+
+def layoff_days(conn: Any, today: date) -> int | None:
+    """Length of a lifting layoff in progress or ended within the last week.
+
+    Returns:
+        The gap in days, or None when no such layoff applies or nothing is logged.
+    """
+    days = sorted(
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT DISTINCT started_at::DATE FROM workout_sets_dedup
+            WHERE NOT is_warmup AND started_at::DATE BETWEEN ? AND ?
+            """,
+            [today - timedelta(days=180), today],
+        ).fetchall()
+    )
+    if not days:
+        return None
+    if (today - days[-1]).days >= _LAYOFF_DAYS:
+        return (today - days[-1]).days
+    recent = [d for d in days if (today - d).days <= _REENTRY_WEEK_DAYS]
+    earlier = [d for d in days if (today - d).days > _REENTRY_WEEK_DAYS]
+    if recent and earlier and (recent[0] - earlier[-1]).days >= _LAYOFF_DAYS:
+        return (recent[0] - earlier[-1]).days
+    return None
+
+
 def _gates(
     rec: RecoveryMetrics,
     sleep: SleepMetrics,
@@ -2728,6 +2761,11 @@ def compute_daily_state(conn, planning_date: date | None = None) -> dict[str, An
         )
     from shc.training.autoregulation import weekly_deload_status
 
+    if (gap := layoff_days(conn, today)) is not None:
+        gates.reentry = True
+        gates.reasons.append(
+            f"Back from a {gap}-day layoff: effort starts at week 1 and loads start lighter"
+        )
     weekly_deload = weekly_deload_status(conn)
     if weekly_deload.get("recommended"):
         gates.deload_required = True

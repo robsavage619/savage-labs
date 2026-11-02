@@ -2,21 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import math
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 import duckdb
 import pytest
 import yaml
 
 from shc import lab, selflab
-from shc.ai.workout_planner import GateViolation, validate_plan
+from shc.ai.workout_planner import (
+    GateViolation,
+    _retrospective_lines,
+    effort_band_for,
+    validate_plan,
+)
+from shc.api.routers.dashboard import _current_unit_pr_kg
 from shc.db import schema
 from shc.ingest import clinical_profile, hevy
+from shc.metrics import layoff_days
+from shc.scheduler import jobs
 from shc.stats.scorecard import scorecard
 from shc.training import loadable
-from shc.training.mesocycle import volume_targets, weekly_budget_block
-from shc.training.prescriptor import _advance
+from shc.training.mesocycle import meso_rpe_band, volume_targets, weekly_budget_block
+from shc.training.prescriptor import _advance, next_prescriptions
 from shc.training.self_learning import accuracy_baseline
 
 
@@ -357,3 +368,104 @@ def test_next_load_uses_the_ceiling_tolerance_and_reaches_the_rep_window():
 
     action, weight, reps, _ = _advance("Raise", 30, 8, 8.0, 12, 20, _Stack(), lambda _reps: 20.0)
     assert (action, weight, reps) == ("reduce_ceiling", 15, 12)
+
+
+def _lift_day(conn, day: date, sets: int = 2) -> None:
+    wid = f"w{day}"
+    conn.execute(
+        "INSERT INTO workouts (id, source, started_at, kind, content_hash) "
+        "VALUES (?, 'hevy', ?, 'strength', ?)",
+        [wid, datetime.combine(day, datetime.min.time()), f"h{day}"],
+    )
+    for i in range(sets):
+        conn.execute(
+            "INSERT INTO workout_sets (id, workout_id, set_idx, exercise, weight_kg, reps, rpe, "
+            "is_warmup, content_hash) VALUES (?, ?, ?, 'Leg Extension (Machine)', 80, 10, 8, "
+            "FALSE, ?)",
+            [f"{wid}s{i}", wid, i, f"c{wid}{i}"],
+        )
+
+
+def test_layoff_is_detected_during_and_for_a_week_after_only(conn):
+    today = date(2026, 11, 1)
+    assert layoff_days(conn, today) is None
+    _lift_day(conn, today - timedelta(days=30))
+    assert layoff_days(conn, today) == 30
+    _lift_day(conn, today - timedelta(days=2))
+    assert layoff_days(conn, today) == 28
+    assert layoff_days(conn, today + timedelta(days=7)) is None
+
+
+def test_reentry_band_starts_at_week_one_and_allows_a_lighter_load():
+    gates = {"max_intensity": "high", "deload_required": False, "reentry": True}
+    week_five = SimpleNamespace(is_deload_week=False, week_number=5, planned_weeks=7)
+    assert effort_band_for(gates, week_five) == meso_rpe_band(1, 7)
+    plan = _gate_plan(
+        {
+            "name": "Leg Extension (Machine)",
+            "sets": 3,
+            "reps": "10",
+            "weight_lbs": 170,
+            "rpe_target": 7,
+        },
+        intensity="high",
+    )
+    state = _state(max_intensity="high", reentry=True)
+    assert validate_plan(plan, state=state, e1rm_ceilings={"Leg Extension (Machine)": 133.0})
+
+
+def test_layoff_turns_next_load_into_a_lighter_provisional_target(conn):
+    _lift_day(conn, date.today() - timedelta(days=21))
+    grids = SimpleNamespace(snap_down=lambda _n, lb: 5.0 * (lb // 5), snap_up=lambda _n, lb: lb)
+    rows = next_prescriptions(
+        conn,
+        {"max_intensity": "high", "deload_required": False, "reentry": True},
+        date.today(),
+        {},
+        grids,
+    )
+    assert len(rows) == 1 and rows[0].provisional and rows[0].action == "reentry"
+    assert rows[0].next_weight_lbs < rows[0].last_weight_lbs * 0.91
+
+
+async def test_adherence_counts_only_prescribed_exercises(conn, monkeypatch):
+    monkeypatch.setattr(schema, "_write_conn", conn)
+    monkeypatch.setattr(schema, "_write_lock", asyncio.Lock())
+    yesterday = date.today() - timedelta(days=1)
+    _lift_day(conn, yesterday, sets=4)
+    plan = {
+        "blocks": [
+            {
+                "exercises": [
+                    {"name": "Bench Press (Dumbbell)", "sets": 2},
+                    {"name": "Leg Extension (Machine)", "sets": 2},
+                ]
+            }
+        ]
+    }
+    conn.execute(
+        "INSERT INTO workout_plans (date, plan_json, source) VALUES (?, ?, 't')",
+        [yesterday, json.dumps(plan)],
+    )
+    await jobs._recompute_adherence()
+    assert conn.execute("SELECT completion_pct FROM plan_adherence").fetchone()[0] == 50.0
+
+
+def test_last_retrospective_reaches_the_planner(conn):
+    _lift_day(conn, date(2026, 10, 31))
+    conn.execute(
+        "INSERT INTO workout_retrospectives (workout_id, summary, flags) VALUES (?, 'short rest', ?)",
+        ["w2026-10-31", json.dumps(["Bench missed reps"])],
+    )
+    lines = _retrospective_lines(conn)
+    assert "short rest" in lines[1] and "- Bench missed reps" in lines
+
+
+def test_per_hand_pr_ignores_the_combined_logging_era(conn):
+    _lift_day(conn, date.today() - timedelta(days=1))
+    conn.execute("UPDATE workout_sets SET exercise = 'Hammer Curl (Dumbbell)', weight_kg = 27")
+    assert _current_unit_pr_kg(conn, "Hammer Curl (Dumbbell)", 54.0) == 27
+    assert _current_unit_pr_kg(conn, "Hammerstrength Incline Chest Press", 130.0) == 130.0
+    # A retired dumbbell lift with an impossible stored best reads as a combined total.
+    assert _current_unit_pr_kg(conn, "Shoulder Press (Dumbbell)", 72.0) == 36.0
+    assert _current_unit_pr_kg(conn, "Shoulder Press (Dumbbell)", 40.0) == 40.0

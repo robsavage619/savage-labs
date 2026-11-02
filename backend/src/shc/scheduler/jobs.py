@@ -110,10 +110,27 @@ async def _recompute_adherence() -> None:
             {"d": yesterday},
         ).fetchone()
         wid = actual[0] if actual else None
-        sets_done = int(actual[1]) if actual and actual[1] else 0
         actual_rpe = float(actual[2]) if actual and actual[2] else None
+        # Sets of the prescribed exercises only, each capped at its prescription, so a
+        # fully swapped session can't read as 100% and an extra one can't exceed it.
+        done_by_name = dict(
+            conn.execute(
+                """
+                SELECT lower(ws.exercise), COUNT(*) FROM workout_sets ws
+                WHERE ws.workout_id = $wid AND NOT ws.is_warmup GROUP BY 1
+                """,
+                {"wid": wid},
+            ).fetchall()
+        )
+        matched_sets = 0
+        for block in plan.get("blocks", []):
+            for ex in block.get("exercises", []):
+                name = str(ex.get("name", "")).lower()
+                take = min(int(ex.get("sets", 0) or 0), done_by_name.get(name, 0))
+                matched_sets += take
+                done_by_name[name] = done_by_name.get(name, 0) - take
         completion_pct = (
-            round(sets_done / prescribed_sets * 100, 1) if prescribed_sets > 0 else None
+            round(matched_sets / prescribed_sets * 100, 1) if prescribed_sets > 0 else None
         )
         conn.execute(
             """
@@ -137,7 +154,7 @@ async def _recompute_adherence() -> None:
                 "tgt": target_rpe,
             },
         )
-    log.info("plan adherence recomputed for %s (sets %s/%s)", yesterday, sets_done, prescribed_sets)
+    log.info("plan adherence recomputed for %s (sets %s/%s)", yesterday, matched_sets, prescribed_sets)
 
 
 async def _auto_advance_mesocycle() -> None:

@@ -1,3 +1,5 @@
+export type TapeField = "waist_in" | "arm_in" | "thigh_in" | "chest_in";
+
 export interface AccuracyBaseline {
   logged: number;
   shuffled: number;
@@ -847,6 +849,18 @@ export const api = {
     }
     return r.json();
   },
+  tape: () =>
+    get<Partial<Record<TapeField, { date: string; inches: number; readings: number }>>>(
+      "/api/body/tape",
+    ),
+  saveTape: async (values: Partial<Record<TapeField, number>>) => {
+    const r = await fetch(`${BASE}/api/body/tape`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...mutHeaders() },
+      body: JSON.stringify(values),
+    });
+    if (!r.ok) throw new Error(`saveTape ${r.status}`);
+  },
   workoutDelete: async () => {
     const r = await fetch(`${BASE}/api/workout/plan`, { method: "DELETE", headers: mutHeaders() });
     if (!r.ok) throw new Error(`workoutDelete ${r.status}`);
@@ -883,6 +897,7 @@ export const api = {
     get<{
       weeks: number;
       total_sets: number;
+      direct_back_weekly_sets: number;
       groups: {
         group: string;
         sets: number;

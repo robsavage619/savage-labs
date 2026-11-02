@@ -2500,7 +2500,10 @@ def _weekly_deload_context(
             "reason": "signal deload suppressed during post-deload cooldown",
         }
 
-    is_calendar = bool(state and state.is_deload_week)
+    from shc.metrics import layoff_days
+
+    # A layoff already was the rest, so the calendar can't prescribe more of it.
+    is_calendar = bool(state and state.is_deload_week) and layoff_days(conn, date.today()) is None
     is_signal = bool(signal_deload["recommended"])
     if is_calendar and is_signal:
         deload_reason = "both"

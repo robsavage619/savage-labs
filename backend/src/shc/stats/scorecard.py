@@ -198,7 +198,10 @@ def _outcomes(conn: duckdb.DuckDBPyConnection, since: date, today: date) -> dict
         {"s": since},
     ).fetchone()
     tape = conn.execute(
-        "SELECT COUNT(*) FROM measurements WHERE metric = 'waist_circumference_cm' AND ts::DATE >= ?",
+        """
+        SELECT COUNT(DISTINCT ts::DATE) FROM measurements
+        WHERE metric LIKE '%circumference_cm' AND ts::DATE >= ?
+        """,
         [since],
     ).fetchone()
     photos = conn.execute(
@@ -251,7 +254,7 @@ def scorecard(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dic
         "metrics": [
             {
                 "key": "adherence",
-                "label": "Exercises done on days he trained",
+                "label": "Exercises done on days you trained",
                 "value": done,
                 "unit": "%",
                 "status": _status(None if done is None else done >= 60),

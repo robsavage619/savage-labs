@@ -516,6 +516,12 @@ function MuscleBalance() {
           <span className="text-[var(--text-faint)]"> · {ratioNote}</span>
         </span>
       </div>
+      {data?.direct_back_weekly_sets != null && (
+        <p className="text-[11px] text-[var(--text-muted)]">
+          Pull includes curls. Direct back work (lats and mid back):{" "}
+          <span className="tabular-nums">{data.direct_back_weekly_sets}</span> sets/wk.
+        </p>
+      )}
       {isLoading ? (
         <div className="h-[88px] shc-skeleton rounded" />
       ) : (

@@ -31,6 +31,11 @@ from shc.stats import classify_change, swc
 from shc.lab import _welch_t as _lab_welch
 from shc.metrics import MUSCLE_TO_GROUP, compute_daily_state
 from shc.metrics import muscle_group as _mg
+from shc.training.load_mechanics import (
+    COMBINED_LOGGING_ENDED,
+    exceeds_per_hand_max,
+    is_per_hand,
+)
 from shc.training.loadable import snap_plan_weights
 
 router = APIRouter(tags=["dashboard"])
@@ -566,6 +571,69 @@ async def get_checkin_today() -> dict:
         "travel_flag": row[9],
         "notes": row[10],
         "muscle_soreness": ms_raw if isinstance(ms_raw, dict) else {},
+    }
+
+
+_TAPE_METRICS = {
+    "waist_in": "waist_circumference_cm",
+    "arm_in": "arm_circumference_cm",
+    "thigh_in": "thigh_circumference_cm",
+    "chest_in": "chest_circumference_cm",
+}
+
+
+class TapeSubmission(BaseModel):
+    waist_in: float | None = Field(default=None, gt=10, lt=90)
+    arm_in: float | None = Field(default=None, gt=5, lt=40)
+    thigh_in: float | None = Field(default=None, gt=5, lt=60)
+    chest_in: float | None = Field(default=None, gt=10, lt=90)
+
+
+@router.post("/body/tape", dependencies=[Depends(require_admin_key)])
+async def post_tape(body: TapeSubmission) -> dict:
+    """Record today's tape measurements; a second entry the same day replaces the first."""
+    values = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not values:
+        raise HTTPException(status_code=422, detail="enter at least one measurement")
+    today = date.today()
+    async with write_ctx() as conn:
+        for field_name, inches in values.items():
+            metric = _TAPE_METRICS[field_name]
+            conn.execute(
+                "DELETE FROM measurements WHERE source = 'manual' AND metric = ? AND ts = ?",
+                [metric, today],
+            )
+            conn.execute(
+                """
+                INSERT INTO measurements
+                    (source, metric, ts, value_num, unit, external_id, content_hash)
+                VALUES ('manual', ?, ?, ?, 'cm', ?, ?)
+                """,
+                [metric, today, inches * 2.54, f"tape:{metric}:{today}", f"{metric}:{today}:{inches}"],
+            )
+    return {"date": today.isoformat(), "saved": sorted(values)}
+
+
+@router.get("/body/tape")
+async def get_tape() -> dict:
+    """Latest manual tape reading per measurement, in inches, and how many days are logged."""
+    conn = get_read_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT metric, MAX(ts)::DATE, arg_max(value_num, ts), COUNT(DISTINCT ts::DATE)
+            FROM measurements
+            WHERE source = 'manual' AND metric LIKE '%circumference_cm'
+            GROUP BY metric
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    names = {v: k for k, v in _TAPE_METRICS.items()}
+    return {
+        names[r[0]]: {"date": str(r[1]), "inches": round(r[2] / 2.54, 1), "readings": r[3]}
+        for r in rows
+        if r[0] in names
     }
 
 
@@ -1342,6 +1410,11 @@ async def training_prs(n: int = Query(15, gt=0, le=1000)) -> list[dict]:
         conn.close()
 
     out = []
+    conn = get_read_conn()
+    try:
+        rows = [(r[0], _current_unit_pr_kg(conn, r[0], r[1]), *r[2:]) for r in rows]
+    finally:
+        conn.close()
     for ex, pr_kg, pr_reps, pr_date, last in rows:
         reps = int(pr_reps or 1)
         est_1rm_kg = float(pr_kg) * (1 + reps / 30.0)
@@ -1440,6 +1513,11 @@ async def training_top_exercises(n: int = Query(10, gt=0, le=100)) -> list[dict]
     finally:
         conn.close()
 
+    conn = get_read_conn()
+    try:
+        rows = [(*r[:3], _current_unit_pr_kg(conn, r[0], r[3]), *r[4:]) for r in rows]
+    finally:
+        conn.close()
     weeks_vol = [r[1] for r in slope_rows]
     half = len(weeks_vol) // 2
     prior = sum(weeks_vol[:half]) / max(half, 1) if half else 0
@@ -1726,6 +1804,16 @@ async def training_muscle_balance(weeks: int = Query(4, gt=0, le=52)) -> dict:
             """,
             {"w": weeks},
         ).fetchall()
+        # "Pull" includes curls, so it can look balanced while back work has stopped.
+        back_sets = conn.execute(
+            """
+            SELECT COUNT(*) FROM workout_sets_dedup ws
+            JOIN exercise_muscle em ON em.exercise_name = ws.exercise AND em.role = 'primary'
+            WHERE ws.is_warmup = FALSE AND em.muscle IN ('lats', 'mid_back')
+              AND day_d >= (current_date - ($w * INTERVAL '7 days'))
+            """,
+            {"w": weeks},
+        ).fetchone()[0]
     finally:
         conn.close()
 
@@ -1749,7 +1837,12 @@ async def training_muscle_balance(weeks: int = Query(4, gt=0, le=52)) -> dict:
         for g, b in buckets.items()
     ]
     out.sort(key=lambda r: r["sets"], reverse=True)
-    return {"weeks": weeks, "groups": out, "total_sets": total_sets}
+    return {
+        "weeks": weeks,
+        "groups": out,
+        "total_sets": total_sets,
+        "direct_back_weekly_sets": round(back_sets / weeks, 1),
+    }
 
 
 @router.get("/insights/correlations")
@@ -3391,6 +3484,23 @@ async def signals_noise_floor(days: int = 28) -> dict:
             "reading under test. A delta inside it is reported flat regardless of sign."
         ),
     }
+
+
+def _current_unit_pr_kg(conn: Any, exercise: str, pr_kg: float) -> float:
+    """A per-hand lift's best since combined-total logging ended, else the stored best."""
+    if not is_per_hand(exercise):
+        return pr_kg
+    row = conn.execute(
+        """
+        SELECT MAX(weight_kg) FROM workout_sets_dedup
+        WHERE exercise = ? AND NOT is_warmup AND started_at::DATE >= ?
+        """,
+        [exercise, COMBINED_LOGGING_ENDED],
+    ).fetchone()
+    if row and row[0]:
+        return float(row[0])
+    # Not done since the switch: a value past the one-hand maximum can only be a total.
+    return pr_kg / 2 if exceeds_per_hand_max(exercise, pr_kg, date.today()) else pr_kg
 
 
 @router.get("/engine/scorecard")
