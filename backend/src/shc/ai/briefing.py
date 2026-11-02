@@ -92,10 +92,12 @@ def build_clinical_context(conn) -> str:
 
     Pulls active medications (started ≤ today, not yet stopped, record valid),
     active conditions (status not in resolved/inactive/remission), and the most
-    recent lab value per analyte from the last 12 months.
+    recent lab value per analyte from the last 12 months, then appends the
+    interpretation rules from personal_context.md.
 
-    Returns a markdown block. Empty string if all three queries return nothing,
-    so the caller can decide whether to skip the section entirely.
+    Returns a markdown block. Empty string if all three queries return nothing
+    and there is no personal context, so the caller can decide whether to skip
+    the section entirely.
     """
     today = date.today().isoformat()
 
@@ -137,7 +139,9 @@ def build_clinical_context(conn) -> str:
         """
     ).fetchall()
 
-    if not (meds or conditions or labs):
+    personal = load_personal_context()
+
+    if not (meds or conditions or labs or personal):
         return ""
 
     lines: list[str] = ["## CLINICAL PROFILE (live from DB)"]
@@ -184,6 +188,9 @@ def build_clinical_context(conn) -> str:
                     flag = " ⬆ HIGH"
             date_str = str(collected_at)[:10]
             lines.append(f"- {name}: {v_str}{unit_str}{range_str}{flag} — {date_str}")
+
+    if personal:
+        lines.append(f"\n{personal}")
 
     return "\n".join(lines)
 
