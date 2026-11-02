@@ -9,6 +9,7 @@ import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { CorrelationCards } from "@/components/correlation-cards";
 import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { EngineReportCard } from "@/components/engine-report-card";
+import { EngineScorecard } from "@/components/engine-scorecard";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { LabExperiments } from "@/components/lab-experiments";
 import { LabPanel } from "@/components/lab-panel";
@@ -263,6 +264,9 @@ export default function LabPage() {
           }
         >
           <EngineReportCard />
+          <div className="mt-4">
+            <EngineScorecard />
+          </div>
         </BoardCard>
 
         <BoardCard

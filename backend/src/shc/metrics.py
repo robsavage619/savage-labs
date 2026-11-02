@@ -357,6 +357,7 @@ class AutoRegGates:
     # about the group (conditioning-ACWR legs forbid, same-day pickleball,
     # soreness) still write forbid_muscle_groups directly.
     forbid_muscles: list[str] = field(default_factory=list)
+    z2_only: bool = False  # possible illness: easy aerobic work only
     deload_required: bool = False
     deload_reason: str | None = None
     hr_zone_shift_bpm: int = 0  # subtract from prescribed HR zones (propranolol days)
@@ -1831,6 +1832,7 @@ def _gates(
             fever_range = rec.skin_temp_delta >= _SKIN_TEMP_FEVER_DELTA
             if fever_range or _illness_gate_corroborated(rec):
                 g.max_intensity = "low"
+                g.z2_only = True
                 cause = "fever-range spike" if fever_range else "corroborated by HRV/RHR/recovery"
                 reasons.append(
                     f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline "

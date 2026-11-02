@@ -3393,6 +3393,18 @@ async def signals_noise_floor(days: int = 28) -> dict:
     }
 
 
+@router.get("/engine/scorecard")
+async def engine_scorecard() -> dict:
+    """The monthly scorecard; rules in docs/evaluation.md."""
+    from shc.stats.scorecard import scorecard
+
+    conn = get_read_conn()
+    try:
+        return scorecard(conn)
+    finally:
+        conn.close()
+
+
 @router.get("/engine/report-card")
 async def engine_report_card(days: int = 365) -> dict:
     """Does the engine prescribe accurately, and does readiness predict anything?

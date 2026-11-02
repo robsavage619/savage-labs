@@ -63,6 +63,21 @@ load-to-HRV coupling is |r| < 0.06 at every lag from 0 to 5 days across roughly
 430 observations, and the invariants already concede that HRV is a weak signal
 here because it is corrupted by a beta-blocker taken as needed.
 
+## Monthly scorecard: is the engine helping?
+
+`GET /api/engine/scorecard`, shown on LAB. These rules were committed on 2026-11-01, before any review, so results can't choose their own interpretation. First review 2027-05-01, with at least 75 sessions; extend rather than conclude if there are fewer.
+
+| Metric | Comparator | Rule at review |
+|---|---|---|
+| Exercises done from the plan | 60% | Below: fix selection before any fitting |
+| Top weight within 5% of plan | 60%; RPE echo under 30% | Below: revisit ceiling math. Quote RPE calibration only when echo is under 30% |
+| Volume calls above chance | Same calls shuffled | Under 3 points at n of 150 or more: remove the accuracy badge and its machinery |
+| Readiness forecast skill | Training-period mean | Under 2%: label the gate a safety prior, stop tuning weights |
+| Eight fixed lifts, 90 days vs prior 90 | No change | At or below 0 for two reviews: full engine review |
+| Size and weight measured | 6 scale readings and 2 tape readings per 90 days | Missing: the growth goal is unevaluated, and the report says so |
+
+Repeated pain at one site, or two zero-training weeks caused by a prescription, triggers a review on their own. Life stress or a medication change is annotated, not adjusted for.
+
 ## Why both numbers appear together
 
 The planner prescribes accurately and predicts nothing. Either number alone

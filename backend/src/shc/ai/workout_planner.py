@@ -1013,7 +1013,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         lines.append(f"- Forbidden muscles: {', '.join(gates['forbid_muscles'])}")
     if gates["deload_required"]:
         lines.append(
-            f"- DELOAD REQUIRED — ≤moderate intensity, target RPE ≤7 ({gates['deload_reason']})"
+            f"- DELOAD REQUIRED — ≤moderate intensity, target RPE ≤{_DELOAD_RPE_CAP:g} ({gates['deload_reason']})"
         )
     lines.append(
         "- Cite vault notes by exact `filename.md`; every citation must be a real catalog note."
@@ -1199,6 +1199,8 @@ def effort_band_for(gates: dict[str, Any], meso_state: Any | None = None) -> tup
     No meso state (or a deload week, where the band would be the flat deload
     band) falls back to the static per-intensity band unchanged.
     """
+    if gates.get("deload_required"):
+        return _DELOAD_RPE_CAP, _DELOAD_RPE_CAP
     lo, hi = EFFORT_RPE_BAND.get(gates.get("max_intensity", "high"), (7, 8))
     if meso_state is None or getattr(meso_state, "is_deload_week", True):
         return float(lo), float(hi)
@@ -1290,6 +1292,7 @@ def load_cap_pct(gates: dict[str, Any]) -> int:
 # 5 exists to prevent.
 RPE_CAP_BY_INTENSITY = {"rest": 6.0, "low": 7.0, "moderate": 8.0, "high": 10.0}
 _DELOAD_RPE_CAP = 6.0
+_Z2_ONLY_MAX_RPE = 5.0
 # High days get headroom above the recorded e1RM so a PR can still register
 # (invariant 5): at RPE 9 the implied e1RM would otherwise always land just
 # under the reference, freezing the strength ceiling.
@@ -1749,6 +1752,51 @@ def _planned_primary_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str
     return planned
 
 
+def _no_legal_notch_above(
+    conn: Any,
+    name: str,
+    w_lbs: float,
+    e1rm_kg: float,
+    reps: int,
+    rpe_t: float,
+    gates: dict[str, Any],
+    tolerance_rpe: float,
+) -> bool:
+    """True when the next real weight up is over today's ceiling or too hard for the label.
+
+    Weight stacks jump. When the notches straddle the legal band, the lighter one is
+    the honest prescription, and rejecting it only pushes the plan to a null weight.
+    """
+    from shc.training.loadable import build_grids
+
+    next_lb = build_grids(conn).snap_up(name, w_lbs + 0.5)
+    if next_lb <= w_lbs:
+        return False
+    ceiling_lb = rpe_derived_ceiling_kg(e1rm_kg, reps, gates) * 2.20462 * 1.03
+    next_kg = next_lb / 2.20462
+    next_rpe = 10.0 - (30.0 * (e1rm_kg / next_kg - 1) - reps)
+    return next_lb > ceiling_lb or next_rpe - rpe_t > tolerance_rpe
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_exercise_fields(ex: dict[str, Any], where: str) -> None:
+    """Reject values that would silently skip the checks further down."""
+    sets = ex.get("sets")
+    if not isinstance(sets, int) or isinstance(sets, bool) or sets < 1:
+        raise ValueError(f"{where} needs a positive whole number of sets, got {sets!r}")
+    if _rep_bounds(ex.get("reps")) is None:
+        raise ValueError(f"{where} needs reps with a number in them, got {ex.get('reps')!r}")
+    weight = ex.get("weight_lbs")
+    if weight is not None and (not _is_number(weight) or weight < 0):
+        raise ValueError(f"{where} weight_lbs must be null or at least 0, got {weight!r}")
+    rpe = ex.get("rpe_target")
+    if rpe is not None and (not _is_number(rpe) or not 0 <= rpe <= 10):
+        raise ValueError(f"{where} rpe_target must be null or 0-10, got {rpe!r}")
+
+
 def validate_plan(
     plan: dict[str, Any],
     state: dict[str, Any] | None = None,
@@ -1865,7 +1913,14 @@ def validate_plan(
     blocks = plan.get("blocks", [])
     if not blocks:
         raise ValueError("Plan has no blocks")
+    if not isinstance(blocks, list) or not all(isinstance(b, dict) for b in blocks):
+        raise ValueError("blocks must be a list of objects")
     for i, block in enumerate(blocks):
+        exercises = block.get("exercises")
+        if exercises and not (
+            isinstance(exercises, list) and all(isinstance(e, dict) for e in exercises)
+        ):
+            raise ValueError(f"Block {i} exercises must be a list of objects")
         if not block.get("label"):
             raise ValueError(f"Block {i} missing required 'label' field (got 'name'?)")
         if not block.get("exercises"):
@@ -1877,6 +1932,7 @@ def validate_plan(
                 raise ValueError(
                     f"Block {i} exercise {j} ({ex.get('name')!r}) missing required 'rest_seconds'"
                 )
+            _validate_exercise_fields(ex, f"Block {i} exercise {j} ({ex['name']!r})")
     if not isinstance(plan.get("cooldown"), str):
         raise ValueError("cooldown must be a plain string, not an array or object")
     if not plan.get("clinical_notes"):
@@ -1940,6 +1996,19 @@ def validate_plan(
                 f"Exercise(s) not available at Rob's gym: {detail}. Pick a movement "
                 "from THIS WEEK'S PRESCRIPTION menu instead (see equipment_unavailable)."
             )
+
+    # ── #26: no dumbbell or cable load past what one hand can hold ────────────
+    # Ingest quarantines these, but a lift with no e1RM has no ceiling to catch one.
+    from shc.training.load_mechanics import MAX_PER_HAND_LB, exceeds_per_hand_max
+
+    for block in plan.get("blocks", []):
+        for ex in block.get("exercises", []):
+            w_lbs = ex.get("weight_lbs")
+            if w_lbs and exceeds_per_hand_max(ex["name"], w_lbs / 2.20462, date.today()):
+                raise GateViolation(
+                    f"{ex['name']!r} at {w_lbs} lb per hand is over Rob's {MAX_PER_HAND_LB:g} lb "
+                    "one-hand maximum. Prescribe the weight in one hand."
+                )
 
     # ── Session budget (#17): working-set cap + ~1h duration ──────────────────
     # Rob has ~1h to train. A plan that blows past the working-set cap or the
@@ -2059,8 +2128,26 @@ def validate_plan(
                             "or hamstrings/glutes/lower_back individually) — hip hinges "
                             "(deadlift / RDL / good morning / hip thrust) stay blocked."
                         )
+        # Applies with or without a load, so a null weight can't dodge the day's cap.
+        day_rpe_cap = rpe_cap_for(gates)
+        for block in blocks:
+            for ex in block.get("exercises", []):
+                rpe_t = ex.get("rpe_target")
+                if rpe_t is not None and rpe_t > day_rpe_cap:
+                    raise GateViolation(
+                        f"{ex['name']!r} targets RPE {rpe_t}, above today's effort cap of "
+                        f"RPE {day_rpe_cap}."
+                    )
+                # Possible illness: easy aerobic work only, unless Rob confirms otherwise.
+                if gates.get("z2_only") and not override_reason:
+                    if ex.get("weight_lbs") or (rpe_t or 0) > _Z2_ONLY_MAX_RPE:
+                        raise GateViolation(
+                            f"{ex['name']!r} is loaded or hard, but today's signals allow Z2 only "
+                            "(possible illness). Prescribe easy aerobic work, or pass "
+                            "override_reason if Rob confirmed he is well."
+                        )
         if gates.get("deload_required"):
-            # Deload weeks must use moderate-or-lower intensity AND target_rpe <= 7.
+            # Deload weeks must use moderate-or-lower intensity AND target_rpe <= the deload cap.
             # If the recommendation omits target_rpe, derive it from the highest
             # per-exercise rpe_target in the plan so a low-RPE plan isn't rejected
             # because the field was absent (would have defaulted to 10).
@@ -2078,7 +2165,7 @@ def validate_plan(
             if order.index(rec["intensity"]) > order.index("moderate") or target_rpe > 7:
                 raise GateViolation(
                     f"Deload required ({gates.get('deload_reason')}) but plan is "
-                    f"{rec['intensity']} @ RPE {target_rpe} — must be ≤moderate @ RPE ≤7."
+                    f"{rec['intensity']} @ RPE {target_rpe} — must be ≤moderate @ RPE ≤{_DELOAD_RPE_CAP:g}."
                 )
 
         # Per-exercise load ceiling: prescribed e1RM demand must not exceed
@@ -2198,20 +2285,16 @@ def validate_plan(
                     # RIR-adjusted Epley: e1RM = weight × (1 + (reps + RIR)/30),
                     # RIR = 10 − RPE. Solve for the weight this RPE/rep combo
                     # implies against the exercise's known e1RM.
-                    # A target above today's effort cap is incoherent on its face.
-                    day_cap = rpe_cap_for(gates)
-                    if rpe_t > day_cap:
-                        raise GateViolation(
-                            f"{name!r} targets RPE {rpe_t}, above today's "
-                            f"{gates.get('max_intensity')} effort cap of RPE {day_cap}."
-                        )
                     # Invert RIR-adjusted Epley for the load actually prescribed:
                     # reps_to_failure = 30 * (e1RM/weight - 1); RIR = that - reps.
                     prescribed_kg = w_lbs / 2.20462
                     if prescribed_kg <= 0 or prescribed_kg >= e1rm_kg:
                         continue  # supramaximal is the ceiling check's business
                     reps_to_failure = 30.0 * (e1rm_kg / prescribed_kg - 1)
-                    implied_rpe = 10.0 - (reps_to_failure - min(reps, 12))
+                    # Real reps, not the 12-rep cap: that cap protects e1RM from
+                    # Epley's high-rep overestimate, but here it made a 20-rep set
+                    # owe a 12-rep load.
+                    implied_rpe = 10.0 - (reps_to_failure - reps)
                     # ONE-DIRECTIONAL: only reject a load too LIGHT for its label.
                     # That is the failure this check exists for — an rpe_target that
                     # is decorative, "RPE 8" on what is really an RPE 5 set. The
@@ -2221,7 +2304,11 @@ def validate_plan(
                     # effort-derived ceiling above, which caps every day at its own
                     # RPE, so nothing is unguarded by making this asymmetric.
                     if rpe_t - implied_rpe > _COHERENCE_TOLERANCE_RPE:
-                        implied_kg = e1rm_kg / (1 + (min(reps, 12) + (10 - rpe_t)) / 30)
+                        if conn is not None and _no_legal_notch_above(
+                            conn, name, w_lbs, e1rm_kg, reps, rpe_t, gates, _COHERENCE_TOLERANCE_RPE
+                        ):
+                            continue
+                        implied_kg = e1rm_kg / (1 + (reps + (10 - rpe_t)) / 30)
                         implied_lb = round(implied_kg * 2.20462, 1)
                         # Suggest a weight the implement can actually be set to,
                         # not a kg-conversion artifact ("use ~106.6lb"). Round UP:

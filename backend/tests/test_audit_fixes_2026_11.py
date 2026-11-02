@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 
 import duckdb
@@ -9,9 +10,13 @@ import pytest
 import yaml
 
 from shc import lab, selflab
+from shc.ai.workout_planner import GateViolation, validate_plan
 from shc.db import schema
 from shc.ingest import clinical_profile, hevy
+from shc.stats.scorecard import scorecard
+from shc.training import loadable
 from shc.training.mesocycle import volume_targets, weekly_budget_block
+from shc.training.prescriptor import _advance
 from shc.training.self_learning import accuracy_baseline
 
 
@@ -224,3 +229,131 @@ def test_budget_tiers_hold_abs_and_raise_back_after_migration(conn):
     assert all(targets[m].mv == 3 for m in ("lats", "mid_back", "hamstrings"))
     emphasis = {r[0] for r in conn.execute("SELECT muscle FROM muscle_emphasis").fetchall()}
     assert "abs" not in emphasis
+
+
+def _gate_plan(exercise: dict, intensity: str = "low") -> dict:
+    return {
+        "generated_at": "2026-11-01T08:00:00",
+        "source": "t",
+        "readiness_tier": "yellow",
+        "readiness_summary": "s",
+        "recommendation": {"intensity": intensity, "focus": "f", "rationale": "r", "target_rpe": 6},
+        "warmup": [],
+        "blocks": [{"label": "b", "exercises": [{"rest_seconds": 60, "notes": "n", **exercise}]}],
+        "cooldown": "c",
+        "clinical_notes": ["c"],
+        "vault_insights": ["i"],
+    }
+
+
+def _state(**gates: object) -> dict:
+    base = {
+        "max_intensity": "low",
+        "forbid_muscle_groups": [],
+        "forbid_muscles": [],
+        "deload_required": False,
+        "reasons": [],
+    }
+    return {"gates": {**base, **gates}}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"reps": "10"},
+        {"sets": 0, "reps": "10"},
+        {"sets": "three", "reps": "10"},
+        {"sets": 3, "reps": "AMRAP"},
+        {"sets": 3, "reps": "10", "weight_lbs": -100},
+        {"sets": 3, "reps": "10", "rpe_target": "hard"},
+    ],
+)
+def test_malformed_exercise_values_are_rejected_with_a_message(bad):
+    with pytest.raises(ValueError):
+        validate_plan(_gate_plan({"name": "Face Pull", **bad}))
+
+
+def test_impossible_per_hand_load_is_rejected():
+    with pytest.raises(GateViolation, match="one-hand"):
+        validate_plan(
+            _gate_plan({"name": "Lunge (Dumbbell)", "sets": 3, "reps": "10", "weight_lbs": 200})
+        )
+
+
+def test_z2_only_day_rejects_lifting_unless_overridden():
+    lift = {"name": "Face Pull", "sets": 3, "reps": "10", "weight_lbs": 50, "rpe_target": 6}
+    with pytest.raises(GateViolation, match="Z2 only"):
+        validate_plan(_gate_plan(lift), state=_state(z2_only=True))
+    walk = {"name": "Walking", "sets": 1, "reps": "30 min", "weight_lbs": None, "rpe_target": 4}
+    assert validate_plan(_gate_plan(walk), state=_state(z2_only=True))
+    assert validate_plan(
+        _gate_plan(lift), state=_state(z2_only=True), override_reason="Rob confirmed he is well"
+    )
+
+
+def test_deload_effort_cap_applies_at_null_weight():
+    hard = {"name": "Face Pull", "sets": 3, "reps": "10", "weight_lbs": None, "rpe_target": 10}
+    with pytest.raises(GateViolation, match="effort cap"):
+        validate_plan(
+            _gate_plan(hard), state=_state(deload_required=True, max_intensity="moderate")
+        )
+
+
+def test_high_rep_set_is_not_held_to_a_twelve_rep_load():
+    # 15 lb x 25 at RPE 9 against the e1RM its own 12-rep cap produces (21 lb).
+    plan = _gate_plan(
+        {
+            "name": "Lateral Raise (Dumbbell)",
+            "sets": 2,
+            "reps": "25",
+            "weight_lbs": 15,
+            "rpe_target": 9,
+        },
+        intensity="high",
+    )
+    state = _state(max_intensity="high")
+    assert validate_plan(
+        plan, state=state, e1rm_ceilings={"Lateral Raise (Dumbbell)": 21 / 2.20462}
+    )
+
+
+def test_scorecard_on_an_empty_database_says_not_measured(conn):
+    card = scorecard(conn, today=date(2026, 11, 1))
+    assert {m["status"] for m in card["metrics"]} == {"not measured"}
+    assert len(card["metrics"]) == 6
+
+
+class _Stack:
+    """A weight stack that only moves in 15 lb jumps."""
+
+    def snap_up(self, _name: str, lb: float) -> float:
+        return 15.0 * math.ceil(lb / 15.0)
+
+    def snap_down(self, _name: str, lb: float) -> float:
+        return 15.0 * math.floor(lb / 15.0)
+
+
+def test_lighter_notch_passes_when_the_next_one_is_over_the_ceiling(conn, monkeypatch):
+    monkeypatch.setattr(loadable, "build_grids", lambda _conn: _Stack())
+    # e1RM 210 lb at 12 reps: an RPE 8 set wants about 143 lb, and the stack offers 135 or 150.
+    state = _state(max_intensity="moderate")
+    e1rm = {"Face Pull": 210 / 2.20462}
+    plan = _gate_plan(
+        {"name": "Face Pull", "sets": 2, "reps": "12", "weight_lbs": 120, "rpe_target": 8},
+        intensity="moderate",
+    )
+    with pytest.raises(GateViolation, match="implies RPE"):
+        validate_plan(plan, state=state, e1rm_ceilings=e1rm, conn=conn)  # 135 is still legal
+    plan["blocks"][0]["exercises"][0]["weight_lbs"] = 135
+    assert validate_plan(plan, state=state, e1rm_ceilings=e1rm, conn=conn)
+
+
+def test_next_load_uses_the_ceiling_tolerance_and_reaches_the_rep_window():
+    action, weight, reps, _ = _advance("Curl", 135, 11, 8.0, 8, 12, _Stack(), lambda _reps: 133.0)
+    assert (action, weight, reps) == ("reduce_ceiling", 135, 11)
+
+    action, weight, reps, _ = _advance("Raise", 15, 8, 8.0, 12, 20, _Stack(), lambda _reps: None)
+    assert (action, weight, reps) == ("add_rep", 15, 12)
+
+    action, weight, reps, _ = _advance("Raise", 30, 8, 8.0, 12, 20, _Stack(), lambda _reps: 20.0)
+    assert (action, weight, reps) == ("reduce_ceiling", 15, 12)

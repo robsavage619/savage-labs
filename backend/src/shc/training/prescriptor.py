@@ -147,14 +147,17 @@ def _advance(
     rep count, or None when no e1RM exists — no ceiling claim, no cap applied
     (the planner's by-feel rule and the validators still stand).
     """
-    ceil_last = ceiling_lb_at(last_reps)
+    # A set below the window has to come up to it, and that may need a lighter load.
+    in_window_reps = max(last_reps, rep_low)
+    ceil_last = ceiling_lb_at(in_window_reps)
     if ceil_last is not None and last_w_lb > ceil_last + _TOL_LB:
-        w = grids.snap_down(exercise, ceil_last)
+        # The validator allows 3% over the ceiling, so a notch inside that is legal.
+        w = min(grids.snap_down(exercise, ceil_last * 1.03), last_w_lb)
         return (
             "reduce_ceiling",
             w,
-            last_reps,
-            f"today's effort ceiling ({ceil_last:g} lb at {last_reps} reps) is below the "
+            in_window_reps,
+            f"today's effort ceiling ({ceil_last:g} lb at {in_window_reps} reps) is below the "
             "last working weight — reduced day, work at the ceiling",
         )
     if last_rpe is not None and last_rpe >= _GRIND_RPE:
@@ -191,7 +194,7 @@ def _advance(
             f"rep window filled at {last_w_lb:g} lb — step to the next notch, reps "
             f"reset to {rep_low}",
         )
-    next_reps = min(last_reps + 1, rep_high)
+    next_reps = max(min(last_reps + 1, rep_high), rep_low)
     return (
         "add_rep",
         last_w_lb,

@@ -980,6 +980,12 @@ export const api = {
       notes: string | null;
       volume_targets: Record<string, { mev: number; mav: number; mrv: number }>;
     }>("/api/training/mesocycle"),
+  engineScorecard: () =>
+    get<{
+      as_of: string;
+      first_review: string;
+      metrics: { key: string; label: string; value: number | null; unit: string; status: string }[];
+    }>("/api/engine/scorecard"),
   engineReportCard: (days = 365) =>
     get<{
       as_of: string;
