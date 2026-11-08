@@ -308,6 +308,13 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     # ── Load prescription rule — prevents the "deload = max attempt" bug ──
     cap_pct = load_cap_pct(gates)  # legacy display only; the ceiling is effort-derived
     day_rpe_cap = rpe_cap_for(gates)
+    try:
+        from shc.training.session_design import session_context_block
+
+        lines.append("\n" + session_context_block(conn, gates, today))
+    except Exception as _e:  # noqa: BLE001 — the validator still enforces it
+        log.warning("session design context unavailable: %s", _e)
+
     lines.append("\n## ⚠ LOAD PRESCRIPTION RULE (HARD CONSTRAINT)")
     lines.append(
         f"- Today's ceiling is an EFFORT ceiling: **RPE {day_rpe_cap}**. For every loaded "
@@ -1060,6 +1067,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
 ```typescript
 interface Plan {
   readiness_tier: "green" | "yellow" | "red";         // exact lowercase
+  session_day: "Upper-A" | "Lower-A" | "Upper-B" | "Lower-B"; // REQUIRED unless intensity is rest: the day TODAY'S SESSION DESIGN names
   readiness_summary: string;
   recommendation: {
     intensity: "high" | "moderate" | "low" | "rest";  // exact lowercase
@@ -1840,6 +1848,7 @@ def validate_plan(
     prescription: Any | None = None,
     override_reason: str | None = None,
     override_muscle_groups: list[str] | None = None,
+    session_date: date | None = None,
 ) -> bool:
     """Validate a plan dict against the schema AND the deterministic gates.
 
@@ -1931,6 +1940,13 @@ def validate_plan(
 
     The session-budget cap (#17 — working-set count + estimated duration) and the
     pull-gate hinge block (#19) run from `state` alone and need no `conn`.
+
+    Pass `session_date` (with `conn` and `state`) to enforce session design (#26,
+    `shc.training.session_design`): the plan's `session_day` must be today's day
+    in the rotation, it opens with that region's anchor compound, compounds come
+    before isolations, the anchor is held for the mesocycle, and the anchor's
+    reps sit in the A (heavy) or B (light) half of its window. Only the main
+    `/workout/plan` path passes it; a midday second session does not.
 
     Raises:
         ValueError: on schema violation.
@@ -2596,6 +2612,26 @@ def validate_plan(
                             "pass an explicit override_reason to record the decision to "
                             "skip it."
                         )
+
+    # #26: session design. The weekly engine sets the dose; this sets the session.
+    if (
+        session_date is not None
+        and conn is not None
+        and state is not None
+        and rec["intensity"] != "rest"
+    ):
+        from shc.training.mesocycle import active_mesocycle
+        from shc.training.session_design import check_session, scheduled_session
+
+        _gates = state.get("gates", {})
+        _meso = active_mesocycle(conn)
+        sched = scheduled_session(
+            conn, _gates, session_date, _meso.started_on if _meso else None
+        )
+        if sched is not None:
+            problem = check_session(conn, plan, sched, _rep_bounds, override_reason)
+            if problem:
+                raise GateViolation(problem)
     return True
 
 

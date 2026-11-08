@@ -194,6 +194,9 @@ each of which either rejects the plan outright or renders the card empty:
   `recommendation.rationale` (the technical audit trail, and a DIFFERENT sentence from
   `summary`); `recommendation.estimated_duration_min`; and `warmup[]`. All four are
   rendered — skip one and that part of the card goes blank.
+- `session_day` — **required** on every non-rest plan, copied from the context's
+  `TODAY'S SESSION DESIGN` block. The session opens with that day's anchor compound and
+  no compound follows an isolation for the same muscle, or it is a **409**.
 - `rest_seconds` on every exercise, no exceptions. `clinical_notes` is a **list** of
   strings, not a string.
 

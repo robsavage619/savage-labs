@@ -3694,6 +3694,7 @@ async def submit_workout_plan(body: WorkoutPlanSubmission) -> dict:
             conn=conn,
             override_reason=body.override_reason,
             override_muscle_groups=body.override_muscle_groups,
+            session_date=plan_date,
         )
 
         # Audit only a GENUINE override — a reason was supplied AND the plan
