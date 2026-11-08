@@ -6,11 +6,16 @@ type was renamed daily ("Upper-A", "Full Body", "Upper Pull + Arms") and an
 isolation often opened the session ahead of the compound it should follow. This
 module is the structure those plans are now validated against.
 
-* Four days rotate by sessions actually EXECUTED, not by weekday, because Rob
-  trains 3-4 times a week on shifting days. Region alternates upper/lower; A/B
-  alternates within a region. A missed day does not skip a template.
-* A and B open with DIFFERENT anchor lifts, so each region gets two movement
-  emphases a week (e.g. incline press-led Upper-A, pulldown-led Upper-B).
+* Days rotate by sessions actually EXECUTED, not by weekday, because Rob trains
+  3-4 times a week on shifting days. A missed day does not skip a template.
+* The split follows his real frequency (`training-frequency-hypertrophy.md`:
+  each muscle at least 2x/week; Helms' templates: 3 days Lower/Upper/Full, 4
+  days Upper/Lower x2). Upper/Lower A/B hits a muscle on half of all sessions, so
+  it reaches 2x/week only at 4+ sessions/week. Below that, the rotation is
+  Upper-A -> Lower-A -> Full Body, which hits every muscle on 2 of 3 sessions.
+* Every day in the rotation opens with a DIFFERENT anchor lift, so each region
+  gets two movement emphases (e.g. incline press-led Upper-A, pulldown-led
+  Upper-B or Full Body).
 * An anchor keeps one rep range for the whole block (`variation-hypertrophy.md`,
   Israetel ch.5): changing reps on the same lift mid-block breaks the overload
   record. A heavy/light half-window split was tried and dropped on 2026-11-08: on
@@ -45,19 +50,28 @@ DAYS: dict[str, tuple[str, str]] = {
     "Lower-A": ("lower", "A"),
     "Upper-B": ("upper", "B"),
     "Lower-B": ("lower", "B"),
+    "Full Body": ("full", "F"),
 }
+FOUR_DAY = ("Upper-A", "Lower-A", "Upper-B", "Lower-B")
+THREE_DAY = ("Upper-A", "Lower-A", "Full Body")
+# Upper/Lower A/B trains a muscle every other session: 2x/week needs 4 sessions/week.
+FOUR_DAY_MIN_SESSIONS_28D = 16
 PURPOSE = {
     "A": "the region's first movement emphasis, led by its own anchor lift",
     "B": "the region's second movement emphasis, led by a DIFFERENT anchor than the A day",
+    "F": "the second weekly hit for every muscle, led by an anchor different from the "
+    "Upper-A and Lower-A anchors",
 }
 ANCHOR_MUSCLES = {
     "upper": frozenset({"chest", "lats", "mid_back", "front_delts"}),
     "lower": frozenset({"quads", "glutes", "hamstrings"}),
 }
+ANCHOR_MUSCLES["full"] = ANCHOR_MUSCLES["upper"] | ANCHOR_MUSCLES["lower"]
 _REGION_MUSCLES = {
     "upper": frozenset(m for m, g in MUSCLE_TO_GROUP.items() if g in ("push", "pull")),
     "lower": frozenset(m for m, g in MUSCLE_TO_GROUP.items() if g == "legs"),
 }
+_REGION_MUSCLES["full"] = _REGION_MUSCLES["upper"] | _REGION_MUSCLES["lower"]
 # Same multi-joint pattern as prescriptor._COMPOUND_RE, plus pulldowns.
 _COMPOUND_RE = re.compile(
     r"\b(press|squat|deadlift|row|lunge|pull[ -]?up|chin[ -]?up|dip|thrust|clean|snatch|"
@@ -75,7 +89,7 @@ class SessionDay:
     anchor: str | None
     reason: str
     anchor_reps: str | None = None
-    sibling_anchor: str | None = None
+    other_anchors: tuple[str, ...] = ()
 
 
 def is_compound(name: str) -> bool:
@@ -157,7 +171,21 @@ def _last_logged_region(conn: Any, before: date) -> str | None:
     return "lower" if row[0] * 2 > row[1] else "upper"
 
 
+def _sessions_28d(conn: Any, before: date) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT day_d) FROM workout_sets_dedup
+        WHERE source = 'hevy' AND NOT is_warmup
+          AND day_d < ? AND day_d >= CAST(? AS DATE) - INTERVAL 28 DAY
+        """,
+        [before, before],
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 def _region_gated(region: str, gates: dict) -> bool:
+    if region == "full":
+        return _region_gated("upper", gates) or _region_gated("lower", gates)
     groups = set(gates.get("forbid_muscle_groups") or [])
     muscles = set(gates.get("forbid_muscles") or [])
     if region == "lower" and "legs" in groups:
@@ -188,26 +216,42 @@ def scheduled_session(
         meso_start: Active mesocycle start; anchors are only held within a block.
     """
     hist = executed_days(conn, today)
-    last_variant = {r: "B" for r in ("upper", "lower")}
-    for _, day, _, _ in hist:
-        region, variant = DAYS[day]
-        last_variant[region] = variant
+    n28 = _sessions_28d(conn, today)
+    four_day = n28 >= FOUR_DAY_MIN_SESSIONS_28D
+    cycle = FOUR_DAY if four_day else THREE_DAY
     if hist:
-        last_region = DAYS[hist[-1][1]][0]
-        why = f"last trained day was {hist[-1][1]} ({hist[-1][0]})"
+        last_day = hist[-1][1]
+        last_region = DAYS[last_day][0]
+        why = f"last trained day was {last_day} ({hist[-1][0]})"
     else:
+        last_day = None
         last_region = _last_logged_region(conn, today) or "lower"
         why = f"no designed day trained yet; last session read as {last_region}"
+    why += (
+        f"; {n28} sessions in the last 28 days, so the "
+        + ("4-day Upper/Lower A/B" if four_day else "3-day Upper/Lower/Full Body")
+        + " split keeps every muscle at 2x/week"
+    )
 
-    order = ["lower", "upper"] if last_region == "upper" else ["upper", "lower"]
-    open_regions = [r for r in order if not _region_gated(r, gates)]
-    if not open_regions:
+    if four_day:
+        last_variant = {"upper": "B", "lower": "B"}
+        for _, past, _, _ in hist:
+            r, v = DAYS[past]
+            if r in last_variant:
+                last_variant[r] = v
+        order = ["lower", "upper"] if last_region == "upper" else ["upper", "lower"]
+        candidates = [f"{r.capitalize()}-{'B' if last_variant[r] == 'A' else 'A'}" for r in order]
+    else:
+        # After upper comes Lower-A, after lower Full Body, after Full Body Upper-A.
+        start = {"upper": 1, "lower": 2, "full": 0}[last_region]
+        candidates = [cycle[(start + i) % 3] for i in range(3)]
+    open_days = [d for d in candidates if not _region_gated(DAYS[d][0], gates)]
+    if not open_days:
         return None
-    region = open_regions[0]
-    if region != order[0]:
-        why += f"; {order[0]} is gated today, so {region} moves up"
-    variant = "B" if last_variant[region] == "A" else "A"
-    day = f"{region.capitalize()}-{variant}"
+    day = open_days[0]
+    region, variant = DAYS[day]
+    if day != candidates[0]:
+        why += f"; {candidates[0]} is gated today, so {day} moves up"
 
     # The first opener trained for a day in this block is its anchor, reps included.
     first_by_day: dict[str, tuple[str, str | None]] = {}
@@ -215,13 +259,11 @@ def scheduled_session(
         if name and (meso_start is None or d >= meso_start):
             first_by_day.setdefault(past_day, (name, reps))
     anchor, anchor_reps = first_by_day.get(day, (None, None))
-    sibling = first_by_day.get(f"{region.capitalize()}-{'A' if variant == 'B' else 'B'}")
+    others = tuple(first_by_day[d][0] for d in cycle if d != day and d in first_by_day)
     if anchor and _anchor_gated(conn, anchor, gates):
         why += f"; anchor {anchor} is gated today, pick another {region} compound"
         anchor, anchor_reps = None, None
-    return SessionDay(
-        day, region, variant, anchor, why, anchor_reps, sibling[0] if sibling else None
-    )
+    return SessionDay(day, region, variant, anchor, why, anchor_reps, others)
 
 
 def check_session(
@@ -291,10 +333,10 @@ def check_session(
     if overridden:
         return None
     opener = exs[0]["name"]
-    if sched.sibling_anchor and day == sched.day and opener == sched.sibling_anchor:
+    if day == sched.day and opener in sched.other_anchors:
         return (
-            f"{opener!r} already anchors the other {region} day this block. {day} needs a "
-            f"different {region} anchor, so the region gets two movement emphases."
+            f"{opener!r} already anchors another day in the rotation this block. {day} "
+            "needs a different anchor, so each region gets two movement emphases."
         )
     if (
         sched.anchor
@@ -322,18 +364,19 @@ def session_context_block(conn: Any, gates: dict, today: date) -> str:
             "lifting day today. Rest-intensity plans skip this check."
         )
     region_list = sorted(ANCHOR_MUSCLES[sched.region])
+    label = "full-body" if sched.region == "full" else sched.region
     reps = f" at **{sched.anchor_reps}** reps (fixed for the block)" if sched.anchor_reps else ""
-    sibling = (
-        f" It may not be {sched.sibling_anchor}, which anchors the other {sched.region} day."
-        if sched.sibling_anchor
+    others = (
+        f" It may not be {', '.join(sched.other_anchors)}, which anchor other days."
+        if sched.other_anchors
         else ""
     )
     anchor_line = (
         f"- Anchor (held for this mesocycle): **{sched.anchor}**{reps}. Open with it."
         if sched.anchor
-        else f"- Anchor: none locked yet. Pick a {sched.region} compound whose primary is one "
-        f"of {region_list}; whatever opens this day, at the reps you give it, is its anchor for the rest of "
-        f"the block.{sibling}"
+        else f"- Anchor: none locked yet. Pick a compound whose primary is one of "
+        f"{region_list}; whatever opens this day, at the reps you give it, is its anchor "
+        f"for the rest of the block.{others}"
     )
     return "\n".join(
         [
@@ -342,10 +385,11 @@ def session_context_block(conn: Any, gates: dict, today: date) -> str:
             f"Why this day: {sched.reason}.",
             f"- Purpose: {PURPOSE[sched.variant]}.",
             anchor_line,
-            f"- Order: anchor compound → other {sched.region} compounds → {sched.region} "
+            f"- Order: anchor compound → other {label} compounds → {label} "
             "isolations (stretch-biased first) → off-region top-ups, core, cardio. "
             "A compound may not follow an isolation that already hit the same muscle.",
-            "- Rotation follows sessions actually trained, not weekdays: upper/lower "
-            "alternate, A/B alternate within each.",
+            "- Rotation follows sessions actually trained, not weekdays: "
+            "Upper-A → Lower-A → Full Body below 4 sessions/week, "
+            "Upper-A → Lower-A → Upper-B → Lower-B at 4+.",
         ]
     )

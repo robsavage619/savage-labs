@@ -23,7 +23,46 @@ def _trained(conn, seed, day: date, plan: dict) -> None:
         seed.workout(day, ex["name"], [(50.0, 10)])
 
 
+def _filler(seed, n: int) -> None:
+    """n logged lifting days in October, enough to set the 28-day frequency."""
+    for i in range(n):
+        seed.workout(date(2026, 10, 10 + i), "Leg Extension (Machine)", [(40.0, 12)])
+
+
+def test_three_day_rotation_below_four_sessions(conn, seed) -> None:
+    upper_a = _plan("Upper-A", [("Incline Bench Press (Dumbbell)", "6-8")])
+    lower_a = _plan("Lower-A", [("Hack Squat (Machine)", "8-10")])
+    _trained(conn, seed, date(2026, 11, 2), upper_a)
+    _trained(conn, seed, date(2026, 11, 3), lower_a)
+
+    s = scheduled_session(conn, {}, date(2026, 11, 5), date(2026, 11, 1))
+    assert s is not None and s.day == "Full Body" and s.region == "full"
+    assert "3-day" in s.reason
+
+    full = _plan(
+        "Full Body",
+        [
+            ("Hammerstrength Decline Chest Press", "10-12"),
+            ("Leg Press (Machine)", "10-12"),
+            ("Cable Fly Crossovers", "15"),
+        ],
+    )
+    assert check_session(conn, full, s, _rep_bounds) is None
+    reuse = _plan("Full Body", [("Hack Squat (Machine)", "8-10")])
+    assert "another day in the rotation" in check_session(conn, reuse, s, _rep_bounds)
+
+    # Legs gated on the Full Body day: Upper-A moves up rather than a half-gated full day.
+    gated = scheduled_session(conn, {"forbid_muscle_groups": ["legs"]}, date(2026, 11, 5), None)
+    assert gated is not None and gated.day == "Upper-A"
+
+    _trained(conn, seed, date(2026, 11, 5), full)
+    s2 = scheduled_session(conn, {}, date(2026, 11, 7), date(2026, 11, 1))
+    assert s2 is not None and s2.day == "Upper-A"
+    assert s2.anchor == "Incline Bench Press (Dumbbell)"
+
+
 def test_rotation_order_and_anchors(conn, seed) -> None:
+    _filler(seed, 14)  # with the plan days below: 16+ sessions in 28 days -> 4-day split
     upper_a = _plan(
         "Upper-A", [("Incline Bench Press (Dumbbell)", "6-8"), ("Cable Fly Crossovers", "12")]
     )
@@ -75,7 +114,7 @@ def test_rotation_order_and_anchors(conn, seed) -> None:
     assert s2 is not None and s2.day == "Upper-A"
     assert s2.anchor == "Incline Bench Press (Dumbbell)"
     assert s2.anchor_reps == "6-8"
-    assert s2.sibling_anchor == "Hammerstrength Decline Chest Press"
+    assert "Hammerstrength Decline Chest Press" in s2.other_anchors
     swapped = _plan("Upper-A", [("Hammerstrength Decline Chest Press", "6-8")])
     assert "anchor this mesocycle" in check_session(conn, swapped, s2, _rep_bounds)
     new_reps = _plan("Upper-A", [("Incline Bench Press (Dumbbell)", "10-12")])
@@ -86,7 +125,7 @@ def test_rotation_order_and_anchors(conn, seed) -> None:
     # Upper-B may not reuse Upper-A's anchor.
     s4 = scheduled_session(conn, {}, date(2026, 11, 5), date(2026, 11, 1))
     reuse = _plan("Upper-B", [("Incline Bench Press (Dumbbell)", "10")])
-    assert "other upper day" in check_session(conn, reuse, s4, _rep_bounds)
+    assert "another day in the rotation" in check_session(conn, reuse, s4, _rep_bounds)
 
     # Legs gated: the lower day yields to upper instead of skipping a template.
     s3 = scheduled_session(conn, {"forbid_muscle_groups": ["legs"]}, date(2026, 11, 4), None)

@@ -1067,7 +1067,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
 ```typescript
 interface Plan {
   readiness_tier: "green" | "yellow" | "red";         // exact lowercase
-  session_day: "Upper-A" | "Lower-A" | "Upper-B" | "Lower-B"; // REQUIRED unless intensity is rest: the day TODAY'S SESSION DESIGN names
+  session_day: "Upper-A" | "Lower-A" | "Upper-B" | "Lower-B" | "Full Body"; // REQUIRED unless intensity is rest: the day TODAY'S SESSION DESIGN names
   readiness_summary: string;
   recommendation: {
     intensity: "high" | "moderate" | "low" | "rest";  // exact lowercase
