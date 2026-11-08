@@ -1944,8 +1944,8 @@ def validate_plan(
     Pass `session_date` (with `conn` and `state`) to enforce session design (#26,
     `shc.training.session_design`): the plan's `session_day` must be today's day
     in the rotation, it opens with that region's anchor compound, compounds come
-    before isolations, the anchor is held for the mesocycle, and the anchor's
-    reps sit in the A (heavy) or B (light) half of its window. Only the main
+    before isolations, the anchor (and its reps) is held for the mesocycle, and
+    the A and B days of a region open with different anchors. Only the main
     `/workout/plan` path passes it; a midday second session does not.
 
     Raises:

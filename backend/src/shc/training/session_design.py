@@ -9,13 +9,19 @@ module is the structure those plans are now validated against.
 * Four days rotate by sessions actually EXECUTED, not by weekday, because Rob
   trains 3-4 times a week on shifting days. Region alternates upper/lower; A/B
   alternates within a region. A missed day does not skip a template.
-* A days are load days (the anchor runs in the heavy half of its evidence rep
-  window), B days are volume days (light half). Both stay inside the hypertrophy
-  windows `exercise_science` already enforces; the variation is the point.
+* A and B open with DIFFERENT anchor lifts, so each region gets two movement
+  emphases a week (e.g. incline press-led Upper-A, pulldown-led Upper-B).
+* An anchor keeps one rep range for the whole block (`variation-hypertrophy.md`,
+  Israetel ch.5): changing reps on the same lift mid-block breaks the overload
+  record. A heavy/light half-window split was tried and dropped on 2026-11-08: on
+  the 8-12 windows it was a 10-vs-10 rep difference, and undulating loads do not
+  beat fixed ones for growth (`periodization-hypertrophy.md`).
 * Slot order: the day opens with an anchor compound for its region, and no
-  compound follows an isolation that already tired one of its primary muscles. Exercise order changes what
-  the later lifts get (`exercise-order-strength.md`); the lift that matters most
-  goes first, fresh.
+  compound follows an isolation that already tired one of its primary muscles.
+  The lift that matters most goes first, fresh, so its numbers stay comparable.
+  Order moves strength toward the lifts done first and does not change growth
+  (`nunes-2020-exercise-order-strength-hypertrophy.md`), so this is a tracking
+  rule, not a growth rule.
 * The anchor is held for the whole mesocycle: the first anchor executed for a day
   in a block is that day's anchor until the block ends, so overload is visible on
   the same lift week over week.
@@ -41,14 +47,8 @@ DAYS: dict[str, tuple[str, str]] = {
     "Lower-B": ("lower", "B"),
 }
 PURPOSE = {
-    "A": (
-        "LOAD day: the anchor runs in the HEAVY half of its rep window, 2-3 min rests, "
-        "compounds carry the session"
-    ),
-    "B": (
-        "VOLUME day: the anchor runs in the LIGHT half of its rep window, shorter rests, "
-        "stretch-biased isolations carry the session"
-    ),
+    "A": "the region's first movement emphasis, led by its own anchor lift",
+    "B": "the region's second movement emphasis, led by a DIFFERENT anchor than the A day",
 }
 ANCHOR_MUSCLES = {
     "upper": frozenset({"chest", "lats", "mid_back", "front_delts"}),
@@ -74,6 +74,8 @@ class SessionDay:
     variant: str
     anchor: str | None
     reason: str
+    anchor_reps: str | None = None
+    sibling_anchor: str | None = None
 
 
 def is_compound(name: str) -> bool:
@@ -107,8 +109,8 @@ def _plan_exercises(plan: dict) -> list[dict]:
     return [ex for b in plan.get("blocks", []) for ex in b.get("exercises", [])]
 
 
-def executed_days(conn: Any, before: date) -> list[tuple[date, str, str | None]]:
-    """(date, session_day, first exercise) for designed plans Rob actually trained, oldest first."""
+def executed_days(conn: Any, before: date) -> list[tuple[date, str, str | None, str | None]]:
+    """(date, session_day, opener, opener reps) for designed plans Rob trained, oldest first."""
     rows = conn.execute(
         """
         SELECT p.date, p.plan_json FROM workout_plans p
@@ -119,7 +121,7 @@ def executed_days(conn: Any, before: date) -> list[tuple[date, str, str | None]]
         """,
         [before],
     ).fetchall()
-    out: list[tuple[date, str, str | None]] = []
+    out: list[tuple[date, str, str | None, str | None]] = []
     for d, pj in rows:
         try:
             plan = json.loads(pj)
@@ -128,7 +130,9 @@ def executed_days(conn: Any, before: date) -> list[tuple[date, str, str | None]]
         day = plan.get("session_day")
         if day in DAYS:
             exs = _plan_exercises(plan)
-            out.append((d, day, exs[0].get("name") if exs else None))
+            first = exs[0] if exs else {}
+            reps = first.get("reps")
+            out.append((d, day, first.get("name"), None if reps is None else str(reps)))
     return out
 
 
@@ -185,7 +189,7 @@ def scheduled_session(
     """
     hist = executed_days(conn, today)
     last_variant = {r: "B" for r in ("upper", "lower")}
-    for _, day, _ in hist:
+    for _, day, _, _ in hist:
         region, variant = DAYS[day]
         last_variant[region] = variant
     if hist:
@@ -205,26 +209,19 @@ def scheduled_session(
     variant = "B" if last_variant[region] == "A" else "A"
     day = f"{region.capitalize()}-{variant}"
 
-    anchor = None
-    for d, past_day, first in reversed(hist):
-        if meso_start and d < meso_start:
-            break
-        if past_day == day and first:
-            anchor = first
+    # The first opener trained for a day in this block is its anchor, reps included.
+    first_by_day: dict[str, tuple[str, str | None]] = {}
+    for d, past_day, name, reps in hist:
+        if name and (meso_start is None or d >= meso_start):
+            first_by_day.setdefault(past_day, (name, reps))
+    anchor, anchor_reps = first_by_day.get(day, (None, None))
+    sibling = first_by_day.get(f"{region.capitalize()}-{'A' if variant == 'B' else 'B'}")
     if anchor and _anchor_gated(conn, anchor, gates):
         why += f"; anchor {anchor} is gated today, pick another {region} compound"
-        anchor = None
-    return SessionDay(day, region, variant, anchor, why)
-
-
-def _science_window(conn: Any, name: str) -> tuple[int, int] | None:
-    row = conn.execute(
-        "SELECT MIN(rep_low), MAX(rep_high) FROM exercise_science WHERE exercise_name = ?",
-        [name],
-    ).fetchone()
-    if not row or row[0] is None or row[1] is None:
-        return None
-    return int(row[0]), int(row[1])
+        anchor, anchor_reps = None, None
+    return SessionDay(
+        day, region, variant, anchor, why, anchor_reps, sibling[0] if sibling else None
+    )
 
 
 def check_session(
@@ -256,7 +253,7 @@ def check_session(
             f"session_day {day!r} is out of rotation: today is {sched.day} "
             f"({sched.reason}). Build {sched.day}, or pass override_reason to deviate."
         )
-    region, variant = DAYS[day]
+    region = DAYS[day][0]
     exs = [e for e in _plan_exercises(plan) if e.get("name")]
     if not exs:
         return None
@@ -291,20 +288,25 @@ def check_session(
             "the same lift, or pass override_reason."
         )
 
-    window = _science_window(conn, exs[0]["name"])
-    bounds = rep_bounds(exs[0].get("reps"))
-    if window and bounds:
-        mid = (window[0] + window[1]) / 2
-        if variant == "A" and bounds[1] > mid:
-            return (
-                f"{day} is a load day: {exs[0]['name']!r} reps {exs[0].get('reps')!r} must "
-                f"stay in the heavy half of its {window[0]}-{window[1]} window (top ≤ {mid:g})."
-            )
-        if variant == "B" and bounds[0] < mid:
-            return (
-                f"{day} is a volume day: {exs[0]['name']!r} reps {exs[0].get('reps')!r} must "
-                f"stay in the light half of its {window[0]}-{window[1]} window (bottom ≥ {mid:g})."
-            )
+    if overridden:
+        return None
+    opener = exs[0]["name"]
+    if sched.sibling_anchor and day == sched.day and opener == sched.sibling_anchor:
+        return (
+            f"{opener!r} already anchors the other {region} day this block. {day} needs a "
+            f"different {region} anchor, so the region gets two movement emphases."
+        )
+    if (
+        sched.anchor
+        and sched.anchor_reps
+        and opener == sched.anchor
+        and rep_bounds(exs[0].get("reps")) != rep_bounds(sched.anchor_reps)
+    ):
+        return (
+            f"{opener!r} runs at {sched.anchor_reps!r} reps for this whole block; the plan "
+            f"says {exs[0].get('reps')!r}. Keep the reps and move the load, so the overload "
+            "record stays comparable."
+        )
     return None
 
 
@@ -320,11 +322,18 @@ def session_context_block(conn: Any, gates: dict, today: date) -> str:
             "lifting day today. Rest-intensity plans skip this check."
         )
     region_list = sorted(ANCHOR_MUSCLES[sched.region])
+    reps = f" at **{sched.anchor_reps}** reps (fixed for the block)" if sched.anchor_reps else ""
+    sibling = (
+        f" It may not be {sched.sibling_anchor}, which anchors the other {sched.region} day."
+        if sched.sibling_anchor
+        else ""
+    )
     anchor_line = (
-        f"- Anchor (held for this mesocycle): **{sched.anchor}**. Open with it."
+        f"- Anchor (held for this mesocycle): **{sched.anchor}**{reps}. Open with it."
         if sched.anchor
         else f"- Anchor: none locked yet. Pick a {sched.region} compound whose primary is one "
-        f"of {region_list}; whatever opens this day is its anchor for the rest of the block."
+        f"of {region_list}; whatever opens this day, at the reps you give it, is its anchor for the rest of "
+        f"the block.{sibling}"
     )
     return "\n".join(
         [

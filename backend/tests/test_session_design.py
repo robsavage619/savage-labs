@@ -23,7 +23,7 @@ def _trained(conn, seed, day: date, plan: dict) -> None:
         seed.workout(day, ex["name"], [(50.0, 10)])
 
 
-def test_rotation_order_anchor_and_rep_halves(conn, seed) -> None:
+def test_rotation_order_and_anchors(conn, seed) -> None:
     upper_a = _plan(
         "Upper-A", [("Incline Bench Press (Dumbbell)", "6-8"), ("Cable Fly Crossovers", "12")]
     )
@@ -66,9 +66,6 @@ def test_rotation_order_anchor_and_rep_halves(conn, seed) -> None:
     )
     assert "already tired" in check_session(conn, pre_fatigued, s, _rep_bounds)
 
-    heavy_on_b = _plan("Upper-B", [("Hammerstrength Decline Chest Press", "6-8")])
-    assert "volume day" in check_session(conn, heavy_on_b, s, _rep_bounds)
-
     assert "out of rotation" in check_session(conn, _plan("Lower-B", []), s, _rep_bounds)
 
     # Next Upper-A holds the anchor executed earlier in the block.
@@ -77,8 +74,19 @@ def test_rotation_order_anchor_and_rep_halves(conn, seed) -> None:
     s2 = scheduled_session(conn, {}, date(2026, 11, 9), date(2026, 11, 1))
     assert s2 is not None and s2.day == "Upper-A"
     assert s2.anchor == "Incline Bench Press (Dumbbell)"
+    assert s2.anchor_reps == "6-8"
+    assert s2.sibling_anchor == "Hammerstrength Decline Chest Press"
     swapped = _plan("Upper-A", [("Hammerstrength Decline Chest Press", "6-8")])
     assert "anchor this mesocycle" in check_session(conn, swapped, s2, _rep_bounds)
+    new_reps = _plan("Upper-A", [("Incline Bench Press (Dumbbell)", "10-12")])
+    assert "whole block" in check_session(conn, new_reps, s2, _rep_bounds)
+    held = _plan("Upper-A", [("Incline Bench Press (Dumbbell)", "6-8")])
+    assert check_session(conn, held, s2, _rep_bounds) is None
+
+    # Upper-B may not reuse Upper-A's anchor.
+    s4 = scheduled_session(conn, {}, date(2026, 11, 5), date(2026, 11, 1))
+    reuse = _plan("Upper-B", [("Incline Bench Press (Dumbbell)", "10")])
+    assert "other upper day" in check_session(conn, reuse, s4, _rep_bounds)
 
     # Legs gated: the lower day yields to upper instead of skipping a template.
     s3 = scheduled_session(conn, {"forbid_muscle_groups": ["legs"]}, date(2026, 11, 4), None)
