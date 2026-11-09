@@ -98,6 +98,37 @@ reads `/api/state/today` and never infers any of it client-side; the beta-blocke
 adjustment, for instance, lives in the gates object, and components consume it
 rather than reading the medication list.
 
+### How a session is made
+
+<img src="images/diagrams/plan-creation.svg" width="100%" alt="Eight stages: today's envelope, weekly dose, session shape, exercise menu, load arithmetic, context packet, planner, validator, then stored, executed, logged and fed back into the first five stages." />
+
+The model is the last mile, not the brain. Early on it composed every session from
+scratch, and that freedom is where the recurring failures lived: hand-computed
+ceilings, loads between plates, a day renamed and restructured every morning.
+Behaviour I asked for in prose, over and over, never stuck, because a fresh
+planner each day has no memory of the request. So each decision got exactly one
+owner in code, and each owner is forbidden from making the others' decisions.
+
+- **The dose is its own layer.** Sets per muscle come from landmarks fit to the
+  subject's own productive weeks, scored by outcome trend rather than by feel.
+  A muscle that is measurably progressing is never frozen by low confidence, and
+  a cut is never softened.
+- **The structure is its own layer.** Days rotate by sessions executed, so a
+  missed day does not skip a template, and each day's anchor lift is held for the
+  whole block so overload shows up on the same movement week over week.
+- **The arithmetic is its own layer.** Loads are double progression off the last
+  logged exposure, then snapped to weights the gym can actually produce, learned
+  from the training log instead of a hand-built equipment table. An audit of 25
+  stored plans found 53 of 144 weighted prescriptions landing between two weights
+  that had ever been used. A lift with no recent history is prescribed an effort
+  target rather than an invented number.
+- **The loop closes.** Executed sessions re-score every lift, grade last week's
+  calls against what happened, and refit the landmarks the next plan reads.
+
+What the model keeps is selection and arrangement inside that envelope, plus the
+written rationale. The thresholds and rules behind each stage are deliberately not
+published on this page; the shape of the system is the part worth reading.
+
 ### The model proposes, the validator disposes
 
 <img src="images/diagrams/plan-loop.svg" width="100%" alt="Context packet to external planner to POST to validate_plan, which checks gates, load ceilings, effort coherence, volume, session budget, exercise identity, physical limits and a clinical guard. Pass is stored, fail is a 409, override loosens one tier and is logged." />
