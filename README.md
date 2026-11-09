@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="images/banner.png" width="100%" />
+<img src="images/banner.svg" width="100%" alt="Savage Labs" />
 
 <br />
 
@@ -8,35 +8,15 @@
 
 <sub>Wearable physiology, training logs, subjective context, progress photos, sport outcomes, research priors, and deterministic gates, fused into one decision, every morning.</sub>
 
-<br />
+<br /><br />
 
-<table>
-<tr>
-<td>
-
-[![Python](https://img.shields.io/badge/Python-3.12-1e1e2e?style=for-the-badge&logo=python&logoColor=cba6f7&labelColor=1e1e2e&color=cba6f7)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-1e1e2e?style=for-the-badge&logo=fastapi&logoColor=a6e3a1&labelColor=1e1e2e&color=a6e3a1)](https://fastapi.tiangolo.com/)
-[![DuckDB](https://img.shields.io/badge/DuckDB-1.1-1e1e2e?style=for-the-badge&logo=duckdb&logoColor=fab387&labelColor=1e1e2e&color=fab387)](https://duckdb.org/)
-
-</td>
-<td>
-
-[![Next.js](https://img.shields.io/badge/Next.js-15-1e1e2e?style=for-the-badge&logo=next.js&logoColor=89b4fa&labelColor=1e1e2e&color=89b4fa)](https://nextjs.org/)
-[![React](https://img.shields.io/badge/React-19-1e1e2e?style=for-the-badge&logo=react&logoColor=74c7ec&labelColor=1e1e2e&color=74c7ec)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-1e1e2e?style=for-the-badge&logo=typescript&logoColor=89dceb&labelColor=1e1e2e&color=89dceb)](https://www.typescriptlang.org/)
-
-</td>
-<td>
-
-[![Claude](https://img.shields.io/badge/Claude-Opus_4.8-1e1e2e?style=for-the-badge&logo=anthropic&logoColor=f5c2e7&labelColor=1e1e2e&color=f5c2e7)](https://anthropic.com/)
-[![Obsidian](https://img.shields.io/badge/Obsidian-RAG-1e1e2e?style=for-the-badge&logo=obsidian&logoColor=cba6f7&labelColor=1e1e2e&color=cba6f7)](https://obsidian.md/)
-[![License](https://img.shields.io/badge/License-MIT-1e1e2e?style=for-the-badge&labelColor=1e1e2e&color=a6e3a1)](LICENSE)
-
-</td>
-</tr>
-</table>
-
-<br />
+[![Python](https://img.shields.io/badge/Python-3.12+-0f1720?style=for-the-badge&logo=python&logoColor=5cc8e6&labelColor=0f1720&color=5cc8e6)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-0f1720?style=for-the-badge&logo=fastapi&logoColor=4fd0bd&labelColor=0f1720&color=4fd0bd)](https://fastapi.tiangolo.com/)
+[![DuckDB](https://img.shields.io/badge/DuckDB-embedded-0f1720?style=for-the-badge&logo=duckdb&logoColor=e7be57&labelColor=0f1720&color=e7be57)](https://duckdb.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-16-0f1720?style=for-the-badge&logo=next.js&logoColor=e9eff5&labelColor=0f1720&color=e9eff5)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-0f1720?style=for-the-badge&logo=react&logoColor=5cc8e6&labelColor=0f1720&color=5cc8e6)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-0f1720?style=for-the-badge&logo=typescript&logoColor=4fd0bd&labelColor=0f1720&color=4fd0bd)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/badge/License-MIT-0f1720?style=for-the-badge&labelColor=0f1720&color=5fd39a)](LICENSE)
 
 </div>
 
@@ -51,6 +31,8 @@ person. Nothing leaves the laptop.
 
 The interesting part is not the dashboard. It is that a language model writes the
 training plan and a deterministic layer is allowed to reject it.
+
+<img src="images/diagrams/numbers.svg" width="100%" alt="1,114 tests, 25 engine invariants, 107 migrations, 131 endpoints, 35k lines of backend" />
 
 ---
 
@@ -95,86 +77,48 @@ dropping whatever does not fit.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         DATA SOURCES                            │
-│  WHOOP OAuth  │  Apple Health XML  │  Hevy API  │  Check-in    │
-│                      DUPR api.dupr.gg                           │
-└───────┬───────┴────────┬───────────┴──────┬─────┴──────┬───────┘
-        │                │                  │            │
-        ▼                ▼                  ▼            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    INGESTION LAYER                              │
-│   OAuth token refresh  │  CCDA/lxml XML parse  │  REST client  │
-│   APScheduler jobs     │  Content-hash dedup   │  Pydantic DTOs│
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       DuckDB (encrypted)                        │
-│  measurements  │  workouts  │  workout_sets  │  sleep           │
-│  recovery      │  cardio    │  daily_checkin │  medications     │
-│  conditions    │  labs      │  daily_cycle    │  workout_plans  │
-│  mesocycles    │  muscle_volume_targets       │  lab_questions  │
-│  lab_findings  │  workout_retrospectives      │  working_weights│
-│  dupr_snapshots│  dupr_matches                │  oauth_state    │
-│                                                                 │
-│  Views: v_hrv_baseline_28d, v_session_load, v_daily_load        │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      METRICS ENGINE                             │
-│                  compute_daily_state()                          │
-│                                                                 │
-│  HRV σ-deviation  │  True ACWR  │  Sleep composite              │
-│  Readiness score  │  Gates      │  Epley e1RM                   │
-│  Push:pull ratio  │  Zone calc  │  Regression detection         │
-│  Sleep arch.      │  Banister CTL/ATL/TSB │ Mesocycle phase     │
-│  After-action     │  Fueling balance      │ Allostatic load     │
-│  SRI · lnRMSSD    │  Drug-adjusted HRV    │ N-of-1 lab runners  │
-│  RR sentinel      │  WHOOP-measured HRmax │ Pickleball volume   │
-│  Concurrent-load signal       │  Percent-recorded filter        │
-└──────────┬────────────────────────────────┬─────────────────────┘
-           │                                │
-           ▼                                ▼
-┌──────────────────────┐      ┌─────────────────────────────────┐
-│    FastAPI REST       │      │         AI LAYER                │
-│    124 endpoints      │      │                                 │
-│                       │      │  build_daily_context()          │
-│  /api/state/today     │      │  build_training_context()       │
-│  /api/daily/brief     │      │  build_clinical_context()       │
-│  /api/workout/*       │      │  load_vault_research()          │
-│  /api/training/*      ├──────┤                                 │
-│  /api/training/load-curve    │  Claude Opus 4.8                │
-│  /api/training/after-action  │  -> validate_plan()             │
-│  /api/training/mesocycle     │  -> Ollama fallback (air-gapped)│
-│  /api/clinical-research/*                                      │
-│  /api/lab/{questions,findings,run}                             │
-│  /api/fueling/{today,trend}                                    │
-│  /api/chat · /api/briefing · /api/insights                     │
-│  /api/hevy/push · /api/vault/search                            │
-└──────────┬────────────┘      └─────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Next.js 15 + React 19                        │
-│                                                                 │
-│  TanStack Query v5  │  Recharts  │  Tailwind v4 (OKLCH)        │
-│  shadcn/ui          │  Motion    │  Orbitron + Geist fonts      │
-│                                                                 │
-│  NOW  /         today's call · session · check-in               │
-│  REVIEW /review momentum · signals · training + body history    │
-│  LAB  /lab      dossier · studies · engine self-assessment      │
-│                                                                 │
-│  Command Briefing  │  Four Pillars  │  Trend Intelligence       │
-│  Workout Planner   │  AI Advisor    │  Clinical Overview        │
-│  Periodization Strip · After-Action · Fueling Panel             │
-│  Clinical Research Signals · Research Lab (N-of-1)              │
-└─────────────────────────────────────────────────────────────────┘
-```
+<img src="images/diagrams/architecture.svg" width="100%" alt="Architecture: seven sources flow through ingestion into DuckDB, then the metrics engine, then the API, board and planner contract. The self-experiment engine and research vault feed the engine from below." />
 
----
+Sources are pulled on a schedule, normalized, and written idempotently, so a
+re-sync never rewrites a row that did not change. One engine pass turns the store
+into a single typed state, and everything downstream (the board, the planner's
+context, the plan validator, the self-evaluation) reads that state rather than
+recomputing it. The research vault and the n-of-1 experiment engine are the only
+inputs that arrive from outside the data path, and both reach the engine through
+paths that are gated and audited.
+
+### One contract for state
+
+<img src="images/diagrams/daily-state.svg" width="100%" alt="Signals are banded against the subject's own baseline, combined into DailyState, and consumed by the board, planner context, plan validator and self-evaluation." />
+
+`DailyState` exists because the same metric was once computed three different
+ways in three places and gave three slightly different answers. Readiness, HRV,
+sleep, load, and the gates that restrict a day are computed once. The frontend
+reads `/api/state/today` and never infers any of it client-side; the beta-blocker
+adjustment, for instance, lives in the gates object, and components consume it
+rather than reading the medication list.
+
+### The model proposes, the validator disposes
+
+<img src="images/diagrams/plan-loop.svg" width="100%" alt="Context packet to external planner to POST to validate_plan, which checks gates, load ceilings, effort coherence, volume, session budget, exercise identity, physical limits and a clinical guard. Pass is stored, fail is a 409, override loosens one tier and is logged." />
+
+The backend never calls a model. It serves a context packet, accepts a plan back
+over an authenticated endpoint, and runs it through `validate_plan()`. A plan that
+trains legs 30 hours after the last leg session is rejected with the violated
+rule named, not adjusted and not warned about. The one escape hatch is an explicit
+`override_reason`, which loosens the discretionary intensity cap by exactly one
+tier, is audit-logged whenever it actually loosens the gate, and cannot touch recovery timing,
+deload, or the clinical guard. [Details](docs/ai-integration.md)
+
+### Experiments that cannot move the engine by accident
+
+<img src="images/diagrams/evidence-loop.svg" width="100%" alt="Preregister, arm, log, refresh outcomes, score. Underpowered results are reported as such; confirmed results emit a governed prior." />
+
+Passive correlation is cheap and misleading in one person. The experiment engine
+runs designed single-subject studies: the hypothesis and analysis plan are locked
+before data exists, the arm for each day is fixed before outcomes are known, and
+every statistic is deterministic. Only a confirmed result can emit a prior, and
+that prior is subject to the same audit as the fitted load and volume bands.
 
 ---
 
@@ -183,10 +127,10 @@ dropping whatever does not fit.
 **A language model that cannot overrule the safety layer.**
 Claude drafts the session. `validate_plan()` checks it against schema and
 against today's gates: intensity cap, forbidden muscle groups, per-exercise
-e1RM ceiling, rep windows, RPE coherence. A plan that trains legs 30 hours after
-the last leg session is rejected and regenerated, not adjusted and not warned
-about. The model is for reasoning. Correctness is not delegated to it.
-[Details](docs/ai-integration.md)
+e1RM ceiling, rep windows, RPE coherence. Correctness is not delegated to the
+model, and behaviour that was repeatedly asked for in prose but never stuck
+(rotation, anchoring, session shape) was moved into validators, because a fresh
+planner each day does not remember a request. [Details](docs/ai-integration.md)
 
 **The engine grades itself, and the result is split.**
 Prescription calibration is good: +0.03 RPE bias over 234 matched prescriptions,
@@ -230,10 +174,11 @@ because a bare `except Exception` was swallowing a wrong column name.
 
 | Layer | What it covers |
 |---|---|
-| [`ENGINE_INVARIANTS.md`](ENGINE_INVARIANTS.md) | The athlete-protection contract, 43 tests behind it |
+| [`ENGINE_INVARIANTS.md`](ENGINE_INVARIANTS.md) | The athlete-protection contract: 25 invariants, each tied to a real defect and enforced by an executable test |
 | `validate_plan()` | Schema plus deterministic gates, rejects rather than adjusts |
-| Migrations | 102 of them, with view and data-integrity tests on the ones that change semantics |
-| Suite | 1,030 tests, 14,120 test lines against 33,295 lines of source |
+| Reconciliation | Checks that recompute from raw rows instead of re-running the code they audit |
+| Migrations | 107 of them, with view and data-integrity tests on the ones that change semantics |
+| Suite | 1,114 tests, 15.4k test lines against 35.1k lines of source |
 | Self-evaluation | Calibration and predictive validity, measured and published |
 
 ---
@@ -273,17 +218,18 @@ The honest state of the system. Full list in [docs/evaluation.md](docs/evaluatio
 
 ## Stack
 
-Python 3.12, FastAPI, DuckDB, APScheduler, Pydantic. Next.js 15, React 19,
-TypeScript, Tailwind, Recharts. Claude for plan drafting and narrative. Obsidian
-as the research corpus. `uv` for packaging, `ruff` for lint and format, `pyright`
-for types, `pytest` for the suite.
+Python 3.12+, FastAPI, DuckDB, APScheduler, Pydantic, NumPy, OpenCV and MediaPipe
+for the photo pipeline. Next.js 16, React 19, TypeScript, Tailwind 4, TanStack
+Query, Recharts, Motion. Claude as the external planner. Obsidian as the research
+corpus. `uv` for packaging, `ruff` for lint and format, `pyright` for types,
+`pytest` for the suite.
 
 ## Data Sources
 
 WHOOP (public OAuth API plus the private iOS API for signals the public one does
 not expose), Apple Health XML export, Hevy for strength logging, DUPR for
-pickleball rating and match history, blood work from a YAML clinical profile, and
-a daily subjective check-in.
+pickleball rating and match history, blood work from a YAML clinical profile,
+progress photos, and a daily subjective check-in.
 
 ## Privacy
 
@@ -298,6 +244,7 @@ after the fact.
 ./dev-restart.sh          # API on :8000, frontend on :3000
 ```
 
-Migrations apply on API start. Without an API key for the model the system still
-computes every metric, gate and prescription; only the narrative and plan
-drafting are unavailable.
+Migrations apply on API start. The backend holds no model key and makes no model
+calls, so every metric, gate and prescription computes on its own; plan drafting
+and narrative happen in a chat session that reads the served context and posts
+the result back.
