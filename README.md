@@ -129,6 +129,15 @@ What the model keeps is selection and arrangement inside that envelope, plus the
 written rationale. The thresholds and rules behind each stage are deliberately not
 published on this page; the shape of the system is the part worth reading.
 
+#### Inside the engine
+
+<img src="images/diagrams/engine-map.svg" width="100%" alt="Engine map: seven stages (sense, dose, structure, select, load, compose, gate), each listing its real modules and the typed artifact it hands to the next stage, with a guard rail of invariants and reconciliation checks and five feedback loops that re-fit the engine from outcomes." />
+
+Each band is a stage with one owner, the label between bands is the typed object
+it hands on, the rail on the right is what keeps every stage honest, and the
+loops at the bottom are how the engine corrects itself from what actually
+happened. The names are real; the numbers behind them are not on this page.
+
 ### The model proposes, the validator disposes
 
 <img src="images/diagrams/plan-loop.svg" width="100%" alt="Context packet to external planner to POST to validate_plan, which checks gates, load ceilings, effort coherence, volume, session budget, exercise identity, physical limits and a clinical guard. Pass is stored, fail is a 409, override loosens one tier and is logged." />
