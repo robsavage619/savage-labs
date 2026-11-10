@@ -1413,6 +1413,16 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .tm-empty { flex: 1 1 auto; min-height: 150px; display: grid; place-items: center; align-content: center; gap: 10px; padding: 16px; border-radius: 12px; border: 1px dashed color-mix(in oklch, var(--tm-c) 35%, var(--hairline)); text-align: center; }
 .tm-empty i { width: 28px; height: 28px; border-radius: 50%; border: 2px solid color-mix(in oklch, var(--tm-c) 55%, transparent); border-top-color: transparent; transform: rotate(45deg); }
 .tm-empty p { margin: 0; max-width: 30ch; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+.tm-start { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; }
+.tm-start > p { margin: 0;  font-size: 12px; color: var(--text-dim); }
+.tm-start ul { flex: 1 1 auto; list-style: none; margin: 0; padding: 0; display: grid; grid-auto-rows: 1fr; }
+.tm-start li { display: grid; grid-template-columns: minmax(0, 1fr) 46px max-content; gap: 10px; align-items: center; border-bottom: 1px solid oklch(1 0 0 / 0.05); padding: 6px 0; }
+.tm-start li span { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tm-start li i { height: 6px; border-radius: 3px; background: oklch(1 0 0 / 0.06); overflow: hidden; }
+.tm-start li i b { display: block; height: 100%; border-radius: 3px; background: var(--tm-c); }
+.tm-start li em { font: 500 10.5px var(--font-data); font-style: normal; color: var(--text-dim); }
+.tm-start li.stale em { color: var(--series-2); }
+.tm-start li.stale i b { background: var(--series-2); }
 .tm-foot { display: flex; gap: 8px; align-items: baseline; padding-top: 12px; border-top: 1px solid var(--hairline); font: 500 10.5px var(--font-data); color: var(--text-dim); min-width: 0; }
 .tm-foot > i { flex: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
 .tm-foot > i.on { background: var(--positive); box-shadow: 0 0 0 3px var(--positive-soft); }
@@ -1438,7 +1448,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .lf-x { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 1fr); gap: 0; border: 1px solid var(--hairline); border-radius: 16px; overflow: hidden; background: oklch(1 0 0 / 0.015); }
 .lf-x section { display: grid; gap: 8px; align-content: start; padding: 18px 20px; border-right: 1px solid var(--hairline); }
 .lf-x section:last-child { border-right: 0; }
-.lf-x-you { background: color-mix(in oklch, var(--sl-accent) 6%, transparent); }
+.lf-x-you { box-shadow: inset 3px 0 0 var(--sl-accent); }
 .lf-x-k { font: 600 10px var(--font-data); letter-spacing: .14em; text-transform: uppercase; color: var(--sl-accent); }
 .lf-x p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-muted); }
 .lf-x p b { color: var(--text-primary); font-weight: 600; }

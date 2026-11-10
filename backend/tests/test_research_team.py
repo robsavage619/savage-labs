@@ -200,11 +200,34 @@ def test_exploration_is_a_notebook_entry_only(conn) -> None:
 
 
 def test_approved_custom_feature_flows_through_research(conn) -> None:
-    from shc import research
-    from tests.test_research import SPEC, _seed
-    from tests.test_research import TODAY as R_TODAY
+    # Self-contained: importing helpers from another test module only works
+    # when `tests` happens to be importable, which the pre-push run is not.
+    import math
+    import random
 
-    _seed(conn, effect_pct=-10)
+    from shc import research
+
+    r_today = date(2026, 6, 30)
+    rng = random.Random(3)
+    start = r_today - timedelta(days=200)
+    for i in range(201):
+        d = start + timedelta(days=i)
+        conn.execute(
+            "INSERT INTO recovery (id, source, date, score, hrv, rhr, content_hash) VALUES (?, 'whoop', ?, 60, ?, 50, ?)",
+            [f"r{i}", d, math.exp(math.log(100) + rng.gauss(0, 0.18)), f"h{i}"],
+        )
+        conn.execute(
+            "INSERT INTO daily_cycle (id, date, strain, content_hash) VALUES (?, ?, ?, ?)",
+            [f"c{i}", d, rng.uniform(4, 18), f"k{i}"],
+        )
+    spec_base = {
+        "exposure": {"feature": "strain", "a": {"max": 10}, "b": {"min": 14}},
+        "outcome": "lnhrv_dev_pct",
+        "lag": 1,
+        "unit": "day",
+        "expected_sign": "-",
+        "min_effect": 3,
+    }
     rt.propose_custom(
         conn,
         "strain_copy",
@@ -215,12 +238,11 @@ def test_approved_custom_feature_flows_through_research(conn) -> None:
         "SELECT date, strain FROM daily_cycle",
     )
     rt.review_custom(conn, "strain_copy", "approve", "Measures day strain as described.")
-    if not research.known_feature(conn, "custom:strain_copy"):
-        pytest.skip("research.py custom: wiring patch not applied yet")
-    spec = {**SPEC, "exposure": {**SPEC["exposure"], "feature": "custom:strain_copy"}}
+    assert research.known_feature(conn, "custom:strain_copy")
+    spec = {**spec_base, "exposure": {**spec_base["exposure"], "feature": "custom:strain_copy"}}
     research.validate_spec(conn, spec)
     assert (
-        research.estimate(conn, spec, today=R_TODAY)["effect"]
-        == research.estimate(conn, SPEC, today=R_TODAY)["effect"]
+        research.estimate(conn, spec, today=r_today)["effect"]
+        == research.estimate(conn, spec_base, today=r_today)["effect"]
     )
     assert any(f["name"] == "custom:strain_copy" for f in research.dictionary(conn))
