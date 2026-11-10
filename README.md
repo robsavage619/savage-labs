@@ -32,7 +32,7 @@ person. Nothing leaves the laptop.
 The interesting part is not the dashboard. It is that a language model writes the
 training plan and a deterministic layer is allowed to reject it.
 
-<img src="images/diagrams/numbers.svg" width="100%" alt="1,114 tests, 25 engine invariants, 107 migrations, 131 endpoints, 35k lines of backend" />
+<img src="images/diagrams/numbers.svg" width="100%" alt="1,142 tests, 25 engine invariants, 112 migrations, 146 endpoints, 37k lines of backend" />
 
 ---
 
@@ -160,9 +160,53 @@ before data exists, the arm for each day is fixed before outcomes are known, and
 every statistic is deterministic. Only a confirmed result can emit a prior, and
 that prior is subject to the same audit as the fitted load and volume bands.
 
+### A research team that studies one person
+
+The Lab is run by four agents with separate jobs, and the separation is the
+point. An **analyst** reads a brief rebuilt from the database on every run (what
+the lab believes, every question it has asked, and where its forecasts were most
+wrong) and proposes questions as declarative specs, so a new question needs no new
+code. A **methodologist** reviews each proposal blind: it sees the spec, the power
+estimate and the data, never the analyst's reasoning, and approves or rejects it
+with written reasons. A **runner** re-tests every approved question nightly, and a
+**forecaster** bets on each morning before it happens.
+
+- **Beliefs, not verdicts.** Every claim is an effect size with an interval. It
+  starts at a deliberately wide prior taken from the research vault, cited, and
+  narrows as the subject's own results arrive. Re-running a question rebuilds the
+  posterior from scratch, so the same days are never counted twice.
+- **Questions are sized before they run.** Each spec gets a power estimate from
+  the outcome's own spread and day-to-day carryover, and a fixed value score
+  (uncertainty, whether the answer changes a decision, feasibility, novelty)
+  computed by the server, so no agent can argue its own question up the queue.
+- **Graded on the future.** The forecaster refits every belief at monthly cut-offs
+  using only data available then, predicts the next month of mornings, and is
+  scored against simply guessing "same as baseline". Each belief is also scored by
+  removing it, and one that makes the forecast worse is marked for demotion however
+  good its p-value looked.
+- **An append-only notebook.** Proposals, blind reviews, results and belief
+  changes are written down and never edited, and the analyst reads it first, so
+  the team does not re-ask a question it has already buried.
+
+In its first real cycle the analyst proposed three questions and the methodologist
+rejected all three on design grounds (a circular exposure, an outcome measured in
+the same recording as its cause, an unadjusted confounder), each with a design it
+would approve. The same cycle turned up two data bugs in the feature store.
+
 ---
 
-## Five Problems Worth Reading About
+## Six Problems Worth Reading About
+
+**Every trial was too small to answer its own question.**
+Next-morning HRV swings about 25 ms around the subject's own baseline. The live
+trials asked for 8 days per condition, which can only detect an effect larger
+than a third of his entire HRV; a 5 ms effect needs roughly 585 days a side. The
+tests also treated each day as independent, and HRV carries over from one day to
+the next: on simulated null data with that carryover, the old test claimed an
+effect 22.7% of the time at a nominal 10%. After correcting for carryover it is
+7.3%, every trial shows the days it needs, and "refuted" now requires the interval
+to rule out the hypothesised effect rather than a point estimate pointing the
+wrong way.
 
 **A language model that cannot overrule the safety layer.**
 Claude drafts the session. `validate_plan()` checks it against schema and
@@ -217,9 +261,10 @@ because a bare `except Exception` was swallowing a wrong column name.
 | [`ENGINE_INVARIANTS.md`](ENGINE_INVARIANTS.md) | The athlete-protection contract: 25 invariants, each tied to a real defect and enforced by an executable test |
 | `validate_plan()` | Schema plus deterministic gates, rejects rather than adjusts |
 | Reconciliation | Checks that recompute from raw rows instead of re-running the code they audit |
-| Migrations | 107 of them, with view and data-integrity tests on the ones that change semantics |
-| Suite | 1,114 tests, 15.4k test lines against 35.1k lines of source |
+| Migrations | 112 of them, with view and data-integrity tests on the ones that change semantics |
+| Suite | 1,142 tests, 15.9k test lines against 37.0k lines of source |
 | Self-evaluation | Calibration and predictive validity, measured and published |
+| Research machinery | Planted-effect tests: the spec runner must recover a synthetic effect inside its interval, noise must never read as supported, and no estimate may see data after its own date |
 
 ---
 
@@ -229,6 +274,9 @@ The honest state of the system. Full list in [docs/evaluation.md](docs/evaluatio
 
 - **Readiness has no demonstrated predictive validity** at n = 54, and still
   gates training. This is the weakest load-bearing assumption in the engine.
+- **The lab barely predicts a single morning.** Forecast skill is +0.1% over 177
+  mornings it never saw. Day-level HRV is mostly noise, so the honest starting
+  point is near zero; weekly questions are how the research team intends to move it.
 - **HRV is corrupted here** by a beta-blocker taken as needed, and carries 0.40
   of the readiness composite.
 - **Two e1RM sources disagree** for the same lift, cause not yet understood.
