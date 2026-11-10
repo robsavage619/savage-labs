@@ -184,7 +184,7 @@ export function useWidth(initial = 560) {
  * never empty space. The chart is absolutely positioned so its own height
  * can't feed back into the space it's measuring.
  */
-export function FillLines({ min = 110, ...props }: Omit<Parameters<typeof Lines>[0], "height"> & { min?: number }) {
+export function Fill({ min = 110, children }: { min?: number; children: (height: number) => ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [h, setH] = useState(min);
   useLayoutEffect(() => {
@@ -196,10 +196,103 @@ export function FillLines({ min = 110, ...props }: Omit<Parameters<typeof Lines>
   }, [min]);
   return (
     <div ref={ref} className="k-fillchart" style={{ minHeight: min }}>
-      <div className="k-fillchart-inner">
-        {/* Multi-series charts draw a legend under the plot; keep it inside the box. */}
-        <Lines {...props} height={props.series.length > 1 ? Math.max(min - 26, h - 26) : h} />
-      </div>
+      <div className="k-fillchart-inner">{children(h)}</div>
+    </div>
+  );
+}
+
+export function FillLines({ min = 110, ...props }: Omit<Parameters<typeof Lines>[0], "height"> & { min?: number }) {
+  // Multi-series charts draw a legend under the plot; keep it inside the box.
+  return <Fill min={min}>{(h) => <Lines {...props} height={props.series.length > 1 ? Math.max(min - 26, h - 26) : h} />}</Fill>;
+}
+
+export function FillBars({ min = 110, ...props }: Omit<Parameters<typeof Bars>[0], "height"> & { min?: number }) {
+  return <Fill min={min}>{(h) => <Bars {...props} height={h} />}</Fill>;
+}
+
+export function Bars({
+  labels,
+  values,
+  height = 160,
+  color = () => "var(--series-1)",
+  fmt = (v) => String(Math.round(v)),
+  refs = [],
+  tip,
+  max,
+}: {
+  labels: string[];
+  values: number[];
+  height?: number;
+  color?: (v: number, i: number) => string;
+  fmt?: (v: number) => string;
+  refs?: { y: number; label: string }[];
+  tip?: (i: number) => ReactNode;
+  max?: number;
+}) {
+  const [ref, W] = useWidth();
+  const [hov, setHov] = useState<number | null>(null);
+  const ticks = niceTicks(0, Math.max(max ?? 0, ...values, ...refs.map((r) => r.y), 1), height < 130 ? 2 : 3);
+  const hi = ticks[ticks.length - 1];
+  const P = { l: Math.max(...ticks.map((t) => fmt(t).length)) * 6.6 + 12, r: 6, t: 12, b: 24 };
+  const n = values.length;
+  const slot = (W - P.l - P.r) / Math.max(1, n);
+  const bw = Math.min(24, Math.max(4, slot - 2));
+  const y = lin(0, hi, height - P.b, P.t);
+  const cx = (i: number) => P.l + slot * (i + 0.5);
+  const every = Math.ceil(n / Math.max(2, Math.floor((W - P.l) / 64)));
+  return (
+    <div className="k-chart" ref={ref} onMouseLeave={() => setHov(null)}>
+      <svg width={W} height={height} viewBox={`0 0 ${W} ${height}`}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={P.l} x2={W - P.r} y1={y(t)} y2={y(t)} className={t === 0 ? "k-axis" : "k-gridline"} />
+            <text x={P.l - 8} y={y(t) + 3.5} className="k-tick" textAnchor="end">
+              {fmt(t)}
+            </text>
+          </g>
+        ))}
+        {values.map((v, i) => {
+          const top = y(v);
+          const x0 = cx(i) - bw / 2;
+          const hgt = y(0) - top;
+          const r = Math.min(4, bw / 2, Math.max(0, hgt));
+          const d = hgt <= 0 ? "" : `M${x0},${y(0)}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x0 + bw - r}Q${x0 + bw},${top} ${x0 + bw},${top + r}V${y(0)}Z`;
+          return (
+            <g key={i} onMouseEnter={() => setHov(i)}>
+              <rect x={cx(i) - slot / 2} y={P.t} width={slot} height={height - P.b - P.t} fill="transparent" />
+              <motion.path
+                d={d}
+                fill={color(v, i)}
+                opacity={hov == null || hov === i ? 1 : 0.45}
+                initial={{ scaleY: 0 }}
+                animate={{ scaleY: 1 }}
+                style={{ transformOrigin: `0px ${y(0)}px` }}
+                transition={{ duration: 0.55, delay: i * 0.02, ease }}
+              />
+            </g>
+          );
+        })}
+        {refs.map((r) => (
+          <g key={r.label}>
+            <line x1={P.l} x2={W - P.r} y1={y(r.y)} y2={y(r.y)} className="k-ref k-ref-bad" />
+            <text x={P.l + 4} y={y(r.y) - 5} className="k-tick k-ref-bad-t">
+              {r.label}
+            </text>
+          </g>
+        ))}
+        {labels.map((l, i) =>
+          i % every === 0 ? (
+            <text key={i} x={cx(i)} y={height - 6} className="k-tick" textAnchor="middle">
+              {fmtX(l)}
+            </text>
+          ) : null,
+        )}
+      </svg>
+      {hov != null && tip && (
+        <div className="k-tip" style={cx(hov) > W * 0.6 ? { right: W - cx(hov) + 14 } : { left: cx(hov) + 14 }}>
+          {tip(hov)}
+        </div>
+      )}
     </div>
   );
 }

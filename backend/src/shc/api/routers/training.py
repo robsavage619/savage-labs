@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from shc.api.deps import require_admin_key
@@ -486,8 +486,11 @@ async def get_training_context() -> dict[str, str]:
 
 
 @router.get("/training/muscle-volume")
-async def get_muscle_volume() -> dict[str, Any]:
+async def get_muscle_volume(weeks_ago: int = Query(0, ge=0, le=26)) -> dict[str, Any]:
     """Per-muscle weekly set counts vs MEV/MAV/MRV targets from the active mesocycle.
+
+    ``weeks_ago`` counts a past Monday-start week (0 = this week). Targets are
+    always the active mesocycle's, so a past week is read against today's block.
 
     Volume is credited per muscle via ``exercise_muscle_map`` (primary 1.0,
     each secondary 1.0 — the vault's 1:1 synergist ratio) by
@@ -509,7 +512,7 @@ async def get_muscle_volume() -> dict[str, Any]:
     conn = get_read_conn()
     try:
         today = date.today()
-        week_start = today - timedelta(days=today.weekday())  # Monday
+        week_start = today - timedelta(days=today.weekday(), weeks=weeks_ago)  # Monday
 
         state = ensure_active_mesocycle(conn)
         targets = volume_targets(conn, state.id)

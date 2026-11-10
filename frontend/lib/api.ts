@@ -1266,7 +1266,7 @@ export const api = {
       today: { date: string; load: number; ctl: number; atl: number; tsb: number } | null;
       tau: { ctl_days: number; atl_days: number };
     }>(`/api/training/load-curve?days=${days}`),
-  muscleVolume: () =>
+  muscleVolume: (weeksAgo = 0) =>
     get<{
       as_of: string;
       week_start: string;
@@ -1279,7 +1279,12 @@ export const api = {
         mrv: number | null;
       }[];
       unmapped_exercises: string[];
-    }>("/api/training/muscle-volume"),
+    }>(`/api/training/muscle-volume?weeks_ago=${weeksAgo}`),
+  /** Each muscle's tier (grow / maintain) and its MEV/MAV/MRV landmarks. */
+  trainingTier: () =>
+    get<{ muscles: { muscle: string; tier: string; mv: number; mev: number; mav: number; mrv: number; landmark_source: string }[] }>(
+      "/api/training/tier",
+    ),
   prescription: () =>
     get<{
       week_start: string;

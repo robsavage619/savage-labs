@@ -160,7 +160,7 @@ function MuscleBar({
 export function MuscleVolumePanel() {
   const volume = useQuery({
     queryKey: ["muscle-volume"],
-    queryFn: api.muscleVolume,
+    queryFn: () => api.muscleVolume(),
     refetchInterval: 10 * 60_000,
   });
 

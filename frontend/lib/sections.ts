@@ -62,30 +62,25 @@ export const SECTIONS: readonly Section[] = [
   // ── Training + Recovery (split from Week, 2026-11-09) ────────────────────
   { id: "sleep-need", label: "Sleep need", surface: "recovery", keywords: ["need", "debt", "strain", "how much sleep"] },
   { id: "aerobic-base", label: "Aerobic base", surface: "recovery", keywords: ["zone 2", "z2", "z3", "aerobic", "180"] },
+  { id: "growth", label: "Growth zones", surface: "training", keywords: ["mev", "mav", "mrv", "sets", "muscle", "landmarks", "volume", "per-muscle"] },
+  { id: "lifts", label: "Lift scoreboard", surface: "training", keywords: ["e1rm", "progressing", "stalled", "strength", "prs", "most trained"] },
+  { id: "fitness", label: "Fitness vs fatigue", surface: "training", keywords: ["ctl", "atl", "performance", "load"] },
+  { id: "form", label: "Form", surface: "training", keywords: ["tsb", "fresh", "fatigue"] },
   { id: "monotony", label: "Monotony", surface: "training", keywords: ["foster", "strain", "same", "variety"] },
+  { id: "block", label: "The block", surface: "training", keywords: ["mesocycle", "deload", "periodization", "week"] },
+  { id: "weekly", label: "Weekly volume", surface: "training", keywords: ["consistency", "sets per week", "sessions", "frequency"] },
   { id: "momentum", label: "Momentum", surface: "recovery", keywords: ["changed", "week over week", "delta"] },
   { id: "recovery", label: "Recovery", surface: "recovery", keywords: ["whoop", "hrv", "rhr", "skin temp"] },
   { id: "sleep", label: "Sleep", surface: "recovery", keywords: ["deep", "rem", "debt", "efficiency", "consistency"] },
-  { id: "load", label: "Training load", surface: "training", keywords: ["acwr", "acute", "chronic", "ramp"] },
   { id: "vitals", label: "Raw WHOOP vitals", surface: "recovery", keywords: ["whoop", "spo2", "respiratory"] },
   { id: "recovery-trend", label: "Recovery trend", surface: "recovery", keywords: ["heatmap", "hrv trend", "monthly"] },
   { id: "patterns", label: "Patterns", surface: "recovery", keywords: ["day of week", "distribution", "correlation"] },
-  { id: "meso", label: "Mesocycle", surface: "training", keywords: ["periodization", "deload", "block", "ctl", "atl"] },
-  { id: "performance", label: "Performance curve", surface: "training", keywords: ["ctl", "atl", "tsb", "fitness", "fatigue", "form"] },
   // StrengthPanel was one 1,559px card holding six independent blocks — four
   // of them under 150px tall, trapped in a single column. Split, so each gets
   // its own grid footprint and its own ⌘K entry.
-  { id: "last-session", label: "Last session", surface: "training", keywords: ["yesterday", "trained", "recent"] },
-  { id: "consistency", label: "Training consistency", surface: "training", keywords: ["heatmap", "streak", "sessions", "2 years"] },
-  { id: "balance", label: "Muscle balance", surface: "training", keywords: ["push pull", "ratio", "imbalance"] },
-  { id: "recovery-training", label: "Recovery × training", surface: "training", keywords: ["train days", "rest days", "90d"] },
-  { id: "volume-load", label: "Volume load", surface: "training", keywords: ["kg lifted", "tonnage", "52 weeks", "progressive overload"] },
-  { id: "most-trained", label: "Most trained", surface: "training", keywords: ["e1rm", "prs", "top exercises", "set volume"] },
+  { id: "balance", label: "Push, pull, legs, core", surface: "training", keywords: ["push pull", "ratio", "imbalance", "muscle balance"] },
   // Was one card holding two components stacked (landmarks 342px + per-muscle
   // 641px) — the same mistake StrengthPanel made. Split.
-  { id: "volume", label: "Volume vs landmarks", surface: "training", keywords: ["mev", "mav", "mrv", "sets", "group"] },
-  { id: "per-muscle", label: "Per-muscle volume", surface: "training", keywords: ["muscle", "sets this week", "mev", "biceps", "chest"] },
-  { id: "prescription", label: "Volume prescription", surface: "training", keywords: ["target", "sets", "muscle", "next week"] },
   { id: "cardio", label: "Cardio", surface: "training", keywords: ["zone 2", "z2", "aerobic", "sessions", "log"] },
   // Tournament history was 678px of a 1,138px card — its own thing.
   { id: "sport", label: "Pickleball", surface: "training", keywords: ["dupr", "court", "freshness", "play"] },
