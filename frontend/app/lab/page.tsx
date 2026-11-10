@@ -11,6 +11,7 @@ import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { EngineReportCard } from "@/components/engine-report-card";
 import { EngineScorecard } from "@/components/engine-scorecard";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { EffectForest, HrvDrivers, PriorsShelf, ScorecardBullets, TrialProgress } from "@/components/lab-charts";
 import { LabExperiments } from "@/components/lab-experiments";
 import { LabPanel } from "@/components/lab-panel";
 import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
@@ -135,6 +136,81 @@ export default function LabPage() {
           }
         >
           <SubjectDossier />
+        </BoardCard>
+
+        {/* The program drawn instead of written: two even rows, 2+2 then 2+1+1,
+            each figure a summary of a detailed panel further down. */}
+        <div className="board-rule">At a glance</div>
+
+        <BoardCard
+          id="trial-progress"
+          label="Trial progress"
+          span={2}
+          help="How many qualifying days each running trial has, against the minimum it needs before it can be scored."
+          helpDetail={
+            <>
+              <p><strong>What it measures.</strong> For each running experiment, the days logged in condition A and in condition B, against the minimum set before it started.</p>
+              <p><strong>How to read it.</strong> A cyan bar has enough days; a copper one still needs more. Observational trials classify days after the fact, randomized ones assign them up front, which is stronger evidence.</p>
+              <p><strong>Why it matters.</strong> Small samples produce false findings. This shows which trials are close to an answer and which need you to do the other condition more.</p>
+            </>
+          }
+        >
+          <TrialProgress />
+        </BoardCard>
+
+        <BoardCard
+          id="effects"
+          label="Trial results"
+          span={2}
+          help="Each scored trial's best estimate and the range the true effect probably sits in."
+          helpDetail={
+            <>
+              <p><strong>What it measures.</strong> The difference between conditions B and A on each trial&apos;s outcome, with its 95% confidence interval.</p>
+              <p><strong>How to read it.</strong> The diamond is the best estimate; the bar is the 95% range. A grey bar crosses zero, so the real effect could be nothing. Rows use different units, so each has its own scale.</p>
+              <p><strong>Why it matters.</strong> An average difference on its own overstates what you know. The range shows how sure to be, and the scored date shows how fresh the answer is.</p>
+            </>
+          }
+        >
+          <EffectForest />
+        </BoardCard>
+
+        <BoardCard
+          id="hrv-drivers"
+          label="HRV drivers"
+          span={2}
+          help="Average HRV on days you answered yes to a WHOOP journal question, minus days you answered no."
+          helpDetail={
+            <>
+              <p><strong>How to read it.</strong> Bars right of centre mean HRV was higher on yes days, bars left mean lower. The small n is how many days you answered.</p>
+              <p><strong>Why it matters.</strong> It points at habits worth testing. These are links, not causes: a calm evening can drive both the habit and the HRV.</p>
+            </>
+          }
+        >
+          <HrvDrivers />
+        </BoardCard>
+
+        <BoardCard
+          id="engine-bullets"
+          label="Engine scorecard"
+          span={1}
+          help="How well the planner has performed over the last 90 days."
+          helpDetail={
+            <>
+              <p><strong>How to read it.</strong> Longer bars are better on the percentage measures. Green is on track, amber needs review.</p>
+              <p><strong>Why it matters.</strong> Trust the plan only as much as it has earned.</p>
+            </>
+          }
+        >
+          <ScorecardBullets />
+        </BoardCard>
+
+        <BoardCard
+          id="priors"
+          label="Proven priors"
+          span={1}
+          help="What your own trials have proven and the engine now uses, and which trial is closest to joining them."
+        >
+          <PriorsShelf />
         </BoardCard>
 
         {/* Four list panels of comparable density — no chart, no table wide

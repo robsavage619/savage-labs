@@ -1145,6 +1145,11 @@ export const api = {
     }>;
   },
   experiments: () => get<Experiment[]>("/api/experiments"),
+  /** Confirmed personal priors the engine may act on; empty until a study confirms. */
+  experimentPriors: () =>
+    get<{ experiment_id: string; prior_key: string; effect: number; effect_ci_low: number | null; effect_ci_high: number | null; outcome_metric: string }[]>(
+      "/api/experiments/priors",
+    ),
   experimentLog: async (
     slug: string,
     body: { day?: string; adhered?: boolean; note?: string },

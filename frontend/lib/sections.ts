@@ -103,6 +103,11 @@ export const SECTIONS: readonly Section[] = [
 
   // ── Lab ──────────────────────────────────────────────────────────────────
   { id: "subject", label: "Subject dossier", surface: "lab", keywords: ["personalization", "days observed", "enrolled"] },
+  { id: "trial-progress", label: "Trial progress", surface: "lab", keywords: ["arms", "days", "minimum", "n-of-1"] },
+  { id: "effects", label: "Trial results", surface: "lab", keywords: ["forest", "confidence interval", "effect size", "p value"] },
+  { id: "hrv-drivers", label: "HRV drivers", surface: "lab", keywords: ["journal", "habits", "what moves hrv"] },
+  { id: "engine-bullets", label: "Engine scorecard", surface: "lab", keywords: ["adherence", "load accuracy", "skill"] },
+  { id: "priors", label: "Proven priors", surface: "lab", keywords: ["confirmed", "proven", "actuation"] },
   { id: "trials", label: "Trials", surface: "lab", keywords: ["n-of-1", "experiments", "studies", "arms"] },
   { id: "findings", label: "Findings", surface: "lab", keywords: ["hypotheses", "confirmed", "refuted", "vault"] },
   { id: "engine", label: "Engine self-assessment", surface: "lab", keywords: ["accuracy", "fitted", "landmarks", "deload trigger"] },
