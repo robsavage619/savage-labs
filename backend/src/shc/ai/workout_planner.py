@@ -381,6 +381,20 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         "and ceiling above are already per-hand, so compare like with like."
     )
 
+    # Randomized trials run hands-free: today's assignment rides in the plan, and
+    # the day is logged automatically as followed unless flagged otherwise.
+    try:
+        from shc import selflab as _sl
+
+        _assign = _sl.todays_assignments(conn, planning_date)
+    except Exception as _exc:  # noqa: BLE001 — assignments are optional guidance
+        log.debug("trial assignments unavailable: %s", _exc)
+        _assign = []
+    if _assign:
+        lines.append("\n## TODAY'S TRIAL ASSIGNMENTS (randomized n-of-1 — state these in the plan notes)")
+        for _a in _assign:
+            lines.append(f"- {_a['hypothesis']} Today is arm {_a['arm']}: **{_a['condition']}**.")
+
     # Confirmed n-of-1 experiment priors — CAUSAL, self-tested effects the plan may
     # lean on. Read-only guidance (effect + CI shown so the model can weigh it), and
     # governed: only CONFIRMED studies emit a prior, and a study that stops

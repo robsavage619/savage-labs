@@ -1,7 +1,6 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 
 import { api, type Experiment } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
@@ -34,25 +33,11 @@ function ArmProgress({ label, arm, need }: { label: string; arm?: Experiment["ar
 export function LabExperiments() {
   const qc = useQueryClient();
   const exps = useQuery({ queryKey: ["experiments"], queryFn: api.experiments, refetchInterval: 60_000 });
-  const [todayArm, setTodayArm] = useState<Record<string, string>>({});
-
-  const logMut = useMutation({
-    mutationFn: (slug: string) => api.experimentLog(slug, { adhered: true }),
-    onSuccess: (r) => {
-      setTodayArm((m) => ({ ...m, [r.slug]: r.assigned_arm }));
-      qc.invalidateQueries({ queryKey: ["experiments"] });
-    },
-  });
-  const scoreMut = useMutation({
-    mutationFn: (slug: string) => api.experimentScore(slug),
+  // The one manual action left: flag a day that didn't follow its assignment.
+  // Logging and scoring otherwise run nightly on their own.
+  const skipMut = useMutation({
+    mutationFn: (slug: string) => api.experimentLog(slug, { adhered: false, note: "flagged: assignment not followed" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["experiments"] }),
-  });
-  const scoreAllMut = useMutation({
-    mutationFn: api.experimentScoreAll,
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["experiments"] });
-      qc.invalidateQueries({ queryKey: ["experiment-priors"] });
-    },
   });
 
   const data = exps.data ?? [];
@@ -63,27 +48,16 @@ export function LabExperiments() {
         <div>
           <Eyebrow>Self-experiments · n-of-1, pre-registered</Eyebrow>
           <p className="text-[10.5px] text-[var(--text-dim)] mt-0.5">
-            Designed single-subject trials — you manipulate one variable, a balanced randomized
-            design isolates the causal effect. Confirmed effects feed the engine.
+            Pre-registered single-subject trials. They log themselves and are scored every night at
+            04:45; randomized ones put today&apos;s assignment in your workout plan. Confirmed effects feed the engine.
           </p>
         </div>
-        {data.length > 0 && (
-          <button
-            className="xp-open"
-            onClick={() => scoreAllMut.mutate()}
-            disabled={scoreAllMut.isPending}
-            title="Refresh outcomes and score every running trial together, with false-discovery correction across them"
-          >
-            {scoreAllMut.isPending ? "scoring all…" : "Score all trials"}
-          </button>
-        )}
       </div>
-      {scoreAllMut.isError && <p className="ts-error mt-2">Scoring failed: {String(scoreAllMut.error)}</p>}
 
       {data.length === 0 ? (
         <p className="text-[12px] text-[var(--text-dim)] mt-4">
           No studies registered yet. Register one via the API / chat (pre-registration locks the
-          hypothesis, design, and analysis before any data is seen), then log adherence here daily.
+          hypothesis, design, and analysis before any data is seen). It logs and scores itself from then on.
         </p>
       ) : (
         <div className="mt-4 space-y-3">
@@ -149,29 +123,23 @@ export function LabExperiments() {
                   </p>
                 )}
 
-                <div className="flex items-center gap-2 flex-wrap pt-1">
-                  <button
-                    onClick={() => logMut.mutate(e.slug)}
-                    disabled={logMut.isPending}
-                    className="text-[10px] uppercase tracking-wider px-2.5 py-1 rounded border border-[var(--hairline)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--text-faint)] disabled:opacity-50"
-                  >
-                    Log today
-                  </button>
-                  <button
-                    onClick={() => scoreMut.mutate(e.slug)}
-                    disabled={scoreMut.isPending}
-                    className="text-[10px] uppercase tracking-wider px-2.5 py-1 rounded bg-[var(--text-primary)] text-[var(--bg)] disabled:opacity-50 hover:opacity-90"
-                  >
-                    {scoreMut.isPending ? "scoring…" : "Score"}
-                  </button>
-                  {todayArm[e.slug] && (
-                    <span className="text-[10px] text-[var(--text-dim)]">
-                      today assigned:{" "}
-                      <span className="text-[var(--text-primary)]">
-                        {todayArm[e.slug]} ·{" "}
-                        {todayArm[e.slug] === "B" ? e.condition_b : e.condition_a}
+                <div className="flex items-center gap-3 flex-wrap pt-1 text-[10.5px] text-[var(--text-dim)]">
+                  {e.today ? (
+                    <>
+                      <span>
+                        Today: <span className="text-[var(--text-primary)]">arm {e.today.arm} · {e.today.condition}</span> (in your plan)
                       </span>
-                    </span>
+                      <button
+                        onClick={() => skipMut.mutate(e.slug)}
+                        disabled={skipMut.isPending}
+                        className="text-[10px] uppercase tracking-wider px-2.5 py-1 rounded border border-[var(--hairline)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--text-faint)] disabled:opacity-50"
+                        title="Counts today as not following its assignment. Every other day is assumed followed."
+                      >
+                        {skipMut.isSuccess ? "Flagged" : "I didn't follow it today"}
+                      </button>
+                    </>
+                  ) : (
+                    <span>{e.design === "observational" ? "Days classified from your data" : "Logs itself"} · scored nightly at 04:45</span>
                   )}
                 </div>
               </div>

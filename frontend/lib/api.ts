@@ -706,6 +706,8 @@ export interface Experiment {
   started_on: string;
   status: string;
   arms: Record<string, ExperimentArm>;
+  /** Randomized studies only: today's assigned arm, carried in the workout plan. */
+  today?: { arm: string; condition: string } | null;
   /** A-priori sizing from the outcome's own spread and day-to-day carryover; null when history is too thin. */
   power?: {
     outcome_sd: number;

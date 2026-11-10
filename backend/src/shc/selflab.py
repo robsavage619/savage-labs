@@ -176,8 +176,8 @@ def preregister(
             (slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
              outcome_direction, design, min_per_arm, min_effect, washout_hours, started_on,
              planned_end, notes, actuation_target_kind, actuation_target_key,
-             actuation_direction, actuation_magnitude_pct, actuation_cap_pct)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             actuation_direction, actuation_magnitude_pct, actuation_cap_pct, autolog_from)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
@@ -185,6 +185,8 @@ def preregister(
             planned_end.isoformat() if planned_end else None, notes,
             actuation_target_kind, actuation_target_key, actuation_direction,
             actuation_magnitude_pct, actuation_cap_pct,
+            # A new randomized study's assignment is in the plan from day one.
+            started.isoformat() if design == "randomized_alternating" else None,
         ],
     )
     row = conn.execute("SELECT id FROM experiments WHERE slug = ?", [slug]).fetchone()
@@ -262,6 +264,66 @@ def log_day(
     )
     return arm
 
+
+
+def autolog_randomized(conn: duckdb.DuckDBPyConnection, exp_id: str, today: date | None = None) -> int:
+    """Log every day of a randomized study at its assigned arm, without anyone pressing a button.
+
+    Intention-to-treat: a day counts as following its assignment unless it was
+    flagged otherwise through ``log_day(adhered=False)``. That biases the
+    estimate toward no effect if assignments are sometimes skipped, never
+    toward a false one. Days start at ``autolog_from`` (when the assignment
+    first appeared in the plan), never earlier, and existing rows are kept.
+
+    Returns:
+        How many days were added.
+    """
+    row = conn.execute(
+        "SELECT slug, started_on, autolog_from FROM experiments WHERE id = ?", [exp_id]
+    ).fetchone()
+    if row is None or row[2] is None:
+        return 0
+    slug = row[0]
+    started = row[1] if isinstance(row[1], date) else date.fromisoformat(str(row[1]))
+    day = row[2] if isinstance(row[2], date) else date.fromisoformat(str(row[2]))
+    today = today or date.today()
+    have = {
+        r[0] if isinstance(r[0], date) else date.fromisoformat(str(r[0]))
+        for r in conn.execute("SELECT day FROM experiment_log WHERE experiment_id = ?", [exp_id]).fetchall()
+    }
+    added = 0
+    while day < today:
+        if day not in have:
+            conn.execute(
+                "INSERT INTO experiment_log (experiment_id, day, assigned_arm, adhered, note) "
+                "VALUES (?, ?, ?, TRUE, 'auto: assumed followed (intention-to-treat)')",
+                [exp_id, day.isoformat(), arm_for_day(slug, started, day)],
+            )
+            added += 1
+        day += timedelta(days=1)
+    return added
+
+
+def todays_assignments(conn: duckdb.DuckDBPyConnection, day: date | None = None) -> list[dict]:
+    """Each active randomized study's condition for `day`, for the plan to carry."""
+    day = day or date.today()
+    out = []
+    for exp_id, slug, hyp, cond_a, cond_b, started in conn.execute(
+        "SELECT id, slug, hypothesis, condition_a, condition_b, started_on FROM experiments "
+        "WHERE status = 'active' AND design = 'randomized_alternating'"
+    ).fetchall():
+        start = started if isinstance(started, date) else date.fromisoformat(str(started))
+        arm = arm_for_day(slug, start, day)
+        out.append(
+            {
+                "id": str(exp_id),
+                "slug": slug,
+                "hypothesis": hyp,
+                "arm": arm,
+                "condition": cond_b if arm == "B" else cond_a,
+            }
+        )
+    return out
 
 # ── Outcome extraction from the live data stream ─────────────────────────────
 
@@ -862,6 +924,10 @@ def refresh_and_score_all(conn: duckdb.DuckDBPyConnection) -> list[dict]:
             except ValueError as exc:
                 problems.append({"slug": slug, "stage": "backfill", "error": str(exc)})
                 continue
+        else:
+            # Randomized studies log themselves too: the plan carries each day's
+            # assignment, so nobody has to press "log today".
+            autolog_randomized(conn, exp_id)
         try:
             refresh_outcomes(conn, exp_id)
         except ValueError as exc:
@@ -1065,6 +1131,11 @@ def overview(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 "title": e[13],
                 "arms": arms,
                 "power": _power_or_none(conn, eid),
+                # Randomized studies run hands-free: the plan carries today's arm.
+                "today": next(
+                    ({"arm": a["arm"], "condition": a["condition"]} for a in todays_assignments(conn) if a["id"] == str(eid)),
+                    None,
+                ),
                 "result": (
                     {
                         "verdict": res[0], "n_a": res[1], "n_b": res[2], "mean_a": res[3],

@@ -463,7 +463,16 @@ def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = N
     rows.sort()
     n_a = sum(1 for r in rows if r[1] == 0)
     n_b = len(rows) - n_a
-    base = {"n_a": n_a, "n_b": n_b, "unit": unit}
+    ya = [r[2] for r in rows if r[1] == 0]
+    yb = [r[2] for r in rows if r[1] == 1]
+    base = {
+        "n_a": n_a,
+        "n_b": n_b,
+        "unit": unit,
+        # Raw (unadjusted) outcome means per arm: what a plain reading of the data says.
+        "mean_a": round(mean(ya), 3) if ya else None,
+        "mean_b": round(mean(yb), 3) if yb else None,
+    }
     if n_a < _MIN_PER_ARM or n_b < _MIN_PER_ARM:
         return base | {
             "verdict": "insufficient",
@@ -621,8 +630,8 @@ def register(
     canon = json.dumps(spec, sort_keys=True)
     hid = str(uuid.uuid4())
     conn.execute(
-        "INSERT INTO research_hypotheses (id, slug, question, spec, spec_hash, belief_id, author, status, power, value_score) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO research_hypotheses (id, slug, question, spec, spec_hash, belief_id, author, status, power, value_score, value_parts) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             hid,
             slug,
@@ -634,6 +643,7 @@ def register(
             status,
             json.dumps(pw) if pw else None,
             value["value"],
+            json.dumps(value),
         ],
     )
     why = (
@@ -704,7 +714,7 @@ def run(conn: duckdb.DuckDBPyConnection, slug: str, author: str = "runner") -> d
     res = estimate(conn, json.loads(spec_json))
     conn.execute(
         "INSERT INTO research_results (id, hypothesis_id, n_a, n_b, effect, se, ci_low, ci_high, p, "
-        "design_effect, verdict, summary, power) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "design_effect, verdict, summary, power, mean_a, mean_b) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             str(uuid.uuid4()),
             hid,
@@ -719,6 +729,8 @@ def run(conn: duckdb.DuckDBPyConnection, slug: str, author: str = "runner") -> d
             res["verdict"],
             res["summary"],
             json.dumps(res["power"]) if res["power"] else None,
+            res["mean_a"],
+            res["mean_b"],
         ],
     )
     if belief_id:
@@ -781,7 +793,7 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     rows = conn.execute(
         """
         SELECT h.id, h.slug, h.question, h.spec, h.belief_id, h.author, h.status, h.power, h.created_at,
-               h.value_score, r.verdict, r.effect, r.ci_low, r.ci_high, r.p, r.n_a, r.n_b, r.design_effect, r.summary, r.run_at
+               h.value_score, h.value_parts, r.mean_a, r.mean_b, r.verdict, r.effect, r.ci_low, r.ci_high, r.p, r.n_a, r.n_b, r.design_effect, r.summary, r.run_at
         FROM research_hypotheses h
         LEFT JOIN research_results r ON r.hypothesis_id = h.id
             AND r.run_at = (SELECT MAX(run_at) FROM research_results WHERE hypothesis_id = h.id)
@@ -791,7 +803,7 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     out = []
     for row in rows:
         hid, r = row[0], row[1:]
-        res = r[9:]
+        res = r[12:]
         out.append(
             {
                 "id": hid,
@@ -804,6 +816,7 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 "power": json.loads(r[6]) if r[6] else None,
                 "created_at": r[7].isoformat(),
                 "value_score": r[8],
+                "value_parts": json.loads(r[9]) if r[9] else None,
                 "result": None
                 if res[0] is None
                 else {
@@ -817,6 +830,8 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                     "design_effect": res[7],
                     "summary": res[8],
                     "run_at": res[9].isoformat() if res[9] else None,
+                    "mean_a": r[10],
+                    "mean_b": r[11],
                 },
             }
         )
@@ -1273,7 +1288,19 @@ def forecast_preview(conn: duckdb.DuckDBPyConnection, today: date | None = None)
     terms = _models(conn, today)
     feats = _features_for(conn, terms, (today - timedelta(days=30), target))
     parts = [
-        {"claim": t.claim, "belief_id": t.belief_id, "contribution": _predict([t], feats, target)}
+        {
+            "claim": t.claim,
+            "belief_id": t.belief_id,
+            "contribution": _predict([t], feats, target),
+            "feature": t.spec["exposure"]["feature"],
+            "exposure": feats[t.spec["exposure"]["feature"]].get(
+                target - timedelta(days=int(t.spec.get("lag", 1)))
+            ),
+            "arm_a": t.spec["exposure"]["a"],
+            "arm_b": t.spec["exposure"]["b"],
+            "effect": t.effect,
+            "share_b": t.p_b,
+        }
         for t in terms
     ]
     row = conn.execute(

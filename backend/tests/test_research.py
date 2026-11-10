@@ -215,3 +215,43 @@ def test_preview_is_the_sum_of_its_named_terms(conn) -> None:
     p = research.forecast_preview(conn, today=TODAY)
     assert p["terms"] and p["target_date"] == str(TODAY + timedelta(days=1))
     assert p["predicted"] == pytest.approx(sum(t["contribution"] for t in p["terms"]))
+
+
+def test_explainer_fields_are_served(conn) -> None:
+    _setup_belief(conn, effect_pct=-15)
+    research.run(conn, "strain-hrv")
+    h = next(x for x in research.hypotheses(conn) if x["slug"] == "strain-hrv")
+    r = h["result"]
+    assert r["mean_a"] is not None and r["mean_b"] is not None
+    # Raw arm means agree in sign with the planted effect.
+    assert r["mean_b"] < r["mean_a"]
+    assert h["value_parts"] is not None and h["value_parts"]["value"] == h["value_score"]
+    t = research.forecast_preview(conn, today=TODAY)["terms"][0]
+    assert t["exposure"] is not None and t["arm_b"] == SPEC["exposure"]["b"]
+
+
+def test_randomized_trials_log_themselves_from_autolog_date(conn) -> None:
+    from shc import selflab
+
+    start = date(2026, 5, 1)
+    exp_id = selflab.preregister(
+        conn,
+        slug="auto-trial",
+        hypothesis="X raises Y.",
+        manipulated="x",
+        condition_a="no x",
+        condition_b="x",
+        outcome_metric="hrv_next_morning",
+        min_effect=3.0,
+        started_on=start,
+    )
+    # A flagged day must survive the automatic pass.
+    selflab.log_day(conn, exp_id, start + timedelta(days=2), adhered=False)
+    added = selflab.autolog_randomized(conn, exp_id, today=start + timedelta(days=10))
+    rows = conn.execute(
+        "SELECT day, adhered FROM experiment_log WHERE experiment_id = ? ORDER BY day", [exp_id]
+    ).fetchall()
+    assert added == 9 and len(rows) == 10
+    assert dict(rows)[start + timedelta(days=2)] is False
+    a = selflab.todays_assignments(conn, start)
+    assert a and a[0]["arm"] == selflab.arm_for_day("auto-trial", start, start)
