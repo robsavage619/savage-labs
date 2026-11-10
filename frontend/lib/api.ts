@@ -846,6 +846,55 @@ export interface AirwayTrend {
   };
 }
 
+export interface ResearchBelief {
+  id: string;
+  claim: string;
+  outcome: string;
+  prior_mean: number;
+  prior_sd: number;
+  prior_source: string;
+  post_mean: number;
+  post_sd: number;
+  n_results: number;
+  decision: string | null;
+  updated_at: string | null;
+  /** 1 − (post_sd / prior_sd)²: how much of the prior's uncertainty the data has removed. */
+  learned: number | null;
+}
+
+export interface ResearchHypothesis {
+  slug: string;
+  question: string;
+  spec: { unit?: string; min_effect: number; expected_sign: "+" | "-"; adjust?: string[] };
+  belief_id: string | null;
+  author: string;
+  status: "registered" | "underpowered" | "retired";
+  power: { needed_per_arm: number; days_to_answer: number | null; outcome_sd: number } | null;
+  created_at: string;
+  result: {
+    verdict: "supported" | "against" | "ruled_out" | "inconclusive" | "insufficient" | "error";
+    effect: number | null;
+    ci_low: number | null;
+    ci_high: number | null;
+    p: number | null;
+    n_a: number;
+    n_b: number;
+    design_effect: number | null;
+    summary: string;
+    run_at: string | null;
+  } | null;
+}
+
+export interface NotebookEntry {
+  id: string;
+  written_at: string;
+  author: string;
+  kind: string;
+  ref: string | null;
+  title: string;
+  body: string | null;
+}
+
 export const api = {
   recoveryToday: () => get<RecoveryToday>("/api/recovery/today"),
   recoveryTrend: (days = 14) => get<RecoveryPoint[]>(`/api/recovery/trend?days=${days}`),
@@ -1162,6 +1211,9 @@ export const api = {
     }>;
   },
   experiments: () => get<Experiment[]>("/api/experiments"),
+  researchBeliefs: () => get<ResearchBelief[]>("/api/research/beliefs"),
+  researchHypotheses: () => get<ResearchHypothesis[]>("/api/research/hypotheses"),
+  researchNotebook: (limit = 40) => get<NotebookEntry[]>(`/api/research/notebook?limit=${limit}`),
   /** Confirmed personal priors the engine may act on; empty until a study confirms. */
   experimentPriors: () =>
     get<{ experiment_id: string; prior_key: string; effect: number; effect_ci_low: number | null; effect_ci_high: number | null; outcome_metric: string }[]>(

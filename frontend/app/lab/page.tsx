@@ -9,6 +9,7 @@ import { GuideProvider, PageHead, Panel, Section } from "@/components/kit";
 import { EffectForest, HrvDrivers, PriorsShelf, ScorecardBullets, TrialProgress } from "@/components/lab-charts";
 import { LabExperiments } from "@/components/lab-experiments";
 import { LabPanel } from "@/components/lab-panel";
+import { BeliefLedger, Notebook, QuestionBoard } from "@/components/research-board";
 import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
 import { SubjectDossier } from "@/components/subject-dossier";
 import { SuggestedExperiments } from "@/components/suggested-experiments";
@@ -69,7 +70,53 @@ export default function LabPage() {
             lede="Your n-of-1 trials and what they found, what's been proven and is now in use, and how far to trust the engine that plans your days."
           />
 
-          <Section n="01" title="The trials">
+          <Section n="01" title="What the team believes">
+            <Panel
+              id="beliefs"
+              span={4}
+              title="What the research team believes about you"
+              question="Each belief starts at what the literature expects and moves as your own data comes in."
+              guide={{
+                what: "The belief ledger: every claim the lab holds about you, as an effect on next-morning HRV with a 95% range.",
+                read: "The faint bar is the prior from the literature; the solid bar is the current belief after your data. 'Learned' is how much of the prior's uncertainty your data has removed.",
+                why: "A finding isn't a yes or no. This shows how big each effect is for you, how sure the team is, and where it's still guessing.",
+                ctx: "Priors are deliberately wide: the literature gives the direction and scale, not your number.",
+              }}
+            >
+              <BeliefLedger />
+            </Panel>
+          </Section>
+
+          <Section n="02" title="Questions and notebook">
+            <Panel
+              id="questions"
+              span={2}
+              title="The questions it's asking"
+              question="Pre-registered questions, re-run every night."
+              guide={{
+                what: "Each question compares two kinds of days (or weeks) on an outcome, adjusted for named confounders, with the result and how long a clear answer will take.",
+                read: "'Supported' means the 95% range excludes zero in the predicted direction; 'ruled out' means it excludes the predicted effect.",
+                why: "These are the team's open lines of inquiry. Weekly questions average out day-level noise and answer faster.",
+              }}
+            >
+              <QuestionBoard />
+            </Panel>
+            <Panel
+              id="notebook"
+              span={2}
+              title="Lab notebook"
+              question="Every proposal, result and belief change, newest first. Nothing is edited or deleted."
+              guide={{
+                what: "The team's running record: what was proposed and why, what each run found, and how beliefs moved.",
+                read: "Proposals carry the power estimate at registration; results carry the estimate and range.",
+                why: "Agents read this before proposing, so the team never re-asks a dead question.",
+              }}
+            >
+              <Notebook />
+            </Panel>
+          </Section>
+
+          <Section n="03" title="The trials">
             <Panel
               id="trial-progress"
               span={4}
@@ -100,7 +147,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="02" title="What's proven">
+          <Section n="04" title="What's proven">
             <Panel
               id="priors"
               span={2}
@@ -129,7 +176,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="03" title="Habits">
+          <Section n="05" title="Habits">
             <Panel
               id="hrv-drivers"
               span={4}
@@ -147,7 +194,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="04" title="Run the trials">
+          <Section n="06" title="Run the trials">
             <Panel id="trials" span={4} title="Active trials" question="Log today's condition, score a trial, or score them all." bare>
               <LabExperiments />
             </Panel>
@@ -156,7 +203,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="05" title="Research and the engine">
+          <Section n="07" title="Research and the engine">
             <Panel id="findings" span={4} title="Standing research program" question="The pre-registered questions the lab re-tests on your data." bare>
               <LabPanel />
             </Panel>

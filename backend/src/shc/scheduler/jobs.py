@@ -72,6 +72,18 @@ async def _score_experiments() -> None:
     log.info("nightly experiment rescore: %s", ", ".join(verdicts) or "no active studies")
 
 
+async def _run_research() -> None:
+    """Nightly job: re-run every registered hypothesis and refresh its belief."""
+    from shc import research
+    from shc.db.schema import write_ctx
+
+    async with write_ctx() as conn:
+        results = research.run_all(conn)
+    log.info(
+        "nightly research run: %s",
+        ", ".join(f"{r['slug']}={r['verdict']}" for r in results) or "no hypotheses",
+    )
+
 async def _backup_db() -> None:
     """Nightly job: keep a week of verified database copies."""
     from shc.config import settings
@@ -368,6 +380,15 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         hour=4,
         minute=45,
         id="experiments_score",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _run_research,
+        "cron",
+        hour=4,
+        minute=50,
+        id="research_run",
         replace_existing=True,
         misfire_grace_time=3600,
     )
