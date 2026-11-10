@@ -933,6 +933,14 @@ export const api = {
     }>(`/api/training/muscle-balance?weeks=${weeks}`),
   dailyState: () => get<DailyState>("/api/state/today"),
   noiseFloor: (days = 28) => get<NoiseFloor>(`/api/signals/noise-floor?days=${days}`),
+  trainingMonotony: (weeks = 12) =>
+    get<{
+      weeks: { week_start: string; load: number; monotony: number | null; strain: number | null; training_days: number; above_heuristic: boolean }[];
+      heuristic_reference: number;
+      weeks_above_heuristic: number;
+      verdict: string;
+      attribution: string;
+    }>(`/api/training/monotony?weeks=${weeks}`),
   checkinToday: () => get<CheckinToday>("/api/checkin/today"),
   checkinSubmit: async (body: CheckinPayload) => {
     const r = await fetch(`${BASE}/api/checkin`, {

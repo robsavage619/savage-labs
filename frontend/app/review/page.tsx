@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-/** /review became /week when the app went to four surfaces. */
+/** /review became /week, then /training when Week split into Training and Recovery. */
 export default function Page() {
-  redirect("/week");
+  redirect("/training");
 }

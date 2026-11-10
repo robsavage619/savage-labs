@@ -7,5 +7,6 @@ import { redirect } from "next/navigation";
  * value leaves its band — were folded into the real surfaces instead.
  */
 export default function Page() {
-  redirect("/week");
+  // Its signals now live on Recovery.
+  redirect("/recovery");
 }
