@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # Obsidian vault path — "vault" always refers to this knowledge graph
     vault_path: Path = Field(default=Path.home() / "Vault/savage_vault")
 
+    # iCloud Drive/Shortcuts/SHC: the phone's daily Shortcut saves its payload here
+    shortcut_inbox_dir: Path = Field(
+        default=Path.home()
+        / "Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/SHC"
+    )
+
     # Fitbod CSV export path (defaults to iCloud location, override via FITBOD_CSV_PATH env var)
     fitbod_csv_path: Path = Field(
         default=Path.home()

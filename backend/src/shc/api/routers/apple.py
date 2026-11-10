@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
@@ -182,6 +184,49 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
         data = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}") from exc
+    try:
+        return await _store_shortcut(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def ingest_shortcut_inbox(inbox: Path) -> int:
+    """Ingest Shortcut payload files dropped in an iCloud folder.
+
+    The phone saves one JSON file per day; the Mac picks them up whenever it is
+    awake. Good files move to ``processed/``, bad ones to ``failed/``.
+
+    Returns:
+        Number of files ingested.
+    """
+    if not inbox.is_dir():
+        return 0
+    placeholders = list(inbox.glob(".*.json.icloud"))
+    if placeholders:
+        log.warning("shortcut inbox: %d files not yet downloaded from iCloud", len(placeholders))
+    done = 0
+    for path in sorted(inbox.glob("*.json")):
+        try:
+            result = await _store_shortcut(json.loads(path.read_bytes()))
+        except (ValueError, OSError) as exc:
+            log.error("shortcut inbox: %s failed (%s), moved to failed/", path.name, exc)
+            _archive(path, inbox / "failed")
+            continue
+        log.info("shortcut inbox: %s → %s", path.name, result)
+        _archive(path, inbox / "processed")
+        done += 1
+    return done
+
+
+def _archive(path: Path, dest_dir: Path) -> None:
+    dest_dir.mkdir(exist_ok=True)
+    path.replace(dest_dir / path.name)
+
+
+async def _store_shortcut(data: Any) -> dict[str, Any]:
+    """Upsert one Shortcut payload into measurements; ValueError if it has no metrics."""
+    if not isinstance(data, dict):
+        raise ValueError(f"payload is not an object: {type(data).__name__}")
 
     # Shortcuts wraps things unpredictably — unwrap until we find the metrics dict.
     # Shape A (ideal):  {"date": "...", "metrics": {hrv_sdnn: 45, ...}}
@@ -198,10 +243,10 @@ async def apple_shortcut_webhook(request: Request) -> dict[str, Any]:
         ts_raw = _parse_ts(str(raw_date))
         metrics = {k: v for k, v in inner.items() if k != "date"}
     else:
-        raise HTTPException(status_code=400, detail=f"could not find metrics in payload: {data}")
+        raise ValueError(f"could not find metrics in payload: {data}")
 
     if not metrics:
-        raise HTTPException(status_code=400, detail="metrics dict is empty")
+        raise ValueError("metrics dict is empty")
 
     inserted = 0
     skipped: list[str] = []

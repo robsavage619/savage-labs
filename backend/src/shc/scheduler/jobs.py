@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -365,4 +366,22 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         replace_existing=True,
         misfire_grace_time=900,
     )
+    # Phone drops the daily Apple Health payload in iCloud; runs at startup so
+    # files that arrived while the lid was shut are picked up on wake.
+    scheduler.add_job(
+        _ingest_shortcut_inbox,
+        "interval",
+        minutes=15,
+        id="shortcut_inbox",
+        replace_existing=True,
+        misfire_grace_time=900,
+        next_run_time=datetime.now(),
+    )
     log.info("registered APScheduler jobs")
+
+
+async def _ingest_shortcut_inbox() -> None:
+    from shc.api.routers.apple import ingest_shortcut_inbox
+    from shc.config import settings
+
+    await ingest_shortcut_inbox(settings.shortcut_inbox_dir)
