@@ -210,6 +210,98 @@ export function FillBars({ min = 110, ...props }: Omit<Parameters<typeof Bars>[0
   return <Fill min={min}>{(h) => <Bars {...props} height={h} />}</Fill>;
 }
 
+/** Stacked columns: one column per label, segments bottom-up, 2px surface gaps. */
+export function StackBars({
+  labels,
+  segments,
+  height = 180,
+  fmt = (v) => String(Math.round(v)),
+  tip,
+}: {
+  labels: string[];
+  segments: { name: string; color: string; values: number[] }[];
+  height?: number;
+  fmt?: (v: number) => string;
+  tip?: (i: number) => ReactNode;
+}) {
+  const [ref, W] = useWidth();
+  const [hov, setHov] = useState<number | null>(null);
+  const totals = labels.map((_, i) => segments.reduce((s, g) => s + (g.values[i] ?? 0), 0));
+  const ticks = niceTicks(0, Math.max(...totals, 1), height < 130 ? 2 : 3);
+  const hi = ticks[ticks.length - 1];
+  const P = { l: Math.max(...ticks.map((t) => fmt(t).length)) * 6.6 + 12, r: 6, t: 12, b: 24 };
+  const n = labels.length;
+  const slot = (W - P.l - P.r) / Math.max(1, n);
+  const bw = Math.min(18, Math.max(4, slot - 3));
+  const y = lin(0, hi, height - P.b, P.t);
+  const cx = (i: number) => P.l + slot * (i + 0.5);
+  const every = Math.ceil(n / Math.max(2, Math.floor((W - P.l) / 64)));
+  return (
+    <div className="k-chart" ref={ref} onMouseLeave={() => setHov(null)}>
+      <svg width={W} height={height} viewBox={`0 0 ${W} ${height}`}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={P.l} x2={W - P.r} y1={y(t)} y2={y(t)} className={t === 0 ? "k-axis" : "k-gridline"} />
+            <text x={P.l - 8} y={y(t) + 3.5} className="k-tick" textAnchor="end">
+              {fmt(t)}
+            </text>
+          </g>
+        ))}
+        {labels.map((_, i) => {
+          let acc = 0;
+          const x0 = cx(i) - bw / 2;
+          return (
+            <motion.g key={i} onMouseEnter={() => setHov(i)} initial={{ opacity: 0, y: 8 }} animate={{ opacity: hov == null || hov === i ? 1 : 0.45, y: 0 }} transition={{ delay: i * 0.015, ease }}>
+              <rect x={cx(i) - slot / 2} y={P.t} width={slot} height={height - P.b - P.t} fill="transparent" />
+              {segments.map((g, si) => {
+                const v = g.values[i] ?? 0;
+                const y1 = y(acc);
+                const y2 = y(acc + v);
+                acc += v;
+                const top = si === segments.length - 1;
+                const h = Math.max(0, y1 - y2 - (top ? 0 : 2));
+                if (h <= 0) return null;
+                const r = top ? Math.min(3, h) : 0;
+                return (
+                  <path
+                    key={g.name}
+                    d={`M${x0},${y2 + h}V${y2 + r}Q${x0},${y2} ${x0 + r},${y2}H${x0 + bw - r}Q${x0 + bw},${y2} ${x0 + bw},${y2 + r}V${y2 + h}Z`}
+                    fill={g.color}
+                  />
+                );
+              })}
+            </motion.g>
+          );
+        })}
+        {labels.map((l, i) =>
+          i % every === 0 ? (
+            <text key={i} x={cx(i)} y={height - 6} className="k-tick" textAnchor="middle">
+              {fmtX(l)}
+            </text>
+          ) : null,
+        )}
+      </svg>
+      {hov != null && tip && (
+        <div className="k-tip" style={cx(hov) > W * 0.6 ? { right: W - cx(hov) + 12 } : { left: cx(hov) + 12 }}>
+          {tip(hov)}
+        </div>
+      )}
+      <div className="k-legend">
+        {segments.map((g) => (
+          <span key={g.name}>
+            <i style={{ background: g.color }} />
+            {g.name}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function FillStackBars({ min = 160, ...props }: Omit<Parameters<typeof StackBars>[0], "height"> & { min?: number }) {
+  return <Fill min={min}>{(h) => <StackBars {...props} height={Math.max(min - 26, h - 26)} />}</Fill>;
+}
+
 export function Bars({
   labels,
   values,

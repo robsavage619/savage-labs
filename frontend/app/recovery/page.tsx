@@ -1,215 +1,197 @@
 "use client";
 
-import { AerobicBaseCard, SleepNeedCard } from "@/components/split-signals";
-import { MomentumPanel } from "@/components/momentum-panel";
-import { PatternsPane } from "@/components/patterns-pane";
-import { PillarRecovery } from "@/components/pillar-recovery";
-import { PillarSleep } from "@/components/pillar-sleep";
-import { RecoveryTrendPane } from "@/components/trend-intelligence";
-import { WhoopVitals } from "@/components/whoop-vitals";
-import { SurfaceCard as Card } from "@/components/surface-card";
+import { GuideProvider, PageHead, Panel, Section } from "@/components/kit";
+import {
+  AerobicBase,
+  DayOfWeek,
+  HrvBand,
+  RecoveryMix,
+  RecoveryScoreTrend,
+  RhrTrend,
+  SleepNeed,
+  SleepStages,
+  SleepTiming,
+  Spo2Burden,
+  WeekOverWeek,
+} from "@/components/recovery-board";
 import { SurfaceShell } from "@/components/surface-shell";
 
 /**
- * RECOVERY — am I absorbing the work?
+ * RECOVERY: am I absorbing the work?
  *
- * Split out of the old Week page on 2026-11-09. Rows pair cards of similar height so no
- * span leaves half a row empty: the weekly delta beside last night's sleep
- * need, the signal pillars with the aerobic-base dose, then the long trends.
+ * Rebuilt on the kit. The nervous system first (HRV, resting HR, recovery,
+ * each against your own normal), then sleep, then the week and the aerobic
+ * and oxygen signals, then long-run patterns. Retired from the page: the
+ * recovery and sleep pillars, raw WHOOP vitals, the old trend and patterns
+ * panes, and the momentum strip, all redrawn here.
  */
 export default function RecoveryPage() {
   return (
     <SurfaceShell>
-      <div className="board">
-        <div className="board-rule">Where the week stands</div>
+      <GuideProvider>
+        <div className="k-page">
+          <PageHead
+            eyebrow="Recovery"
+            question="Am I absorbing the work?"
+            lede="Your nervous system and sleep against your own normal, the week against the one before, and the patterns underneath."
+          />
 
-        <Card
-          id="momentum"
-          span={2}
-          label="Momentum"
-          help="Whether the last 7 days were better or worse than the 7 before them."
-          helpDetail={
-            <>
-              <p>
-                Three comparisons: average recovery, average sleep, and sessions trained. The arrow
-                and number are the change against the prior week, not the raw value.
-              </p>
-              <p>
-                One week down is noise — bad sleep, a hard tournament, a cold. Two in a row on the
-                same tile is the signal worth acting on, usually by adding sleep before subtracting
-                training.
-              </p>
-            </>
-          }
-        >
-          <MomentumPanel />
-        </Card>
-        <Card
-          id="sleep-need"
-          span={2}
-          label="Sleep need"
-          help="Why last night's sleep target was what it was, and how close you came to it."
-          helpDetail={
-            <>
-              <p>
-                <strong>What it measures.</strong> WHOOP&apos;s estimate of how much sleep you needed, split into its parts: your
-                baseline need, extra for built-up sleep debt, extra for yesterday&apos;s strain, minus any naps.
-              </p>
-              <p>
-                <strong>How to read it.</strong> The copper bars add up from left to right to the total need. The cyan bar
-                underneath is what you actually slept.
-              </p>
-              <p>
-                <strong>Why it matters.</strong> Eight hours is the wrong target after a hard day. This shows why the target
-                moved and by how much.
-              </p>
-            </>
-          }
-        >
-          <SleepNeedCard />
-        </Card>
+          <Section n="01" title="Nervous system">
+            <Panel
+              id="hrv"
+              span={2}
+              title="HRV against your own baseline"
+              question="Ninety nights, with your 28-day average and its normal band."
+              explore="hrv"
+              guide={{
+                what: "Heart rate variability each night, with your rolling 28-day average and a band of plus or minus one standard deviation.",
+                read: "Cyan is each night, copper the 28-day average, the shaded band your normal range. One night below the band means little; several in a row means something.",
+                why: "HRV reflects how settled your nervous system is. Only compare it to yourself; it varies hugely between people.",
+                ctx: "Watch the copper line: a sliding average is a bigger story than any single night.",
+              }}
+            >
+              <HrvBand />
+            </Panel>
+            <Panel
+              id="rhr"
+              title="Resting heart rate"
+              question="Ninety mornings against your baseline."
+              explore="rhr"
+              guide={{
+                what: "Resting heart rate each morning, with your 28-day baseline.",
+                read: "Points above the dashed baseline are higher than your normal.",
+                why: "A run of higher mornings often comes before illness or after hard weeks.",
+              }}
+            >
+              <RhrTrend />
+            </Panel>
+            <Panel
+              id="recovery"
+              title="Recovery score"
+              question="WHOOP's daily score, ninety mornings."
+              explore="recovery"
+              guide={{
+                what: "WHOOP's 0–100 recovery score each morning.",
+                read: "Above the 67 line is green, below 34 is red.",
+                why: "It blends HRV, resting HR and sleep into one number; the trend matters more than the day.",
+              }}
+            >
+              <RecoveryScoreTrend />
+            </Panel>
+          </Section>
 
-        <div className="board-rule">Signals</div>
+          <Section n="02" title="Sleep">
+            <Panel
+              id="sleep"
+              span={2}
+              title="Sleep architecture"
+              question="Deep, REM, light and awake, night by night."
+              explore="sleep"
+              guide={{
+                what: "Hours in each sleep stage for the last four weeks of nights.",
+                read: "Each column is a night, stages stacked from the bottom: deep, REM, light, awake. Hover a night for minutes.",
+                why: "Deep sleep drives physical repair, REM supports memory and mood; total hours alone hide which one you're short on.",
+                ctx: "Where WHOOP logged two main sleeps on one night, the longer is shown.",
+              }}
+            >
+              <SleepStages />
+            </Panel>
+            <Panel
+              id="sleep-need"
+              title="Why you needed what you needed"
+              question="Last night's need, by part, against what you got."
+              guide={{
+                what: "WHOOP's estimate of last night's need: baseline, plus debt, plus yesterday's strain, minus naps.",
+                read: "Copper bars add up to the need; the cyan bar is what you slept.",
+                why: "Eight hours is the wrong target after a hard day.",
+              }}
+            >
+              <SleepNeed />
+            </Panel>
+            <Panel
+              id="sleep-timing"
+              title="When and how well"
+              question="Consistency, timing and how long you've been sleeping."
+              guide={{
+                what: "How regular your sleep timing is, how far your sleep midpoint sits from WHOOP's ideal window, efficiency and wake-ups, plus nightly hours.",
+                read: "Higher consistency and efficiency are better; a midpoint far from zero means you're sleeping off your best window.",
+                why: "Regular timing does as much for recovery as total hours.",
+              }}
+            >
+              <SleepTiming />
+            </Panel>
+          </Section>
 
-        <Card
-          id="recovery"
-          span={1}
-          label="Recovery"
-          help="How ready your body says it is today, and which signal is driving that number."
-          helpDetail={
-            <>
-              <p>
-                The ring is the WHOOP recovery score. <strong>67 and up</strong> is green — train as
-                planned. <strong>34–66</strong> is yellow — train, but hold the top end. Under 34 is
-                red: the session should be easy or skipped.
-              </p>
-              <p>
-                The chips underneath say why: heart-rate variability against your 28-day baseline
-                (in σ, standard deviations), resting heart rate, and last night&apos;s sleep. On
-                propranolol days HRV is chemically blunted, so a low σ there is the drug, not
-                necessarily your nervous system.
-              </p>
-            </>
-          }
-        >
-          <PillarRecovery />
-        </Card>
-        <Card
-          id="sleep"
-          span={1}
-          label="Sleep"
-          help="How you actually slept the last seven nights — duration, sleep stages, and how steady your timing was."
-          helpDetail={
-            <>
-              <p>
-                Aim for <strong>7.5 hours or more</strong>, with roughly 15–20% deep and 20–25% REM.
-                Deep is where the physical repair happens, REM is where the motor learning consolidates
-                — a short night usually cuts REM first.
-              </p>
-              <p>
-                Efficiency above 85% and disturbances at 5 or fewer are healthy. The consistency
-                figure is how much your mid-sleep time wanders night to night; tight beats long if
-                you have to pick one.
-              </p>
-            </>
-          }
-        >
-          <PillarSleep />
-        </Card>
-        <Card
-          id="vitals"
-          span={1}
-          label="WHOOP vitals"
-          help="Whether WHOOP is still syncing, plus this week's cardio minutes and last night's sleep detail."
-          helpDetail={
-            <>
-              <p>
-                Check the sync stamp first — every other card on this page is downstream of it, and a
-                &quot;reauth needed&quot; badge means the numbers are frozen, not good.
-              </p>
-              <p>
-                Sleep performance and efficiency want to be 85% or better, consistency 70% or better,
-                disturbances 5 or fewer. Respiratory rate and skin temperature are the illness tells:
-                both drifting up together is worth a light day. Allergies push them the same
-                direction, so read them with the season in mind.
-              </p>
-            </>
-          }
-        >
-          <WhoopVitals />
-        </Card>
-        <Card
-          id="aerobic-base"
-          span={1}
-          label="Aerobic base"
-          help="Minutes of easy, steady aerobic work this week against the 180-minute weekly dose."
-          helpDetail={
-            <>
-              <p>
-                <strong>What it measures.</strong> Minutes in the last 7 days in WHOOP heart-rate zones 2 and 3 together,
-                about 70–85% of your max.
-              </p>
-              <p>
-                <strong>How to read it.</strong> The arc fills toward 180 minutes. The bars below show every zone; the cyan
-                ones are what count.
-              </p>
-              <p>
-                <strong>Why it matters.</strong> This work builds the aerobic base that speeds recovery between sets and
-                between days. WHOOP&apos;s zone 2 alone undercounts it by roughly 40%.
-              </p>
-            </>
-          }
-        >
-          <AerobicBaseCard />
-        </Card>
+          <Section n="03" title="The week">
+            <Panel
+              id="momentum"
+              span={2}
+              title="This week against last"
+              question="Recovery, sleep and sessions, last 7 days versus the 7 before."
+              guide={{
+                what: "Average recovery, average sleep and sessions trained this week and last.",
+                read: "Arrows show the change. One week down is noise; two in a row on the same tile is the signal.",
+                why: "It's the quickest read on whether the week is going the right way.",
+              }}
+            >
+              <WeekOverWeek />
+            </Panel>
+            <Panel
+              id="aerobic-base"
+              title="Aerobic base"
+              question="Steady aerobic minutes against the 180 a week."
+              guide={{
+                what: "Minutes in WHOOP zones 2 and 3 over 7 days, about 70–85% of your max heart rate.",
+                read: "The arc fills toward 180; the cyan bars are the zones that count.",
+                why: "It speeds recovery between sets and between days. Zone 2 alone undercounts it.",
+              }}
+            >
+              <AerobicBase />
+            </Panel>
+            <Panel
+              id="spo2"
+              title="Overnight oxygen"
+              question="Nightly average SpO₂, four weeks."
+              guide={{
+                what: "Average blood oxygen during sleep each night.",
+                read: "Points under the 95% line are low nights.",
+                why: "Repeatedly low overnight oxygen can point to breathing problems during sleep, which quietly hurt recovery.",
+              }}
+            >
+              <Spo2Burden />
+            </Panel>
+          </Section>
 
-        <div className="board-rule">Trends</div>
-
-        <Card
-          id="recovery-trend"
-          span={2}
-          label="Recovery trend"
-          help="Three months of recovery and nervous-system data, so slow drift shows up before it becomes a slump."
-          helpDetail={
-            <>
-              <p>
-                The grid is one square per day, darker meaning better recovery — read it for streaks
-                and clusters, not single days. The chart under it plots heart-rate variability with a
-                shaded band of ±1σ, your normal range; sustained trips below the band matter, single
-                dips do not.
-              </p>
-              <p>
-                The pre-illness strip flags days where resting heart rate rose and HRV fell together.
-                Two or three of those in a row is the classic run-up to getting sick, and the cheapest
-                response is an early night rather than a skipped block.
-              </p>
-            </>
-          }
-        >
-          <RecoveryTrendPane />
-        </Card>
-        <Card
-          id="patterns"
-          span={2}
-          label="Patterns"
-          help="Which days you recover best on, and how strongly sleep and heart-rate variability track your recovery."
-          helpDetail={
-            <>
-              <p>
-                The day-of-week bars are all-time averages: a reliably low day usually traces back to
-                a fixed habit — weekend pickleball, a late Friday, a Sunday night.
-              </p>
-              <p>
-                The two scatter plots show how tightly sleep hours and heart-rate variability track
-                recovery for <em>you</em>. A steep, tight cloud means that input is worth protecting;
-                a shapeless one means the score is being driven by something else that week.
-              </p>
-            </>
-          }
-        >
-          <PatternsPane />
-        </Card>
-      </div>
+          <Section n="04" title="Patterns">
+            <Panel
+              id="patterns"
+              span={2}
+              title="Your best and worst days"
+              question="Average recovery by day of the week, all time."
+              guide={{
+                what: "Average morning recovery for each day of the week across your whole WHOOP history.",
+                read: "Taller bars are better mornings.",
+                why: "It shows which days your week costs you, usually the ones after court days or late nights.",
+              }}
+            >
+              <DayOfWeek />
+            </Panel>
+            <Panel
+              id="recovery-trend"
+              span={2}
+              title="Green, yellow, red"
+              question="How your mornings have split, all time."
+              guide={{
+                what: "Every scored morning, bucketed green (67+), yellow (34–66) and red (under 34).",
+                read: "The bar shows the share of each; the rows give counts.",
+                why: "A rising red share over a season is a sign to back off before a single bad week tells you.",
+              }}
+            >
+              <RecoveryMix />
+            </Panel>
+          </Section>
+        </div>
+      </GuideProvider>
     </SurfaceShell>
   );
 }

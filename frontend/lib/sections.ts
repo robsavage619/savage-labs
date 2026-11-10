@@ -69,12 +69,15 @@ export const SECTIONS: readonly Section[] = [
   { id: "monotony", label: "Monotony", surface: "training", keywords: ["foster", "strain", "same", "variety"] },
   { id: "block", label: "The block", surface: "training", keywords: ["mesocycle", "deload", "periodization", "week"] },
   { id: "weekly", label: "Weekly volume", surface: "training", keywords: ["consistency", "sets per week", "sessions", "frequency"] },
-  { id: "momentum", label: "Momentum", surface: "recovery", keywords: ["changed", "week over week", "delta"] },
-  { id: "recovery", label: "Recovery", surface: "recovery", keywords: ["whoop", "hrv", "rhr", "skin temp"] },
-  { id: "sleep", label: "Sleep", surface: "recovery", keywords: ["deep", "rem", "debt", "efficiency", "consistency"] },
-  { id: "vitals", label: "Raw WHOOP vitals", surface: "recovery", keywords: ["whoop", "spo2", "respiratory"] },
-  { id: "recovery-trend", label: "Recovery trend", surface: "recovery", keywords: ["heatmap", "hrv trend", "monthly"] },
-  { id: "patterns", label: "Patterns", surface: "recovery", keywords: ["day of week", "distribution", "correlation"] },
+  { id: "hrv", label: "HRV vs baseline", surface: "recovery", keywords: ["hrv", "heart rate variability", "band", "nervous system"] },
+  { id: "rhr", label: "Resting heart rate", surface: "recovery", keywords: ["rhr", "resting", "heart rate"] },
+  { id: "recovery", label: "Recovery score", surface: "recovery", keywords: ["whoop", "green", "red", "score"] },
+  { id: "sleep", label: "Sleep architecture", surface: "recovery", keywords: ["deep", "rem", "light", "stages"] },
+  { id: "sleep-timing", label: "Sleep timing", surface: "recovery", keywords: ["consistency", "midpoint", "efficiency", "wake"] },
+  { id: "momentum", label: "This week vs last", surface: "recovery", keywords: ["changed", "week over week", "delta", "momentum"] },
+  { id: "spo2", label: "Overnight oxygen", surface: "recovery", keywords: ["spo2", "oxygen", "airway", "vitals"] },
+  { id: "patterns", label: "Best and worst days", surface: "recovery", keywords: ["day of week", "weekday", "patterns"] },
+  { id: "recovery-trend", label: "Green, yellow, red", surface: "recovery", keywords: ["distribution", "share", "all time"] },
   // StrengthPanel was one 1,559px card holding six independent blocks — four
   // of them under 150px tall, trapped in a single column. Split, so each gets
   // its own grid footprint and its own ⌘K entry.
