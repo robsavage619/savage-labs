@@ -105,6 +105,7 @@ export const SECTIONS: readonly Section[] = [
   { id: "clinical", label: "Clinical record", surface: "body", keywords: ["labs", "meds", "conditions", "bloodwork", "risk"] },
 
   // ── Lab ──────────────────────────────────────────────────────────────────
+  { id: "forecast", label: "Forecast skill", surface: "lab", keywords: ["forecast", "predict", "skill", "how well", "report card"] },
   { id: "beliefs", label: "Belief ledger", surface: "lab", keywords: ["beliefs", "prior", "posterior", "what we know", "research team"] },
   { id: "questions", label: "Research questions", surface: "lab", keywords: ["hypotheses", "questions", "pre-registered", "specs"] },
   { id: "notebook", label: "Lab notebook", surface: "lab", keywords: ["notebook", "log", "history", "proposals"] },

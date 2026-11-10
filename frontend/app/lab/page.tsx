@@ -9,7 +9,7 @@ import { GuideProvider, PageHead, Panel, Section } from "@/components/kit";
 import { EffectForest, HrvDrivers, PriorsShelf, ScorecardBullets, TrialProgress } from "@/components/lab-charts";
 import { LabExperiments } from "@/components/lab-experiments";
 import { LabPanel } from "@/components/lab-panel";
-import { BeliefLedger, Notebook, QuestionBoard } from "@/components/research-board";
+import { BeliefLedger, ForecastSkill, Notebook, QuestionBoard } from "@/components/research-board";
 import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
 import { SubjectDossier } from "@/components/subject-dossier";
 import { SuggestedExperiments } from "@/components/suggested-experiments";
@@ -70,7 +70,24 @@ export default function LabPage() {
             lede="Your n-of-1 trials and what they found, what's been proven and is now in use, and how far to trust the engine that plans your days."
           />
 
-          <Section n="01" title="What the team believes">
+          <Section n="01" title="How well the lab knows you">
+            <Panel
+              id="forecast"
+              span={4}
+              title="Can the lab predict your morning?"
+              question="Each morning's HRV forecast from everything the team believes, scored on mornings it never saw."
+              guide={{
+                what: "The lab's report card. It forecasts how far each morning's HRV will sit from your baseline, using only its current beliefs, and compares that with simply guessing 'same as baseline'.",
+                read: "Skill above zero means the lab beats the naive guess. The bars show how much each belief adds: one that hurts the forecast is a candidate to drop, however good its p-value looked.",
+                why: "A lab that understands you should predict you. This is the one number that says whether all the research is adding up to anything.",
+                ctx: "Daily HRV is mostly noise, so skill near zero is the honest starting point. It should rise as weekly questions and new beliefs land.",
+              }}
+            >
+              <ForecastSkill />
+            </Panel>
+          </Section>
+
+          <Section n="02" title="What the team believes">
             <Panel
               id="beliefs"
               span={4}
@@ -87,7 +104,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="02" title="Questions and notebook">
+          <Section n="03" title="Questions and notebook">
             <Panel
               id="questions"
               span={2}
@@ -116,7 +133,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="03" title="The trials">
+          <Section n="04" title="The trials">
             <Panel
               id="trial-progress"
               span={4}
@@ -147,7 +164,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="04" title="What's proven">
+          <Section n="05" title="What's proven">
             <Panel
               id="priors"
               span={2}
@@ -176,7 +193,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="05" title="Habits">
+          <Section n="06" title="Habits">
             <Panel
               id="hrv-drivers"
               span={4}
@@ -194,7 +211,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="06" title="Run the trials">
+          <Section n="07" title="Run the trials">
             <Panel id="trials" span={4} title="Active trials" question="Log today's condition, score a trial, or score them all." bare>
               <LabExperiments />
             </Panel>
@@ -203,7 +220,7 @@ export default function LabPage() {
             </Panel>
           </Section>
 
-          <Section n="07" title="Research and the engine">
+          <Section n="08" title="Research and the engine">
             <Panel id="findings" span={4} title="Standing research program" question="The pre-registered questions the lab re-tests on your data." bare>
               <LabPanel />
             </Panel>

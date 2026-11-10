@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api, type ResearchBelief, type ResearchHypothesis } from "@/lib/api";
-import { Fill } from "@/components/kit";
+import { Fill, FillLines } from "@/components/kit";
 
 /**
  * The research team's workspace: what it believes about you, the questions it
@@ -169,6 +169,67 @@ export function Notebook() {
           </ol>
         )}
       </Fill>
+    </div>
+  );
+}
+
+// ── Forecast skill ──────────────────────────────────────────────────────────
+
+const skillPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
+
+export function ForecastSkill() {
+  const f = useQuery({ queryKey: ["research-forecast"], queryFn: api.researchForecast, staleTime: STALE });
+  const b = useQuery({ queryKey: ["research-beliefs"], queryFn: api.researchBeliefs, staleTime: STALE });
+  if (f.isError) return <Err e={f.error} />;
+  if (!f.data || !b.data) return <Skel h={360} />;
+  const bt = f.data.backtest;
+  if (!bt || bt.skill == null) return <p className="ts-lede">No backtest yet. It runs nightly at 04:50.</p>;
+  const claim = Object.fromEntries(b.data.map((x) => [x.id, x.claim]));
+  const gains = Object.entries(bt.gains)
+    .filter(([, g]) => g != null)
+    .map(([id, g]) => ({ id, claim: claim[id] ?? id, g: g as number }))
+    .sort((x, y) => y.g - x.g);
+  const gmax = Math.max(0.001, ...gains.map((x) => Math.abs(x.g)));
+  const next = f.data.live.find((x) => x.actual == null);
+  return (
+    <div className="ts-card fs-card">
+      <div className="fs-top">
+        <div className="fs-score">
+          <small>Forecast skill</small>
+          <b className={bt.skill > 0 ? "up" : "down"}>{skillPct(bt.skill)}</b>
+          <span>
+            better than guessing &quot;same as your baseline&quot; across {bt.n} mornings it never saw. Typical miss {bt.rmse_lab?.toFixed(1)}% vs {bt.rmse_base?.toFixed(1)}%.
+          </span>
+        </div>
+        <div className="fs-gains">
+          <small>What each belief adds</small>
+          {gains.map((x) => (
+            <div key={x.id} className="fs-g">
+              <span>{x.claim}</span>
+              <span className="fs-track">
+                <span className="fs-mid" />
+                <i style={x.g >= 0 ? { left: "50%", width: `${(x.g / gmax) * 50}%`, background: "var(--series-1)" } : { right: "50%", width: `${(-x.g / gmax) * 50}%`, background: "var(--series-2)" }} />
+              </span>
+              <b>{x.g > 0 ? "helps" : x.g < 0 ? "hurts" : "no effect"}</b>
+            </div>
+          ))}
+        </div>
+      </div>
+      <FillLines
+        labels={bt.series.map((x) => x.date)}
+        series={[
+          { name: "What happened", color: "var(--series-2)", y: bt.series.map((x) => x.actual) },
+          { name: "Lab forecast", color: "var(--series-1)", y: bt.series.map((x) => x.predicted) },
+        ]}
+        refs={[{ y: 0, label: "baseline" }]}
+        fmt={(v) => `${Math.round(v)}%`}
+        min={200}
+      />
+      <p className="ts-foot">
+        Morning HRV against your 28-day baseline, log scale. Each month the lab refits its beliefs on data up to that point and forecasts the next 30 mornings, so every point scored is one it hadn&apos;t seen.
+        {next ? ` Today's live forecast: ${next.predicted > 0 ? "+" : ""}${next.predicted.toFixed(1)}%.` : " Live forecasts start at 04:50 each morning, before the reading exists."}
+        {f.data.live_n > 0 && f.data.live_skill != null ? ` Live skill so far ${skillPct(f.data.live_skill)} over ${f.data.live_n} mornings.` : ""}
+      </p>
     </div>
   );
 }

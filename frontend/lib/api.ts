@@ -860,6 +860,24 @@ export interface ResearchBelief {
   updated_at: string | null;
   /** 1 − (post_sd / prior_sd)²: how much of the prior's uncertainty the data has removed. */
   learned: number | null;
+  /** Backtest forecast skill with this belief minus without it; ≤ 0 marks it for demotion. */
+  forecast_gain: number | null;
+}
+
+export interface ResearchForecast {
+  backtest: {
+    run_at: string;
+    metric: string;
+    skill: number | null;
+    n: number;
+    rmse_lab: number | null;
+    rmse_base: number | null;
+    gains: Record<string, number | null>;
+    series: { date: string; actual: number; predicted: number }[];
+  } | null;
+  live: { date: string; predicted: number; actual: number | null; made_at: string }[];
+  live_skill: number | null;
+  live_n: number;
 }
 
 export interface ResearchHypothesis {
@@ -1213,6 +1231,7 @@ export const api = {
   experiments: () => get<Experiment[]>("/api/experiments"),
   researchBeliefs: () => get<ResearchBelief[]>("/api/research/beliefs"),
   researchHypotheses: () => get<ResearchHypothesis[]>("/api/research/hypotheses"),
+  researchForecast: () => get<ResearchForecast>("/api/research/forecast"),
   researchNotebook: (limit = 40) => get<NotebookEntry[]>(`/api/research/notebook?limit=${limit}`),
   /** Confirmed personal priors the engine may act on; empty until a study confirms. */
   experimentPriors: () =>

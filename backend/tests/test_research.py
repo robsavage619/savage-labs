@@ -100,3 +100,49 @@ def test_notebook_records_each_step(conn) -> None:
     research.run(conn, "s2", author="runner")
     kinds = [n["kind"] for n in research.notebook(conn)]
     assert kinds[:2] == ["result", "proposal"]
+
+
+def test_estimate_never_sees_days_after_its_date(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    cut = TODAY - timedelta(days=120)
+    early = research.estimate(conn, SPEC, today=cut)
+    full = research.estimate(conn, SPEC, today=TODAY)
+    assert early["n_a"] + early["n_b"] < full["n_a"] + full["n_b"] - 100
+
+
+def _setup_belief(conn, effect_pct: float) -> str:
+    _seed(conn, effect_pct=effect_pct, days=420)
+    bid = research.add_belief(
+        conn, "Hard days lower HRV", "lnhrv_dev_pct", -3.0, 5.0, "test prior", None, "test"
+    )
+    research.register(conn, "strain-hrv", "q", SPEC, bid, "test")
+    return bid
+
+
+def test_backtest_finds_skill_in_a_real_effect_and_credits_its_belief(conn) -> None:
+    bid = _setup_belief(conn, effect_pct=-15)
+    bt = research.backtest(conn, today=TODAY)
+    assert bt["n"] > 100
+    assert bt["skill"] > 0
+    assert bt["gains"][bid] > 0
+
+
+def test_backtest_shows_no_skill_from_noise(conn) -> None:
+    _setup_belief(conn, effect_pct=0)
+    bt = research.backtest(conn, today=TODAY)
+    assert bt["skill"] < 0.02
+
+
+def test_live_forecast_is_logged_before_the_reading_and_scored_after(conn) -> None:
+    _setup_belief(conn, effect_pct=-15)
+    tomorrow = TODAY + timedelta(days=1)
+    made = research.forecast_today(conn, today=tomorrow)
+    assert made is not None and made["target_date"] == str(tomorrow)
+    # Once the morning's reading exists, no second forecast is made and the first is scored.
+    conn.execute(
+        "INSERT INTO recovery (id, source, date, score, hrv, rhr, content_hash) VALUES ('rx', 'whoop', ?, 60, 90, 50, 'hx')",
+        [tomorrow],
+    )
+    assert research.forecast_today(conn, today=tomorrow) is None
+    view = research.forecast_view(conn)
+    assert view["live"][-1]["actual"] is not None

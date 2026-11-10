@@ -128,3 +128,18 @@ async def run_all() -> list[dict]:
 async def add_note(body: NoteIn) -> dict:
     async with write_ctx() as conn:
         return {"id": research.note(conn, body.author, body.kind, body.title, body.body, body.ref)}
+
+
+@router.get("/research/forecast")
+async def forecast() -> dict:
+    """The lab's skill at predicting next-morning HRV, backtest and live."""
+    return _read(research.forecast_view)
+
+
+@router.post("/research/backtest", dependencies=[Depends(require_admin_key)])
+async def backtest() -> dict:
+    async with write_ctx() as conn:
+        bt = research.backtest(conn)
+        research.store_backtest(conn, bt)
+        research.forecast_today(conn)
+    return {k: v for k, v in bt.items() if k != "series"}

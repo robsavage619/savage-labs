@@ -73,12 +73,15 @@ async def _score_experiments() -> None:
 
 
 async def _run_research() -> None:
-    """Nightly job: re-run every registered hypothesis and refresh its belief."""
+    """Nightly job: re-run every hypothesis, log the morning forecast, re-score the lab."""
     from shc import research
     from shc.db.schema import write_ctx
 
     async with write_ctx() as conn:
         results = research.run_all(conn)
+        # Log this morning's forecast before the reading lands, then re-score the lab.
+        research.forecast_today(conn)
+        research.store_backtest(conn, research.backtest(conn))
     log.info(
         "nightly research run: %s",
         ", ".join(f"{r['slug']}={r['verdict']}" for r in results) or "no hypotheses",

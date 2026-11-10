@@ -420,8 +420,11 @@ def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = N
         raw = {n: _weekly(s) for n, s in raw.items()}
 
     rows: list[tuple[date, int, float, list[float]]] = []
+    last_day = step - timedelta(days=1)  # a week-unit outcome spans seven mornings
     for d, x in raw[exp_name].items():
-        if d < start:
+        # Nothing after `today` may enter: a backtest dated in the past must not
+        # see the mornings it is about to be scored on.
+        if d < start or d + lag * step + last_day > today:
             continue
         arm = 0 if _in(x, spec["exposure"]["a"]) else 1 if _in(x, spec["exposure"]["b"]) else None
         y = raw[out_name].get(d + lag * step)
@@ -719,7 +722,7 @@ def run_all(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     rows = conn.execute(
         "SELECT id, claim, outcome, prior_mean, prior_sd, prior_source, post_mean, post_sd, n_results, "
-        "decision, updated_at FROM research_beliefs ORDER BY updated_at DESC"
+        "decision, updated_at, forecast_gain FROM research_beliefs ORDER BY updated_at DESC"
     ).fetchall()
     keys = [
         "id",
@@ -733,6 +736,7 @@ def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         "n_results",
         "decision",
         "updated_at",
+        "forecast_gain",
     ]
     out = []
     for r in rows:
@@ -803,3 +807,232 @@ def notebook(conn: duckdb.DuckDBPyConnection, limit: int = 50) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ── Forecaster ──────────────────────────────────────────────────────────────
+
+FORECAST_METRIC = "lnhrv_dev_pct"
+# Monthly cut-offs refit on data up to each one, then scored on the next 30
+# mornings: every scored morning is one the model never saw.
+_BACKTEST_ORIGINS = 6
+_BACKTEST_HORIZON = 30
+
+
+@dataclass(frozen=True)
+class _Term:
+    belief_id: str
+    claim: str
+    spec: dict
+    effect: float  # posterior mean of B − A
+    p_b: float  # share of classified days in arm B, so the term is centred on an average day
+
+
+def _models(conn: duckdb.DuckDBPyConnection, origin: date) -> list[_Term]:
+    """Each belief's day-unit HRV hypothesis, refit on data up to `origin` and
+    shrunk toward its literature prior."""
+    rows = conn.execute(
+        "SELECT b.id, b.claim, b.prior_mean, b.prior_sd, h.spec FROM research_beliefs b "
+        "JOIN research_hypotheses h ON h.belief_id = b.id WHERE h.status <> 'retired' ORDER BY h.created_at"
+    ).fetchall()
+    terms: list[_Term] = []
+    for bid, claim, pm, psd, spec_json in rows:
+        spec = json.loads(spec_json)
+        if (
+            any(t.belief_id == bid for t in terms)
+            or spec.get("unit", "day") != "day"
+            or spec["outcome"] != FORECAST_METRIC
+        ):
+            continue
+        res = estimate(conn, spec, today=origin)
+        if res["effect"] is None:
+            continue
+        post, _ = _combine(pm, psd, [(res["effect"], res["se"])])
+        terms.append(_Term(bid, claim, spec, post, res["n_b"] / (res["n_a"] + res["n_b"])))
+    return terms
+
+
+def _features_for(
+    conn: duckdb.DuckDBPyConnection, terms: list[_Term], span: tuple[date, date]
+) -> dict[str, dict[date, float]]:
+    names = {t.spec["exposure"]["feature"] for t in terms}
+    return {n: _fill_zero(n, series(conn, n), span) for n in names}
+
+
+def _predict(
+    terms: list[_Term], feats: dict[str, dict[date, float]], morning: date, drop: str | None = None
+) -> float:
+    """Deviation from baseline the lab expects this morning: each term adds its
+    effect for an arm-B day and subtracts it for an arm-A day, both centred so an
+    average day predicts zero. A day in neither arm contributes nothing."""
+    total = 0.0
+    for t in terms:
+        if t.belief_id == drop:
+            continue
+        x = feats[t.spec["exposure"]["feature"]].get(
+            morning - timedelta(days=int(t.spec.get("lag", 1)))
+        )
+        if x is None:
+            continue
+        if _in(x, t.spec["exposure"]["b"]):
+            total += t.effect * (1 - t.p_b)
+        elif _in(x, t.spec["exposure"]["a"]):
+            total -= t.effect * t.p_b
+    return total
+
+
+def _skill(pairs: list[tuple[float, float]]) -> float | None:
+    """1 − MSE(lab) / MSE(same-as-baseline). Above zero means the lab beats the naive guess."""
+    base = sum(a * a for a, _ in pairs)
+    if not pairs or base == 0:
+        return None
+    return 1 - sum((a - p) ** 2 for a, p in pairs) / base
+
+
+def backtest(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict:
+    """Rolling-origin backtest of next-morning HRV, with each belief's contribution."""
+    today = today or date.today()
+    actual = series(conn, FORECAST_METRIC)
+    scored: list[tuple[date, float, float, dict[str, float]]] = []
+    claims: dict[str, str] = {}
+    for k in range(_BACKTEST_ORIGINS, 0, -1):
+        origin = today - timedelta(days=k * _BACKTEST_HORIZON)
+        terms = _models(conn, origin)
+        claims |= {t.belief_id: t.claim for t in terms}
+        feats = _features_for(conn, terms, (origin - timedelta(days=30), today))
+        for i in range(1, _BACKTEST_HORIZON + 1):
+            m = origin + timedelta(days=i)
+            if m > today or m not in actual:
+                continue
+            lab = _predict(terms, feats, m)
+            scored.append(
+                (
+                    m,
+                    actual[m],
+                    lab,
+                    {t.belief_id: _predict(terms, feats, m, drop=t.belief_id) for t in terms},
+                )
+            )
+    skill = _skill([(a, p) for _, a, p, _ in scored])
+    gains = {}
+    for bid in claims:
+        without = _skill([(a, w.get(bid, p)) for _, a, p, w in scored])
+        gains[bid] = None if skill is None or without is None else skill - without
+    return {
+        "metric": FORECAST_METRIC,
+        "skill": skill,
+        "n": len(scored),
+        "rmse_lab": math.sqrt(mean((a - p) ** 2 for _, a, p, _ in scored)) if scored else None,
+        "rmse_base": math.sqrt(mean(a * a for _, a, _, _ in scored)) if scored else None,
+        "gains": gains,
+        "series": [
+            {"date": str(m), "actual": round(a, 2), "predicted": round(p, 2)}
+            for m, a, p, _ in scored
+        ],
+    }
+
+
+def forecast_today(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict | None:
+    """Score past live forecasts, then log this morning's before its HRV exists.
+
+    Returns the new forecast, or None when this morning's reading is already in
+    (a forecast made after the fact would score itself).
+    """
+    today = today or date.today()
+    actual = series(conn, FORECAST_METRIC)
+    for (d,) in conn.execute(
+        "SELECT target_date FROM research_forecasts WHERE metric = ? AND actual IS NULL",
+        [FORECAST_METRIC],
+    ).fetchall():
+        if d in actual:
+            conn.execute(
+                "UPDATE research_forecasts SET actual = ? WHERE target_date = ? AND metric = ?",
+                [actual[d], d, FORECAST_METRIC],
+            )
+    exists = conn.execute(
+        "SELECT 1 FROM research_forecasts WHERE target_date = ? AND metric = ?",
+        [today, FORECAST_METRIC],
+    ).fetchone()
+    if today in actual or exists:
+        return None
+    terms = _models(conn, today)
+    feats = _features_for(conn, terms, (today - timedelta(days=30), today))
+    pred = _predict(terms, feats, today)
+    used = [
+        {
+            "belief_id": t.belief_id,
+            "claim": t.claim,
+            "contribution": round(_predict([t], feats, today), 3),
+        }
+        for t in terms
+    ]
+    conn.execute(
+        "INSERT INTO research_forecasts (target_date, metric, predicted, terms) VALUES (?, ?, ?, ?)",
+        [today, FORECAST_METRIC, pred, json.dumps(used)],
+    )
+    return {"target_date": str(today), "predicted": pred, "terms": used}
+
+
+def store_backtest(conn: duckdb.DuckDBPyConnection, bt: dict, author: str = "forecaster") -> None:
+    """Persist a backtest and write each belief's contribution back to the ledger."""
+    conn.execute(
+        "INSERT INTO research_forecast_skill (metric, skill, n, rmse_lab, rmse_base, gains, series) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            bt["metric"],
+            bt["skill"],
+            bt["n"],
+            bt["rmse_lab"],
+            bt["rmse_base"],
+            json.dumps(bt["gains"]),
+            json.dumps(bt["series"]),
+        ],
+    )
+    for bid, g in bt["gains"].items():
+        conn.execute("UPDATE research_beliefs SET forecast_gain = ? WHERE id = ?", [g, bid])
+    if bt["skill"] is not None:
+        helps = sum(1 for g in bt["gains"].values() if g is not None and g > 0)
+        note(
+            conn,
+            author,
+            "forecast",
+            f"Forecast skill {bt['skill']:+.3f} over {bt['n']} unseen mornings",
+            f"{helps} of {len(bt['gains'])} beliefs improve the forecast; the rest are candidates for demotion.",
+        )
+
+
+def forecast_view(conn: duckdb.DuckDBPyConnection, live_days: int = 60) -> dict:
+    row = conn.execute(
+        "SELECT run_at, metric, skill, n, rmse_lab, rmse_base, gains, series FROM research_forecast_skill "
+        "ORDER BY run_at DESC LIMIT 1"
+    ).fetchone()
+    live = conn.execute(
+        "SELECT target_date, predicted, actual, made_at FROM research_forecasts WHERE metric = ? "
+        "ORDER BY target_date DESC LIMIT ?",
+        [FORECAST_METRIC, live_days],
+    ).fetchall()
+    scored = [(float(a), float(p)) for _, p, a, _ in live if a is not None]
+    return {
+        "backtest": None
+        if row is None
+        else {
+            "run_at": row[0].isoformat(),
+            "metric": row[1],
+            "skill": row[2],
+            "n": row[3],
+            "rmse_lab": row[4],
+            "rmse_base": row[5],
+            "gains": json.loads(row[6]),
+            "series": json.loads(row[7]),
+        },
+        "live": [
+            {
+                "date": str(d),
+                "predicted": round(p, 2),
+                "actual": None if a is None else round(a, 2),
+                "made_at": m.isoformat(),
+            }
+            for d, p, a, m in reversed(live)
+        ],
+        "live_skill": _skill(scored),
+        "live_n": len(scored),
+    }
