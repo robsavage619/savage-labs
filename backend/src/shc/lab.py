@@ -1251,6 +1251,38 @@ def reverify_retired(conn, findings: list[LabFinding]) -> list[str]:
     return reopened
 
 
+# ponytail: the range is rebuilt from the effect and its p under a normal
+# approximation, because runners report p rather than an interval; have each
+# runner return its own CI when the catalogue moves to declarative specs.
+def _gate_refuted(f: LabFinding, q: dict) -> None:
+    """Downgrade REFUTED to inconclusive unless the 95% range rules out the
+    hypothesised effect.
+
+    Runners call a question refuted when the point estimate merely points the
+    wrong way. With day-level HRV noise that is usually a wide range centred
+    near zero, which can't rule anything out.
+    """
+    if f.verdict != "refuted":
+        return
+    thr = q.get("threshold")
+    direction = q.get("direction")
+    ruled_out = False
+    if f.effect_size is not None and f.p_value is not None and thr is not None and 0 < f.p_value < 1:
+        z = _st.NormalDist().inv_cdf(1 - f.p_value / 2)
+        se = abs(f.effect_size) / z if z > 0 else math.inf
+        lo, hi = f.effect_size - 1.96 * se, f.effect_size + 1.96 * se
+        t = abs(float(thr))
+        if direction == "positive":
+            ruled_out = hi < t
+        elif direction == "negative":
+            ruled_out = lo > -t
+        else:
+            ruled_out = -t < lo and hi < t
+    if not ruled_out:
+        f.verdict = "inconclusive"
+        f.summary += " The range still includes the hypothesised effect, so this is not a refutation."
+
+
 def run_all(conn) -> list[LabFinding]:
     qrows = _questions_to_run(conn)
     findings: list[LabFinding] = []
@@ -1265,7 +1297,9 @@ def run_all(conn) -> list[LabFinding]:
         if runner is None:
             continue
         try:
-            findings.append(runner(conn, qd))
+            finding = runner(conn, qd)
+            _gate_refuted(finding, qd)
+            findings.append(finding)
         except Exception as exc:  # noqa: BLE001
             log.exception("lab runner failed: %s", qd["id"])
             findings.append(LabFinding(

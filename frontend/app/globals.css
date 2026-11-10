@@ -885,9 +885,11 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .tp-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .tp-name span { font-size: 13.5px; color: var(--text-primary); text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tp-name em { font: 500 10.5px var(--font-data); font-style: normal; letter-spacing: .06em; }
-.tp-meta { font: 500 11px  var(--font-data); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-power { grid-column: 1 / -1; margin: -4px 0 0; font: 500 11.5px var(--font-data); color: var(--text-dim); line-height: 1.45; }
+.tp-power b { font-weight: 600; color: var(--series-2); }
+.tp-power b.ready { color: var(--series-1); }
 .tp-obs { color: var(--text-dim); } .tp-rand { color: var(--sl-accent); }
-.tp-arm { display: grid; grid-template-columns: 12px minmax(0, 1fr) 46px; gap: 6px; align-items: center; }
+.tp-arm { display: grid;  grid-template-columns: 12px minmax(0, 1fr) max-content; gap: 6px; align-items: center; }
 .tp-arm small { color: var(--text-faint); font: 500 11px var(--font-data); }
 .tp-arm b { font: 600 12px var(--font-data); color: var(--text-primary); text-align: right; }
 .tp-track, .sb-track { position: relative; height: 8px; border-radius: 4px; background: oklch(1 0 0 / 0.06); overflow: hidden; }

@@ -21,9 +21,10 @@ the same gate-and-audit discipline as the fitted ACWR/volume bands.
 
 import hashlib
 import logging
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
-from statistics import mean
+from statistics import NormalDist, mean, pstdev
 
 import duckdb
 
@@ -609,6 +610,64 @@ def _bootstrap_ci(a: list[float], b: list[float], slug: str) -> tuple[float, flo
     return round(lo, 4), round(hi, 4)
 
 
+_NORMAL = NormalDist()
+# Two-sided alpha plus 80% power, the conventional a-priori design point.
+_POWER_Z = _NORMAL.inv_cdf(1 - _ALPHA / 2) + _NORMAL.inv_cdf(0.80)
+# Days of arm accrual used to project when a study can answer.
+_PACE_WINDOW_DAYS = 60
+
+
+def _design_effect(series: list[tuple[date, float]]) -> float:
+    """Variance inflation (1+ρ)/(1−ρ) from the lag-1 autocorrelation of
+    consecutive days. Today's HRV resembles yesterday's, so n days carry less
+    information than n independent draws; 1.0 means no inflation."""
+    s = sorted(series)
+    if len(s) < 10:
+        return 1.0
+    m = mean(v for _, v in s)
+    var = sum((v - m) ** 2 for _, v in s) / len(s)
+    pairs = [
+        (s[i - 1][1], s[i][1]) for i in range(1, len(s)) if (s[i][0] - s[i - 1][0]).days == 1
+    ]
+    if var == 0 or len(pairs) < 5:
+        return 1.0
+    rho = sum((a - m) * (b - m) for a, b in pairs) / len(pairs) / var
+    rho = min(max(rho, 0.0), 0.9)
+    return (1 + rho) / (1 - rho)
+
+
+def _arm_residuals(rows: list[tuple[date, str, float]]) -> list[tuple[date, float]]:
+    """Each day's outcome minus its own arm's mean. Carryover must be measured
+    without the treatment effect: arms run in blocks, so the effect alone would
+    make neighbouring days look alike and read as autocorrelation."""
+    by_arm: dict[str, list[float]] = {}
+    for _, arm, v in rows:
+        by_arm.setdefault(arm, []).append(v)
+    means = {arm: mean(vs) for arm, vs in by_arm.items()}
+    return [(d, v - means[arm]) for d, arm, v in rows]
+
+
+# ponytail: design-effect inflation of a permutation p and a bootstrap CI is an
+# approximation; move to a block bootstrap once randomized arms run in blocks.
+def _inflate_p(p: float, design_effect: float) -> float:
+    """Two-sided p re-expressed with the test statistic shrunk by √design_effect."""
+    if design_effect <= 1.0 or p >= 1.0:
+        return p
+    z = _NORMAL.inv_cdf(1 - p / 2) / math.sqrt(design_effect)
+    return round(2 * (1 - _NORMAL.cdf(z)), 4)
+
+
+def _inflate_ci(effect: float, lo: float, hi: float, design_effect: float) -> tuple[float, float]:
+    """Widen each side of the interval about the estimate by √design_effect."""
+    k = math.sqrt(max(design_effect, 1.0))
+    return round(effect - (effect - lo) * k, 4), round(effect + (hi - effect) * k, 4)
+
+
+def _needed_per_arm(sd: float, min_effect: float, design_effect: float) -> int:
+    """Days per arm to detect `min_effect` at the lab's alpha with 80% power."""
+    return math.ceil(2 * (_POWER_Z * sd / min_effect) ** 2 * design_effect)
+
+
 def _score_raw(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
     """Compute an experiment's verdict + effect + bootstrap CI WITHOUT
     persisting or emitting a prior — the pure-compute core shared by `score()`
@@ -616,12 +675,12 @@ def _score_raw(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
     (batch, Benjamini–Hochberg corrected across the batch's p-values before
     anything is written)."""
     rows = conn.execute(
-        "SELECT assigned_arm, outcome_value FROM experiment_log "
+        "SELECT assigned_arm, outcome_value, day FROM experiment_log "
         "WHERE experiment_id = ? AND adhered = TRUE AND outcome_value IS NOT NULL",
         [exp.id],
     ).fetchall()
-    a = [float(v) for arm, v in rows if arm == "A"]
-    b = [float(v) for arm, v in rows if arm == "B"]
+    a = [float(v) for arm, v, _ in rows if arm == "A"]
+    b = [float(v) for arm, v, _ in rows if arm == "B"]
     n_a, n_b = len(a), len(b)
 
     result: dict = {"experiment_id": exp.id, "n_a": n_a, "n_b": n_b}
@@ -656,8 +715,10 @@ def _score_raw(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
 
     mean_a, mean_b = round(mean(a), 4), round(mean(b), 4)
     effect = round(mean_b - mean_a, 4)
-    p = _permutation_p(a, b, exp.slug)
-    ci_low, ci_high = _bootstrap_ci(a, b, exp.slug)
+    # Both tests assume independent days; correct for day-to-day carryover.
+    de = _design_effect(_arm_residuals([(d, arm, float(v)) for arm, v, d in rows]))
+    p = _inflate_p(_permutation_p(a, b, exp.slug), de)
+    ci_low, ci_high = _inflate_ci(effect, *_bootstrap_ci(a, b, exp.slug), de)
 
     ci_excludes_zero = ci_low > 0 or ci_high < 0
     significant = p is not None and p < _ALPHA
@@ -688,7 +749,7 @@ def _score_raw(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
         "summary": (
             f"{exp.condition_b} vs {exp.condition_a} on {exp.outcome_metric}: "
             f"Δ={effect:+g} (95% CI {ci_low:+g}..{ci_high:+g}), p={p}, "
-            f"n={n_a}/{n_b}. → {verdict}"
+            f"n={n_a}/{n_b}, design effect ×{de:.2f}. → {verdict}"
         ),
     }
     return result
@@ -882,6 +943,76 @@ def _emit_prior(
              metric_short, pct)
 
 
+def power_estimate(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict | None:
+    """How many days a study needs, what it can detect now, and when it can answer.
+
+    Spread and day-to-day carryover come from the study's own outcome series;
+    a study with fewer than 10 outcomes borrows the metric's last 180 days.
+    Returns None when there is still too little history to say.
+    """
+    rows = conn.execute(
+        "SELECT day, assigned_arm, outcome_value, adhered FROM experiment_log "
+        "WHERE experiment_id = ? AND outcome_value IS NOT NULL",
+        [exp.id],
+    ).fetchall()
+    series = _arm_residuals([(d, arm, float(v)) for d, arm, v, _ in rows])
+    if len(series) < 10:
+        series = []
+        for k in range(1, 181):
+            d = date.today() - timedelta(days=k)
+            v = _outcome_value(conn, exp.outcome_metric, d)
+            if v is not None:
+                series.append((d, float(v)))
+    if len(series) < 10 or exp.min_effect <= 0:
+        return None
+    sd = pstdev(v for _, v in series)
+    de = _design_effect(series)
+    needed = _needed_per_arm(sd, exp.min_effect, de)
+    have = {
+        arm: sum(1 for _, a, _, ok in rows if a == arm and ok) for arm in ("A", "B")
+    }
+    since = date.today() - timedelta(days=_PACE_WINDOW_DAYS)
+    pace = {
+        arm: sum(1 for d, a, _, ok in rows if a == arm and ok and d >= since) / _PACE_WINDOW_DAYS
+        for arm in ("A", "B")
+    }
+    waits = []
+    for arm in ("A", "B"):
+        short = needed - have[arm]
+        if short <= 0:
+            waits.append(0)
+        elif pace[arm] > 0:
+            waits.append(math.ceil(short / pace[arm]))
+        else:
+            waits.append(None)
+    days_to_answer = None if None in waits else max(waits)
+    detectable = (
+        round(_POWER_Z * sd * math.sqrt(de * (1 / have["A"] + 1 / have["B"])), 2)
+        if have["A"] and have["B"]
+        else None
+    )
+    return {
+        "outcome_sd": round(sd, 2),
+        "design_effect": round(de, 2),
+        "needed_per_arm": needed,
+        "have": have,
+        "detectable_now": detectable,
+        "days_to_answer": days_to_answer,
+    }
+
+
+def _power_or_none(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict | None:
+    exp = load(conn, exp_id)
+    if exp is None:
+        return None
+    try:
+        return power_estimate(conn, exp)
+    except ValueError:
+        # An outcome metric with no extractor has no history to size it from.
+        log.warning("no power estimate for %s: unsupported outcome %r", exp.slug, exp.outcome_metric)
+        return None
+
+
 def overview(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     """One row per experiment with its config, latest result, prior, and per-arm
     adherence counts — everything the Lab UI needs in a single call."""
@@ -933,6 +1064,7 @@ def overview(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 "design": e[12],
                 "title": e[13],
                 "arms": arms,
+                "power": _power_or_none(conn, eid),
                 "result": (
                     {
                         "verdict": res[0], "n_a": res[1], "n_b": res[2], "mean_a": res[3],

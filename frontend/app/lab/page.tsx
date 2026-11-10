@@ -72,20 +72,21 @@ export default function LabPage() {
           <Section n="01" title="The trials">
             <Panel
               id="trial-progress"
-              span={2}
-              title="How close is each trial to an answer?"
-              question="Days logged in each condition against the minimum set before it started."
+              span={4}
+              title="How close is each trial to a real answer?"
+              question="Days in each condition against the days needed to detect the effect it was set up to find."
               guide={{
-                what: "For each running experiment, the qualifying days in condition A and condition B, against its pre-registered minimum.",
-                read: "Cyan bars have enough days; copper ones still need more. Observational trials classify days after the fact; randomized ones assign them up front, which is stronger evidence.",
-                why: "Small samples produce false findings. This shows which trials are close to an answer and which need more days of one condition.",
+                what: "For each running trial, the qualifying days in conditions A and B against a power estimate: how many days it takes to see the hypothesised effect 80% of the time.",
+                read: "Cyan bars have enough days; copper still need more. The estimate uses the outcome's own day-to-day spread and how much one day resembles the next. Observational trials classify days after the fact; randomized ones assign them up front, which is stronger evidence.",
+                why: "A trial scored before it has enough days can only miss. This says which trials can answer, when, and the smallest effect each can see today.",
+                ctx: "Next-morning HRV is noisy, so small HRV effects take many months of days. That's the true cost of the question, not a fault in the trial.",
               }}
             >
               <TrialProgress />
             </Panel>
             <Panel
               id="effects"
-              span={2}
+              span={4}
               title="What the trials found so far"
               question="Each scored effect with its 95% range."
               guide={{

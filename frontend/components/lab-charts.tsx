@@ -42,48 +42,75 @@ const useExperiments = () => useQuery({ queryKey: ["experiments"], queryFn: api.
 
 // ── Trial progress ──────────────────────────────────────────────────────────
 
+const OUTCOME_UNIT: Record<string, string> = { hrv_next_morning: "ms", recovery_score_next_day: "pts" };
+
+/** Plain-language wait from a day count. */
+function waitFor(days: number | null) {
+  if (days == null) return "no answer at the current pace";
+  if (days === 0) return "enough days now";
+  if (days > 730) return "years at the current pace";
+  if (days > 90) return `about ${Math.round(days / 30)} months`;
+  return `about ${days} days`;
+}
+
 export function TrialProgress() {
   const q = useExperiments();
   const active = (q.data ?? []).filter((e) => e.status === "active");
   return (
     <Frame error={q.error} ready={!!q.data} height={280}>
       <div className="tp-list">
-        {active.map((e) => (
-          <div key={e.id} className="tp-row">
-            <div className="tp-name">
-              <span>{label(e)}</span>
-              <em className={e.design === "observational" ? "tp-obs" : "tp-rand"}>{e.design === "observational" ? "observational" : "randomized"}</em>
-              <small className="tp-meta">
-                since {fmtDate(e.started_on)} · {e.outcome_metric.replace(/_/g, " ")}
-              </small>
+        {active.map((e) => {
+          const pw = e.power ?? null;
+          const need = pw?.needed_per_arm ?? e.min_per_arm;
+          const unit = OUTCOME_UNIT[e.outcome_metric] ?? "";
+          return (
+            <div key={e.id} className="tp-row">
+              <div className="tp-name">
+                <span>{label(e)}</span>
+                <em className={e.design === "observational" ? "tp-obs" : "tp-rand"}>{e.design === "observational" ? "observational" : "randomized"}</em>
+              </div>
+              {(["A", "B"] as const).map((k) => {
+                const n = e.arms?.[k]?.measured ?? 0;
+                const full = n >= need;
+                return (
+                  <div key={k} className="tp-arm" title={`${k}: ${k === "A" ? e.condition_a : e.condition_b}`}>
+                    <small>{k}</small>
+                    <span className="tp-track">
+                      <i style={{ width: `${Math.max(Math.min(n / need, 1) * 100, n > 0 ? 2 : 0)}%`, background: full ? "var(--series-1)" : "var(--series-2)" }} />
+                    </span>
+                    <b>
+                      {n}/{need}
+                    </b>
+                  </div>
+                );
+              })}
+              <span className={`nf-chip${e.result?.verdict === "CONFIRMED" ? " moved" : ""}`}>{e.result ? e.result.verdict.toLowerCase().replace("_", " ") : "not scored"}</span>
+              <p className="tp-power">
+                {pw ? (
+                  <>
+                    Needs {need.toLocaleString()} days per condition to see {`${e.min_effect} ${unit}`.trim()}
+                    {pw.detectable_now != null && <>; can see {`${pw.detectable_now.toFixed(1)} ${unit}`.trim()} or more today</>}.{" "}
+                    <b className={pw.days_to_answer === 0 ? "ready" : ""}>Answer: {waitFor(pw.days_to_answer)}.</b>
+                  </>
+                ) : (
+                  <>
+                    Since {fmtDate(e.started_on)} · {e.outcome_metric.replace(/_/g, " ")}. Too little outcome history to size yet.
+                  </>
+                )}
+              </p>
             </div>
-            {(["A", "B"] as const).map((k) => {
-              const n = e.arms?.[k]?.measured ?? 0;
-              const full = n >= e.min_per_arm;
-              return (
-                <div key={k} className="tp-arm" title={`${k}: ${k === "A" ? e.condition_a : e.condition_b}`}>
-                  <small>{k}</small>
-                  <span className="tp-track">
-                    <i style={{ width: `${Math.min(n / e.min_per_arm, 1) * 100}%`, background: full ? "var(--series-1)" : "var(--series-2)" }} />
-                  </span>
-                  <b>
-                    {n}/{e.min_per_arm}
-                  </b>
-                </div>
-              );
-            })}
-            <span className={`nf-chip${e.result?.verdict === "CONFIRMED" ? " moved" : ""}`}>{e.result ? e.result.verdict.toLowerCase().replace("_", " ") : "not scored"}</span>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      <p className="ts-foot">A trial can be scored once both conditions reach their pre-registered minimum days. Copper bars still need days.</p>
+      <p className="ts-foot">
+        Bars fill toward the days each trial needs to detect the effect it was set up to find, at 80% power, from the spread of its own outcome and how much one day resembles the next. Copper still needs days.
+      </p>
     </Frame>
   );
 }
 
 // ── Effect sizes ────────────────────────────────────────────────────────────
 
-const OUTCOME_UNIT: Record<string, string> = { hrv_next_morning: "ms", recovery_score_next_day: "pts" };
 
 function ForestRow({ e }: { e: Experiment }) {
   const r = e.result!;

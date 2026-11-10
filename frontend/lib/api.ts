@@ -706,6 +706,15 @@ export interface Experiment {
   started_on: string;
   status: string;
   arms: Record<string, ExperimentArm>;
+  /** A-priori sizing from the outcome's own spread and day-to-day carryover; null when history is too thin. */
+  power?: {
+    outcome_sd: number;
+    design_effect: number;
+    needed_per_arm: number;
+    have: { A: number; B: number };
+    detectable_now: number | null;
+    days_to_answer: number | null;
+  } | null;
   result: {
     verdict: "CONFIRMED" | "REFUTED" | "INCONCLUSIVE" | "INSUFFICIENT_N";
     n_a: number;
