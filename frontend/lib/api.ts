@@ -881,6 +881,7 @@ export interface ResearchForecast {
 }
 
 export interface ResearchHypothesis {
+  id: string;
   slug: string;
   question: string;
   spec: { unit?: string; min_effect: number; expected_sign: "+" | "-"; adjust?: string[] };
@@ -913,6 +914,33 @@ export interface NotebookEntry {
   ref: string | null;
   title: string;
   body: string | null;
+}
+
+export interface ForecastPreview {
+  target_date: string;
+  predicted: number;
+  typical_miss: number | null;
+  terms: { claim: string; belief_id: string; contribution: number }[];
+}
+
+export interface ForecastMisses {
+  note?: string;
+  by_weekday?: { day: string; mean_residual: number; n: number }[];
+  last_30_days_bias?: number | null;
+  worst_mornings?: ({ date: string; residual: number } & Record<string, number | string | null>)[];
+}
+
+export interface FeatureInfo {
+  name: string;
+  label: string;
+  unit: string;
+  timing: string;
+  source: string;
+  first: string | null;
+  last: string | null;
+  days: number;
+  coverage_90d_pct: number | null;
+  stale: boolean;
 }
 
 export const api = {
@@ -1234,6 +1262,9 @@ export const api = {
   researchBeliefs: () => get<ResearchBelief[]>("/api/research/beliefs"),
   researchHypotheses: () => get<ResearchHypothesis[]>("/api/research/hypotheses"),
   researchForecast: () => get<ResearchForecast>("/api/research/forecast"),
+  researchPreview: () => get<ForecastPreview>("/api/research/forecast/preview"),
+  researchMisses: () => get<ForecastMisses>("/api/research/misses"),
+  researchFeatures: () => get<FeatureInfo[]>("/api/research/features"),
   researchNotebook: (limit = 40) => get<NotebookEntry[]>(`/api/research/notebook?limit=${limit}`),
   /** Confirmed personal priors the engine may act on; empty until a study confirms. */
   experimentPriors: () =>

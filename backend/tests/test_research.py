@@ -208,3 +208,10 @@ def test_weekend_feature_marks_saturday_and_sunday(conn) -> None:
     sat = next(d for d in s if d.weekday() == 5)
     assert s[sat] == 1.0 and s[sat + timedelta(days=2)] == 0.0
     research.validate_spec(conn, SPEC | {"adjust": ["weekend"]})
+
+
+def test_preview_is_the_sum_of_its_named_terms(conn) -> None:
+    _setup_belief(conn, effect_pct=-15)
+    p = research.forecast_preview(conn, today=TODAY)
+    assert p["terms"] and p["target_date"] == str(TODAY + timedelta(days=1))
+    assert p["predicted"] == pytest.approx(sum(t["contribution"] for t in p["terms"]))

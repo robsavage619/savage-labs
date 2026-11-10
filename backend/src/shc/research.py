@@ -780,7 +780,7 @@ def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT h.slug, h.question, h.spec, h.belief_id, h.author, h.status, h.power, h.created_at,
+        SELECT h.id, h.slug, h.question, h.spec, h.belief_id, h.author, h.status, h.power, h.created_at,
                h.value_score, r.verdict, r.effect, r.ci_low, r.ci_high, r.p, r.n_a, r.n_b, r.design_effect, r.summary, r.run_at
         FROM research_hypotheses h
         LEFT JOIN research_results r ON r.hypothesis_id = h.id
@@ -789,10 +789,12 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         """
     ).fetchall()
     out = []
-    for r in rows:
+    for row in rows:
+        hid, r = row[0], row[1:]
         res = r[9:]
         out.append(
             {
+                "id": hid,
                 "slug": r[0],
                 "question": r[1],
                 "spec": json.loads(r[2]),
@@ -1259,3 +1261,31 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
         "notebook": notebook(conn, 80),
         "features": dictionary(conn),
     }
+
+
+def forecast_preview(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict:
+    """The lab's bet for the next morning without a reading, and what drives it.
+
+    Not stored: the logged forecast is still the one written at 04:50.
+    """
+    today = today or date.today()
+    target = today + timedelta(days=1) if today in series(conn, FORECAST_METRIC) else today
+    terms = _models(conn, today)
+    feats = _features_for(conn, terms, (today - timedelta(days=30), target))
+    parts = [
+        {"claim": t.claim, "belief_id": t.belief_id, "contribution": _predict([t], feats, target)}
+        for t in terms
+    ]
+    row = conn.execute(
+        "SELECT rmse_lab FROM research_forecast_skill ORDER BY run_at DESC LIMIT 1"
+    ).fetchone()
+    return {
+        "target_date": str(target),
+        "predicted": sum(p["contribution"] for p in parts),
+        "typical_miss": row[0] if row else None,
+        "terms": sorted(parts, key=lambda p: abs(p["contribution"]), reverse=True),
+    }
+
+
+def misses(conn: duckdb.DuckDBPyConnection) -> dict:
+    return _misses(conn)

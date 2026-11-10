@@ -195,3 +195,15 @@ async def review(slug: str, body: ReviewIn) -> dict:
             return research.review(conn, slug, body.decision, body.reasons, body.author)
         except research.SpecError as exc:
             raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/research/forecast/preview")
+async def forecast_preview() -> dict:
+    """Tomorrow morning's bet and the beliefs behind it (computed, not logged)."""
+    return _read(research.forecast_preview)
+
+
+@router.get("/research/misses")
+async def misses() -> dict:
+    """Where the latest backtest went most wrong: the analyst's agenda."""
+    return _read(research.misses)
