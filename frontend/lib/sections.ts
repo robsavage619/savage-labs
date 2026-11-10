@@ -105,10 +105,12 @@ export const SECTIONS: readonly Section[] = [
   { id: "clinical", label: "Clinical record", surface: "body", keywords: ["labs", "meds", "conditions", "bloodwork", "risk"] },
 
   // ── Lab ──────────────────────────────────────────────────────────────────
-  { id: "forecast", label: "Forecast skill", surface: "lab", keywords: ["forecast", "predict", "skill", "how well", "report card"] },
+  { id: "forecast", label: "Forecast desk", surface: "lab", keywords: ["forecast", "predict", "skill", "tomorrow", "bet"] },
   { id: "beliefs", label: "Belief ledger", surface: "lab", keywords: ["beliefs", "prior", "posterior", "what we know", "research team"] },
-  { id: "questions", label: "Research questions", surface: "lab", keywords: ["hypotheses", "questions", "pre-registered", "specs"] },
-  { id: "notebook", label: "Lab notebook", surface: "lab", keywords: ["notebook", "log", "history", "proposals"] },
+  { id: "questions", label: "Questions in flight", surface: "lab", keywords: ["hypotheses", "questions", "pipeline", "review"] },
+  { id: "notebook", label: "Team conversation", surface: "lab", keywords: ["notebook", "threads", "agents", "methodologist", "analyst"] },
+  { id: "misses", label: "Where the lab is wrong", surface: "lab", keywords: ["misses", "errors", "residuals", "weekday", "sunday"] },
+  { id: "coverage", label: "What the team can see", surface: "lab", keywords: ["data", "coverage", "streams", "stale"] },
   { id: "subject", label: "Subject dossier", surface: "lab", keywords: ["personalization", "days observed", "enrolled"] },
   { id: "trial-progress", label: "Trial progress", surface: "lab", keywords: ["arms", "days", "minimum", "n-of-1"] },
   { id: "effects", label: "Trial results", surface: "lab", keywords: ["forest", "confidence interval", "effect size", "p value"] },

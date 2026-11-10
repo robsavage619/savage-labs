@@ -22,6 +22,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             .eyebrow (500), .shc-section-title (600), .metric-* (500) and the
             header HUD (500/700) all rendered synthesized or silently Black. */}
         <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;900&display=swap" rel="stylesheet" />
+        {/* The Savage Labs wordmark: a scanline face that reads like a lab instrument's display. */}
+        <link href="https://fonts.googleapis.com/css2?family=Sixtyfour:BLED,SCAN@0..100,-53..100&display=swap" rel="stylesheet" />
         {/* Console type systems — switchable on the console boards while Rob
             settles on one. Editorial was tried as the sole option and rejected
             on sight at length; a screenshot is not enough to judge a typeface. */}
