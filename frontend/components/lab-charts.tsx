@@ -10,6 +10,8 @@ import { api, type Experiment } from "@/lib/api";
  */
 
 const nice = (slug: string) => slug.replace(/^suggest-/, "").replace(/-/g, " ");
+/** Display name: the stored title when set, else the slug made readable. */
+const label = (e: Experiment) => e.title ?? nice(e.slug);
 const fmtDate = (iso: string | null) => {
   if (!iso) return "never";
   // A bare date is a calendar day, not UTC midnight: parse it as local.
@@ -49,7 +51,7 @@ export function TrialProgress() {
         {active.map((e) => (
           <div key={e.id} className="tp-row">
             <div className="tp-name">
-              <span>{nice(e.slug)}</span>
+              <span>{label(e)}</span>
               <em className={e.design === "observational" ? "tp-obs" : "tp-rand"}>{e.design === "observational" ? "observational" : "randomized"}</em>
               <small className="tp-meta">
                 since {fmtDate(e.started_on)} · {e.outcome_metric.replace(/_/g, " ")}
@@ -96,7 +98,7 @@ function ForestRow({ e }: { e: Experiment }) {
   return (
     <div className="fp-row">
       <div className="fp-label">
-        <span>{nice(e.slug)}</span>
+        <span>{label(e)}</span>
         <small>
           n {r.n_a}/{r.n_b} · scored {fmtDate(r.scored_at)}
         </small>
@@ -142,32 +144,52 @@ export function EffectForest() {
 
 export function HrvDrivers() {
   const q = useQuery({ queryKey: ["insights-correlations"], queryFn: api.insightsCorrelations, staleTime: 10 * 60 * 1000 });
-  const rows = (q.data ?? [])
-    .filter((c) => c.hrv_delta != null)
-    .sort((a, b) => Math.abs(b.hrv_delta!) - Math.abs(a.hrv_delta!))
-    .slice(0, 8);
-  const max = Math.max(1, ...rows.map((r) => Math.abs(r.hrv_delta!)));
+  // Server order is strongest evidence first; it withholds a difference until both sides have enough days.
+  const rows = (q.data ?? []).filter((c) => c.hrv_delta != null && c.hrv_ci_low != null && c.hrv_ci_high != null);
+  const thin = (q.data ?? []).filter((c) => c.hrv_delta == null && c.n_yes > 0 && c.n_no > 0);
+  const max = Math.max(1, ...rows.flatMap((r) => [Math.abs(r.hrv_ci_low!), Math.abs(r.hrv_ci_high!)]));
+  const x = (v: number) => 50 + (v / max) * 50;
   return (
     <Frame error={q.error} ready={!!q.data} height={300}>
-      <div className="dv-list">
-        {rows.map((c) => {
-          const d = c.hrv_delta!;
-          return (
-            <div key={c.question} className="dv-row" title={`${c.sample_days} days answered`}>
-              <span className="dv-q">{c.question.replace(/\?$/, "")}</span>
-              <span className="dv-track">
-                <span className="dv-mid" />
-                <i style={d >= 0 ? { left: "50%", width: `${(d / max) * 50}%`, background: "var(--series-1)" } : { right: "50%", width: `${(-d / max) * 50}%`, background: "var(--series-2)" }} />
-              </span>
-              <b className="dv-val">
-                {d > 0 ? "+" : ""}
-                {d.toFixed(0)} ms<small>n {c.sample_days}</small>
-              </b>
-            </div>
-          );
-        })}
-      </div>
-      <p className="ts-foot">These are links, not proven causes; a calm evening can drive both the habit and the HRV. Test the interesting ones as a trial.</p>
+      {rows.length === 0 ? (
+        <p className="ts-lede">No journal question has enough yes and no days to compare yet.</p>
+      ) : (
+        <div className="dv-list">
+          {rows.map((c) => {
+            const d = c.hrv_delta!;
+            const lo = c.hrv_ci_low!;
+            const hi = c.hrv_ci_high!;
+            const clear = lo > 0 || hi < 0;
+            const color = !clear ? "var(--text-dim)" : d >= 0 ? "var(--series-1)" : "var(--series-2)";
+            return (
+              <div key={c.question} className="dv-row" title={`95% range ${lo.toFixed(0)} to ${hi.toFixed(0)} ms`}>
+                <span className="dv-q">{c.question.replace(/\?$/, "")}</span>
+                <span className="dv-track">
+                  <span className="dv-mid" />
+                  <span className="dv-ci" style={{ left: `${x(lo)}%`, width: `${x(hi) - x(lo)}%`, background: color }} />
+                  <i style={{ left: `${Math.min(x(d), 50)}%`, width: `${Math.abs(x(d) - 50)}%`, background: color }} />
+                </span>
+                <b className="dv-val">
+                  {d > 0 ? "+" : ""}
+                  {d.toFixed(0)} ms
+                  <small>
+                    yes {c.n_yes} · no {c.n_no}
+                  </small>
+                </b>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="ts-foot">
+        Bar is the average difference, the thin line its 95% range; grey ranges cross zero, so there&apos;s no clear link. These are links, not causes.
+        {thin.length > 0 && (
+          <>
+            {" "}
+            Too few days on one side to compare: {thin.map((c) => `${c.question.replace(/\?$/, "").toLowerCase()} (${Math.min(c.n_yes, c.n_no)})`).join(", ")}.
+          </>
+        )}
+      </p>
     </Frame>
   );
 }
@@ -235,7 +257,7 @@ export function PriorsShelf() {
           <p className="ts-lede">Nothing yet. No trial has confirmed, so the engine still runs on textbook rules here.</p>
           {closest && (
             <p className="ps-next">
-              Closest: <b>{nice(closest.slug)}</b>, p {closest.result!.p_value!.toFixed(2)}
+              Closest: <b>{label(closest)}</b>, p {closest.result!.p_value!.toFixed(2)}
               {short && short.some((s) => s > 0)
                 ? `, still ${short[0]} days short in A and ${short[1]} in B.`
                 : ". Both conditions have enough days but the effect isn't clear yet; it rescores every night."}
@@ -265,7 +287,7 @@ function PValueLadder({ trials }: { trials: Experiment[] }) {
           const against = e.result!.effect! > 0 !== predictedPositive(e);
           return (
             <div key={e.id} className="pl-row" title={against ? "Points opposite to the hypothesis, so it can never confirm" : undefined}>
-              <span className="pl-name">{nice(e.slug)}</span>
+              <span className="pl-name">{label(e)}</span>
               <span className="pl-track">
                 <span className="pl-line" style={{ left: `${pPos(0.05) * 100}%` }} />
                 <i style={{ width: `${pPos(p) * 100}%`, background: against ? "var(--series-2)" : "var(--series-1)" }} />

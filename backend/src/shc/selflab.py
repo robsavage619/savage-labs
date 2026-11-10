@@ -887,7 +887,7 @@ def overview(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     adherence counts — everything the Lab UI needs in a single call."""
     exps = conn.execute(
         "SELECT id, slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric, "
-        "outcome_direction, min_per_arm, min_effect, started_on, status, design "
+        "outcome_direction, min_per_arm, min_effect, started_on, status, design, title "
         "FROM experiments ORDER BY preregistered_at DESC"
     ).fetchall()
     out: list[dict] = []
@@ -931,6 +931,7 @@ def overview(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 # "randomized" OVERSTATES the evidence — worse than showing
                 # nothing at all.
                 "design": e[12],
+                "title": e[13],
                 "arms": arms,
                 "result": (
                     {

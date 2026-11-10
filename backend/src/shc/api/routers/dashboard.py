@@ -1845,43 +1845,68 @@ async def training_muscle_balance(weeks: int = Query(4, gt=0, le=52)) -> dict:
     }
 
 
+# Days needed on EACH side before a yes-minus-no difference is reported. One
+# yes-day with a high HRV once topped the Lab chart at +23 ms.
+_MIN_DAYS_PER_SIDE = 10
+
+
 @router.get("/insights/correlations")
 async def insights_correlations() -> list[dict]:
     conn = get_read_conn()
     try:
         rows = conn.execute(
             """
+            WITH r AS (
+                SELECT date, AVG(score) AS score, AVG(hrv) AS hrv
+                FROM recovery GROUP BY date
+            )
             SELECT
                 j.question,
                 COUNT(*) AS sample_days,
+                COUNT(*) FILTER (WHERE j.answered_yes) AS n_yes,
+                COUNT(*) FILTER (WHERE NOT j.answered_yes) AS n_no,
                 AVG(CASE WHEN j.answered_yes THEN r.score END) AS avg_recovery_yes,
                 AVG(CASE WHEN NOT j.answered_yes THEN r.score END) AS avg_recovery_no,
                 AVG(CASE WHEN j.answered_yes THEN r.hrv END) AS avg_hrv_yes,
-                AVG(CASE WHEN NOT j.answered_yes THEN r.hrv END) AS avg_hrv_no
+                AVG(CASE WHEN NOT j.answered_yes THEN r.hrv END) AS avg_hrv_no,
+                VAR_SAMP(CASE WHEN j.answered_yes THEN r.hrv END) AS var_yes,
+                VAR_SAMP(CASE WHEN NOT j.answered_yes THEN r.hrv END) AS var_no
             FROM whoop_journal j
-            JOIN recovery r ON r.date = j.date::DATE
+            JOIN r ON r.date = j.date::DATE
             GROUP BY j.question
             HAVING COUNT(*) >= 10
-            ORDER BY ABS(
-                AVG(CASE WHEN j.answered_yes THEN r.hrv END) -
-                AVG(CASE WHEN NOT j.answered_yes THEN r.hrv END)
-            ) DESC NULLS LAST
             """
         ).fetchall()
     finally:
         conn.close()
-    return [
-        {
-            "question": r[0],
-            "sample_days": r[1],
-            "avg_recovery_yes": round(r[2], 1) if r[2] else None,
-            "avg_recovery_no": round(r[3], 1) if r[3] else None,
-            "avg_hrv_yes": round(r[4], 2) if r[4] else None,
-            "avg_hrv_no": round(r[5], 2) if r[5] else None,
-            "hrv_delta": round(r[4] - r[5], 2) if (r[4] and r[5]) else None,
-        }
-        for r in rows
-    ]
+    scored: list[tuple[float, dict]] = []
+    for q, n, n_yes, n_no, rec_y, rec_n, hrv_y, hrv_n, var_y, var_n in rows:
+        delta = ci = None
+        if n_yes >= _MIN_DAYS_PER_SIDE and n_no >= _MIN_DAYS_PER_SIDE:
+            delta = hrv_y - hrv_n
+            ci = 1.96 * math.sqrt(var_y / n_yes + var_n / n_no)
+        z = abs(delta) / (ci / 1.96) if delta is not None and ci else -1.0
+        scored.append(
+            (
+                z,
+                {
+                    "question": q,
+                    "sample_days": n,
+                    "n_yes": n_yes,
+                    "n_no": n_no,
+                    "avg_recovery_yes": round(rec_y, 1) if rec_y is not None else None,
+                    "avg_recovery_no": round(rec_n, 1) if rec_n is not None else None,
+                    "avg_hrv_yes": round(hrv_y, 2) if hrv_y is not None else None,
+                    "avg_hrv_no": round(hrv_n, 2) if hrv_n is not None else None,
+                    "hrv_delta": round(delta, 2) if delta is not None else None,
+                    "hrv_ci_low": round(delta - ci, 2) if delta is not None else None,
+                    "hrv_ci_high": round(delta + ci, 2) if delta is not None else None,
+                },
+            )
+        )
+    # Strongest evidence first, not biggest raw difference.
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [row for _, row in scored]
 
 
 class MedicationIn(BaseModel):

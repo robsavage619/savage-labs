@@ -197,7 +197,12 @@ export interface Correlation {
   avg_recovery_no: number | null;
   avg_hrv_yes: number | null;
   avg_hrv_no: number | null;
+  /** Null until both sides have the server's minimum days (10). */
   hrv_delta: number | null;
+  n_yes: number;
+  n_no: number;
+  hrv_ci_low: number | null;
+  hrv_ci_high: number | null;
 }
 
 export interface LabPoint {
@@ -688,6 +693,8 @@ export interface Experiment {
    *  classified from ingested data). Different evidential strength — the UI
    *  must not render the two identically. */
   design?: string;
+  /** Display name; null falls back to the slug. */
+  title?: string | null;
   hypothesis: string;
   manipulated: string;
   condition_a: string;

@@ -137,7 +137,7 @@ export default function LabPage() {
               explore="hrv"
               guide={{
                 what: "For each journal question, average HRV on yes days minus no days.",
-                read: "Bars right of centre mean higher HRV on yes days, left mean lower. n is how many days you answered.",
+                read: "Bars right of centre mean higher HRV on yes days, left mean lower. The thin line is the 95% range; grey means it crosses zero. A question needs 10 yes and 10 no days before it is drawn.",
                 why: "It points at habits worth testing as a trial.",
                 ctx: "These are links, not causes, and the journal stopped on 8 May.",
               }}
