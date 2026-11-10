@@ -843,13 +843,10 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .rd-val { font: 600 12.5px var(--font-data); text-align: right; color: var(--text-primary); white-space: nowrap; }
 
 .ls-plot { position: relative; display: grid; gap: 14px; padding-bottom: 18px; }
-.ls-zones { position: absolute; left: 104px; right: 52px; top: -4px; bottom: 18px; pointer-events: none; }
-.ls-build { position: absolute; top: 0; bottom: 0; background: oklch(0.76 0.13 155 / 0.10); border-radius: 4px; }
-.ls-gate { position: absolute; top: 0; bottom: 0; background: oklch(0.68 0.17 25 / 0.12); border-radius: 4px; }
 .ls-row { position: relative; display: grid; grid-template-columns: 92px minmax(0, 1fr) 40px; gap: 12px; align-items: center; }
 .ls-label { font-size: 13px; color: var(--text-primary); }
-.ls-track { position: relative; height: 1px; background: var(--hairline-strong); }
-.ls-dot { position: absolute; top: -6px; width: 13px; height: 13px; margin-left: -6.5px; border-radius: 50%; background: var(--series-1); box-shadow: 0 0 0 2px var(--card); transition: left 900ms cubic-bezier(.22,1,.36,1); }
+.ls-track { position: relative; height: 4px; border-radius: 2px; opacity: 0.9; }
+.ls-dot { position: absolute; top: -5px; width: 13px; height: 13px; margin-left: -6.5px; border-radius: 50%; background: var(--series-1); box-shadow: 0 0 0 2px var(--card); transition: left 900ms cubic-bezier(.22,1,.36,1); }
 .ls-dot.hot { background: var(--negative); }
 .ls-val { font: 600 13px var(--font-data); text-align: right; color: var(--text-primary); }
 .ls-axis { position: absolute; left: 104px; right: 52px; bottom: 0; height: 14px; color: var(--text-faint); font: 10.5px var(--font-data); }
@@ -974,3 +971,91 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .xp-source code { color: var(--text-dim); font-family: var(--font-data); }
 .xp-empty { margin: 0; color: var(--text-dim); font-size: 13px; }
 .xp-skeleton { border-radius: var(--r-md); background: oklch(1 0 0 / 0.04); }
+
+/* ══ Kit: the approved overhaul look (components/kit.tsx) ═══════════════════
+   Layout: one page question, numbered sections, flat panels on a 4-column
+   grid, reading guides open under each chart. Pages move onto this one at a
+   time; old .shc-card pages are untouched. */
+:root { --series-band: oklch(0.66 0.11 215 / 0.16); }
+.k-page { max-width: 1480px; margin: 0 auto; padding-bottom: 96px; }
+.k-page-head { margin: 8px 0 8px; display: grid; gap: 10px; }
+.k-eyebrow { margin: 0; font: 500 11px var(--font-data); letter-spacing: .14em; text-transform: uppercase; color: var(--text-dim); }
+.k-question { margin: 0; font: 800 clamp(32px, 4.2vw, 56px)/1.04 var(--font-display); letter-spacing: -.02em; color: var(--text-primary); text-wrap: balance; }
+.k-lede { margin: 0; max-width: 72ch; font-size: 16px; line-height: 1.55; color: var(--text-muted); }
+.k-section { margin-top: 44px; }
+.k-section-title { display: flex; align-items: baseline; gap: 12px; margin: 0 0 16px; font: 700 21px var(--font-display); color: var(--text-primary); }
+.k-section-title span { font: 600 12px var(--font-data); color: var(--sl-accent); }
+.k-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.k-panel > .k-guide { margin-top: auto; }
+.k-span-1 { grid-column: span 1; } .k-span-2 { grid-column: span 2; } .k-span-3 { grid-column: span 3; } .k-span-4 { grid-column: span 4; }
+.k-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.k-panel { min-width: 0; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 14px; border: 1px solid var(--hairline); background: var(--card); }
+.k-panel.k-bare { padding: 0; border: 0; background: none; gap: 10px; align-self: start; }
+.k-stack { align-self: start; }
+.k-panel.k-bare > .k-panel-head { padding: 0 2px; }
+.k-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.k-panel-title { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font: 700 16px var(--font-display); color: var(--text-primary); }
+.k-tag { font: 600 10px var(--font-data); font-style: normal; letter-spacing: .1em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; color: var(--sl-accent); background: var(--sl-accent-soft); }
+.k-panel-q { margin: 3px 0 0; font-size: 13px; color: var(--text-dim); }
+
+.k-guide { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px 18px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--hairline); background: oklch(0.165 0.008 250); }
+.k-span-2 > .k-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.k-span-3 > .k-guide, .k-span-4 > .k-guide { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.k-guide div { min-width: 0; }
+.k-guide dt { margin-bottom: 3px; font: 600 10px var(--font-data); letter-spacing: .12em; text-transform: uppercase; color: var(--sl-accent); }
+.k-guide dd { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-muted); }
+.k-guide div:last-child dd { color: var(--text-primary); }
+.k-guide-toggle { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 40; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--hairline-strong); background: var(--bg-elevated); font: 500 12px var(--font-data); color: var(--text-primary); box-shadow: 0 6px 24px oklch(0.05 0.01 250 / 0.5); }
+
+.k-chart { position: relative; }
+.k-chart svg { display: block; overflow: visible; shape-rendering: geometricPrecision; }
+.k-gridline { stroke: oklch(0.235 0.010 250); stroke-width: 1; shape-rendering: crispEdges; }
+.k-axis { stroke: var(--hairline-strong); stroke-width: 1; shape-rendering: crispEdges; }
+.k-tick { fill: var(--text-dim); font: 500 11px var(--font-data); font-variant-numeric: tabular-nums; }
+.k-end { fill: var(--text-primary); font: 600 11.5px var(--font-data); }
+.k-ref { stroke: var(--text-muted); stroke-dasharray: 4 4; shape-rendering: crispEdges; }
+.k-cross { stroke: var(--text-muted); stroke-width: 1; shape-rendering: crispEdges; }
+.k-tip { position: absolute; top: 4px; z-index: 3; display: grid; gap: 2px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--hairline-strong); background: oklch(0.235 0.010 250 / 0.96); font: 12px var(--font-data); color: var(--text-muted); white-space: nowrap; pointer-events: none; box-shadow: 0 8px 24px oklch(0.05 0.01 250 / 0.5); }
+.k-tip b { margin-left: 4px; color: var(--text-primary); }
+.k-tip i, .k-legend i { display: inline-block; width: 12px; height: 3px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
+.k-tip-date, .k-tip-dim { color: var(--text-dim); }
+.k-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: 12px; color: var(--text-dim); }
+.k-empty { padding: 24px; color: var(--text-dim); font-size: 13px; }
+.k-clamp { position: relative; overflow: hidden; }
+.k-clamp:not(.open)::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 120px; background: linear-gradient(transparent, var(--bg)); pointer-events: none; }
+.k-clamp-btn { position: absolute; left: 50%; bottom: 14px; z-index: 2; transform: translateX(-50%); padding: 8px 16px; border-radius: 999px; border: 1px solid var(--hairline-strong); background: var(--bg-elevated); font: 500 12px var(--font-data); color: var(--text-primary); }
+.k-clamp.open .k-clamp-btn { position: static; transform: none; display: block; margin: 12px auto 0; }
+
+/* Today hero (today-hero.tsx) */
+.th { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.4fr); gap: 28px; align-items: start; }
+.th-call { font: 800 clamp(34px, 3.6vw, 52px)/1 var(--font-display); letter-spacing: -.02em; }
+.th-why { margin: 10px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-muted); }
+.th-locks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.th-chip { padding: 3px 10px; border-radius: 999px; font: 500 11.5px var(--font-data); text-transform: capitalize; }
+.th-hard { color: var(--negative); border: 1px solid oklch(0.68 0.17 25 / 0.4); background: oklch(0.68 0.17 25 / 0.1); }
+.th-soft { color: var(--neutral); border: 1px solid oklch(0.80 0.135 78 / 0.4); background: oklch(0.80 0.135 78 / 0.1); }
+.th-clear { color: var(--positive); border: 1px solid oklch(0.76 0.13 155 / 0.35); background: oklch(0.76 0.13 155 / 0.08); }
+.th-session { display: grid; gap: 3px; margin-top: 18px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--hairline-strong); text-decoration: none; transition: border-color 160ms ease, background 160ms ease; }
+.th-session:hover { border-color: var(--sl-accent); background: var(--sl-accent-soft); }
+.th-session-focus { font: 700 15px var(--font-display); color: var(--text-primary); }
+.th-session-meta { font: 12px var(--font-data); color: var(--text-dim); }
+.th-session-go { font: 500 12px var(--font-data); color: var(--sl-accent); }
+.th-numbers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; border-radius: 12px; border: 1px solid var(--hairline); background: var(--hairline); }
+.th-stat { display: grid; gap: 2px; padding: 14px; background: var(--card); }
+.th-stat span { font: 500 10.5px var(--font-data); letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim); }
+.th-stat b { font: 600 32px var(--font-data); color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.th-stat small { font: 12px var(--font-data); color: var(--text-dim); }
+.th-chart-label { margin: 0 0 6px; font: 500 11px var(--font-data); letter-spacing: .06em; color: var(--text-dim); }
+
+@media (max-width: 1200px) {
+  .k-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .k-span-3, .k-span-4 { grid-column: span 2; }
+  .th { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .th-chart { grid-column: 1 / -1; }
+}
+@media (max-width: 780px) {
+  .k-grid { grid-template-columns: minmax(0, 1fr); }
+  .k-span-2, .k-span-3, .k-span-4 { grid-column: span 1; }
+  .k-guide, .k-span-2 > .k-guide, .k-span-3 > .k-guide, .k-span-4 > .k-guide { grid-template-columns: minmax(0, 1fr); }
+  .th { grid-template-columns: minmax(0, 1fr); }
+}

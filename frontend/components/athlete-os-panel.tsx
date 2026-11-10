@@ -11,7 +11,7 @@ function toneColor(tone: VerdictTone): string {
   return "var(--neutral)";
 }
 
-function readinessCommand(state: DailyState | undefined, plan: WorkoutPlan | undefined): {
+export function readinessCommand(state: DailyState | undefined, plan: WorkoutPlan | undefined): {
   label: string;
   detail: string;
   tone: VerdictTone;
