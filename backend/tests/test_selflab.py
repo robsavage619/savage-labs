@@ -272,3 +272,43 @@ def test_score_all_applies_correction_before_persisting(conn) -> None:
     # of finalizing AFTER correction.
     assert persisted[weak] == weak_r["verdict"]
     assert persisted[null] == null_r["verdict"]
+
+
+def test_refresh_and_score_all_scores_and_surfaces_failed_refresh(conn, monkeypatch) -> None:
+    """The shared route/nightly path scores every active study, and a study whose
+    refresh fails is still listed under `unprocessable` instead of vanishing."""
+    good = _prereg(conn, slug="good-study", outcome_metric="top_set_e1rm:Squat (Barbell)")
+    _fill(conn, good, [100, 99, 101, 100, 98, 100], [130, 129, 131, 130, 128, 131])
+    _prereg(conn, slug="broken-study", outcome_metric="top_set_e1rm:Row (Barbell)")
+    broken_id = selflab.load(conn, "broken-study").id
+    real_refresh = selflab.refresh_outcomes
+
+    def flaky(c, exp_id):
+        if exp_id == broken_id:
+            raise ValueError("no extractor for outcome metric")
+        return real_refresh(c, exp_id)
+
+    monkeypatch.setattr(selflab, "refresh_outcomes", flaky)
+    results = selflab.refresh_and_score_all(conn)
+
+    scored = {r["experiment_id"]: r for r in results if "experiment_id" in r}
+    assert set(scored) == {good, broken_id}
+    assert scored[good]["verdict"] == "CONFIRMED"
+    assert results[-1] == {
+        "unprocessable": [
+            {"slug": "broken-study", "stage": "outcomes", "error": "no extractor for outcome metric"}
+        ]
+    }
+
+
+def test_nightly_rescore_job_is_registered_after_the_4am_jobs() -> None:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from shc.scheduler.jobs import register_jobs
+
+    sched = AsyncIOScheduler()
+    register_jobs(sched)
+    job = sched.get_job("experiments_score")
+    assert job is not None
+    fields = {f.name: str(f) for f in job.trigger.fields}
+    assert (fields["hour"], fields["minute"]) == ("4", "45")

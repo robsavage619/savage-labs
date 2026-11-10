@@ -57,6 +57,21 @@ async def _recompute_scores() -> None:
                 )
 
 
+async def _score_experiments() -> None:
+    """Nightly job: refresh and rescore every active n-of-1 study.
+
+    Scoring had no scheduled caller, so results sat unscored from 2026-09-04
+    until a manual rescore on 2026-11-09 while their arms kept filling.
+    """
+    from shc import selflab
+    from shc.db.schema import write_ctx
+
+    async with write_ctx() as conn:
+        results = selflab.refresh_and_score_all(conn)
+    verdicts = [f"{r['experiment_id']}={r['verdict']}" for r in results if "verdict" in r]
+    log.info("nightly experiment rescore: %s", ", ".join(verdicts) or "no active studies")
+
+
 async def _backup_db() -> None:
     """Nightly job: keep a week of verified database copies."""
     from shc.config import settings
@@ -342,6 +357,17 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         hour=4,
         minute=30,
         id="mesocycle_auto_advance",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    # Rescore the n-of-1 portfolio after the 4:00–4:30 jobs, before the morning
+    # plan. A newly CONFIRMED randomized study emits its prior here.
+    scheduler.add_job(
+        _score_experiments,
+        "cron",
+        hour=4,
+        minute=45,
+        id="experiments_score",
         replace_existing=True,
         misfire_grace_time=3600,
     )
