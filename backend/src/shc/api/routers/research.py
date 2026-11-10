@@ -143,3 +143,55 @@ async def backtest() -> dict:
         research.store_backtest(conn, bt)
         research.forecast_today(conn)
     return {k: v for k, v in bt.items() if k != "series"}
+
+
+class ReviewIn(BaseModel):
+    decision: str = Field(pattern=r"^(approve|reject)$")
+    reasons: str = Field(min_length=10)
+    author: str = "methodologist"
+
+
+class ScoreIn(BaseModel):
+    spec: dict[str, Any]
+    belief_id: str | None = None
+
+
+@router.get("/research/brief")
+async def research_brief() -> dict:
+    """The analyst's starting point: beliefs, questions, notebook, forecast misses, data."""
+    return _read(research.brief)
+
+
+@router.get("/research/review-queue")
+async def review_queue() -> list[dict]:
+    """Proposed questions for the methodologist, without the analyst's reasoning."""
+    return _read(research.review_queue)
+
+
+@router.post("/research/score")
+async def score_candidate(body: ScoreIn) -> dict:
+    """Validate a draft spec and return its power and value without registering it."""
+    conn = get_read_conn()
+    try:
+        research.validate_spec(conn, body.spec)
+        est = research.estimate(conn, body.spec)
+        pw = est.get("power")
+        return {
+            "n_a": est["n_a"],
+            "n_b": est["n_b"],
+            "power": pw,
+            "value": research.value_score(conn, body.spec, body.belief_id, power=pw),
+        }
+    except research.SpecError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@router.post("/research/hypotheses/{slug}/review", dependencies=[Depends(require_admin_key)])
+async def review(slug: str, body: ReviewIn) -> dict:
+    async with write_ctx() as conn:
+        try:
+            return research.review(conn, slug, body.decision, body.reasons, body.author)
+        except research.SpecError as exc:
+            raise HTTPException(409, str(exc)) from exc

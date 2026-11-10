@@ -116,6 +116,7 @@ def _setup_belief(conn, effect_pct: float) -> str:
         conn, "Hard days lower HRV", "lnhrv_dev_pct", -3.0, 5.0, "test prior", None, "test"
     )
     research.register(conn, "strain-hrv", "q", SPEC, bid, "test")
+    research.review(conn, "strain-hrv", "approve", "sized and adjusted", "methodologist")
     return bid
 
 
@@ -146,3 +147,64 @@ def test_live_forecast_is_logged_before_the_reading_and_scored_after(conn) -> No
     assert research.forecast_today(conn, today=tomorrow) is None
     view = research.forecast_view(conn)
     assert view["live"][-1]["actual"] is not None
+
+
+def test_new_questions_wait_for_review_and_only_active_ones_run(conn) -> None:
+    _seed(conn, effect_pct=0, days=60)
+    out = research.register(conn, "s3", "q", SPEC, None, "analyst")
+    assert out["status"] == "proposed"
+    assert research.run_all(conn) == []
+    queue = research.review_queue(conn)
+    assert [q["slug"] for q in queue] == ["s3"]
+    assert "rationale" not in queue[0]
+    research.review(conn, "s3", "reject", "confounded by weekday", "methodologist")
+    assert research.run_all(conn) == []
+    with pytest.raises(research.SpecError):
+        research.review(conn, "s3", "approve", "changed my mind", "methodologist")
+
+
+def test_value_score_rewards_open_feasible_new_questions(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    fast = {"needed_per_arm": 50, "days_to_answer": 30, "outcome_sd": 10}
+    slow = {"needed_per_arm": 900, "days_to_answer": 1200, "outcome_sd": 20}
+    assert (
+        research.value_score(conn, SPEC, None, fast)["value"]
+        > research.value_score(conn, SPEC, None, slow)["value"]
+    )
+    research.register(conn, "s4", "q", SPEC, None, "analyst")
+    assert research.value_score(conn, SPEC, None, fast)["novelty"] == 0.0
+    sibling = SPEC | {"lag": 2}
+    assert research.value_score(conn, sibling, None, fast)["novelty"] == 0.5
+    with pytest.raises(research.SpecError, match="identical"):
+        research.register(conn, "s5", "q", SPEC, None, "analyst")
+
+
+def test_cumulative_features_are_daily_totals_from_one_source(conn) -> None:
+    day = date(2026, 6, 1)
+    rows = [
+        ("apple", "apple:a1", 9, 3000.0),
+        ("apple", "apple:a2", 15, 4500.0),
+        # A daily summary from a second source must not be added on top.
+        ("hae", "hae:d1", 23, 7400.0),
+    ]
+    for src, ext, hour, v in rows:
+        conn.execute(
+            "INSERT INTO measurements (source, metric, ts, value_num, external_id, content_hash) "
+            "VALUES (?, 'step_count', ?, ?, ?, ?)",
+            [src, f"{day} {hour:02d}:00:00+00", v, ext, ext],
+        )
+    assert research.series(conn, "steps")[day] == 7500.0
+
+
+def test_malformed_adjust_is_a_spec_error_not_a_crash(conn) -> None:
+    for bad in ([{"feature": "strain", "lag": 1}], "strain", [3]):
+        with pytest.raises(research.SpecError, match="adjust"):
+            research.validate_spec(conn, SPEC | {"adjust": bad})
+
+
+def test_weekend_feature_marks_saturday_and_sunday(conn) -> None:
+    _seed(conn, effect_pct=0, days=14)
+    s = research.series(conn, "weekend")
+    sat = next(d for d in s if d.weekday() == 5)
+    assert s[sat] == 1.0 and s[sat + timedelta(days=2)] == 0.0
+    research.validate_spec(conn, SPEC | {"adjust": ["weekend"]})

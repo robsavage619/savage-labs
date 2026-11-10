@@ -886,7 +886,9 @@ export interface ResearchHypothesis {
   spec: { unit?: string; min_effect: number; expected_sign: "+" | "-"; adjust?: string[] };
   belief_id: string | null;
   author: string;
-  status: "registered" | "underpowered" | "retired";
+  status: "proposed" | "active" | "rejected" | "retired";
+  /** Server-computed value of information: uncertainty × decision × feasibility × novelty. */
+  value_score: number | null;
   power: { needed_per_arm: number; days_to_answer: number | null; outcome_sd: number } | null;
   created_at: string;
   result: {

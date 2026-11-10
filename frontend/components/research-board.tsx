@@ -101,6 +101,8 @@ function waitFor(days: number | null | undefined) {
   return `about ${days} days`;
 }
 
+const ORDER: Record<ResearchHypothesis["status"], number> = { proposed: 0, active: 1, rejected: 2, retired: 3 };
+
 function QuestionRow({ h }: { h: ResearchHypothesis }) {
   const r = h.result;
   const unit = h.spec.unit === "week" ? "weeks" : "days";
@@ -108,7 +110,11 @@ function QuestionRow({ h }: { h: ResearchHypothesis }) {
     <div className="hq-row">
       <div className="hq-head">
         <span className="hq-q">{h.question}</span>
-        <span className={`hq-v hq-${r?.verdict ?? "none"}`}>{r ? VERDICT[r.verdict] ?? r.verdict : "not run"}</span>
+        {h.status === "active" ? (
+          <span className={`hq-v hq-${r?.verdict ?? "none"}`}>{r ? VERDICT[r.verdict] ?? r.verdict : "not run"}</span>
+        ) : (
+          <span className={`hq-v hq-st-${h.status}`}>{h.status === "proposed" ? "awaiting review" : h.status}</span>
+        )}
       </div>
       <p className="hq-meta">
         {r?.effect != null && r.ci_low != null && r.ci_high != null ? (
@@ -120,6 +126,8 @@ function QuestionRow({ h }: { h: ResearchHypothesis }) {
           <>{r.n_a} vs {r.n_b} {unit} so far. </>
         ) : null}
         {h.power ? `Sized to see ${h.spec.min_effect}%: needs ${h.power.needed_per_arm} ${unit} a side, ${waitFor(h.power.days_to_answer)}.` : "Too little data to size yet."}
+        {h.value_score != null && ` Value ${h.value_score.toFixed(2)}.`}
+        {` Proposed by ${h.author}.`}
       </p>
     </div>
   );
@@ -132,11 +140,11 @@ export function QuestionBoard() {
   return (
     <div className="ts-card">
       <div className="hq-list">
-        {q.data.map((h) => (
+        {[...q.data].sort((a, b) => ORDER[a.status] - ORDER[b.status]).map((h) => (
           <QuestionRow key={h.slug} h={h} />
         ))}
       </div>
-      <p className="ts-foot">Each question is pre-registered as a spec and frozen; the team re-runs every one nightly and folds the result into its belief.</p>
+      <p className="ts-foot">Each question is pre-registered as a frozen spec. The methodologist reviews it blind; once approved it is re-run nightly and folds into its belief. Value is the server&apos;s fixed score, so no proposer can argue a question up the list.</p>
     </div>
   );
 }

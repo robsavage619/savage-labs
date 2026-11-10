@@ -957,6 +957,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .hq-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .hq-q { font-size: 13.5px; color: var(--text-primary); }
 .hq-v { flex: none; font: 600 10.5px var(--font-data); letter-spacing: .04em; text-transform: uppercase; color: var(--text-dim); }
+.hq-st-proposed { color: var(--sl-accent); } .hq-st-rejected { color: var(--text-faint); text-decoration: line-through; }
 .hq-supported { color: var(--series-1); } .hq-against { color: var(--series-2); } .hq-ruled_out { color: var(--text-muted); }
 .hq-meta { margin: 0; font: 500 11.5px var(--font-data); color: var(--text-dim); line-height: 1.5; }
 .hq-meta b { color: var(--text-primary); }
