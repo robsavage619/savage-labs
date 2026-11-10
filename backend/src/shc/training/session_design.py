@@ -150,25 +150,35 @@ def executed_days(conn: Any, before: date) -> list[tuple[date, str, str | None, 
     return out
 
 
-def _last_logged_region(conn: Any, before: date) -> str | None:
-    """Region of the most recent logged lifting session, by primary-muscle majority."""
+def _last_logged(conn: Any, before: date) -> tuple[date, str] | None:
+    """(date, region) of the most recent logged lifting session, by majority of SETS.
+
+    Each set counts once, as lower when most of its exercise's primaries are
+    lower-body. lower_back counts as lower here (it sits in the "pull" group for
+    gating) because its lifts are hinges: on 2026-11-08 a stiff-legged deadlift
+    split half to upper and a 7-leg-set vs 6-arm-set day read as upper.
+    """
     row = conn.execute(
         """
-        SELECT
-            SUM(CASE WHEN m.muscle IN ('quads','hamstrings','glutes','calves','adductors')
-                     THEN 1 ELSE 0 END),
-            COUNT(*)
+        WITH ex AS (
+            SELECT exercise_name,
+                   AVG(CASE WHEN muscle IN ('quads','hamstrings','glutes','calves',
+                                            'adductors','lower_back')
+                            THEN 1.0 ELSE 0.0 END) > 0.5 AS is_lower
+            FROM exercise_muscle WHERE role = 'primary' GROUP BY exercise_name
+        )
+        SELECT SUM(CASE WHEN ex.is_lower THEN 1 ELSE 0 END), COUNT(*), MAX(s.day_d)
         FROM workout_sets_dedup s
-        JOIN exercise_muscle m ON m.exercise_name = s.exercise AND m.role = 'primary'
+        JOIN ex ON ex.exercise_name = s.exercise
         WHERE s.source = 'hevy' AND NOT s.is_warmup
           AND s.day_d = (SELECT MAX(day_d) FROM workout_sets_dedup
-                         WHERE source = 'hevy' AND day_d < ?)
+                         WHERE source = 'hevy' AND NOT is_warmup AND day_d < ?)
         """,
         [before],
     ).fetchone()
     if not row or not row[1]:
         return None
-    return "lower" if row[0] * 2 > row[1] else "upper"
+    return row[2], "lower" if row[0] * 2 > row[1] else "upper"
 
 
 def _sessions_28d(conn: Any, before: date) -> int:
@@ -219,14 +229,16 @@ def scheduled_session(
     n28 = _sessions_28d(conn, today)
     four_day = n28 >= FOUR_DAY_MIN_SESSIONS_28D
     cycle = FOUR_DAY if four_day else THREE_DAY
+    logged = _last_logged(conn, today)
     if hist:
-        last_day = hist[-1][1]
-        last_region = DAYS[last_day][0]
-        why = f"last trained day was {last_day} ({hist[-1][0]})"
+        last_region = DAYS[hist[-1][1]][0]
+        why = f"last trained day was {hist[-1][1]} ({hist[-1][0]})"
     else:
-        last_day = None
-        last_region = _last_logged_region(conn, today) or "lower"
+        last_region = logged[1] if logged else "lower"
         why = f"no designed day trained yet; last session read as {last_region}"
+    # A region trained yesterday is not trained again today (48 h between sessions
+    # for the same muscles, `training-frequency-hypertrophy.md`).
+    recent = logged[1] if logged and (today - logged[0]).days <= 1 else None
     why += (
         f"; {n28} sessions in the last 28 days, so the "
         + ("4-day Upper/Lower A/B" if four_day else "3-day Upper/Lower/Full Body")
@@ -248,10 +260,13 @@ def scheduled_session(
     open_days = [d for d in candidates if not _region_gated(DAYS[d][0], gates)]
     if not open_days:
         return None
-    day = open_days[0]
+    rested = [d for d in open_days if DAYS[d][0] not in (recent, "full")] if recent else []
+    day = (rested or open_days)[0]
+    if recent and day != open_days[0]:
+        why += f"; {recent} body was trained yesterday, so {open_days[0]} waits"
     region, variant = DAYS[day]
-    if day != candidates[0]:
-        why += f"; {candidates[0]} is gated today, so {day} moves up"
+    if open_days[0] != candidates[0]:
+        why += f"; {candidates[0]} is gated today, so {open_days[0]} moves up"
 
     # The first opener trained for a day in this block is its anchor, reps included.
     first_by_day: dict[str, tuple[str, str | None]] = {}

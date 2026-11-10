@@ -130,3 +130,26 @@ def test_rotation_order_and_anchors(conn, seed) -> None:
     # Legs gated: the lower day yields to upper instead of skipping a template.
     s3 = scheduled_session(conn, {"forbid_muscle_groups": ["legs"]}, date(2026, 11, 4), None)
     assert s3 is not None and s3.region == "upper"
+
+
+def test_leg_day_with_hinge_reads_lower_and_legs_rest_48h(conn, seed) -> None:
+    # 2026-11-08: 7 leg sets + 6 arm sets, no session_day. The SLDL's lower_back
+    # primary counted toward upper, the day read as upper, and 11/9 got Lower-A.
+    day = date(2026, 11, 8)
+    for name, n in [
+        ("Split Squat (Dumbbell)", 3),
+        ("Smith Machine Stiff-Legged Deadlift", 2),
+        ("Standing Calf Raise (Machine)", 2),
+        ("Hammer Curl (Dumbbell)", 2),
+        ("Reverse Curl (Barbell)", 2),
+        ("Seated Triceps Press", 2),
+    ]:
+        seed.workout(day, name, [(40.0, 10)] * n)
+    # The day after: Full Body would be next in the 3-day cycle, but it trains legs
+    # again within 24 h, so Upper-A goes first.
+    s = scheduled_session(conn, {}, date(2026, 11, 9), None)
+    assert s is not None and s.day == "Upper-A", s.reason
+    assert "trained yesterday" in s.reason
+    # Two days later the legs have had 48 h and the cycle resumes.
+    s2 = scheduled_session(conn, {}, date(2026, 11, 10), None)
+    assert s2 is not None and s2.day == "Full Body", s2.reason
