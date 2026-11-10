@@ -49,6 +49,10 @@ export type Span = 1 | 2 | 3 | 4;
 export const SECTIONS: readonly Section[] = [
   // ── Today ────────────────────────────────────────────────────────────────
   { id: "call", label: "Today's call", surface: "today", keywords: ["verdict", "readiness", "gates", "locked", "intensity"] },
+  { id: "overnight", label: "Did anything move overnight", surface: "today", keywords: ["noise floor", "swc", "baseline", "hrv", "rhr", "moved"] },
+  { id: "readiness", label: "Readiness breakdown", surface: "today", keywords: ["readiness", "score", "components", "weights"] },
+  { id: "load-split", label: "Load ratio split", surface: "today", keywords: ["acwr", "lifting", "conditioning", "spike"] },
+  { id: "fresh", label: "Muscle freshness", surface: "today", keywords: ["recovered", "days since", "dose", "ready"] },
   { id: "session", label: "The session", surface: "today", keywords: ["workout", "plan", "hevy", "lifts", "sets", "reps", "push"] },
   { id: "midday", label: "Midday session", surface: "today", keywords: ["lunch", "nike", "second"] },
   { id: "report", label: "Daily report", surface: "today", keywords: ["narrative", "claude", "prompt"] },

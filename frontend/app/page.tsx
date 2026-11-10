@@ -8,6 +8,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { MiddaySessionCard } from "@/components/midday-session-card";
 import { NextWorkoutPane } from "@/components/next-workout";
 import { SurfaceShell } from "@/components/surface-shell";
+import { LoadSplit, MuscleFreshness, NoiseFloorCard, ReadinessBreakdown } from "@/components/today-signals";
 
 /**
  * TODAY — what to train, and log it.
@@ -64,6 +65,49 @@ export default function TodayPage() {
           </div>
           <ErrorBoundary label="Today's call">
             <AthleteOSPanel />
+          </ErrorBoundary>
+        </section>
+
+        <div className="board-rule">The morning read</div>
+
+        <section id="overnight" className="span-2 scroll-mt-24">
+          <div className="px-1">
+            <CardHelp summary="Each overnight signal against your own normal wobble. A dot inside the shaded band is noise, however it looks.">
+              <p><strong>What it measures.</strong> How far each reading moved from your own average over the last 28 days.</p>
+              <p><strong>How to read it.</strong> The shaded band in the middle is your normal night-to-night range. A grey dot inside it means nothing really changed. A bright dot outside it, tagged <em>moved</em>, is a real change. Click a row to open its history.</p>
+              <p><strong>Why it matters.</strong> Most bad-looking mornings are just noise. This stops you reacting to a dip that is normal for you, and makes the rare real change stand out.</p>
+              <p><strong>Context.</strong> The band is half the spread of your own last 28 days, the smallest change worth caring about. Skin temperature is shown in °F.</p>
+            </CardHelp>
+          </div>
+          <ErrorBoundary label="Overnight noise floor">
+            <NoiseFloorCard />
+          </ErrorBoundary>
+        </section>
+
+        <section id="readiness" className="span-1 scroll-mt-24">
+          <div className="px-1">
+            <CardHelp summary="The readiness score split into its four inputs, so you can see which one is holding it back.">
+              <p><strong>What it measures.</strong> The 0–100 readiness score and the four scores it is built from.</p>
+              <p><strong>How to read it.</strong> The ring is today&apos;s score. Each bar is one input on its own 0–100 scale; the small percentage is how much it counts. The amber bar is the weakest input.</p>
+              <p><strong>Why it matters.</strong> A middling score can hide one strong input and one weak one. The short bar tells you what&apos;s dragging the day.</p>
+              <p><strong>Context.</strong> HRV counts most at 40%. If you skip the check-in, its 10% is simply missing from the score.</p>
+            </CardHelp>
+          </div>
+          <ErrorBoundary label="Readiness breakdown">
+            <ReadinessBreakdown />
+          </ErrorBoundary>
+        </section>
+
+        <section id="load-split" className="span-1 scroll-mt-24">
+          <div className="px-1">
+            <CardHelp summary="Your last week of training against the three weeks before it, for lifting and conditioning separately.">
+              <p><strong>What it measures.</strong> The last 7 days of load divided by your average over the 21 days before that, for all training, lifting only and conditioning only.</p>
+              <p><strong>How to read it.</strong> Each dot sits on one scale. The green band (0.8–1.3) is steady building. The red zone (1.5 and up) is where the engine starts locking muscles. Below 0.8 means you&apos;re backing off.</p>
+              <p><strong>Why it matters.</strong> Sudden jumps in load, more than the load itself, tend to come before injuries and bad weeks. The split shows whether lifting or pickleball did the jumping.</p>
+            </CardHelp>
+          </div>
+          <ErrorBoundary label="Load ratio split">
+            <LoadSplit />
           </ErrorBoundary>
         </section>
 
@@ -134,6 +178,19 @@ export default function TodayPage() {
         </div>
 
         <div className="span-1 flex flex-col gap-4">
+          <section id="fresh" className="scroll-mt-24">
+            <div className="px-1">
+              <CardHelp summary="Days since each muscle last got a real dose of training. Greener tiles are more rested.">
+                <p><strong>What it measures.</strong> Days since each muscle last got 4 or more hard sets.</p>
+                <p><strong>How to read it.</strong> A bigger number on a greener tile means more rested and ready to train again.</p>
+                <p><strong>Why it matters.</strong> A muscle generally needs 2–3 days between hard sessions to grow. This shows which ones are ready without guessing.</p>
+                <p><strong>Context.</strong> Only muscles with a recorded dose appear here.</p>
+              </CardHelp>
+            </div>
+            <ErrorBoundary label="Muscle freshness">
+              <MuscleFreshness />
+            </ErrorBoundary>
+          </section>
           <section id="midday" className="scroll-mt-24">
             <div className="px-1">
               <CardHelp summary="Your lunch-hour session at work: what to do, for how long, and what it's for.">

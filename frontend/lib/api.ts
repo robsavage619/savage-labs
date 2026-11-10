@@ -483,6 +483,11 @@ export interface DailyStateLoad {
   pickleball_min_7d: number;
   pickleball_min_28d: number;
   cardio_modality_min_7d: Record<string, number>;
+  /** Load ratio split by modality; the blended `acwr` hides which one spiked. */
+  resistance_acwr?: number | null;
+  conditioning_acwr?: number | null;
+  /** Per-muscle dose history; only muscles with a recorded dose appear. */
+  muscle_recovery?: Record<string, { days_since_dose: number | null; days_since_any_primary_set: number | null; dose_threshold_sets: number; last_rpe: number | null; last_dose_sets: number | null }>;
 }
 
 export interface DailyStateCheckin {
@@ -533,6 +538,26 @@ export interface DailyStateFreshness {
   hevy_age_days: number | null;
   cardio_age_days: number | null;
   gaps: string[];
+}
+
+export interface NoiseFloorSignal {
+  unit: string;
+  n: number;
+  value: number | null;
+  baseline: number | null;
+  delta: number | null;
+  /** Smallest worthwhile change: 0.5 x SD of the subject's own baseline window. */
+  swc: number | null;
+  within_noise: boolean | null;
+  direction: "up" | "down" | "flat" | null;
+}
+
+export interface NoiseFloor {
+  as_of: string;
+  window_days: number;
+  signals: Record<string, NoiseFloorSignal>;
+  moved: string[];
+  method: string;
 }
 
 export interface DailyState {
@@ -907,6 +932,7 @@ export const api = {
       }[];
     }>(`/api/training/muscle-balance?weeks=${weeks}`),
   dailyState: () => get<DailyState>("/api/state/today"),
+  noiseFloor: (days = 28) => get<NoiseFloor>(`/api/signals/noise-floor?days=${days}`),
   checkinToday: () => get<CheckinToday>("/api/checkin/today"),
   checkinSubmit: async (body: CheckinPayload) => {
     const r = await fetch(`${BASE}/api/checkin`, {
