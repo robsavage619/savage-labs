@@ -14,6 +14,8 @@ import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
 import { SubjectDossier } from "@/components/subject-dossier";
 import { SuggestedExperiments } from "@/components/suggested-experiments";
 import { SurfaceShell } from "@/components/surface-shell";
+import { TeamRoom } from "@/components/team-board";
+import { BeliefsExplain, CoverageExplain, ExplainButton, ForecastExplain, MissesExplain, NotebookExplain, PipelineExplain, TeamExplain, useExplain } from "@/components/lab-explain";
 import { api } from "@/lib/api";
 
 const LAB_RUN_THROTTLE_KEY = "lab_last_run_ms";
@@ -87,22 +89,25 @@ export default function LabPage() {
           {tab === "floor" ? (
             <>
               <Masthead />
-              <Block id="forecast" n="01" kicker="Forecast desk" title="Can the team predict you?">
+              <Block id="team" explain={<TeamExplain />} n="01" kicker="The researchers" title="Who is studying you, and what they're chasing" lede="Four specialists with their own interests, each keeping an agenda of open leads it updates every week.">
+                <TeamRoom />
+              </Block>
+              <Block id="forecast" explain={<ForecastExplain />} n="02" kicker="Forecast desk" title="Can the team predict you?">
                 <ForecastDesk />
               </Block>
-              <Block id="beliefs" n="02" kicker="Belief ledger" title="What the team believes about you">
+              <Block id="beliefs" explain={<BeliefsExplain />} n="03" kicker="Belief ledger" title="What the team believes about you">
                 <BeliefLenses />
               </Block>
-              <Block id="questions" n="03" kicker="Pipeline" title="Questions in flight">
+              <Block id="questions" explain={<PipelineExplain />} n="04" kicker="Pipeline" title="Questions in flight">
                 <Pipeline />
               </Block>
-              <Block id="notebook" n="04" kicker="Notebook" title="The team's conversation" lede="Proposals, blind reviews and results, as the agents wrote them.">
+              <Block id="notebook" explain={<NotebookExplain />} n="05" kicker="Notebook" title="The team's conversation" lede="Proposals, blind reviews, explorations and results, as the agents wrote them.">
                 <Threads />
               </Block>
-              <Block id="misses" n="05" kicker="Misses" title="Where the lab is still wrong" lede="The analyst's agenda: patterns in the forecast's errors that no belief explains yet.">
+              <Block id="misses" explain={<MissesExplain />} n="06" kicker="Misses" title="Where the lab is still wrong" lede="Patterns in the forecast's errors that no belief explains yet: the specialists' shared agenda.">
                 <Misses />
               </Block>
-              <Block id="coverage" n="06" kicker="Data" title="What the team can see">
+              <Block id="coverage" explain={<CoverageExplain />} n="07" kicker="Data" title="What the team can see">
                 <Coverage />
               </Block>
             </>
@@ -222,7 +227,8 @@ export default function LabPage() {
   );
 }
 
-function Block({ id, n, kicker, title, lede, children }: { id: string; n: string; kicker: string; title: string; lede?: string; children: React.ReactNode }) {
+function Block({ id, n, kicker, title, lede, explain, children }: { id: string; n: string; kicker: string; title: string; lede?: string; explain?: React.ReactNode; children: React.ReactNode }) {
+  const [open, toggle] = useExplain();
   return (
     <section id={id} className="lf-block scroll-mt-24">
       <header className="lf-bhead">
@@ -232,8 +238,10 @@ function Block({ id, n, kicker, title, lede, children }: { id: string; n: string
           <h2>{title}</h2>
           {lede && <p>{lede}</p>}
         </div>
+        {explain && <ExplainButton open={open} onClick={toggle} />}
       </header>
       {children}
+      {explain && open && explain}
     </section>
   );
 }

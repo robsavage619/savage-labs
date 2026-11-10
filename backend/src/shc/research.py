@@ -25,6 +25,8 @@ import duckdb
 import numpy as np
 
 from shc.selflab import _design_effect, _needed_per_arm
+from shc.training.mesocycle import _CAPPED_E1RM, _MAX_E1RM_MEDIAN_DEVIATION
+from shc.training.volume import _RPE_GATE, _STIMULATING
 
 log = logging.getLogger(__name__)
 
@@ -244,12 +246,123 @@ FEATURES: dict[str, Feature] = {
                 "SELECT date, MAX(value_avg) FROM v_daily_metrics WHERE metric = 'walking_speed_m_s' GROUP BY date"
             ),
         ),
+        # Goal outcomes: what the training is for, not just how recovered it left you.
+        Feature(
+            "strength_emphasis_pct14",
+            "Emphasis-muscle strength, 14 days vs prior 14",
+            "%",
+            "day",
+            "Hevy",
+        ),
+        Feature(
+            "session_quality",
+            "Plan completion",
+            "%",
+            "day",
+            "plan adherence",
+            # A session that diverged from its plan can read past 100% (the
+            # comparison picks the wrong day); doing more than planned is full
+            # completion, not extra quality.
+            _q(
+                "SELECT date, LEAST(MAX(completion_pct), 100) FROM plan_adherence "
+                "WHERE completion_pct IS NOT NULL GROUP BY date"
+            ),
+        ),
+        # Pounds, the unit the subject reads weight in; the store keeps kilograms.
+        Feature(
+            "body_mass_lb",
+            "Body weight",
+            "lb",
+            "day",
+            "Apple Health",
+            _q(
+                "SELECT date, AVG(value_avg) * 2.20462 FROM v_daily_metrics WHERE metric = 'body_mass_kg' GROUP BY date"
+            ),
+        ),
+        Feature(
+            "body_mass_7d", "Body weight, 7-day mean of weigh-ins", "lb", "day", "Apple Health"
+        ),
+        Feature(
+            "vo2_max",
+            "VO₂ max estimate",
+            "mL/kg/min",
+            "day",
+            "Apple Health",
+            _q(
+                "SELECT date, AVG(value_avg) FROM v_daily_metrics WHERE metric = 'vo2_max' GROUP BY date"
+            ),
+        ),
+        Feature(
+            "sleep_efficiency_pct",
+            "Sleep efficiency",
+            "%",
+            "morning",
+            "WHOOP",
+            _q(
+                "SELECT night_date, MAX(sleep_efficiency_pct) FROM sleep WHERE NOT COALESCE(is_nap, FALSE) GROUP BY night_date"
+            ),
+        ),
     ]
 }
+
+# Per-muscle features, named `<kind>:<muscle>` for any muscle in exercise_muscle.
+_PARAMETRIC: dict[str, tuple[str, str, str, str]] = {
+    "e1rm_pct14": ("Strength, 14 days vs prior 14", "%", "day", "Hevy"),
+    "sets": ("Working sets", "sets", "day", "Hevy"),
+}
+EMPHASIS_MUSCLES = ("biceps", "glutes")
+
+# What each outcome is for, in the subject's goal order: muscle first, then body
+# composition, then aerobic fitness. Recovery signals are mediators, not goals.
+GOAL_WEIGHTS = {"muscle": 1.0, "body": 0.85, "cardio": 0.7, "recovery": 0.6}
+_OTHER_GOAL_WEIGHT = 0.5
+_GOALS = {
+    "muscle": {"strength_emphasis_pct14", "session_quality", "working_sets", "lift_tonnes"},
+    "body": {"body_mass_lb", "body_mass_7d"},
+    "cardio": {"vo2_max", "walking_speed"},
+    "recovery": {
+        "hrv_ms",
+        "lnhrv_dev_pct",
+        "lnhrv_7d_pct",
+        "recovery_score",
+        "rhr_bpm",
+        "skin_temp",
+        "spo2_pct",
+        "sleep_hours",
+        "sleep_consistency_pct",
+        "sleep_efficiency_pct",
+        "deep_sleep_min",
+        "rem_sleep_min",
+        "sleep_disturbances",
+        "resp_rate",
+    },
+}
+
+
+def goal_of(name: str) -> str:
+    """The goal category an outcome feature serves: muscle, body, cardio, recovery or other."""
+    if name.partition(":")[0] in _PARAMETRIC:
+        return "muscle"
+    return next((g for g, names in _GOALS.items() if name in names), "other")
+
+
+def feature(name: str) -> Feature | None:
+    """A feature's metadata, including the parametric and journal families."""
+    if name in FEATURES:
+        return FEATURES[name]
+    kind, _, arg = name.partition(":")
+    if kind in _PARAMETRIC and arg:
+        label, unit, timing, source = _PARAMETRIC[kind]
+        return Feature(name, f"{label}: {arg.replace('_', ' ')}", unit, timing, source)
+    if kind == "journal" and arg:
+        return Feature(name, arg, "yes=1", "day", "WHOOP journal")
+    return None
+
 
 # Days a feature counts as zero when absent rather than missing: no pickleball
 # session that day means zero minutes, not an unknown.
 _ZERO_FILL = {"pickleball_min", "working_sets", "lift_tonnes"}
+_ZERO_FILL_KINDS = ("sets:",)
 
 
 def _rows(
@@ -274,13 +387,76 @@ def _lnhrv_dev(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
     return out
 
 
-def _rolling7(base: dict[date, float]) -> dict[date, float]:
+def _rolling7(base: dict[date, float], min_n: int = 4) -> dict[date, float]:
     out: dict[date, float] = {}
     for d in base:
         w = [base[d - timedelta(days=k)] for k in range(7) if d - timedelta(days=k) in base]
-        if len(w) >= 4:
+        if len(w) >= min_n:
             out[d] = mean(w)
     return out
+
+
+def _muscle_sets(conn: duckdb.DuckDBPyConnection, muscle: str) -> dict[date, float]:
+    """Working sets a day that credit `muscle`, primary or secondary, at 1.0 each.
+
+    Same set filter as training/volume.py: warm-ups out, loaded, inside the
+    stimulating rep window, and past the RPE gate.
+    """
+    return _rows(
+        conn,
+        "SELECT ws.day_d, COUNT(*) FROM workout_sets_dedup ws "
+        "JOIN exercise_muscle m ON m.exercise_name = ws.exercise "
+        f"WHERE m.muscle = ? AND NOT COALESCE(ws.is_warmup, FALSE) AND ws.weight_kg > 0 "
+        f"AND {_STIMULATING} AND {_RPE_GATE} GROUP BY ws.day_d",
+        [muscle],
+    )
+
+
+def _e1rm_pct14(conn: duckdb.DuckDBPyConnection, muscle: str) -> dict[date, float]:
+    """Per day: mean over the lifts crediting `muscle` of 100 × (best e1RM in the
+    trailing 14 days / best in the 14 before − 1).
+
+    Uses the engine's e1RM (Epley over RIR-adjusted, capped reps on per-hand
+    load, Hevy working sets only). A lift counts only when trained in both
+    windows, and a change past ±35% is a logging artifact, not physiology.
+    Lifts are compared to themselves, so a heavy lift skipped for a fortnight
+    can't read as lost strength.
+    """
+    return _rows(
+        conn,
+        f"""
+        WITH d AS (
+            SELECT ws.exercise AS ex, ws.day_d AS day, MAX({_CAPPED_E1RM}) AS e
+            FROM workout_sets_dedup ws JOIN exercise_muscle m ON m.exercise_name = ws.exercise
+            WHERE m.muscle = ? AND ws.weight_kg > 0 AND ws.reps > 0 AND ws.source = 'hevy'
+              AND NOT COALESCE(ws.is_warmup, FALSE)
+            GROUP BY 1, 2
+        ),
+        spine AS (
+            SELECT ex, UNNEST(generate_series(lo, LEAST(hi + 13, current_date), INTERVAL 1 DAY))::DATE AS day
+            FROM (SELECT ex, MIN(day) AS lo, MAX(day) AS hi FROM d GROUP BY ex)
+        ),
+        w AS (
+            SELECT s.day,
+                   MAX(d.e) OVER (PARTITION BY s.ex ORDER BY s.day
+                                  ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS cur,
+                   MAX(d.e) OVER (PARTITION BY s.ex ORDER BY s.day
+                                  ROWS BETWEEN 27 PRECEDING AND 14 PRECEDING) AS prev
+            FROM spine s LEFT JOIN d ON d.ex = s.ex AND d.day = s.day
+        )
+        SELECT day, AVG(100 * (cur / prev - 1)) FROM w
+        WHERE cur IS NOT NULL AND prev IS NOT NULL AND abs(cur / prev - 1) <= ?
+        GROUP BY day
+        """,
+        [muscle, _MAX_E1RM_MEDIAN_DEVIATION],
+    )
+
+
+def _emphasis(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
+    """Mean 14-day strength change across the emphasis muscles, on days all of them have one."""
+    parts = [_e1rm_pct14(conn, m) for m in EMPHASIS_MUSCLES]
+    days = set.intersection(*(set(p) for p in parts))
+    return {d: mean(p[d] for p in parts) for d in days}
 
 
 def _weekend(_conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
@@ -296,6 +472,12 @@ _DERIVED: dict[str, Callable[[duckdb.DuckDBPyConnection], dict[date, float]]] = 
     "weekend": _weekend,
     "lnhrv_dev_pct": _lnhrv_dev,
     "lnhrv_7d_pct": lambda c: _rolling7(series(c, "lnhrv_dev_pct")),
+    "body_mass_7d": lambda c: _rolling7(series(c, "body_mass_lb"), min_n=1),
+    "strength_emphasis_pct14": _emphasis,
+}
+_DERIVED_KINDS: dict[str, Callable[[duckdb.DuckDBPyConnection, str], dict[date, float]]] = {
+    "sets": _muscle_sets,
+    "e1rm_pct14": _e1rm_pct14,
 }
 
 
@@ -308,8 +490,16 @@ def series(conn: duckdb.DuckDBPyConnection, name: str) -> dict[date, float]:
             "WHERE question = ? GROUP BY date",
             [name.partition(":")[2]],
         )
+    if name.startswith("custom:"):
+        # Imported here: research_team imports this module for note() and goal_of().
+        from shc import research_team
+
+        return research_team.custom_series(conn, name)
     if name in _DERIVED:
         return _DERIVED[name](conn)
+    kind, _, arg = name.partition(":")
+    if kind in _DERIVED_KINDS and arg:
+        return _DERIVED_KINDS[kind](conn, arg)
     f = FEATURES.get(name)
     if f is None or f.sql is None:
         raise ValueError(f"unknown feature {name!r}")
@@ -323,31 +513,57 @@ def known_feature(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
             conn.execute("SELECT 1 FROM whoop_journal WHERE question = ? LIMIT 1", [q]).fetchone()
             is not None
         )
+    kind, _, arg = name.partition(":")
+    if kind in _PARAMETRIC:
+        return bool(arg) and arg in _muscles(conn)
+    if kind == "custom":
+        from shc import research_team
+
+        return research_team.known_custom(conn, name)
     return name in FEATURES
 
 
+def _muscles(conn: duckdb.DuckDBPyConnection) -> list[str]:
+    return [
+        m
+        for (m,) in conn.execute(
+            "SELECT DISTINCT muscle FROM exercise_muscle ORDER BY 1"
+        ).fetchall()
+    ]
+
+
+def _entry(f: Feature, s: dict[date, float], today: date) -> dict:
+    recent = sum(1 for d in s if d >= today - timedelta(days=90))
+    last = max(s) if s else None
+    return {
+        "name": f.name,
+        "label": f.label,
+        "unit": f.unit,
+        "timing": f.timing,
+        "source": f.source,
+        "goal": goal_of(f.name),
+        "first": str(min(s)) if s else None,
+        "last": str(last) if last else None,
+        "days": len(s),
+        "coverage_90d_pct": round(100 * recent / 90),
+        "stale": last is None or (today - last).days > 7,
+    }
+
+
 def dictionary(conn: duckdb.DuckDBPyConnection) -> list[dict]:
-    """The data dictionary agents read before proposing: what exists, how much, how fresh."""
+    """The data dictionary agents read before proposing: what exists, how much, how fresh.
+
+    Per-muscle features are listed only for muscles that have data.
+    """
     today = date.today()
-    out = []
-    for f in FEATURES.values():
-        s = series(conn, f.name)
-        recent = sum(1 for d in s if d >= today - timedelta(days=90))
-        last = max(s) if s else None
-        out.append(
-            {
-                "name": f.name,
-                "label": f.label,
-                "unit": f.unit,
-                "timing": f.timing,
-                "source": f.source,
-                "first": str(min(s)) if s else None,
-                "last": str(last) if last else None,
-                "days": len(s),
-                "coverage_90d_pct": round(100 * recent / 90),
-                "stale": last is None or (today - last).days > 7,
-            }
-        )
+    out = [_entry(f, series(conn, f.name), today) for f in FEATURES.values()]
+    for m in _muscles(conn):
+        for kind in _PARAMETRIC:
+            name = f"{kind}:{m}"
+            s = series(conn, name)
+            f = feature(name)
+            if s and f is not None:
+                out.append(_entry(f, s, today))
     for q, n, first, last in conn.execute(
         "SELECT question, COUNT(DISTINCT date), MIN(date), MAX(date) FROM whoop_journal GROUP BY question ORDER BY 2 DESC"
     ).fetchall():
@@ -358,6 +574,7 @@ def dictionary(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 "unit": "yes=1",
                 "timing": "day",
                 "source": "WHOOP journal",
+                "goal": "other",
                 "first": str(first),
                 "last": str(last),
                 "days": n,
@@ -365,6 +582,9 @@ def dictionary(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 "stale": (today - last).days > 7,
             }
         )
+    from shc import research_team
+
+    out.extend(research_team.custom_dictionary(conn))
     return out
 
 
@@ -422,7 +642,7 @@ def _weekly(s: dict[date, float]) -> dict[date, float]:
 
 
 def _fill_zero(name: str, s: dict[date, float], span: tuple[date, date]) -> dict[date, float]:
-    if name not in _ZERO_FILL:
+    if name not in _ZERO_FILL and not name.startswith(_ZERO_FILL_KINDS):
         return s
     d, out = span[0], dict(s)
     while d <= span[1]:
@@ -513,7 +733,8 @@ def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = N
     else:
         verdict = "inconclusive"
     power = _power(rows, math.sqrt(sigma2), m, de, today, unit)
-    unit_label = FEATURES[out_name].unit if out_name in FEATURES else ""
+    out_f = feature(out_name)
+    unit_label = out_f.unit if out_f else ""
     return base | {
         "verdict": verdict,
         "effect": round(effect, 3),
@@ -579,24 +800,73 @@ def add_belief(
     prior_source: str,
     decision: str | None,
     author: str,
+    unit: str | None = None,
 ) -> str:
+    """Record a belief about an outcome, its literature prior and the unit it is in.
+
+    Args:
+        conn: Open DuckDB connection.
+        claim: The belief in plain words.
+        outcome: Outcome feature the belief is about.
+        prior_mean: Prior mean effect, in the outcome's unit.
+        prior_sd: Prior standard deviation; must be positive.
+        prior_source: Citation for the prior.
+        decision: What the engine would change on an answer, if anything.
+        author: Who wrote it.
+        unit: The effect's unit; taken from the outcome feature when omitted.
+
+    Returns:
+        The new belief's id.
+
+    Raises:
+        SpecError: If prior_sd is not positive.
+    """
     if prior_sd <= 0:
         raise SpecError("prior_sd must be positive")
+    unit = unit or _unit_of(outcome)
     bid = str(uuid.uuid4())
     conn.execute(
         "INSERT INTO research_beliefs (id, claim, outcome, prior_mean, prior_sd, prior_source, "
-        "post_mean, post_sd, decision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [bid, claim, outcome, prior_mean, prior_sd, prior_source, prior_mean, prior_sd, decision],
+        "post_mean, post_sd, decision, unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            bid,
+            claim,
+            outcome,
+            prior_mean,
+            prior_sd,
+            prior_source,
+            prior_mean,
+            prior_sd,
+            decision,
+            unit,
+        ],
     )
     note(
         conn,
         author,
         "belief",
         f"New belief: {claim}",
-        f"Prior {prior_mean:+g} ± {prior_sd:g} from {prior_source}.",
+        f"Prior {prior_mean:+g} ± {prior_sd:g}{f' {unit}' if unit else ''} from {prior_source}.",
         ref=bid,
     )
     return bid
+
+
+def _unit_of(outcome: str) -> str | None:
+    f = feature(outcome)
+    return f.unit if f else None
+
+
+_NICE = (1, 1.5, 2, 3, 5, 7.5, 10)
+
+
+def _scale(b: dict) -> float:
+    """Symmetric display half-range that holds both curves to ±2 SD, on a round number."""
+    need = max(
+        abs(b["prior_mean"]) + 2 * b["prior_sd"], abs(b["post_mean"]) + 2 * b["post_sd"], 1e-9
+    )
+    mag = 10 ** math.floor(math.log10(need))
+    return next(round(n * mag, 9) for n in _NICE if n * mag >= need)
 
 
 def register(
@@ -763,7 +1033,7 @@ def run_all(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     rows = conn.execute(
         "SELECT id, claim, outcome, prior_mean, prior_sd, prior_source, post_mean, post_sd, n_results, "
-        "decision, updated_at, forecast_gain FROM research_beliefs ORDER BY updated_at DESC"
+        "decision, updated_at, forecast_gain, unit FROM research_beliefs ORDER BY updated_at DESC"
     ).fetchall()
     keys = [
         "id",
@@ -778,10 +1048,14 @@ def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         "decision",
         "updated_at",
         "forecast_gain",
+        "unit",
     ]
     out = []
     for r in rows:
         d = dict(zip(keys, r, strict=True))
+        d["unit"] = d["unit"] or _unit_of(d["outcome"])
+        d["goal"] = goal_of(d["outcome"])
+        d["scale"] = _scale(d)
         d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else None
         # How much the data has narrowed the prior: 0 = untouched, → 1 = data dominates.
         d["learned"] = round(1 - (d["post_sd"] / d["prior_sd"]) ** 2, 3) if d["prior_sd"] else None
@@ -860,10 +1134,45 @@ def notebook(conn: duckdb.DuckDBPyConnection, limit: int = 50) -> list[dict]:
 # ── Forecaster ──────────────────────────────────────────────────────────────
 
 FORECAST_METRIC = "lnhrv_dev_pct"
+STRENGTH_METRIC = "strength_emphasis_pct14"
 # Monthly cut-offs refit on data up to each one, then scored on the next 30
-# mornings: every scored morning is one the model never saw.
+# days: every scored point is one the model never saw.
 _BACKTEST_ORIGINS = 6
 _BACKTEST_HORIZON = 30
+
+
+@dataclass(frozen=True)
+class ForecastTarget:
+    metric: str
+    label: str
+    # 0: the morning not yet read. >0: the value that many days ahead, so only
+    # beliefs whose lag reaches that far can be known when the bet is made.
+    horizon_days: int
+    # Score one point per step: a 14-day rolling outcome scored daily would
+    # count the same fortnight fourteen times.
+    step_days: int
+    min_scored: int
+
+
+FORECAST_TARGETS: dict[str, ForecastTarget] = {
+    t.metric: t
+    for t in [
+        ForecastTarget(FORECAST_METRIC, "Next-morning HRV vs baseline", 0, 1, 30),
+        ForecastTarget(STRENGTH_METRIC, "Emphasis-muscle strength, 14 days vs prior 14", 7, 7, 12),
+    ]
+}
+
+
+def forecast_target(metric: str) -> ForecastTarget:
+    """The forecast target for a metric.
+
+    Raises:
+        SpecError: If the metric is not a forecast target.
+    """
+    t = FORECAST_TARGETS.get(metric)
+    if t is None:
+        raise SpecError(f"no forecast target {metric!r}; one of {sorted(FORECAST_TARGETS)}")
+    return t
 
 
 @dataclass(frozen=True)
@@ -875,9 +1184,12 @@ class _Term:
     p_b: float  # share of classified days in arm B, so the term is centred on an average day
 
 
-def _models(conn: duckdb.DuckDBPyConnection, origin: date) -> list[_Term]:
-    """Each belief's day-unit HRV hypothesis, refit on data up to `origin` and
-    shrunk toward its literature prior."""
+def _models(
+    conn: duckdb.DuckDBPyConnection, origin: date, metric: str = FORECAST_METRIC
+) -> list[_Term]:
+    """Each belief's day-unit hypothesis on `metric`, refit on data up to
+    `origin` and shrunk toward its literature prior."""
+    horizon = forecast_target(metric).horizon_days
     rows = conn.execute(
         "SELECT b.id, b.claim, b.prior_mean, b.prior_sd, h.spec FROM research_beliefs b "
         "JOIN research_hypotheses h ON h.belief_id = b.id WHERE h.status = 'active' ORDER BY h.created_at"
@@ -888,7 +1200,8 @@ def _models(conn: duckdb.DuckDBPyConnection, origin: date) -> list[_Term]:
         if (
             any(t.belief_id == bid for t in terms)
             or spec.get("unit", "day") != "day"
-            or spec["outcome"] != FORECAST_METRIC
+            or spec["outcome"] != metric
+            or int(spec.get("lag", 1)) < horizon
         ):
             continue
         res = estimate(conn, spec, today=origin)
@@ -936,18 +1249,37 @@ def _skill(pairs: list[tuple[float, float]]) -> float | None:
     return 1 - sum((a - p) ** 2 for a, p in pairs) / base
 
 
-def backtest(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict:
-    """Rolling-origin backtest of next-morning HRV, with each belief's contribution."""
+def backtest(
+    conn: duckdb.DuckDBPyConnection, today: date | None = None, metric: str = FORECAST_METRIC
+) -> dict:
+    """Rolling-origin backtest of one forecast target, with each belief's contribution.
+
+    The baseline guess is zero (no change from the outcome's own baseline). The
+    skill is withheld, with a `reason`, when no belief predicts the target or
+    fewer than the target's `min_scored` points could be scored: a model with
+    no terms scores exactly zero by construction, which is not a finding.
+
+    Args:
+        conn: Open DuckDB connection.
+        today: Last day that may be scored; defaults to today.
+        metric: A key of FORECAST_TARGETS.
+
+    Returns:
+        Skill, n, RMSEs, per-belief gains, the scored series and a reason when
+        skill is withheld.
+    """
     today = today or date.today()
-    actual = series(conn, FORECAST_METRIC)
+    target = forecast_target(metric)
+    actual = series(conn, metric)
     scored: list[tuple[date, float, float, dict[str, float]]] = []
     claims: dict[str, str] = {}
+    first = max(1, target.horizon_days)
     for k in range(_BACKTEST_ORIGINS, 0, -1):
         origin = today - timedelta(days=k * _BACKTEST_HORIZON)
-        terms = _models(conn, origin)
+        terms = _models(conn, origin, metric)
         claims |= {t.belief_id: t.claim for t in terms}
         feats = _features_for(conn, terms, (origin - timedelta(days=30), today))
-        for i in range(1, _BACKTEST_HORIZON + 1):
+        for i in range(first, _BACKTEST_HORIZON + 1, target.step_days):
             m = origin + timedelta(days=i)
             if m > today or m not in actual:
                 continue
@@ -960,15 +1292,24 @@ def backtest(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict
                     {t.belief_id: _predict(terms, feats, m, drop=t.belief_id) for t in terms},
                 )
             )
-    skill = _skill([(a, p) for _, a, p, _ in scored])
+    reason = None
+    if not claims:
+        reason = "No active belief predicts this target yet, so there is nothing to score."
+    elif len(scored) < target.min_scored:
+        reason = (
+            f"Only {len(scored)} scorable points in the backtest window; need {target.min_scored}."
+        )
+    skill = None if reason else _skill([(a, p) for _, a, p, _ in scored])
     gains = {}
     for bid in claims:
         without = _skill([(a, w.get(bid, p)) for _, a, p, w in scored])
         gains[bid] = None if skill is None or without is None else skill - without
     return {
-        "metric": FORECAST_METRIC,
+        "metric": metric,
+        "label": target.label,
         "skill": skill,
         "n": len(scored),
+        "reason": reason,
         "rmse_lab": math.sqrt(mean((a - p) ** 2 for _, a, p, _ in scored)) if scored else None,
         "rmse_base": math.sqrt(mean(a * a for _, a, _, _ in scored)) if scored else None,
         "gains": gains,
@@ -979,52 +1320,66 @@ def backtest(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict
     }
 
 
-def forecast_today(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict | None:
-    """Score past live forecasts, then log this morning's before its HRV exists.
+def _bet_date(target: ForecastTarget, today: date, actual: dict[date, float]) -> date:
+    if target.horizon_days:
+        return today + timedelta(days=target.horizon_days)
+    return today + timedelta(days=1) if today in actual else today
 
-    Returns the new forecast, or None when this morning's reading is already in
-    (a forecast made after the fact would score itself).
+
+def forecast_today(
+    conn: duckdb.DuckDBPyConnection, today: date | None = None, metric: str = FORECAST_METRIC
+) -> dict | None:
+    """Score past live forecasts, then log today's bet before its value exists.
+
+    A morning target is bet on for this morning; a day target for `horizon_days`
+    ahead, and scored only once that day is over.
+
+    Returns:
+        The new forecast, or None when the target's value is already in (a
+        forecast made after the fact would score itself) or one is logged.
     """
     today = today or date.today()
-    actual = series(conn, FORECAST_METRIC)
+    target = forecast_target(metric)
+    actual = series(conn, metric)
     for (d,) in conn.execute(
         "SELECT target_date FROM research_forecasts WHERE metric = ? AND actual IS NULL",
-        [FORECAST_METRIC],
+        [metric],
     ).fetchall():
-        if d in actual:
+        if d in actual and (target.horizon_days == 0 or d < today):
             conn.execute(
                 "UPDATE research_forecasts SET actual = ? WHERE target_date = ? AND metric = ?",
-                [actual[d], d, FORECAST_METRIC],
+                [actual[d], d, metric],
             )
+    when = today + timedelta(days=target.horizon_days)
     exists = conn.execute(
         "SELECT 1 FROM research_forecasts WHERE target_date = ? AND metric = ?",
-        [today, FORECAST_METRIC],
+        [when, metric],
     ).fetchone()
-    if today in actual or exists:
+    if (target.horizon_days == 0 and today in actual) or exists:
         return None
-    terms = _models(conn, today)
-    feats = _features_for(conn, terms, (today - timedelta(days=30), today))
-    pred = _predict(terms, feats, today)
+    terms = _models(conn, today, metric)
+    feats = _features_for(conn, terms, (today - timedelta(days=30), when))
+    pred = _predict(terms, feats, when)
     used = [
         {
             "belief_id": t.belief_id,
             "claim": t.claim,
-            "contribution": round(_predict([t], feats, today), 3),
+            "contribution": round(_predict([t], feats, when), 3),
         }
         for t in terms
     ]
     conn.execute(
         "INSERT INTO research_forecasts (target_date, metric, predicted, terms) VALUES (?, ?, ?, ?)",
-        [today, FORECAST_METRIC, pred, json.dumps(used)],
+        [when, metric, pred, json.dumps(used)],
     )
-    return {"target_date": str(today), "predicted": pred, "terms": used}
+    return {"target_date": str(when), "predicted": pred, "terms": used}
 
 
 def store_backtest(conn: duckdb.DuckDBPyConnection, bt: dict, author: str = "forecaster") -> None:
     """Persist a backtest and write each belief's contribution back to the ledger."""
     conn.execute(
-        "INSERT INTO research_forecast_skill (metric, skill, n, rmse_lab, rmse_base, gains, series) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO research_forecast_skill (metric, skill, n, rmse_lab, rmse_base, gains, series, reason) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
             bt["metric"],
             bt["skill"],
@@ -1033,30 +1388,37 @@ def store_backtest(conn: duckdb.DuckDBPyConnection, bt: dict, author: str = "for
             bt["rmse_base"],
             json.dumps(bt["gains"]),
             json.dumps(bt["series"]),
+            bt.get("reason"),
         ],
     )
     for bid, g in bt["gains"].items():
         conn.execute("UPDATE research_beliefs SET forecast_gain = ? WHERE id = ?", [g, bid])
     if bt["skill"] is not None:
         helps = sum(1 for g in bt["gains"].values() if g is not None and g > 0)
+        what = "mornings" if bt["metric"] == FORECAST_METRIC else f"{bt['metric']} points"
         note(
             conn,
             author,
             "forecast",
-            f"Forecast skill {bt['skill']:+.3f} over {bt['n']} unseen mornings",
+            f"Forecast skill {bt['skill']:+.3f} over {bt['n']} unseen {what}",
             f"{helps} of {len(bt['gains'])} beliefs improve the forecast; the rest are candidates for demotion.",
         )
 
 
-def forecast_view(conn: duckdb.DuckDBPyConnection, live_days: int = 60) -> dict:
+def forecast_view(
+    conn: duckdb.DuckDBPyConnection, live_days: int = 60, metric: str = FORECAST_METRIC
+) -> dict:
+    """The latest backtest and live record for one target, plus the targets on offer."""
+    target = forecast_target(metric)
     row = conn.execute(
-        "SELECT run_at, metric, skill, n, rmse_lab, rmse_base, gains, series FROM research_forecast_skill "
-        "ORDER BY run_at DESC LIMIT 1"
+        "SELECT run_at, metric, skill, n, rmse_lab, rmse_base, gains, series, reason "
+        "FROM research_forecast_skill WHERE metric = ? ORDER BY run_at DESC LIMIT 1",
+        [metric],
     ).fetchone()
     live = conn.execute(
         "SELECT target_date, predicted, actual, made_at FROM research_forecasts WHERE metric = ? "
         "ORDER BY target_date DESC LIMIT ?",
-        [FORECAST_METRIC, live_days],
+        [metric, live_days],
     ).fetchall()
     scored = [(float(a), float(p)) for _, p, a, _ in live if a is not None]
     return {
@@ -1071,6 +1433,7 @@ def forecast_view(conn: duckdb.DuckDBPyConnection, live_days: int = 60) -> dict:
             "rmse_base": row[5],
             "gains": json.loads(row[6]),
             "series": json.loads(row[7]),
+            "reason": row[8],
         },
         "live": [
             {
@@ -1083,6 +1446,13 @@ def forecast_view(conn: duckdb.DuckDBPyConnection, live_days: int = 60) -> dict:
         ],
         "live_skill": _skill(scored),
         "live_n": len(scored),
+        "target": {
+            "metric": target.metric,
+            "label": target.label,
+            "horizon_days": target.horizon_days,
+            "unit": _unit_of(target.metric),
+        },
+        "targets": [{"metric": t.metric, "label": t.label} for t in FORECAST_TARGETS.values()],
     }
 
 
@@ -1097,11 +1467,13 @@ def value_score(
 ) -> dict:
     """Fixed value-of-information score, so no proposer can argue its way up.
 
-    value = uncertainty × decision × feasibility × novelty, where uncertainty is
-    the belief's current 95% half-width in units of the smallest effect worth
-    acting on (capped at 3), decision is 1 when an answer would change what the
-    engine does and 0.5 otherwise, feasibility is 1 inside 120 days and decays
-    beyond, and novelty drops for a question the team has already asked.
+    value = uncertainty × decision × feasibility × novelty × goal, where
+    uncertainty is the belief's current 95% half-width in units of the smallest
+    effect worth acting on (capped at 3), decision is 1 when an answer would
+    change what the engine does and 0.5 otherwise, feasibility is 1 inside 120
+    days and decays beyond, novelty drops for a question the team has already
+    asked, and goal weights the outcome by what it serves (GOAL_WEIGHTS: muscle
+    above body composition above cardio above recovery mediators).
     """
     sd, decision = _DEFAULT_PRIOR_SD, 0.5
     if belief_id:
@@ -1131,12 +1503,16 @@ def value_score(
         )
         if same_question:
             novelty = min(novelty, 0.5)
+    goal = goal_of(spec["outcome"])
+    goal_weight = GOAL_WEIGHTS.get(goal, _OTHER_GOAL_WEIGHT)
     return {
-        "value": round(uncertainty * decision * feasibility * novelty, 3),
+        "value": round(uncertainty * decision * feasibility * novelty * goal_weight, 3),
         "uncertainty": round(uncertainty, 3),
         "decision": decision,
         "feasibility": round(feasibility, 3),
         "novelty": novelty,
+        "goal": goal,
+        "goal_weight": goal_weight,
     }
 
 
@@ -1197,7 +1573,8 @@ def review_queue(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 def _misses(conn: duckdb.DuckDBPyConnection) -> dict:
     """Where the latest backtest went most wrong: the patterns a curious analyst chases."""
     row = conn.execute(
-        "SELECT series FROM research_forecast_skill ORDER BY run_at DESC LIMIT 1"
+        "SELECT series FROM research_forecast_skill WHERE metric = ? ORDER BY run_at DESC LIMIT 1",
+        [FORECAST_METRIC],
     ).fetchone()
     if row is None:
         return {}
@@ -1254,7 +1631,9 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
             "outcome_scale": "lnhrv_dev_pct is % change in HRV vs your 28-day baseline; 3% is the smallest change worth acting on.",
             "max_days_to_answer": MAX_DAYS_TO_ANSWER,
             "min_per_arm": _MIN_PER_ARM,
-            "value_formula": "uncertainty × decision × feasibility × novelty (see value_score); computed by the server, not the proposer.",
+            "value_formula": "uncertainty × decision × feasibility × novelty × goal_weight (see value_score); computed by the server, not the proposer.",
+            "goal_weights": GOAL_WEIGHTS | {"other": _OTHER_GOAL_WEIGHT},
+            "goals": "Build muscle first (biceps and glutes emphasis), then body recomposition at maintenance, then aerobic fitness. HRV, sleep and RHR are mediators. Outcomes: e1rm_pct14:<muscle>, sets:<muscle>, strength_emphasis_pct14, session_quality, body_mass_lb, body_mass_7d, vo2_max.",
             "spec_shape": {
                 "exposure": {
                     "feature": "<feature name>",
@@ -1270,6 +1649,14 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
             },
         },
         "forecast": {k: fc.get(k) for k in ("skill", "n", "rmse_lab", "rmse_base", "gains")},
+        "forecast_targets": {
+            m: {
+                k: (forecast_view(conn, metric=m).get("backtest") or {}).get(k)
+                for k in ("skill", "n", "reason")
+            }
+            | {"label": t.label}
+            for m, t in FORECAST_TARGETS.items()
+        },
         "misses": _misses(conn),
         "beliefs": beliefs(conn),
         "hypotheses": hypotheses(conn),
@@ -1278,14 +1665,17 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
     }
 
 
-def forecast_preview(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict:
-    """The lab's bet for the next morning without a reading, and what drives it.
+def forecast_preview(
+    conn: duckdb.DuckDBPyConnection, today: date | None = None, metric: str = FORECAST_METRIC
+) -> dict:
+    """The lab's next bet on a target without a value yet, and what drives it.
 
     Not stored: the logged forecast is still the one written at 04:50.
     """
     today = today or date.today()
-    target = today + timedelta(days=1) if today in series(conn, FORECAST_METRIC) else today
-    terms = _models(conn, today)
+    tgt = forecast_target(metric)
+    target = _bet_date(tgt, today, series(conn, metric))
+    terms = _models(conn, today, metric)
     feats = _features_for(conn, terms, (today - timedelta(days=30), target))
     parts = [
         {
@@ -1304,9 +1694,11 @@ def forecast_preview(conn: duckdb.DuckDBPyConnection, today: date | None = None)
         for t in terms
     ]
     row = conn.execute(
-        "SELECT rmse_lab FROM research_forecast_skill ORDER BY run_at DESC LIMIT 1"
+        "SELECT rmse_lab FROM research_forecast_skill WHERE metric = ? ORDER BY run_at DESC LIMIT 1",
+        [metric],
     ).fetchone()
     return {
+        "metric": metric,
         "target_date": str(target),
         "predicted": sum(p["contribution"] for p in parts),
         "typical_miss": row[0] if row else None,

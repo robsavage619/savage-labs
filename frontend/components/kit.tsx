@@ -30,7 +30,13 @@ export interface GuideText {
   ctx?: ReactNode;
 }
 
-const GuideCtx = createContext<{ on: boolean; flip: () => void }>({ on: true, flip: () => {} });
+// `version` counts flips of the global switch, so a component with its own
+// open/closed state can tell "the reader just asked for everything" from its
+// own last toggle.
+const GuideCtx = createContext<{ on: boolean; flip: () => void; version: number }>({ on: true, flip: () => {}, version: 0 });
+
+/** The global reading-guides switch, for components that keep their own open state. */
+export const useGuides = () => useContext(GuideCtx);
 const GUIDE_KEY = "shc-guides";
 
 const subscribeStorage = (cb: () => void) => {
@@ -48,9 +54,11 @@ const readGuidePref = () => {
 export function GuideProvider({ children }: { children: ReactNode }) {
   const stored = useSyncExternalStore(subscribeStorage, readGuidePref, () => null);
   const [override, setOverride] = useState<boolean | null>(null);
+  const [version, setVersion] = useState(0);
   const on = override ?? stored !== "off";
   const flip = () => {
     setOverride(!on);
+    setVersion((v) => v + 1);
     try {
       localStorage.setItem(GUIDE_KEY, on ? "off" : "on");
     } catch {
@@ -58,7 +66,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
     }
   };
   return (
-    <GuideCtx.Provider value={{ on, flip }}>
+    <GuideCtx.Provider value={{ on, flip, version }}>
       {children}
       <button className="k-guide-toggle" onClick={flip} aria-pressed={on}>
         {on ? "Hide reading guides" : "Show reading guides"}

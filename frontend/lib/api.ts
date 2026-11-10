@@ -864,6 +864,17 @@ export interface ResearchBelief {
   learned: number | null;
   /** Backtest forecast skill with this belief minus without it; ≤ 0 marks it for demotion. */
   forecast_gain: number | null;
+  /** Unit of the effect (from the outcome feature unless set on the belief). */
+  unit: string | null;
+  /** Symmetric half-range, in `unit`, that holds prior and posterior to ±2 SD. */
+  scale: number;
+  /** Goal the outcome serves: muscle, body, cardio, recovery or other. */
+  goal: string;
+}
+
+export interface ForecastTargetInfo {
+  metric: string;
+  label: string;
 }
 
 export interface ResearchForecast {
@@ -876,10 +887,14 @@ export interface ResearchForecast {
     rmse_base: number | null;
     gains: Record<string, number | null>;
     series: { date: string; actual: number; predicted: number }[];
+    /** Why skill is withheld (no beliefs predict the target, or too little history). */
+    reason?: string | null;
   } | null;
   live: { date: string; predicted: number; actual: number | null; made_at: string }[];
   live_skill: number | null;
   live_n: number;
+  target?: ForecastTargetInfo & { horizon_days: number; unit: string | null };
+  targets?: ForecastTargetInfo[];
 }
 
 export interface ResearchHypothesis {
@@ -892,10 +907,15 @@ export interface ResearchHypothesis {
   status: "proposed" | "active" | "rejected" | "retired";
   /** Server-computed value of information: uncertainty × decision × feasibility × novelty. */
   value_score: number | null;
+  /** The value score's inputs as computed at registration (null for questions registered before it was stored). */
+  value_parts: { value: number; uncertainty: number; decision: number; feasibility: number; novelty: number; goal?: string; goal_weight?: number } | null;
   power: { needed_per_arm: number; days_to_answer: number | null; outcome_sd: number } | null;
   created_at: string;
   result: {
     verdict: "supported" | "against" | "ruled_out" | "inconclusive" | "insufficient" | "error";
+    /** Raw (unadjusted) outcome mean in each arm. */
+    mean_a?: number | null;
+    mean_b?: number | null;
     effect: number | null;
     ci_low: number | null;
     ci_high: number | null;
@@ -919,10 +939,22 @@ export interface NotebookEntry {
 }
 
 export interface ForecastPreview {
+  metric?: string;
   target_date: string;
   predicted: number;
   typical_miss: number | null;
-  terms: { claim: string; belief_id: string; contribution: number }[];
+  terms: {
+    claim: string;
+    belief_id: string;
+    contribution: number;
+    feature?: string;
+    /** The exposure value that sets today's term (null when it hasn't been measured). */
+    exposure?: number | null;
+    arm_a?: { min?: number; max?: number };
+    arm_b?: { min?: number; max?: number };
+    effect?: number;
+    share_b?: number;
+  }[];
 }
 
 export interface ForecastMisses {
@@ -1263,8 +1295,10 @@ export const api = {
   experiments: () => get<Experiment[]>("/api/experiments"),
   researchBeliefs: () => get<ResearchBelief[]>("/api/research/beliefs"),
   researchHypotheses: () => get<ResearchHypothesis[]>("/api/research/hypotheses"),
-  researchForecast: () => get<ResearchForecast>("/api/research/forecast"),
-  researchPreview: () => get<ForecastPreview>("/api/research/forecast/preview"),
+  researchForecast: (metric?: string) =>
+    get<ResearchForecast>(`/api/research/forecast${metric ? `?metric=${encodeURIComponent(metric)}` : ""}`),
+  researchPreview: (metric?: string) =>
+    get<ForecastPreview>(`/api/research/forecast/preview${metric ? `?metric=${encodeURIComponent(metric)}` : ""}`),
   researchMisses: () => get<ForecastMisses>("/api/research/misses"),
   researchFeatures: () => get<FeatureInfo[]>("/api/research/features"),
   researchNotebook: (limit = 40) => get<NotebookEntry[]>(`/api/research/notebook?limit=${limit}`),

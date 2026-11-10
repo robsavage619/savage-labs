@@ -30,8 +30,8 @@ const Skel = ({ h }: { h: number }) => <div className="ts-skeleton" style={{ hei
 // ── Masthead and roster ─────────────────────────────────────────────────────
 
 const ROLES = [
-  { key: "analyst", name: "Analyst", does: "Proposes questions from the forecast's misses", cadence: "Sundays 1 PM", authors: ["analyst"] },
-  { key: "methodologist", name: "Methodologist", does: "Reviews every proposal blind", cadence: "After the analyst", authors: ["methodologist"] },
+  { key: "specialists", name: "Specialists", does: "Four researchers chasing their own leads", cadence: "One a day, Mon–Thu", authors: ["hypertrophy", "recovery", "conditioning", "metabolic", "analyst"] },
+  { key: "methodologist", name: "Methodologist", does: "Reviews every proposal and new measure blind", cadence: "After each specialist", authors: ["methodologist"] },
   { key: "forecaster", name: "Forecaster", does: "Bets on each morning before it happens", cadence: "Nightly 04:50", authors: ["forecaster"] },
   { key: "runner", name: "Runner", does: "Re-runs every live question", cadence: "Nightly 04:50", authors: ["nightly", "runner"] },
 ] as const;
@@ -91,13 +91,43 @@ const gauss = (x: number, m: number, s: number) => Math.exp(-0.5 * ((x - m) / s)
 
 // ── Forecast desk ───────────────────────────────────────────────────────────
 
-function Ribbon({ series, bet, miss, height }: { series: { date: string; actual: number; predicted: number }[]; bet: { date: string; v: number } | null; miss: number; height: number }) {
+const HRV = "lnhrv_dev_pct";
+/** Copy and axis floors per forecast target; the server owns which targets exist. */
+const DESK: Record<string, { tab: string; points: string; subject: string; bet: string; tag: string; sub: string; floor: number; ext: number; base: string; foot: string }> = {
+  [HRV]: {
+    tab: "HRV",
+    points: "mornings",
+    subject: "your HRV",
+    bet: "Tomorrow's bet",
+    tag: "tomorrow",
+    sub: "HRV against your baseline",
+    floor: 25,
+    ext: 50,
+    base: "baseline",
+    foot: "Logged for real at 04:50, before the reading exists, then scored when it lands.",
+  },
+  strength_emphasis_pct14: {
+    tab: "Strength",
+    points: "weeks",
+    subject: "your biceps and glutes strength",
+    bet: "Next week's bet",
+    tag: "next week",
+    sub: "Biceps and glutes e1RM, last 14 days vs the 14 before",
+    floor: 6,
+    ext: 15,
+    base: "no change",
+    foot: "A week-ahead bet, scored once that week is over. Only beliefs that act a week or more ahead can move it.",
+  },
+};
+const deskOf = (metric: string, label?: string) => DESK[metric] ?? { ...DESK[HRV], tab: label ?? metric, subject: label ?? metric, sub: label ?? metric, tag: "next" };
+
+function Ribbon({ series, bet, miss, height, floor, tag }: { series: { date: string; actual: number; predicted: number }[]; bet: { date: string; v: number } | null; miss: number; height: number; floor: number; tag: string }) {
   const [ref, W] = useWidth();
   const [hov, setHov] = useState<number | null>(null);
   const pts = series.slice(-90);
   const n = pts.length + (bet ? 2 : 0);
   const P = { l: 44, r: 16, t: 14, b: 26 };
-  const lim = Math.min(60, Math.max(25, ...pts.map((p) => Math.abs(p.actual))));
+  const lim = Math.min(60, Math.max(floor, ...pts.map((p) => Math.abs(p.actual))));
   const x = (i: number) => P.l + (i / Math.max(1, n - 1)) * (W - P.l - P.r);
   const y = (v: number) => P.t + ((lim - Math.max(-lim, Math.min(lim, v))) / (2 * lim)) * (height - P.t - P.b);
   const line = pts.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.predicted).toFixed(1)}`).join("");
@@ -136,7 +166,7 @@ function Ribbon({ series, bet, miss, height }: { series: { date: string; actual:
             <line x1={bx} x2={bx} y1={y(bet.v + miss)} y2={y(bet.v - miss)} className="lf-betbar" />
             <motion.circle cx={bx} cy={y(bet.v)} r={6} className="lf-bet" initial={{ scale: 0 }} animate={{ scale: [0, 1.4, 1] }} transition={{ delay: 1.2, duration: 0.6 }} />
             <text x={bx - 10} y={y(bet.v) - 12} textAnchor="end" className="lf-betlabel">
-              tomorrow
+              {tag}
             </text>
           </g>
         )}
@@ -174,37 +204,70 @@ function Ribbon({ series, bet, miss, height }: { series: { date: string; actual:
 }
 
 export function ForecastDesk() {
-  const f = useQuery({ queryKey: ["research-forecast"], queryFn: api.researchForecast, staleTime: STALE });
-  const p = useQuery({ queryKey: ["research-preview"], queryFn: api.researchPreview, staleTime: STALE });
+  const [metric, setMetric] = useState(HRV);
+  const arg = metric === HRV ? undefined : metric;
+  const f = useQuery({ queryKey: ["research-forecast", metric], queryFn: () => api.researchForecast(arg), staleTime: STALE });
+  const p = useQuery({ queryKey: ["research-preview", metric], queryFn: () => api.researchPreview(arg), staleTime: STALE });
   const [deskRef, deskW] = useWidth(900);
-  const bt = f.data?.backtest;
-  if (!bt || bt.skill == null || !p.data) return <Skel h={420} />;
-  const miss = bt.rmse_lab ?? 18;
+  const targets = f.data?.targets ?? [];
+  const cfg = deskOf(metric, f.data?.target?.label);
+  const switcher =
+    targets.length > 1 ? (
+      <div className="lf-switch" role="tablist" aria-label="Forecast target">
+        {targets.map((t) => (
+          <button key={t.metric} role="tab" aria-selected={metric === t.metric} title={t.label} className={metric === t.metric ? "on" : ""} onClick={() => setMetric(t.metric)}>
+            {deskOf(t.metric, t.label).tab}
+          </button>
+        ))}
+      </div>
+    ) : null;
+  if (!f.data || !p.data) return <Skel h={420} />;
+  const bt = f.data.backtest;
+  if (!bt || bt.skill == null) {
+    return (
+      <div className="lf-desk lf-desk-none">
+        <div className="lf-desk-chart">
+          {switcher}
+          <span className="lf-label">No forecast skill to show yet</span>
+          <p className="lf-none-why">
+            {bt?.reason ?? "The forecaster has not backtested this target yet."}
+            {bt ? ` ${bt.n} ${cfg.points} were scorable.` : ""} The lab won&apos;t claim skill it hasn&apos;t earned on {cfg.points} it never saw.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  const miss = bt.rmse_lab ?? cfg.floor;
   const max = Math.max(1, ...p.data.terms.map((t) => Math.abs(t.contribution)));
   const live = p.data.terms.filter((t) => t.contribution !== 0);
   const quiet = p.data.terms.filter((t) => t.contribution === 0);
   return (
     <div className="lf-desk" ref={deskRef}>
       <div className="lf-desk-chart">
+        {switcher}
         <div className="lf-desk-top">
           <div>
-            <span className="lf-label">Forecast skill on mornings it never saw</span>
+            <span className="lf-label">Forecast skill on {cfg.points} it never saw</span>
             <b className={`lf-big ${bt.skill > 0 ? "up" : "down"}`}>{signed(bt.skill * 100, 1)}%</b>
           </div>
           <p>
-            Better than guessing &quot;same as baseline&quot; across {bt.n} mornings. The line is the lab&apos;s forecast, the band its typical miss of ±{miss.toFixed(0)}%, the dots what your HRV actually did; copper dots landed outside the band.
+            Better than guessing &quot;{cfg.base}&quot; across {bt.n} {cfg.points}. The line is the lab&apos;s forecast, the band its typical miss of ±{miss.toFixed(miss < 10 ? 1 : 0)}%, the dots what {cfg.subject} actually did; copper dots landed outside the band.
           </p>
         </div>
-        <Fill min={deskW < 760 ? 240 : 280}>{(h) => <Ribbon series={bt.series} bet={{ date: p.data!.target_date, v: p.data!.predicted }} miss={miss} height={h} />}</Fill>
+        <Fill min={deskW < 760 ? 240 : 280}>{(h) => <Ribbon series={bt.series} bet={{ date: p.data!.target_date, v: p.data!.predicted }} miss={miss} height={h} floor={cfg.floor} tag={cfg.tag} />}</Fill>
       </div>
       <div className="lf-bet-card">
-        <span className="lf-label">Tomorrow&apos;s bet · {short(p.data.target_date)}</span>
+        <span className="lf-label">
+          {cfg.bet} · {short(p.data.target_date)}
+        </span>
         <b className="lf-bet-v">{signed(p.data.predicted)}%</b>
-        <span className="lf-bet-sub">HRV against your baseline, give or take {miss.toFixed(0)}%</span>
-        <Fill min={110}>{(h) => <BetCurve v={p.data!.predicted} miss={miss} height={h} />}</Fill>
+        <span className="lf-bet-sub">
+          {cfg.sub}, give or take {miss.toFixed(miss < 10 ? 1 : 0)}%
+        </span>
+        <Fill min={110}>{(h) => <BetCurve v={p.data!.predicted} miss={miss} height={h} ext={cfg.ext} base={cfg.base} />}</Fill>
         <div className="lf-drivers">
           <span className="lf-label">Why</span>
-          {live.length === 0 && <p className="lf-quiet">No belief applies to today&apos;s data, so the lab bets on your baseline.</p>}
+          {live.length === 0 && <p className="lf-quiet">No belief applies to the data so far, so the lab bets on {cfg.base}.</p>}
           {live.map((t) => (
             <div key={t.belief_id} className="lf-drv">
               <span>{t.claim}</span>
@@ -222,7 +285,7 @@ export function ForecastDesk() {
           ))}
           {quiet.length > 0 && <p className="lf-quiet">Silent today: {quiet.map((t) => t.claim.toLowerCase()).join("; ")}.</p>}
         </div>
-        <p className="lf-foot">Logged for real at 04:50, before the reading exists, then scored when it lands.</p>
+        <p className="lf-foot">{cfg.foot}</p>
       </div>
     </div>
   );
@@ -230,9 +293,8 @@ export function ForecastDesk() {
 
 /** Where tomorrow's reading will probably land: the bet as a distribution, with
  *  the middle half and 80% of outcomes shaded. */
-function BetCurve({ v, miss, height }: { v: number; miss: number; height: number }) {
+function BetCurve({ v, miss, height, ext, base }: { v: number; miss: number; height: number; ext: number; base: string }) {
   const [ref, W] = useWidth(320);
-  const ext = 50;
   const X = (x: number) => ((x + ext) / (2 * ext)) * W;
   const sh = height - 20; // the caption takes the rest
   const H = sh - 16;
@@ -252,11 +314,11 @@ function BetCurve({ v, miss, height }: { v: number; miss: number; height: number
         <path d={area(v - q50, v + q50)} className="lf-b50" />
         <path d={xs.map((x, i) => `${i ? "L" : "M"}${X(x).toFixed(1)},${Y(x).toFixed(1)}`).join("")} className="lf-bline" />
         <line x1={X(0)} x2={X(0)} y1={0} y2={H} className="lf-axis0" />
-        <text x={X(0)} y={sh - 3} textAnchor="middle" className="lf-tick">baseline</text>
+        <text x={X(0)} y={sh - 3} textAnchor="middle" className="lf-tick">{base}</text>
         <text x={X(-ext) + 2} y={sh - 3} className="lf-tick">−{ext}%</text>
         <text x={X(ext) - 2} y={sh - 3} textAnchor="end" className="lf-tick">+{ext}%</text>
       </svg>
-      <span className="lf-betcap">Half of mornings like this land in {signed(v - q50, 0)} to {signed(v + q50, 0)}%, eight in ten in {signed(v - q80, 0)} to {signed(v + q80, 0)}%.</span>
+      <span className="lf-betcap">Half of bets like this land in {signed(v - q50, 0)} to {signed(v + q50, 0)}%, eight in ten in {signed(v - q80, 0)} to {signed(v + q80, 0)}%.</span>
     </div>
   );
 }
@@ -280,6 +342,13 @@ function useMorph(target: { m: number; s: number }, from: { m: number; s: number
   }, [target.m, target.s, from.m, from.s]);
   return v;
 }
+
+/** A value in a belief's own unit: "+3.0%", "+0.40 kg". */
+const inUnit = (v: number, unit: string | null, ext: number) => {
+  const s = signed(v, ext < 3 ? 2 : 1);
+  return unit === "%" ? `${s}%` : unit ? `${s} ${unit}` : s;
+};
+const tickOf = (v: number, unit: string | null) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}${unit === "%" ? "%" : ""}`;
 
 function Lens({ b, ext }: { b: ResearchBelief; ext: number }) {
   const [ref, W] = useWidth(240);
@@ -310,6 +379,8 @@ function Lens({ b, ext }: { b: ResearchBelief; ext: number }) {
             </linearGradient>
           </defs>
           <line x1={X(0)} x2={X(0)} y1={0} y2={H} className="lf-axis0" />
+          <text x={2} y={11} className="lf-tick">{tickOf(-ext, b.unit)}</text>
+          <text x={W - 2} y={11} textAnchor="end" className="lf-tick">{tickOf(ext, b.unit)}</text>
           <path d={path(b.prior_mean, b.prior_sd)} fill="none" className="lf-prior" />
           <path d={`${path(post.m, post.s)}L${W},${H}L0,${H}Z`} fill={`url(#lf-g-${b.id})`} />
           <path d={path(post.m, post.s)} fill="none" className={`lf-post${clear ? (b.post_mean < 0 ? " neg" : " pos") : ""}`} />
@@ -317,9 +388,9 @@ function Lens({ b, ext }: { b: ResearchBelief; ext: number }) {
       </div>
       <footer>
         <div>
-          <b>{signed(b.post_mean)}%</b>
+          <b>{inUnit(b.post_mean, b.unit, ext)}</b>
           <span>
-            90%: {signed(lo)} to {signed(hi)}
+            90%: {inUnit(lo, b.unit, ext)} to {inUnit(hi, b.unit, ext)}
           </span>
         </div>
         <div className="lf-learned">
@@ -343,16 +414,18 @@ export function BeliefLenses() {
   const q = useBeliefs();
   if (!q.data) return <Skel h={260} />;
   const rows = [...q.data].sort((a, b) => (b.learned ?? 0) - (a.learned ?? 0));
-  const ext = 15;
+  // Beliefs in the same unit share the widest of their scales, so their curves compare at a glance.
+  const ext = new Map<string, number>();
+  for (const b of rows) ext.set(b.unit ?? "", Math.max(ext.get(b.unit ?? "") ?? 0, b.scale));
   return (
     <>
       <div className="lf-lenses">
         {rows.map((b) => (
-          <Lens key={b.id} b={b} ext={ext} />
+          <Lens key={b.id} b={b} ext={ext.get(b.unit ?? "") ?? b.scale} />
         ))}
       </div>
       <p className="lf-foot">
-        Each curve is a belief about how much a thing moves your morning HRV, from −15% to +15%. The dashed curve is where the literature started the team; the filled one is where your data has moved it. Narrow and away from the centre line means the team is sure.
+        Each curve is a belief about how much a thing moves its outcome, drawn in that outcome&apos;s own unit on a scale symmetric about zero; beliefs in the same unit share a scale. The dashed curve is where the literature started the team; the filled one is where your data has moved it. Narrow and away from the centre line means the team is sure.
       </p>
     </>
   );
@@ -431,8 +504,12 @@ export function Pipeline() {
 
 // ── Conversation ────────────────────────────────────────────────────────────
 
+const SPECIALISTS = ["hypertrophy", "recovery", "conditioning", "metabolic"] as const;
+
 const roleOf = (author: string) => {
   const a = author.toLowerCase();
+  const sp = SPECIALISTS.find((k) => a.includes(k));
+  if (sp) return sp;
   if (a.includes("method")) return "methodologist";
   if (a.includes("forecast")) return "forecaster";
   if (a.includes("night") || a.includes("runner")) return "runner";

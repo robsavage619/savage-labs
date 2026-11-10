@@ -255,3 +255,153 @@ def test_randomized_trials_log_themselves_from_autolog_date(conn) -> None:
     assert dict(rows)[start + timedelta(days=2)] is False
     a = selflab.todays_assignments(conn, start)
     assert a and a[0]["arm"] == selflab.arm_for_day("auto-trial", start, start)
+
+
+# ── Goal outcomes ───────────────────────────────────────────────────────────
+
+
+def _map(conn, exercise: str, muscle: str, role: str = "primary") -> None:
+    conn.execute(
+        "INSERT INTO exercise_muscle (exercise_name, muscle, role, credit) VALUES (?, ?, ?, ?)",
+        [exercise, muscle, role, 1.0 if role == "primary" else 0.5],
+    )
+
+
+def test_per_muscle_features_validate_and_measure(conn, seed) -> None:
+    _map(conn, "Synthetic Curl", "biceps")
+    _map(conn, "Synthetic Row", "lats")
+    _map(conn, "Synthetic Row", "biceps", "secondary")
+    _map(conn, "Synthetic Raise", "calves")  # mapped, never trained
+    end = TODAY
+    # Prior fortnight at 20 kg, this fortnight at 21 kg: same reps, +5% e1RM.
+    for k in (20, 17):
+        seed.workout(end - timedelta(days=k), "Synthetic Curl", [(20.0, 10)] * 3, rpe=None)
+    for k in (6, 2):
+        seed.workout(end - timedelta(days=k), "Synthetic Curl", [(21.0, 10)] * 3, rpe=None)
+    seed.workout(end - timedelta(days=2), "Synthetic Row", [(40.0, 10)] * 2, rpe=None)
+    seed.workout(end - timedelta(days=2), "Synthetic Curl", [(10.0, 10)], rpe=None, is_warmup=True)
+
+    sets = research.series(conn, "sets:biceps")
+    # Secondary credit counts at 1.0, the warm-up doesn't count at all.
+    assert sets[end - timedelta(days=2)] == 5.0
+    assert research.series(conn, "sets:lats")[end - timedelta(days=2)] == 2.0
+    pct = research.series(conn, "e1rm_pct14:biceps")
+    assert pct[end] == pytest.approx(5.0, abs=0.01)
+
+    assert research.known_feature(conn, "e1rm_pct14:biceps")
+    assert not research.known_feature(conn, "sets:not_a_muscle")
+    assert not research.known_feature(conn, "sets:")
+    research.validate_spec(
+        conn,
+        SPEC
+        | {
+            "exposure": SPEC["exposure"] | {"feature": "sets:biceps"},
+            "outcome": "e1rm_pct14:biceps",
+        },
+    )
+    names = {f["name"]: f for f in research.dictionary(conn)}
+    assert names["e1rm_pct14:biceps"]["unit"] == "%" and names["sets:biceps"]["timing"] == "day"
+    assert names["sets:biceps"]["goal"] == "muscle"
+    assert "sets:calves" not in names
+
+
+def test_value_score_weights_outcomes_by_goal(conn) -> None:
+    fast = {"needed_per_arm": 50, "days_to_answer": 30, "outcome_sd": 10}
+    hrv = research.value_score(conn, SPEC, None, fast)
+    muscle = research.value_score(conn, SPEC | {"outcome": "e1rm_pct14:biceps"}, None, fast)
+    body = research.value_score(conn, SPEC | {"outcome": "body_mass_7d"}, None, fast)
+    other = research.value_score(conn, SPEC | {"outcome": "steps"}, None, fast)
+    assert (hrv["goal"], hrv["goal_weight"]) == ("recovery", 0.6)
+    assert (muscle["goal"], muscle["goal_weight"]) == ("muscle", 1.0)
+    assert body["goal_weight"] == 0.85 and other["goal_weight"] == 0.5
+    assert muscle["value"] > body["value"] > hrv["value"] > other["value"]
+    assert muscle["value"] / hrv["value"] == pytest.approx(1 / 0.6, rel=0.01)
+
+
+def test_beliefs_carry_their_outcome_unit_and_a_symmetric_scale(conn) -> None:
+    research.add_belief(conn, "Mass holds", "body_mass_7d", 0.0, 0.5, "test prior", None, "t")
+    research.add_belief(conn, "Curls help", "e1rm_pct14:biceps", 2.0, 3.0, "test prior", None, "t")
+    research.add_belief(conn, "HRV dips", "lnhrv_dev_pct", -3.0, 5.0, "test prior", None, "t")
+    research.add_belief(conn, "Override", "steps", 100.0, 50.0, "test prior", None, "t", unit="k")
+    by = {b["claim"]: b for b in research.beliefs(conn)}
+    assert by["Mass holds"]["unit"] == "lb"
+    assert by["Curls help"]["unit"] == "%"
+    assert by["Override"]["unit"] == "k"
+    assert by["HRV dips"]["scale"] == 15
+    for b in by.values():
+        assert b["scale"] >= abs(b["prior_mean"]) + 2 * b["prior_sd"]
+
+
+def _plant_strength(monkeypatch, conn, effect: float, seed: int = 5) -> None:
+    """A strength outcome that rises `effect` points a week after a hard day."""
+    rng = random.Random(seed)
+    strain = research.series(conn, "strain")
+    out = {
+        d + timedelta(days=7): (effect if s >= 14 else 0.0) + rng.gauss(0, 1.0)
+        for d, s in strain.items()
+    }
+    monkeypatch.setitem(research._DERIVED, research.STRENGTH_METRIC, lambda _c: out)
+
+
+STRENGTH_SPEC = SPEC | {
+    "outcome": research.STRENGTH_METRIC,
+    "lag": 7,
+    "expected_sign": "+",
+    "min_effect": 1,
+}
+
+
+def _strength_belief(conn, slug: str = "strain-strength", spec: dict = STRENGTH_SPEC) -> str:
+    bid = research.add_belief(
+        conn,
+        "Hard days build strength",
+        research.STRENGTH_METRIC,
+        1.0,
+        3.0,
+        "test prior",
+        None,
+        "t",
+    )
+    research.register(conn, slug, "q", spec, bid, "test")
+    research.review(conn, slug, "approve", "sized and adjusted", "methodologist")
+    return bid
+
+
+def test_forecaster_predicts_a_second_target_weekly(conn, monkeypatch) -> None:
+    _seed(conn, effect_pct=0, days=420)
+    _plant_strength(monkeypatch, conn, effect=4.0)
+    bid = _strength_belief(conn)
+    # A lag shorter than the week-ahead horizon can't be known when the bet is made.
+    _strength_belief(conn, "too-short", STRENGTH_SPEC | {"lag": 3})
+    bt = research.backtest(conn, today=TODAY, metric=research.STRENGTH_METRIC)
+    assert bt["reason"] is None and bt["n"] >= 12
+    # Scored once a week, not daily.
+    assert bt["n"] <= 6 * 5
+    assert bt["skill"] > 0.3
+    assert set(bt["gains"]) == {bid} and bt["gains"][bid] > 0
+    research.store_backtest(conn, bt)
+    view = research.forecast_view(conn, metric=research.STRENGTH_METRIC)
+    assert view["backtest"]["skill"] == pytest.approx(bt["skill"])
+    assert view["target"]["horizon_days"] == 7
+    assert {t["metric"] for t in view["targets"]} == set(research.FORECAST_TARGETS)
+    # The HRV view is untouched by the strength run.
+    assert research.forecast_view(conn)["backtest"] is None
+    p = research.forecast_preview(conn, today=TODAY, metric=research.STRENGTH_METRIC)
+    assert p["target_date"] == str(TODAY + timedelta(days=7))
+    made = research.forecast_today(conn, today=TODAY, metric=research.STRENGTH_METRIC)
+    assert made is not None and made["target_date"] == str(TODAY + timedelta(days=7))
+
+
+def test_forecaster_refuses_to_score_without_beliefs_or_history(conn, monkeypatch) -> None:
+    _seed(conn, effect_pct=0, days=75)
+    _plant_strength(monkeypatch, conn, effect=4.0)
+    none = research.backtest(conn, today=TODAY, metric=research.STRENGTH_METRIC)
+    assert none["skill"] is None and "No active belief" in none["reason"]
+    _strength_belief(conn)
+    thin = research.backtest(conn, today=TODAY, metric=research.STRENGTH_METRIC)
+    assert thin["skill"] is None and thin["n"] < 12 and "need 12" in thin["reason"]
+    assert all(g is None for g in thin["gains"].values())
+    research.store_backtest(conn, thin)
+    assert research.forecast_view(conn, metric=research.STRENGTH_METRIC)["backtest"]["reason"]
+    with pytest.raises(research.SpecError, match="forecast target"):
+        research.backtest(conn, today=TODAY, metric="made_up")

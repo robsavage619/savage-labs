@@ -80,12 +80,14 @@ async def _run_research() -> None:
     async with write_ctx() as conn:
         results = research.run_all(conn)
         # Log this morning's forecast before the reading lands, then re-score the lab.
-        research.forecast_today(conn)
-        research.store_backtest(conn, research.backtest(conn))
+        for target in research.FORECAST_TARGETS:
+            research.forecast_today(conn, metric=target)
+            research.store_backtest(conn, research.backtest(conn, metric=target))
     log.info(
         "nightly research run: %s",
         ", ".join(f"{r['slug']}={r['verdict']}" for r in results) or "no hypotheses",
     )
+
 
 async def _backup_db() -> None:
     """Nightly job: keep a week of verified database copies."""
@@ -185,7 +187,9 @@ async def _recompute_adherence() -> None:
                 "tgt": target_rpe,
             },
         )
-    log.info("plan adherence recomputed for %s (sets %s/%s)", yesterday, matched_sets, prescribed_sets)
+    log.info(
+        "plan adherence recomputed for %s (sets %s/%s)", yesterday, matched_sets, prescribed_sets
+    )
 
 
 async def _auto_advance_mesocycle() -> None:
@@ -338,7 +342,12 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         misfire_grace_time=300,
     )
     scheduler.add_job(
-        _backup_db, "cron", hour=3, minute=30, id="db_backup", replace_existing=True,
+        _backup_db,
+        "cron",
+        hour=3,
+        minute=30,
+        id="db_backup",
+        replace_existing=True,
         misfire_grace_time=6 * 3600,
     )
     # Closes the prescription→execution loop — runs after Hevy has synced,

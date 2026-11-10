@@ -24,6 +24,8 @@ class BeliefIn(BaseModel):
     prior_source: str = Field(min_length=3)
     decision: str | None = None
     author: str = "analyst"
+    # The effect's unit; derived from the outcome feature when omitted.
+    unit: str | None = None
 
 
 class HypothesisIn(BaseModel):
@@ -85,6 +87,7 @@ async def add_belief(body: BeliefIn) -> dict:
                 body.prior_source,
                 body.decision,
                 body.author,
+                body.unit,
             )
         except research.SpecError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -130,19 +133,41 @@ async def add_note(body: NoteIn) -> dict:
         return {"id": research.note(conn, body.author, body.kind, body.title, body.body, body.ref)}
 
 
+_METRIC = Query(
+    research.FORECAST_METRIC, description="Forecast target; next-morning HRV by default."
+)
+
+
+def _target(metric: str) -> str:
+    try:
+        return research.forecast_target(metric).metric
+    except research.SpecError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.get("/research/forecast")
-async def forecast() -> dict:
-    """The lab's skill at predicting next-morning HRV, backtest and live."""
-    return _read(research.forecast_view)
+async def forecast(metric: str = _METRIC) -> dict:
+    """The lab's skill at predicting a target (next-morning HRV by default), backtest and live."""
+    m = _target(metric)
+    return _read(lambda c: research.forecast_view(c, metric=m))
 
 
 @router.post("/research/backtest", dependencies=[Depends(require_admin_key)])
-async def backtest() -> dict:
+async def backtest(metric: str | None = None) -> dict:
+    """Backtest and log today's bet for one target, or every target when none is named.
+
+    The response is the named target's summary (HRV when none is named), with
+    every target's summary under `targets`.
+    """
+    metrics = [_target(metric)] if metric else list(research.FORECAST_TARGETS)
+    out: dict[str, dict] = {}
     async with write_ctx() as conn:
-        bt = research.backtest(conn)
-        research.store_backtest(conn, bt)
-        research.forecast_today(conn)
-    return {k: v for k, v in bt.items() if k != "series"}
+        for m in metrics:
+            bt = research.backtest(conn, metric=m)
+            research.store_backtest(conn, bt)
+            research.forecast_today(conn, metric=m)
+            out[m] = {k: v for k, v in bt.items() if k != "series"}
+    return out[metrics[0]] | {"targets": out}
 
 
 class ReviewIn(BaseModel):
@@ -198,9 +223,10 @@ async def review(slug: str, body: ReviewIn) -> dict:
 
 
 @router.get("/research/forecast/preview")
-async def forecast_preview() -> dict:
-    """Tomorrow morning's bet and the beliefs behind it (computed, not logged)."""
-    return _read(research.forecast_preview)
+async def forecast_preview(metric: str = _METRIC) -> dict:
+    """The next bet on a target and the beliefs behind it (computed, not logged)."""
+    m = _target(metric)
+    return _read(lambda c: research.forecast_preview(c, metric=m))
 
 
 @router.get("/research/misses")
