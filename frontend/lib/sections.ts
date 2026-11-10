@@ -103,7 +103,7 @@ export const SECTIONS: readonly Section[] = [
   { id: "subject", label: "Subject dossier", surface: "lab", keywords: ["personalization", "days observed", "enrolled"] },
   { id: "trial-progress", label: "Trial progress", surface: "lab", keywords: ["arms", "days", "minimum", "n-of-1"] },
   { id: "effects", label: "Trial results", surface: "lab", keywords: ["forest", "confidence interval", "effect size", "p value"] },
-  { id: "hrv-drivers", label: "HRV drivers", surface: "lab", keywords: ["journal", "habits", "what moves hrv"] },
+  { id: "hrv-drivers", label: "What moves your HRV", surface: "lab", keywords: ["journal", "habits", "what moves hrv", "correlations", "hrv delta"] },
   { id: "engine-bullets", label: "Engine scorecard", surface: "lab", keywords: ["adherence", "load accuracy", "skill"] },
   { id: "priors", label: "Proven priors", surface: "lab", keywords: ["confirmed", "proven", "actuation"] },
   { id: "trials", label: "Trials", surface: "lab", keywords: ["n-of-1", "experiments", "studies", "arms"] },
@@ -111,7 +111,7 @@ export const SECTIONS: readonly Section[] = [
   { id: "engine", label: "Engine self-assessment", surface: "lab", keywords: ["accuracy", "fitted", "landmarks", "deload trigger"] },
   { id: "signals", label: "Clinical research signals", surface: "lab", keywords: ["sri", "allostatic", "lnrmssd"] },
   { id: "autonomic", label: "Autonomic load", surface: "lab", keywords: ["stress", "behavior impact"] },
-  { id: "correlations", label: "What moves your HRV", surface: "lab", keywords: ["journal", "hrv delta", "behaviours"] },
+  { id: "suggested", label: "Suggested studies", surface: "lab", keywords: ["suggest", "new trial", "shortlist"] },
 ] as const;
 
 export function sectionsFor(surface: SurfaceId): Section[] {

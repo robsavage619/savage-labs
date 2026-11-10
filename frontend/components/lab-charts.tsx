@@ -2,8 +2,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api, type Experiment } from "@/lib/api";
-import { Eyebrow } from "@/components/ui/metric";
-import { ExploreButton } from "@/components/metric-explorer";
 
 /**
  * Lab at a glance: the n-of-1 program drawn instead of written. Every figure
@@ -14,26 +12,28 @@ import { ExploreButton } from "@/components/metric-explorer";
 const nice = (slug: string) => slug.replace(/^suggest-/, "").replace(/-/g, " ");
 const fmtDate = (iso: string | null) => {
   if (!iso) return "never";
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  // A bare date is a calendar day, not UTC midnight: parse it as local.
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00` : iso);
+  const year = d.getFullYear() === new Date().getFullYear() ? undefined : "numeric";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year });
 };
 
-function Head({ eyebrow, title, children }: { eyebrow: string; title: string; children?: React.ReactNode }) {
-  return (
-    <div className="ts-head">
-      <div>
-        <Eyebrow>{eyebrow}</Eyebrow>
-        <h3 className="shc-section-title mt-1">{title}</h3>
-      </div>
-      {children}
-    </div>
-  );
+/** Content only: the kit Panel around it supplies the card, title and guide. */
+function Frame({ error, ready, height, children }: { error: unknown; ready: boolean; height: number; children: React.ReactNode }) {
+  if (error) return <p className="ts-error">Couldn&apos;t load: {String(error)}</p>;
+  if (!ready) return <div className="ts-skeleton" style={{ height }} />;
+  return <div className="ts-card">{children}</div>;
 }
 
-function Frame({ error, ready, height, children }: { error: unknown; ready: boolean; height: number; children: React.ReactNode }) {
-  if (error) return <div className="shc-card p-6 ts-card"><p className="ts-error">Couldn&apos;t load: {String(error)}</p></div>;
-  if (!ready) return <div className="shc-card p-6 ts-card ts-skeleton" style={{ height }} />;
-  return <div className="shc-card shc-enter p-6 ts-card">{children}</div>;
+/** Sign of B − A the study predicted, from its pre-registered direction. */
+const predictedPositive = (e: Experiment) => e.outcome_direction !== "lower_better";
+
+/** A clear effect (CI excludes zero) whose sign contradicts the hypothesis. It can never confirm. */
+function againstHypothesis(e: Experiment) {
+  const r = e.result;
+  if (r?.effect == null || r.effect_ci_low == null || r.effect_ci_high == null) return false;
+  const clear = r.effect_ci_low > 0 || r.effect_ci_high < 0;
+  return clear && r.effect > 0 !== predictedPositive(e);
 }
 
 const useExperiments = () => useQuery({ queryKey: ["experiments"], queryFn: api.experiments, staleTime: 5 * 60 * 1000 });
@@ -45,13 +45,15 @@ export function TrialProgress() {
   const active = (q.data ?? []).filter((e) => e.status === "active");
   return (
     <Frame error={q.error} ready={!!q.data} height={280}>
-      <Head eyebrow={`${active.length} running`} title="How close is each trial to an answer?" />
       <div className="tp-list">
         {active.map((e) => (
           <div key={e.id} className="tp-row">
             <div className="tp-name">
               <span>{nice(e.slug)}</span>
               <em className={e.design === "observational" ? "tp-obs" : "tp-rand"}>{e.design === "observational" ? "observational" : "randomized"}</em>
+              <small className="tp-meta">
+                since {fmtDate(e.started_on)} · {e.outcome_metric.replace(/_/g, " ")}
+              </small>
             </div>
             {(["A", "B"] as const).map((k) => {
               const n = e.arms?.[k]?.measured ?? 0;
@@ -88,6 +90,8 @@ function ForestRow({ e }: { e: Experiment }) {
   const ext = Math.max(Math.abs(lo), Math.abs(hi), Math.abs(r.effect!)) * 1.2;
   const x = (v: number) => 50 + (v / ext) * 50;
   const crosses = lo <= 0 && hi >= 0;
+  const against = againstHypothesis(e);
+  const tone = crosses ? " dim" : against ? " against" : "";
   const unit = OUTCOME_UNIT[e.outcome_metric] ?? "";
   return (
     <div className="fp-row">
@@ -96,11 +100,12 @@ function ForestRow({ e }: { e: Experiment }) {
         <small>
           n {r.n_a}/{r.n_b} · scored {fmtDate(r.scored_at)}
         </small>
+        {against && <em className="fp-against-t">clear effect, opposite to the hypothesis</em>}
       </div>
       <div className="fp-plot" aria-label={`effect ${r.effect} ${unit}, 95% CI ${lo} to ${hi}`}>
         <span className="fp-zero" />
-        <span className={`fp-ci${crosses ? " dim" : ""}`} style={{ left: `${x(lo)}%`, width: `${x(hi) - x(lo)}%` }} />
-        <span className={`fp-pt${crosses ? " dim" : ""}`} style={{ left: `${x(r.effect!)}%` }} />
+        <span className={`fp-ci${tone}`} style={{ left: `${x(lo)}%`, width: `${x(hi) - x(lo)}%` }} />
+        <span className={`fp-pt${tone}`} style={{ left: `${x(r.effect!)}%` }} />
         <span className="fp-tick" style={{ left: "0%" }}>−{ext.toFixed(0)}</span>
         <span className="fp-tick mid" style={{ left: "50%" }}>0</span>
         <span className="fp-tick end" style={{ left: "100%" }}>+{ext.toFixed(0)}</span>
@@ -119,7 +124,6 @@ export function EffectForest() {
   const scored = (q.data ?? []).filter((e) => e.result?.effect != null && e.result.effect_ci_low != null && e.result.effect_ci_high != null);
   return (
     <Frame error={q.error} ready={!!q.data} height={280}>
-      <Head eyebrow="Scored results · 95% confidence" title="What the trials found so far" />
       {scored.length === 0 ? (
         <p className="ts-lede">No trial has enough data to be scored yet.</p>
       ) : (
@@ -129,7 +133,7 @@ export function EffectForest() {
           ))}
         </div>
       )}
-      <p className="ts-foot">The diamond is the best estimate; the bar is where the true effect probably sits. A grey bar crosses zero, so it isn&apos;t a finding yet. Each row has its own scale and unit.</p>
+      <p className="ts-foot">The diamond is the best estimate; the bar is where the true effect probably sits. Grey crosses zero, so it isn&apos;t a finding yet. Copper is a clear effect in the opposite direction to the hypothesis: a finding against it, which can never confirm. Each row has its own scale and unit.</p>
     </Frame>
   );
 }
@@ -145,9 +149,6 @@ export function HrvDrivers() {
   const max = Math.max(1, ...rows.map((r) => Math.abs(r.hrv_delta!)));
   return (
     <Frame error={q.error} ready={!!q.data} height={300}>
-      <Head eyebrow="WHOOP journal · yes days minus no days" title="What moves your HRV">
-        <ExploreButton metric="hrv" />
-      </Head>
       <div className="dv-list">
         {rows.map((c) => {
           const d = c.hrv_delta!;
@@ -177,7 +178,7 @@ export function ScorecardBullets() {
   const q = useQuery({ queryKey: ["engine-scorecard"], queryFn: api.engineScorecard, staleTime: 10 * 60 * 1000 });
   return (
     <Frame error={q.error} ready={!!q.data} height={300}>
-      <Head eyebrow={`Last 90 days · first review ${q.data ? fmtDate(q.data.first_review) : ""}`} title="Is the engine any good?" />
+      <p className="ts-lede">Last 90 days. First formal review {q.data ? fmtDate(q.data.first_review) : ""}.</p>
       <div className="sb-list">
         {q.data?.metrics.map((m) => {
           const pct = m.unit.trim() === "%" && m.value != null ? Math.max(0, Math.min(100, m.value)) : null;
@@ -206,13 +207,17 @@ export function ScorecardBullets() {
 export function PriorsShelf() {
   const p = useQuery({ queryKey: ["experiment-priors"], queryFn: api.experimentPriors, staleTime: 10 * 60 * 1000 });
   const ex = useExperiments();
+  // Only a study whose estimate points the predicted way can still confirm.
   const closest = (ex.data ?? [])
-    .filter((e) => e.status === "active" && e.result?.p_value != null)
+    .filter((e) => e.status === "active" && e.result?.p_value != null && e.result.effect != null)
+    .filter((e) => e.result!.effect! > 0 === predictedPositive(e))
     .sort((a, b) => a.result!.p_value! - b.result!.p_value!)[0];
+  const ladder = (ex.data ?? [])
+    .filter((e) => e.status === "active" && e.result?.p_value != null && e.result.effect != null)
+    .sort((a, b) => a.result!.p_value! - b.result!.p_value!);
   const short = closest ? (["A", "B"] as const).map((k) => Math.max(0, closest.min_per_arm - (closest.arms?.[k]?.measured ?? 0))) : null;
   return (
     <Frame error={p.error ?? ex.error} ready={!!p.data && !!ex.data} height={300}>
-      <Head eyebrow="Confirmed and in use" title="What's been proven" />
       {p.data && p.data.length > 0 ? (
         <ul className="ps-list">
           {p.data.map((x) => (
@@ -231,11 +236,49 @@ export function PriorsShelf() {
           {closest && (
             <p className="ps-next">
               Closest: <b>{nice(closest.slug)}</b>, p {closest.result!.p_value!.toFixed(2)}
-              {short && short.some((s) => s > 0) ? `, still ${short[0]} days short in A and ${short[1]} in B.` : ". Both conditions have enough days; it needs rescoring."}
+              {short && short.some((s) => s > 0)
+                ? `, still ${short[0]} days short in A and ${short[1]} in B.`
+                : ". Both conditions have enough days but the effect isn't clear yet; it rescores every night."}
             </p>
           )}
         </div>
       )}
+      <PValueLadder trials={ladder} />
     </Frame>
+  );
+}
+
+/** p on a log axis from 1 down to 0.001, so the 0.05 bar sits in view and small p's spread out. */
+const pPos = (p: number) => Math.min(1, Math.max(0, Math.log10(1 / Math.max(p, 0.001)) / 3));
+
+function PValueLadder({ trials }: { trials: Experiment[] }) {
+  if (trials.length === 0) return null;
+  return (
+    <div className="pl-wrap">
+      <div className="pl-head">
+        <span>Distance to confirming</span>
+        <small>p value, log scale · the line is 0.05</small>
+      </div>
+      <div className="pl-list">
+        {trials.map((e) => {
+          const p = e.result!.p_value!;
+          const against = e.result!.effect! > 0 !== predictedPositive(e);
+          return (
+            <div key={e.id} className="pl-row" title={against ? "Points opposite to the hypothesis, so it can never confirm" : undefined}>
+              <span className="pl-name">{nice(e.slug)}</span>
+              <span className="pl-track">
+                <span className="pl-line" style={{ left: `${pPos(0.05) * 100}%` }} />
+                <i style={{ width: `${pPos(p) * 100}%`, background: against ? "var(--series-2)" : "var(--series-1)" }} />
+              </span>
+              <b className="pl-val">
+                p {p.toFixed(2)}
+                <small>{against ? "wrong way" : p < 0.05 ? "past the line" : "not yet"}</small>
+              </b>
+            </div>
+          );
+        })}
+      </div>
+      <p className="ts-foot">Longer bars are stronger evidence; a cyan bar past the line, in a randomized trial, becomes a prior. Copper bars point the other way and can never confirm.</p>
+    </div>
   );
 }
