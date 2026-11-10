@@ -95,8 +95,13 @@ export const SECTIONS: readonly Section[] = [
   // ── Body ─────────────────────────────────────────────────────────────────
   { id: "fueling", label: "Fuelling", surface: "body", keywords: ["protein", "calories", "weight", "hydration"] },
   { id: "physique", label: "Progress photos", surface: "body", keywords: ["photos", "waist", "compare", "upload"] },
-  { id: "composition", label: "Body composition", surface: "body", keywords: ["weight", "vo2", "steps", "rhr"] },
-  { id: "airway", label: "Airway overnight", surface: "body", keywords: ["spo2", "oxygen", "saturation", "apnea", "osa", "respiratory", "breathing", "cpap"] },
+  { id: "composition", label: "Body weight", surface: "body", keywords: ["weight", "scale", "lbs", "recomp"] },
+  { id: "vo2", label: "VO₂ max", surface: "body", keywords: ["vo2", "aerobic", "fitness", "cardio"] },
+  { id: "steps", label: "Daily steps", surface: "body", keywords: ["steps", "walking", "neat", "movement"] },
+  { id: "rhr-devices", label: "Resting HR, both devices", surface: "body", keywords: ["rhr", "apple watch", "whoop", "resting"] },
+  { id: "airway", label: "Overnight oxygen", surface: "body", keywords: ["spo2", "oxygen", "saturation", "apnea", "osa", "cpap"] },
+  { id: "resp", label: "Breathing rate", surface: "body", keywords: ["respiratory", "breathing", "breaths", "illness"] },
+  { id: "tape", label: "Tape measurements", surface: "body", keywords: ["waist", "tape", "girth", "inches"] },
   { id: "clinical", label: "Clinical record", surface: "body", keywords: ["labs", "meds", "conditions", "bloodwork", "risk"] },
 
   // ── Lab ──────────────────────────────────────────────────────────────────
