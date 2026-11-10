@@ -1170,6 +1170,13 @@ export const api = {
     if (!r.ok) throw new Error(`experimentScore ${r.status}`);
     return r.json();
   },
+  /** Refresh and score every active trial together, with Benjamini–Hochberg
+   *  correction across the batch. The per-trial route skips that correction. */
+  experimentScoreAll: async () => {
+    const r = await fetch(`${BASE}/api/experiments/score-all`, { method: "POST", headers: mutHeaders() });
+    if (!r.ok) throw new Error(`experimentScoreAll ${r.status}`);
+    return r.json() as Promise<{ slug?: string; verdict?: string; error?: string }[]>;
+  },
   afterAction: () =>
     get<{
       as_of: string;

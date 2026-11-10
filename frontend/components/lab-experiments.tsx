@@ -47,6 +47,13 @@ export function LabExperiments() {
     mutationFn: (slug: string) => api.experimentScore(slug),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["experiments"] }),
   });
+  const scoreAllMut = useMutation({
+    mutationFn: api.experimentScoreAll,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["experiments"] });
+      qc.invalidateQueries({ queryKey: ["experiment-priors"] });
+    },
+  });
 
   const data = exps.data ?? [];
 
@@ -60,7 +67,18 @@ export function LabExperiments() {
             design isolates the causal effect. Confirmed effects feed the engine.
           </p>
         </div>
+        {data.length > 0 && (
+          <button
+            className="xp-open"
+            onClick={() => scoreAllMut.mutate()}
+            disabled={scoreAllMut.isPending}
+            title="Refresh outcomes and score every running trial together, with false-discovery correction across them"
+          >
+            {scoreAllMut.isPending ? "scoring all…" : "Score all trials"}
+          </button>
+        )}
       </div>
+      {scoreAllMut.isError && <p className="ts-error mt-2">Scoring failed: {String(scoreAllMut.error)}</p>}
 
       {data.length === 0 ? (
         <p className="text-[12px] text-[var(--text-dim)] mt-4">
