@@ -126,6 +126,7 @@ export function Panel({
   tag,
   guide,
   bare = false,
+  fill = false,
   children,
 }: {
   id?: string;
@@ -137,10 +138,12 @@ export function Panel({
   guide?: GuideText;
   /** For panels that bring their own card chrome: no surface, keeps the header and guide. */
   bare?: boolean;
+  /** Stretch to the row's height and let the body (e.g. a Clamp) take exactly the free space. */
+  fill?: boolean;
   children: ReactNode;
 }) {
   return (
-    <motion.article id={id} variants={rise} className={`k-panel k-span-${span}${bare ? " k-bare" : ""} scroll-mt-24`}>
+    <motion.article id={id} variants={rise} className={`k-panel k-span-${span}${bare ? " k-bare" : ""}${fill ? " k-fill" : ""} scroll-mt-24`}>
       <header className="k-panel-head">
         <div>
           <h3 className="k-panel-title">
@@ -151,7 +154,9 @@ export function Panel({
         </div>
         {explore && <ExploreButton metric={explore} />}
       </header>
-      <ErrorBoundary label={title}>{children}</ErrorBoundary>
+      <div className="k-body">
+        <ErrorBoundary label={title}>{children}</ErrorBoundary>
+      </div>
       {guide && <Guide g={guide} />}
     </motion.article>
   );
@@ -171,6 +176,32 @@ export function useWidth(initial = 560) {
     return () => ro.disconnect();
   }, []);
   return [ref, w] as const;
+}
+
+/**
+ * A chart that takes whatever vertical space its panel has spare (at least
+ * `min` px). This is how stretched panels stay gap-free: slack becomes chart,
+ * never empty space. The chart is absolutely positioned so its own height
+ * can't feed back into the space it's measuring.
+ */
+export function FillLines({ min = 110, ...props }: Omit<Parameters<typeof Lines>[0], "height"> & { min?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [h, setH] = useState(min);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setH(Math.max(min, Math.floor(e.contentRect.height))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [min]);
+  return (
+    <div ref={ref} className="k-fillchart" style={{ minHeight: min }}>
+      <div className="k-fillchart-inner">
+        {/* Multi-series charts draw a legend under the plot; keep it inside the box. */}
+        <Lines {...props} height={props.series.length > 1 ? Math.max(min - 26, h - 26) : h} />
+      </div>
+    </div>
+  );
 }
 
 export function niceTicks(lo: number, hi: number, n = 4): number[] {

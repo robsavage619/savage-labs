@@ -992,6 +992,33 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .k-panel { min-width: 0; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 14px; border: 1px solid var(--hairline); background: var(--card); }
 .k-panel.k-bare { padding: 0; border: 0; background: none; gap: 10px; align-self: start; }
 .k-stack { align-self: start; }
+/* Zero-gap rule: a stretched panel's body takes the free space and its rows
+   spread across it, so no panel shows dead space above its guide. */
+.k-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.k-body > * { flex: 1 1 auto; }
+.k-panel.k-fill { align-self: stretch; }
+.k-fill .k-body { flex: 1 1 0; }
+.k-fill .k-clamp:not(.open) { flex: 1 1 0; min-height: 0; }
+/* Slack goes INTO a designated element (bigger rows or tiles), never between them. */
+.nf-list { flex: 1 1 auto; display: flex; flex-direction: column; }
+.nf-list > .nf-row { flex: 1 1 auto; }
+.th-numbers { grid-auto-rows: 1fr; align-content: stretch; }
+.ls-mini { flex: 1 1 auto; display: flex; flex-direction: column; }
+.k-fillchart { position: relative; flex: 1 1 auto; }
+.k-fillchart-inner { position: absolute; inset: 0; min-width: 0; }
+.mf-tile b { font-size: 26px; }
+.k-stack > .k-panel { align-self: stretch; }
+.ls-mini { min-width: 0; }
+.mf-patterns { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border-radius: var(--r-md); border: 1px solid var(--hairline); background: var(--hairline); }
+.mf-patterns div { display: grid; gap: 2px; padding: 10px 12px; background: var(--card); min-width: 0; }
+.mf-patterns span { font: 500 10.5px var(--font-data); letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); }
+.mf-patterns b { font: 600 18px var(--font-data); color: var(--text-primary); }
+/* A stacked column stretches to its row; its first full panel absorbs the slack. */
+.k-stack.k-span-2 { align-self: stretch; }
+.k-stack > .k-panel:not(.k-bare):first-child { flex: 1 1 auto; }
+.ci-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; min-width: 0; }
+@media (max-width: 780px) { .ci-grid { grid-template-columns: minmax(0, 1fr); } }
+.ls-mini-label { margin: 0 0 4px; font: 500 11px var(--font-data); letter-spacing: .06em; color: var(--text-dim); }
 .k-panel.k-bare > .k-panel-head { padding: 0 2px; }
 .k-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .k-panel-title { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font: 700 16px var(--font-display); color: var(--text-primary); }
@@ -1027,7 +1054,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .k-clamp.open .k-clamp-btn { position: static; transform: none; display: block; margin: 12px auto 0; }
 
 /* Today hero (today-hero.tsx) */
-.th { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.4fr); gap: 28px; align-items: start; }
+.th { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.4fr); gap: 28px; align-items: stretch; }
 .th-call { font: 800 clamp(34px, 3.6vw, 52px)/1 var(--font-display); letter-spacing: -.02em; }
 .th-why { margin: 10px 0 0; font-size: 14px; line-height: 1.5; color: var(--text-muted); }
 .th-locks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }

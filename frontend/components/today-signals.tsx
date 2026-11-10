@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, type DailyState, type NoiseFloorSignal } from "@/lib/api";
 import { useExplorer, type MetricKey } from "@/components/metric-explorer";
+import { FillLines } from "@/components/kit";
 
 /**
  * The morning read: four figures that say whether today is different from
@@ -158,6 +159,7 @@ export function ReadinessBreakdown() {
         </div>
       </div>
       {weakest && <p className="ts-foot">Dragging it down most: {weakest.label.toLowerCase()} at {Math.round(r.components[weakest.key] ?? 0)}.</p>}
+      <RecoveryMini />
     </Shell>
   );
 }
@@ -200,8 +202,73 @@ export function LoadSplit() {
           <span style={{ left: `${ax(1.5)}%` }}>1.5 gate</span>
         </div>
       </div>
-      <p className="ts-foot">Green band is steady building. Past 1.5 the engine starts locking muscles.</p>
+      <LoadCurveMini />
+      <p className="ts-foot">Green is steady building. Past 1.5 the engine starts locking muscles.</p>
     </Shell>
+  );
+}
+
+/** Working sets per week for eight weeks: how much there has been to recover from. */
+function WeeklySetsMini() {
+  const q = useQuery({ queryKey: ["training-weekly", 8], queryFn: () => api.trainingWeekly(8), staleTime: 10 * 60 * 1000 });
+  const pts = q.data ?? [];
+  return (
+    <div className="ls-mini">
+      <p className="ls-mini-label">Working sets per week, last 8 weeks</p>
+      {pts.length > 1 ? (
+        <FillLines labels={pts.map((w) => w.week)} series={[{ name: "Sets", color: "var(--series-1)", y: pts.map((w) => w.sets) }]} min={110} />
+      ) : (
+        <div className="ts-skeleton" style={{ height: 110 }} />
+      )}
+    </div>
+  );
+}
+
+/** WHOOP recovery for four weeks, with its green and red cut-offs. */
+function RecoveryMini() {
+  const q = useQuery({ queryKey: ["recovery-trend", 28], queryFn: () => api.recoveryTrend(28), staleTime: 10 * 60 * 1000 });
+  const pts = q.data ?? [];
+  return (
+    <div className="ls-mini">
+      <p className="ls-mini-label">WHOOP recovery, last 4 weeks</p>
+      {pts.length > 1 ? (
+        <FillLines
+          labels={pts.map((p) => p.date)}
+          series={[{ name: "Recovery", color: "var(--series-1)", y: pts.map((p) => p.score) }]}
+          refs={[
+            { y: 67, label: "green 67" },
+            { y: 34, label: "red 34" },
+          ]}
+          min={120}
+        />
+      ) : (
+        <div className="ts-skeleton" style={{ height: 120 }} />
+      )}
+    </div>
+  );
+}
+
+/** Six weeks of fitness vs fatigue: the trend the ratio above is a snapshot of. */
+function LoadCurveMini() {
+  const q = useQuery({ queryKey: ["load-curve", 42], queryFn: () => api.loadCurve(42), staleTime: 10 * 60 * 1000 });
+  const pts = q.data?.points ?? [];
+  return (
+    <div className="ls-mini">
+      <p className="ls-mini-label">Fitness vs fatigue, last 6 weeks</p>
+      {pts.length > 1 ? (
+        <FillLines
+          labels={pts.map((p) => p.date)}
+          series={[
+            { name: "Fitness", color: "var(--series-1)", y: pts.map((p) => p.ctl) },
+            { name: "Fatigue", color: "var(--series-2)", y: pts.map((p) => p.atl) },
+          ]}
+          min={130}
+          fmt={(v) => v.toFixed(0)}
+        />
+      ) : (
+        <div className="ts-skeleton" style={{ height: 130 }} />
+      )}
+    </div>
   );
 }
 
@@ -230,7 +297,23 @@ export function MuscleFreshness() {
           })}
         </div>
       )}
-      <p className="ts-foot">A dose is {mr[0]?.[1].dose_threshold_sets ?? 4}+ hard sets. Greener means more rested.</p>
+      <div className="mf-patterns">
+        {(
+          [
+            ["Legs", q.data.training_load.days_since_legs],
+            ["Push", q.data.training_load.days_since_push],
+            ["Pull", q.data.training_load.days_since_pull],
+            ["Pickleball", q.data.training_load.days_since_pickleball ?? null],
+          ] as [string, number | null][]
+        ).map(([label, d]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <b>{d == null ? "–" : `${d}d`}</b>
+          </div>
+        ))}
+      </div>
+      <p className="ts-foot">Tiles: a dose is {mr[0]?.[1].dose_threshold_sets ?? 4}+ hard sets, greener means more rested. Row: days since any session of that kind.</p>
+      <WeeklySetsMini />
     </Shell>
   );
 }

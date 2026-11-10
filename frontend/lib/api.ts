@@ -467,6 +467,7 @@ export interface DailyStateLoad {
   days_since_legs: number;
   days_since_push: number;
   days_since_pull: number;
+  days_since_pickleball?: number | null;
   push_pull_ratio_28d: number | null;
   push_sets_28d: number;
   pull_sets_28d: number;

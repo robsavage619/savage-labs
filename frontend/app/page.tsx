@@ -19,10 +19,11 @@ import { LoadSplit, MuscleFreshness, NoiseFloorCard, ReadinessBreakdown } from "
  * `lib/sections.ts`.
  */
 
-function Clamp({ children, height }: { children: ReactNode; height: number }) {
+/** Shows the first screen of the session, then a toggle for the rest. */
+function Clamp({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className={`k-clamp${open ? " open" : ""}`} style={open ? undefined : { maxHeight: height }}>
+    <div className={`k-clamp${open ? " open" : ""}`} style={open ? undefined : { maxHeight: 760 }}>
       {children}
       <button className="k-clamp-btn" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         {open ? "Show less" : "Show the whole session"}
@@ -110,7 +111,7 @@ export default function TodayPage() {
           <Section n="03" title="The session">
             <Panel
               id="session"
-              span={3}
+              span={4}
               title="Today's session"
               question="Sets, reps, load and target effort, ready to push to Hevy."
               bare
@@ -120,11 +121,28 @@ export default function TodayPage() {
                 why: "Hevy pushes the session as a routine to log against, and that log is what tomorrow's plan is built from. A session trained but not logged is invisible to the engine.",
               }}
             >
-              <Clamp height={720}>
+              <Clamp>
                 <NextWorkoutPane />
               </Clamp>
             </Panel>
-            <div className="k-span-1 k-stack">
+          </Section>
+
+          <Section n="04" title="Around the session">
+            <Panel
+              id="checkin"
+              span={2}
+              title="Check-in"
+              question="Thirty seconds of how you feel. It moves tomorrow's plan."
+              bare
+              guide={{
+                what: "Soreness, sleep quality, energy, stress and motivation on a 1–10 scale, plus where you're sore.",
+                read: "Higher stress or soreness pulls tomorrow's load down. Everything saves as you touch it.",
+                why: "Wearables can't see how you feel. This is the only way it reaches the engine, and readiness is missing 10% without it.",
+              }}
+            >
+              <CheckinCard />
+            </Panel>
+            <div className="k-span-2 k-stack">
               <Panel
                 id="fresh"
                 title="What's fresh"
@@ -141,23 +159,10 @@ export default function TodayPage() {
               <Panel id="midday" title="Lunch session" question="What to do at midday, built from what the morning left in the tank." bare>
                 <MiddaySessionCard />
               </Panel>
-              <Panel
-                id="checkin"
-                title="Check-in"
-                question="Thirty seconds of how you feel. It moves tomorrow's plan."
-                bare
-                guide={{
-                  what: "Soreness, sleep quality, energy, stress and motivation on a 1–10 scale, plus where you're sore.",
-                  read: "Higher stress or soreness pulls tomorrow's load down. Everything saves as you touch it.",
-                  why: "Wearables can't see how you feel. This is the only way it reaches the engine, and readiness is missing 10% without it.",
-                }}
-              >
-                <CheckinCard />
-              </Panel>
             </div>
           </Section>
 
-          <Section n="04" title="The write-up">
+          <Section n="05" title="The write-up">
             <Panel id="report" span={4} title="Morning report" question="The written read of your morning, when you've generated one." bare>
               <DailyReport />
             </Panel>

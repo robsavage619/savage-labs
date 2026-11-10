@@ -112,6 +112,11 @@ export function CheckinCard() {
         ) : null}
       </div>
 
+      {/* Two columns when there's room: inputs left, the body map right. Stacked
+          in one narrow column the card ran 1,100px+ and left half of Today
+          empty beside it. */}
+      <div className="ci-grid">
+      <div className="space-y-4 min-w-0">
       {/* Propranolol — pill toggle */}
       <Field label="Propranolol today">
         <PillToggle
@@ -169,15 +174,6 @@ export function CheckinCard() {
         onChange={(v) => { setMotivation(v); send({ motivation_1_10: v }); }}
       />
 
-      {/* Body diagram — per-muscle soreness */}
-      <BodyDiagram
-        value={muscleSoreness}
-        onChange={(next) => {
-          setMuscleSoreness(next);
-          send({ muscle_soreness: next });
-        }}
-      />
-
       {/* Sick / Traveling state pills */}
       <div className="flex items-center gap-2 pt-1">
         <StatePill
@@ -201,6 +197,19 @@ export function CheckinCard() {
         onChange={(e) => handleNotesChange(e.target.value)}
         className="w-full bg-transparent border border-[var(--hairline)] rounded-sm px-2.5 py-1.5 text-[11.5px] text-[var(--text-primary)] placeholder:text-[var(--text-faint)] focus:border-[var(--hairline-strong)] focus:outline-none resize-none"
       />
+      </div>
+
+      {/* Body diagram — per-muscle soreness */}
+      <div className="min-w-0">
+        <BodyDiagram
+          value={muscleSoreness}
+          onChange={(next) => {
+            setMuscleSoreness(next);
+            send({ muscle_soreness: next });
+          }}
+        />
+      </div>
+      </div>
 
       {submit.isError ? (
         <p className="text-[10.5px] text-[var(--negative)] mt-1">
