@@ -21,7 +21,10 @@ def _patch_db(conn: duckdb.DuckDBPyConnection, monkeypatch) -> None:
 
 async def test_inbox_ingests_and_archives(conn, monkeypatch, tmp_path: Path) -> None:
     _patch_db(conn, monkeypatch)
-    payload = {"date": "2026-11-08", "metrics": {"step_count": 9899, "walking_speed_mph": 2.6}}
+    payload = {
+        "date": "2026-11-08",
+        "metrics": {"step_count": 9899, "walking_speed_mph": 2.6, "basal_energy_kcal": 1800},
+    }
     (tmp_path / "2026-11-08.json").write_text(json.dumps(payload))
 
     assert await apple.ingest_shortcut_inbox(tmp_path) == 1
@@ -29,7 +32,11 @@ async def test_inbox_ingests_and_archives(conn, monkeypatch, tmp_path: Path) -> 
     rows = conn.execute(
         "SELECT metric, value_num FROM measurements WHERE source = 'apple_health' ORDER BY metric"
     ).fetchall()
-    assert rows == [("step_count", 9899.0), ("walking_speed_m_s", round(2.6 * 0.44704, 4))]
+    assert rows == [
+        ("basal_energy_kcal", 1800.0),
+        ("step_count", 9899.0),
+        ("walking_speed_m_s", round(2.6 * 0.44704, 4)),
+    ]
     assert not (tmp_path / "2026-11-08.json").exists()
     assert (tmp_path / "processed" / "2026-11-08.json").exists()
 
