@@ -20,19 +20,22 @@ def require_admin_key(
 ) -> None:
     """Reject mutating requests that don't carry the configured admin key.
 
-    Trusts loopback callers (the local CLI workout skill, the local browser
-    frontend) without a key — this is a single-user local app and the TCP peer
-    address is set by uvicorn from the real connection, not a spoofable header.
-    The key gate still applies to every non-loopback caller, so the
-    internet/Tailscale-facing surface remains protected. (The Apple Health
-    webhook has its own independent key check in routers/apple.py and is
-    unaffected by this.)
+    Trusts two callers without a key: a direct loopback peer (the local CLI,
+    the scheduled sync, an SSH tunnel), and a request `tailscale serve`
+    proxied for a logged-in tailnet user. The proxy also connects from
+    loopback, so a forwarded request is trusted only when it carries
+    `Tailscale-User-Login`, which tailscaled sets for tailnet users and strips
+    from incoming requests. Funnel traffic and tagged devices carry no login and
+    need the key. (The Apple Health and OwnTracks webhooks check their own key.)
 
     Also skips the check when no key is configured (first-run, no .env).
     """
     client = request.client
     if client is not None and client.host in _LOOPBACK_HOSTS:
-        return  # local CLI / local browser — trusted peer
+        proxied = "x-forwarded-for" in request.headers
+        # ponytail: any tailnet user is trusted; pin to one login if the tailnet gains others.
+        if not proxied or request.headers.get("tailscale-user-login"):
+            return
 
     effective = settings.effective_admin_key
     if not effective:

@@ -24,6 +24,7 @@ from statistics import NormalDist, mean
 import duckdb
 import numpy as np
 
+from shc import places
 from shc.selflab import _design_effect, _needed_per_arm
 from shc.training.mesocycle import _CAPPED_E1RM, _MAX_E1RM_MEDIAN_DEVIATION
 from shc.training.volume import _RPE_GATE, _STIMULATING
@@ -489,6 +490,7 @@ _DERIVED: dict[str, Callable[[duckdb.DuckDBPyConnection], dict[date, float]]] = 
 _DERIVED_KINDS: dict[str, Callable[[duckdb.DuckDBPyConnection, str], dict[date, float]]] = {
     "sets": _muscle_sets,
     "e1rm_pct14": _e1rm_pct14,
+    "place": lambda c, arg: places.daily_hours(c, int(arg)),
 }
 
 

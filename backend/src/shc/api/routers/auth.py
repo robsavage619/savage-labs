@@ -39,6 +39,17 @@ async def whoop_sync() -> dict:
     return {"status": "ok", "counts": counts}
 
 
+@router.post("/whoop-private/sync")
+async def whoop_private_sync(days: int = 2) -> dict:
+    """Pull the private-API metrics, minute stress among them, for the last `days` days."""
+    from shc.ingest.whoop_private import is_linked
+    from shc.ingest.whoop_private_metrics import sync_private_metrics
+
+    if not is_linked():
+        raise HTTPException(status_code=409, detail="WHOOP private API not linked on this host")
+    return {"status": "ok", **await sync_private_metrics(days)}
+
+
 @router.post("/apple/ingest")
 async def apple_ingest() -> dict:
     """Stream Apple Health export.xml into the measurements table."""

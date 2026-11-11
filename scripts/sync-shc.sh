@@ -28,6 +28,11 @@ HEVY_OUT=$(curl -sS --max-time 60 -X POST http://127.0.0.1:8000/api/hevy/sync 2>
   log "hevy  ok · ${HEVY_OUT}" || \
   log "hevy  FAILED · ${HEVY_OUT}"
 
+# Minute stress + sleep need from WHOOP's private API (409 until it is linked here).
+PRIV_OUT=$(curl -sS --max-time 120 -X POST "http://127.0.0.1:8000/auth/whoop-private/sync?days=2" 2>&1) && \
+  log "whoop-private · ${PRIV_OUT}" || \
+  log "whoop-private FAILED · ${PRIV_OUT}"
+
 # Trigger adherence recompute so yesterday's plan-vs-execution row updates.
 curl -sS --max-time 30 -X POST http://127.0.0.1:8000/api/training/adherence/recompute > /dev/null 2>&1 \
   && log "adherence recomputed" \

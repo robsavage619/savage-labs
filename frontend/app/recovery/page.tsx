@@ -5,6 +5,7 @@ import {
   AerobicBase,
   DayOfWeek,
   HrvBand,
+  Places,
   RecoveryMix,
   RecoveryScoreTrend,
   RhrTrend,
@@ -162,7 +163,24 @@ export default function RecoveryPage() {
             </Panel>
           </Section>
 
-          <Section n="04" title="Patterns">
+          <Section n="04" title="Places">
+            <Panel
+              id="places"
+              span={2}
+              title="Where you spend your time"
+              question="Places found from your phone, and what each one does to stress and the next morning."
+              guide={{
+                what: "Spots where you stayed 10 minutes or more, grouped into places. Nothing is set up by hand; tap a place to name it.",
+                read: "Stress is the average gap against your own normal for the same hours elsewhere; plus means higher there. HRV is the next morning after 2+ hours there versus days you didn't go.",
+                why: "Some places cost you more than a hard workout does, and you rarely see it from inside the day.",
+                ctx: "Ranges that cross zero mean no clear difference yet.",
+              }}
+            >
+              <Places />
+            </Panel>
+          </Section>
+
+          <Section n="05" title="Patterns">
             <Panel
               id="patterns"
               span={2}

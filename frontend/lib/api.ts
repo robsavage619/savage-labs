@@ -17,6 +17,49 @@ function mutHeaders(extra?: Record<string, string>): Record<string, string> {
   return h;
 }
 
+export interface PlaceEffect {
+  n_visits: number;
+  effect: number;
+  ci_low: number | null;
+  ci_high: number | null;
+}
+
+export interface PlaceMorning {
+  verdict: string;
+  effect: number | null;
+  ci_low: number | null;
+  ci_high: number | null;
+  n_a: number;
+  n_b: number;
+  summary: string;
+}
+
+export interface Place {
+  id: number;
+  name: string | null;
+  lat: number;
+  lon: number;
+  visits: number;
+  hours: number;
+  first: string;
+  last: string;
+  usual_days: string[];
+  usual_arrival_hour: number;
+  status: "ready" | "collecting";
+  stress: PlaceEffect | null;
+  morning: PlaceMorning | null;
+}
+
+export interface PlacesSummary {
+  places: Place[];
+  stays: number;
+  last_point_at: string | null;
+  tracked_days: number;
+  stress_days: number;
+  min_visits: number;
+  min_span_days: number;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status} ${path}`);
@@ -1069,6 +1112,15 @@ export const api = {
       body: JSON.stringify(values),
     });
     if (!r.ok) throw new Error(`saveTape ${r.status}`);
+  },
+  places: () => get<PlacesSummary>("/api/places"),
+  namePlace: async (id: number, name: string | null) => {
+    const r = await fetch(`${BASE}/api/places/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...mutHeaders() },
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) throw new Error(`namePlace ${r.status}`);
   },
   workoutDelete: async () => {
     const r = await fetch(`${BASE}/api/workout/plan`, { method: "DELETE", headers: mutHeaders() });

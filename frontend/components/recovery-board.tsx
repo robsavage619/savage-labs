@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { api } from "@/lib/api";
+import { api, type Place } from "@/lib/api";
 import { ease, fmtX, FillBars, FillLines, FillStackBars } from "@/components/kit";
 
 /**
@@ -427,3 +428,129 @@ export function RecoveryMix() {
     </div>
   );
 }
+
+// ── Places ──────────────────────────────────────────────────────────────────
+
+const signed = (v: number, digits = 2) => `${v > 0 ? "+" : ""}${v.toFixed(digits)}`;
+const clock = (h: number) => {
+  const hh = Math.floor(h);
+  const mm = Math.round((h - hh) * 60);
+  const am = hh < 12;
+  return `${((hh + 11) % 12) + 1}:${String(mm).padStart(2, "0")} ${am ? "am" : "pm"}`;
+};
+
+function PlaceName({ p }: { p: Place }) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: (name: string) => api.namePlace(p.id, name.trim() || null),
+    onSuccess: () => {
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ["places"] });
+    },
+  });
+  if (draft !== null) {
+    return (
+      <form
+        className="pl-name"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save.mutate(draft);
+        }}
+      >
+        <input autoFocus value={draft} maxLength={60} placeholder={`Place ${p.id}`} aria-label="Place name" onChange={(e) => setDraft(e.target.value)} onBlur={() => save.mutate(draft)} />
+      </form>
+    );
+  }
+  return (
+    <button type="button" className="pl-name" onClick={() => setDraft(p.name ?? "")} title="Rename">
+      {p.name ?? `Place ${p.id}`}
+      {!p.name && <span className="pl-hint"> · name it</span>}
+    </button>
+  );
+}
+
+function PlaceEffects({ p, minVisits }: { p: Place; minVisits: number }) {
+  if (p.status === "collecting") {
+    return <span className="nf-chip">collecting {Math.min(p.visits, minVisits)}/{minVisits}</span>;
+  }
+  const s = p.stress;
+  const m = p.morning;
+  return (
+    <div className="pl-fx">
+      {s ? (
+        <div>
+          stress <b>{signed(s.effect)}</b>
+          {s.ci_low != null && s.ci_high != null && (
+            <span className="pl-ci">
+              {" "}
+              ({signed(s.ci_low)} to {signed(s.ci_high)})
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="pl-ci">no stress minutes yet</div>
+      )}
+      {m && m.effect != null ? (
+        <div>
+          next-morning HRV <b>{signed(m.effect, 1)}%</b>
+          <span className="pl-ci">
+            {" "}
+            ({signed(m.ci_low ?? 0, 1)} to {signed(m.ci_high ?? 0, 1)})
+          </span>
+        </div>
+      ) : (
+        <div className="pl-ci">HRV: needs more days with and without</div>
+      )}
+    </div>
+  );
+}
+
+export function Places() {
+  const q = useQuery({ queryKey: ["places"], queryFn: api.places, staleTime: 10 * 60 * 1000 });
+  if (q.isError) return <Err e={q.error} />;
+  const d = q.data;
+  if (!d) return <Skel h={200} />;
+  if (!d.places.length) {
+    return (
+      <div className="ts-card">
+        <p className="ts-lede">
+          {d.last_point_at ? (
+            <>
+              Collecting: <b>{d.stays}</b> stays so far. A place shows up after your second visit.
+            </>
+          ) : (
+            <>No location yet. Once OwnTracks is sending, the places you spend time at appear here on their own.</>
+          )}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="ts-card">
+      <p className="ts-lede">
+        <b>{d.places.length}</b> places over {d.tracked_days} days, with minute stress on <b>{d.stress_days}</b> of them. Stress is WHOOP&apos;s 0–3 score against the same hours elsewhere.
+      </p>
+      <div className="pl-list">
+        {d.places.map((p) => (
+          <div className="pl-row" key={p.id}>
+            <div className="pl-who">
+              <PlaceName p={p} />
+              <div className="pl-ci">
+                {p.usual_days.join(" ")} · arrives ~{clock(p.usual_arrival_hour)} · {p.visits} visits · {p.hours} h ·{" "}
+                <a href={`https://maps.apple.com/?ll=${p.lat},${p.lon}&q=Place%20${p.id}`} target="_blank" rel="noreferrer">
+                  map
+                </a>
+              </div>
+            </div>
+            <PlaceEffects p={p} minVisits={d.min_visits} />
+          </div>
+        ))}
+      </div>
+      <p className="ts-foot">
+        A place reports once it has {d.min_visits} visits over {d.min_span_days} days. Workouts and the half hour after are left out. These are associations: who you&apos;re with and when you go come along with the place.
+      </p>
+    </div>
+  );
+}
+
