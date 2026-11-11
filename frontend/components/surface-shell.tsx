@@ -27,9 +27,9 @@ export function SurfaceShell({ children }: { children: ReactNode }) {
   const path = usePathname();
 
   return (
-    <main className="min-h-screen px-8 pb-24 pt-5 max-w-[1680px] mx-auto">
+    <main className="sl-shell min-h-screen max-w-[1680px] mx-auto">
       <header className="flex items-center justify-between flex-wrap gap-x-6 gap-y-3 pb-4 mb-5 border-b border-[var(--hairline)]">
-        <div className="flex items-baseline gap-3 shrink-0">
+        <div className="flex items-baseline flex-wrap gap-x-3 gap-y-2 min-w-0">
           <h1 className="flex items-baseline gap-[0.4em]">
             <span className="sl-wordmark-savage">Savage</span>
             <span className="sl-wordmark-labs">Labs</span>
@@ -38,7 +38,7 @@ export function SurfaceShell({ children }: { children: ReactNode }) {
           <SyncStatus />
         </div>
 
-        <nav className="flex items-center gap-1" aria-label="Surfaces">
+        <nav className="sl-shell-nav flex items-center gap-1" aria-label="Surfaces">
           {SURFACES.map((s) => {
             const active = s.route === "/" ? path === "/" : path.startsWith(s.route);
             return (
@@ -87,6 +87,24 @@ export function SurfaceShell({ children }: { children: ReactNode }) {
 
       <ErrorBoundary label="Page">{children}</ErrorBoundary>
       <CommandPalette />
+
+      {/* Phones only (CSS): the top tab row can't fit five surfaces at 390px. */}
+      <nav className="sl-tabbar" aria-label="Surfaces">
+        {SURFACES.map((s) => {
+          const active = s.route === "/" ? path === "/" : path.startsWith(s.route);
+          return (
+            <Link
+              key={s.id}
+              href={s.route}
+              aria-current={active ? "page" : undefined}
+              className="sl-tab no-tactile"
+            >
+              <i aria-hidden="true" />
+              {s.label}
+            </Link>
+          );
+        })}
+      </nav>
     </main>
   );
 }

@@ -178,7 +178,10 @@ export function useWidth(initial = 560) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    setW(Math.max(160, Math.round(el.getBoundingClientRect().width)));
+    // Content box, like the observer below: the border box overshot padded cards by their padding.
+    const cs = getComputedStyle(el);
+    const content = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    setW(Math.max(160, Math.round(content)));
     const ro = new ResizeObserver(([e]) => setW(Math.max(160, Math.round(e.contentRect.width))));
     ro.observe(el);
     return () => ro.disconnect();

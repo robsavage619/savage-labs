@@ -54,11 +54,11 @@
 .bo-log-head b { font: 600 17px/1.35 var(--font-display); }
 .bo-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
 .bo-fields > .bo-field:first-child { grid-column: 1 / -1; }
-.bo-field { display: grid; gap: 6px; min-width: 0; }
+.bo-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
 .bo-field small { font: 500 10.5px var(--font-data); color: var(--text-faint); }
 .bo-input { display: flex; align-items: baseline; gap: 6px; border-bottom: 1px solid var(--hairline-strong); padding-bottom: 4px; transition: border-color .2s; }
 .bo-input:focus-within { border-color: var(--sl-accent); }
-.bo-input input { flex: 1 1 auto; min-width: 0; background: none; border: 0; outline: 0; color: var(--text-primary); font: 600 26px/1.1 var(--font-display); -moz-appearance: textfield; }
+.bo-input input { flex: 1 1 auto; min-width: 0; width: 100%; background: none; border: 0; outline: 0; color: var(--text-primary); font: 600 26px/1.1 var(--font-display); -moz-appearance: textfield; }
 .bo-field:first-child .bo-input input { font-size: 40px; }
 .bo-input input::-webkit-outer-spin-button, .bo-input input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .bo-input input::placeholder { color: var(--text-faint); }
