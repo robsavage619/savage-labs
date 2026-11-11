@@ -31,8 +31,9 @@ dependencies = [
     "pyyaml>=6",
     "model2vec>=0.8.1",
     # Vision — progress-photo body tracking (all local, no external calls)
-    "mediapipe>=0.10",
-    "rembg[cpu]>=2.0",
+    # No Intel-Mac wheels for these two; the photo route degrades to 503 there.
+    "mediapipe>=0.10; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "rembg[cpu]>=2.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "opencv-python-headless>=4.10",
     "pillow>=10",
     "numpy>=1.26",

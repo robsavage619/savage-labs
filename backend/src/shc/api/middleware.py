@@ -40,8 +40,12 @@ class HostOriginMiddleware(BaseHTTPMiddleware):
                 # uses a random port, so port-exact matching would block it.
                 # DNS-rebinding protection is satisfied by requiring localhost/127.0.0.1.
                 from urllib.parse import urlparse
+
                 parsed = urlparse(origin)
-                if parsed.hostname not in ("localhost", "127.0.0.1"):
+                allowed_origins = {"localhost", "127.0.0.1"} | (
+                    {settings.tailscale_host} if settings.tailscale_host else set()
+                )
+                if parsed.hostname not in allowed_origins:
                     log.warning("rejected request with Origin: %s", origin)
                     return Response("Forbidden", status_code=403)
 

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/lib/providers";
@@ -10,7 +10,10 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 export const metadata: Metadata = {
   title: "Savage Labs",
   description: "Personal health intelligence platform",
+  appleWebApp: { capable: true, title: "Savage Labs", statusBarStyle: "black-translucent" },
 };
+
+export const viewport: Viewport = { themeColor: "#05070a", viewportFit: "cover" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

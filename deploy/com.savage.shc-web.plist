@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.savage.shc-web</string>
+  <key>UserName</key><string>__USER__</string>
+  <key>WorkingDirectory</key><string>__HOME__/Projects/savage-health-center/frontend</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/node/bin/node</string><string>node_modules/next/dist/bin/next</string>
+    <string>start</string><string>--hostname</string><string>127.0.0.1</string><string>--port</string><string>3000</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>__HOME__</string>
+    <key>NODE_ENV</key><string>production</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/shc-web.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/shc-web.log</string>
+</dict>
+</plist>

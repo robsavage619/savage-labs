@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 from datetime import date
+from types import ModuleType
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -20,8 +21,16 @@ from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
 from shc.metrics import compute_daily_state
 from shc.vision.noise import GIRTH_NOISE_FRACTION, classify_change
-from shc.vision.overlay import change_heatmap
-from shc.vision.pipeline import analyze_photo
+
+
+def _vision() -> tuple[ModuleType, ModuleType]:
+    """Load the pose/silhouette stack lazily, so the API still boots where it can't install."""
+    try:
+        from shc.vision import overlay, pipeline
+    except ImportError as exc:  # mediapipe/onnxruntime ship no Intel-Mac wheels
+        raise HTTPException(503, "photo analysis isn't available on this host") from exc
+    return pipeline, overlay
+
 
 router = APIRouter(tags=["progress-photos"])
 log = logging.getLogger(__name__)
@@ -74,11 +83,12 @@ async def upload_photo(
     if ext not in _ALLOWED_EXT:
         raise HTTPException(422, f"unsupported file type {ext}")
 
+    pipeline, _ = _vision()
     dest = _photo_dir() / f"{pdate.isoformat()}_{angle}{ext}"
     dest.write_bytes(await file.read())
 
     try:
-        analysis = analyze_photo(dest, baseline_scale_px=_baseline_scale(angle))
+        analysis = pipeline.analyze_photo(dest, baseline_scale_px=_baseline_scale(angle))
     except ValueError as exc:
         dest.unlink(missing_ok=True)
         raise HTTPException(422, str(exc)) from exc
@@ -268,8 +278,9 @@ async def heatmap(
             raise HTTPException(404, f"no {angle} photo on {d}")
         paths.append(str(settings.uploads_dir / row[0]))
 
+    _, overlay = _vision()
     try:
-        png = change_heatmap(paths[0], paths[1])
+        png = overlay.change_heatmap(paths[0], paths[1])
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return Response(content=png, media_type="image/png")

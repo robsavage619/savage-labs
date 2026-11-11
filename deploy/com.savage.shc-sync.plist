@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.savage.shc-sync</string>
+  <key>UserName</key><string>__USER__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/Projects/savage-health-center/scripts/sync-shc.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>HOME</key><string>__HOME__</string></dict>
+  <!-- 4×/day: 7am, 1pm, 6pm, 10pm. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>22</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/shc-sync/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/shc-sync/launchd.err.log</string>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>
