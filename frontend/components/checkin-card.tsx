@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type CheckinPayload } from "@/lib/api";
 import { Eyebrow } from "@/components/ui/metric";
@@ -328,6 +328,12 @@ function Field({ label, suffix, children }: { label: string; suffix?: string; ch
   );
 }
 
+function touchValue(e: ReactPointerEvent<HTMLInputElement>): number {
+  const r = e.currentTarget.getBoundingClientRect();
+  const t = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  return Math.round(1 + t * 9);
+}
+
 function Slider({
   label,
   value,
@@ -354,7 +360,7 @@ function Slider({
           <span className="text-[9.5px] text-[var(--text-faint)] ml-0.5">/10</span>
         </span>
       </div>
-      <div className="relative h-[18px] flex items-center">
+      <div className="slider-row relative flex items-center">
         <div className="absolute inset-x-0 h-[3px] rounded-full bg-[var(--hairline-strong)]" />
         {value != null && (
           <div
@@ -368,9 +374,20 @@ function Slider({
           max={10}
           step={1}
           value={display}
+          aria-label={label}
           onChange={(e) => onChange(parseInt(e.target.value, 10))}
+          onPointerDown={(e) => {
+            // Touch: a native range only moves when the finger lands on the thumb,
+            // so a near miss scrolled the page. Grab anywhere on the scale instead.
+            if (e.pointerType === "mouse") return;
+            onChange(touchValue(e));
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (e.pointerType === "mouse" || !e.currentTarget.hasPointerCapture(e.pointerId)) return;
+            onChange(touchValue(e));
+          }}
           className="relative w-full appearance-none bg-transparent cursor-pointer slider-input"
-          style={{ height: "18px" }}
         />
       </div>
     </div>

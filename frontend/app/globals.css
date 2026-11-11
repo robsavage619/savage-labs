@@ -474,6 +474,15 @@ body::before {
   cursor: grab;
 }
 .slider-input::-moz-range-track { background: transparent; height: 18px; }
+.slider-row { height: 18px; }
+.slider-input { height: 18px; }
+/* Fingers: a 44px row the slider owns outright, and a thumb you can see under a thumb. */
+@media (pointer: coarse) {
+  .slider-row, .slider-input { height: 44px; }
+  .slider-input { touch-action: none; }
+  .slider-input::-webkit-slider-runnable-track { height: 44px; }
+  .slider-input::-webkit-slider-thumb { width: 26px; height: 26px; margin-top: 9px; }
+}
 
 /* ── Scrollbar ───────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
