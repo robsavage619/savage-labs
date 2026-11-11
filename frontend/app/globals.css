@@ -1454,3 +1454,17 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .lf-x p b { color: var(--text-primary); font-weight: 600; }
 .lf-x-wait { color: var(--text-faint); }
 @media (max-width: 1000px) { .lf-x { grid-template-columns: minmax(0, 1fr); } .lf-x section { border-right: 0; border-bottom: 1px solid var(--hairline); } .lf-x section:last-child { border-bottom: 0; } }
+
+/* Sync problem: a chip beside LIVE; its detail opens in a popover anchored under it. */
+.sync-chip { anchor-name: --sync-chip; display: inline-flex; align-items: center; gap: 6px; align-self: center; padding: 3px 9px 3px 8px; border-radius: 999px; border: 1px solid color-mix(in oklch, var(--c) 35%, transparent); background: color-mix(in oklch, var(--c) 8%, transparent); color: var(--c); font: 600 10px var(--font-data); letter-spacing: .1em; cursor: pointer; }
+.sync-chip.warm { --c: var(--neutral); }
+.sync-chip.hot { --c: var(--negative); }
+.sync-chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in oklch, var(--c) 20%, transparent); }
+.sync-chip em { font-style: normal; font-weight: 500; color: var(--text-dim); letter-spacing: .06em; }
+.sync-chip:hover { border-color: var(--c); }
+.sync-pop { position-anchor: --sync-chip; inset: auto; top: calc(anchor(bottom) + 8px); left: anchor(left); margin: 0; width: 320px; padding: 14px 16px; display: none; gap: 6px; border: 1px solid var(--hairline-strong); border-radius: 12px; background: var(--card); color: var(--text-primary); box-shadow: 0 12px 40px oklch(0 0 0 / 0.5); }
+.sync-pop:popover-open { display: grid; }
+.sync-pop-k { font: 600 10px var(--font-data); letter-spacing: .14em; text-transform: uppercase; color: var(--text-faint); }
+.sync-pop b { font: 600 15px/1.3 var(--font-display); }
+.sync-pop p { margin: 0 0 4px; font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }
+.sync-pop .btn { justify-self: start; }

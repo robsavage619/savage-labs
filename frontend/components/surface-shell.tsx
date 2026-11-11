@@ -20,8 +20,8 @@ import { ErrorBoundary } from "@/components/error-boundary";
  * 1728px a board that shows everything has nothing to jump past. Finding a
  * specific card is ⌘K's job now, over the same manifest the pages render from.
  *
- * SyncStatus stays because it carries the WHOOP reauth link — the one control
- * that, when it is needed, nothing else in the app can substitute for.
+ * SyncStatus sits beside LIVE as a chip: it carries the WHOOP reauth link, the
+ * one control nothing else in the app can substitute for, without a page-wide bar.
  */
 export function SurfaceShell({ children }: { children: ReactNode }) {
   const path = usePathname();
@@ -35,6 +35,7 @@ export function SurfaceShell({ children }: { children: ReactNode }) {
             <span className="sl-wordmark-labs">Labs</span>
           </h1>
           <LiveBadge />
+          <SyncStatus />
         </div>
 
         <nav className="flex items-center gap-1" aria-label="Surfaces">
@@ -83,8 +84,6 @@ export function SurfaceShell({ children }: { children: ReactNode }) {
           <HeaderHUD />
         </div>
       </header>
-
-      <SyncStatus />
 
       <ErrorBoundary label="Page">{children}</ErrorBoundary>
       <CommandPalette />

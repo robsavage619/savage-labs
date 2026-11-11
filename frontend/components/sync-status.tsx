@@ -2,7 +2,6 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { WarningIcon } from "@/components/ui/icons";
 
 /**
  * Sources that actually have a `/auth/<source>/login` redirect on the API.
@@ -12,47 +11,44 @@ import { WarningIcon } from "@/components/ui/icons";
  */
 const OAUTH_SOURCES = new Set(["whoop"]);
 
+/**
+ * A sync problem as a small chip beside LIVE, not a page-wide banner. The
+ * detail opens in a native popover (light-dismiss and Escape come free).
+ * WHOOP gets the louder tone: it feeds every gate, DUPR only the rating.
+ */
 export function SyncStatus() {
-  const { data } = useQuery({
-    queryKey: ["oauth-status"],
-    queryFn: api.oauthStatus,
-    refetchInterval: 60_000,
-  });
+  const { data } = useQuery({ queryKey: ["oauth-status"], queryFn: api.oauthStatus, refetchInterval: 60_000 });
+  const issue = data?.find((s) => s.needs_reauth) ?? data?.find((s) => s.last_error);
+  if (!issue) return null;
 
-  const failing = data?.find((s) => s.last_error);
-  const needsReauth = data?.find((s) => s.needs_reauth);
-  if (failing && !needsReauth) {
-    return (
-      <div className="rounded-lg border border-[oklch(0.75_0.18_75/0.3)] bg-[oklch(0.75_0.18_75/0.08)] px-4 py-2 text-sm text-[oklch(0.75_0.18_75)] flex items-center gap-2">
-        <WarningIcon size={14} />
-        <span>
-          {failing.source.toUpperCase()} sync is failing, so new data may be missing.{" "}
-          <span className="text-[var(--text-muted)]">{failing.last_error}</span>
-        </span>
-      </div>
-    );
-  }
-  if (!needsReauth) return null;
-
-  const source = needsReauth.source;
-  const canRedirect = OAUTH_SOURCES.has(source);
+  const src = issue.source.toUpperCase();
+  const reauth = issue.needs_reauth;
+  const canRedirect = reauth && OAUTH_SOURCES.has(issue.source);
+  const tone = issue.source === "whoop" ? "hot" : "warm";
 
   return (
-    <div className="rounded-lg border border-[oklch(0.75_0.18_75/0.3)] bg-[oklch(0.75_0.18_75/0.08)] px-4 py-2 text-sm text-[oklch(0.75_0.18_75)] flex items-center gap-2">
-      <WarningIcon size={14} />
-      <span>
-        {source.toUpperCase()} sync needs re-authorization.{" "}
-        {canRedirect ? (
-          <a href={`http://127.0.0.1:8000/auth/${source}/login`} className="underline">
-            Reconnect →
+    <>
+      <button type="button" className={`sync-chip ${tone}`} popoverTarget="sync-pop" title="Sync needs attention">
+        <i aria-hidden="true" />
+        {src}
+        <em>{reauth ? "sign-in" : "failing"}</em>
+      </button>
+      <div id="sync-pop" popover="auto" className="sync-pop">
+        <span className="sync-pop-k">{src} sync</span>
+        <b>{reauth ? "Automatic logins are paused" : "Recent syncs are failing"}</b>
+        <p>
+          {reauth
+            ? canRedirect
+              ? "The connection expired. Reconnect and the next sync picks up where it left off."
+              : "The login was refused or wants an emailed code. Sort it out at the source, then run a manual sync."
+            : `New data may be missing. ${issue.last_error ?? ""}`}
+        </p>
+        {canRedirect && (
+          <a className="btn btn-primary" href={`http://127.0.0.1:8000/auth/${issue.source}/login`}>
+            Reconnect {src}
           </a>
-        ) : (
-          <span className="text-[var(--text-muted)]">
-            Automatic logins are paused — the login was refused or needs an emailed code.
-            Sort it out at the source, then run a manual sync.
-          </span>
         )}
-      </span>
-    </div>
+      </div>
+    </>
   );
 }
