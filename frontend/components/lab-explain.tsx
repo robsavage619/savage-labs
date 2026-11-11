@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { api } from "@/lib/api";
 import { teamApi } from "@/lib/team-api";
 import { useGuides } from "@/components/kit";
+import { useDefaultTarget } from "@/components/lab-floor";
 
 /**
  * Explainers for the research floor: each block can open a three-layer read.
@@ -275,7 +276,10 @@ export function NotebookExplain() {
 // ── Misses ──────────────────────────────────────────────────────────────────
 
 export function MissesExplain() {
-  const q = useQuery({ queryKey: ["research-misses"], queryFn: api.researchMisses, staleTime: STALE });
+  const metric = useDefaultTarget();
+  const hrv = metric === "lnhrv_dev_pct";
+  const what = hrv ? "your HRV" : "your strength change";
+  const q = useQuery({ queryKey: ["research-misses", metric], queryFn: () => api.researchMisses(hrv ? undefined : metric), staleTime: STALE });
   const wd = [...(q.data?.by_weekday ?? [])].sort((a, b) => Math.abs(b.mean_residual) - Math.abs(a.mean_residual))[0];
   const worst = q.data?.worst_mornings?.[0];
   return (
@@ -283,7 +287,7 @@ export function MissesExplain() {
       plain={
         <p>
           A miss is what actually happened minus what the lab predicted. One big miss is just noise. A miss that keeps landing on the same weekday, or the same kind of night, is a clue: something the lab
-          doesn&apos;t yet know about is driving your HRV. That&apos;s where the researchers look first.
+          doesn&apos;t yet know about is driving the result. That&apos;s where the researchers look first.
         </p>
       }
       numbers={
@@ -293,7 +297,7 @@ export function MissesExplain() {
           <p>
             {wd && (
               <>
-                The biggest pattern: on {DAY[wd.day] ?? wd.day} your HRV came in <b>{Math.abs(wd.mean_residual).toFixed(1)}%</b> {wd.mean_residual < 0 ? "below" : "above"} what the lab expected, averaged over {wd.n} mornings.{" "}
+                The biggest pattern: on {DAY[wd.day] ?? wd.day} {what} came in <b>{Math.abs(wd.mean_residual).toFixed(1)}%</b> {wd.mean_residual < 0 ? "below" : "above"} what the lab expected, averaged over {wd.n} mornings.{" "}
               </>
             )}
             {q.data.last_30_days_bias != null && (

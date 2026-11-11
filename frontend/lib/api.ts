@@ -1299,7 +1299,7 @@ export const api = {
     get<ResearchForecast>(`/api/research/forecast${metric ? `?metric=${encodeURIComponent(metric)}` : ""}`),
   researchPreview: (metric?: string) =>
     get<ForecastPreview>(`/api/research/forecast/preview${metric ? `?metric=${encodeURIComponent(metric)}` : ""}`),
-  researchMisses: () => get<ForecastMisses>("/api/research/misses"),
+  researchMisses: (metric?: string) => get<ForecastMisses>(`/api/research/misses${metric ? `?metric=${encodeURIComponent(metric)}` : ""}`),
   researchFeatures: () => get<FeatureInfo[]>("/api/research/features"),
   researchNotebook: (limit = 40) => get<NotebookEntry[]>(`/api/research/notebook?limit=${limit}`),
   /** Confirmed personal priors the engine may act on; empty until a study confirms. */

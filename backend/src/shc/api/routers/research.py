@@ -230,6 +230,27 @@ async def forecast_preview(metric: str = _METRIC) -> dict:
 
 
 @router.get("/research/misses")
-async def misses() -> dict:
-    """Where the latest backtest went most wrong: the analyst's agenda."""
-    return _read(research.misses)
+async def misses(metric: str = Query(research.FORECAST_METRIC)) -> dict:
+    """Where the latest backtest of a target went most wrong: the analysts' agenda."""
+    conn = get_read_conn()
+    try:
+        return research.misses(conn, metric)
+    except research.SpecError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    finally:
+        conn.close()
+
+
+class RetireIn(BaseModel):
+    reason: str = Field(min_length=10)
+    author: str = "methodologist"
+
+
+@router.post("/research/hypotheses/{slug}/retire", dependencies=[Depends(require_admin_key)])
+async def retire(slug: str, body: RetireIn) -> dict:
+    """Stop running an active question; its results and notebook trail stay."""
+    async with write_ctx() as conn:
+        try:
+            return research.retire(conn, slug, body.reason, body.author)
+        except research.SpecError as exc:
+            raise HTTPException(409, str(exc)) from exc

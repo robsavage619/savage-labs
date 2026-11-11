@@ -92,6 +92,13 @@ const gauss = (x: number, m: number, s: number) => Math.exp(-0.5 * ((x - m) / s)
 // ── Forecast desk ───────────────────────────────────────────────────────────
 
 const HRV = "lnhrv_dev_pct";
+const STRENGTH = "strength_emphasis_pct14";
+
+/** Lead with the subject's goal: strength once it has a scored forecast, HRV until then. */
+export function useDefaultTarget(): string {
+  const s = useQuery({ queryKey: ["research-forecast", STRENGTH], queryFn: () => api.researchForecast(STRENGTH), staleTime: STALE });
+  return s.data?.backtest?.skill != null ? STRENGTH : HRV;
+}
 /** Copy and axis floors per forecast target; the server owns which targets exist. */
 const DESK: Record<string, { tab: string; points: string; subject: string; bet: string; tag: string; sub: string; floor: number; ext: number; base: string; foot: string }> = {
   [HRV]: {
@@ -204,7 +211,9 @@ function Ribbon({ series, bet, miss, height, floor, tag }: { series: { date: str
 }
 
 export function ForecastDesk() {
-  const [metric, setMetric] = useState(HRV);
+  const fallback = useDefaultTarget();
+  const [picked, setMetric] = useState<string | null>(null);
+  const metric = picked ?? fallback;
   const arg = metric === HRV ? undefined : metric;
   const f = useQuery({ queryKey: ["research-forecast", metric], queryFn: () => api.researchForecast(arg), staleTime: STALE });
   const p = useQuery({ queryKey: ["research-preview", metric], queryFn: () => api.researchPreview(arg), staleTime: STALE });
@@ -570,7 +579,8 @@ export function Threads() {
 // ── Where the lab is wrong ──────────────────────────────────────────────────
 
 export function Misses() {
-  const q = useQuery({ queryKey: ["research-misses"], queryFn: api.researchMisses, staleTime: STALE });
+  const metric = useDefaultTarget();
+  const q = useQuery({ queryKey: ["research-misses", metric], queryFn: () => api.researchMisses(metric === HRV ? undefined : metric), staleTime: STALE });
   if (!q.data) return <Skel h={300} />;
   const wd = q.data.by_weekday ?? [];
   const worst = (q.data.worst_mornings ?? []).slice(0, 6);

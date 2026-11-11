@@ -246,3 +246,42 @@ def test_approved_custom_feature_flows_through_research(conn) -> None:
         == research.estimate(conn, spec_base, today=r_today)["effect"]
     )
     assert any(f["name"] == "custom:strain_copy" for f in research.dictionary(conn))
+
+
+def test_custom_outcome_carries_its_declared_goal_weight(conn) -> None:
+    from shc import research
+
+    _seed_strain(conn)
+    # Proposed by the recovery specialist, but it measures muscle.
+    rt.propose_custom(
+        conn,
+        "copy_muscle",
+        "recovery",
+        "Day strain, copied",
+        "strain",
+        "day",
+        "SELECT date, strain FROM daily_cycle",
+        goal="muscle",
+    )
+    rt.propose_custom(
+        conn,
+        "copy_default",
+        "metabolic",
+        "Day strain, copied",
+        "strain",
+        "day",
+        "SELECT date, strain FROM daily_cycle",
+    )
+    assert research.goal_of("custom:copy_muscle", conn) == "muscle"
+    assert research.goal_of("custom:copy_default", conn) == "body"
+    with pytest.raises(rt.TeamError, match="goal"):
+        rt.propose_custom(
+            conn,
+            "bad_goal",
+            "recovery",
+            "Day strain, copied",
+            "strain",
+            "day",
+            "SELECT date, strain FROM daily_cycle",
+            goal="vibes",
+        )

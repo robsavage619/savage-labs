@@ -31,6 +31,7 @@ class CustomFeatureIn(BaseModel):
     unit: str
     timing: str
     sql: str
+    goal: str | None = None
 
 
 class CustomReviewIn(BaseModel):
@@ -99,6 +100,7 @@ async def propose_custom(body: CustomFeatureIn) -> dict:
                 body.unit,
                 body.timing,
                 body.sql,
+                body.goal,
             )
         except research_team.TeamError as exc:
             raise HTTPException(422, str(exc)) from exc

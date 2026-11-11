@@ -405,3 +405,36 @@ def test_forecaster_refuses_to_score_without_beliefs_or_history(conn, monkeypatc
     assert research.forecast_view(conn, metric=research.STRENGTH_METRIC)["backtest"]["reason"]
     with pytest.raises(research.SpecError, match="forecast target"):
         research.backtest(conn, today=TODAY, metric="made_up")
+
+
+def test_retired_questions_stop_running_but_keep_their_evidence(conn) -> None:
+    bid = _setup_belief(conn, effect_pct=-15)
+    research.run(conn, "strain-hrv")
+    before = next(b for b in research.beliefs(conn) if b["id"] == bid)
+    research.retire(conn, "strain-hrv", "hurts the forecast in the backtest", "methodologist")
+    assert research.run_all(conn) == []
+    after = next(b for b in research.beliefs(conn) if b["id"] == bid)
+    assert after["post_mean"] == before["post_mean"]
+    assert research.notebook(conn, 1)[0]["kind"] == "retirement"
+    with pytest.raises(research.SpecError):
+        research.retire(conn, "strain-hrv", "already retired, try again", "methodologist")
+
+
+def test_misses_follow_the_requested_target(conn) -> None:
+    _setup_belief(conn, effect_pct=-15)
+    research.store_backtest(conn, research.backtest(conn, today=TODAY))
+    assert research.misses(conn)["metric"] == research.FORECAST_METRIC
+    with pytest.raises(research.SpecError):
+        research.misses(conn, "not_a_target")
+
+
+def test_more_sessions_do_not_read_as_more_strength(conn, seed) -> None:
+    # One session last fortnight; five this fortnight scattered around the same
+    # load. Taking the window's MAX would read +5% from sheer opportunity.
+    _map(conn, "Synthetic Curl", "biceps")
+    end = TODAY
+    seed.workout(end - timedelta(days=20), "Synthetic Curl", [(20.0, 10)], rpe=None)
+    for k, w in zip((12, 10, 7, 4, 1), (19.0, 19.5, 20.0, 20.5, 21.0), strict=True):
+        seed.workout(end - timedelta(days=k), "Synthetic Curl", [(w, 10)], rpe=None)
+    pct = research.series(conn, "e1rm_pct14:biceps")
+    assert pct[end] == pytest.approx(0.0, abs=0.01)

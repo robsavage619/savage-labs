@@ -309,6 +309,23 @@ def custom_series(conn: duckdb.DuckDBPyConnection, name: str) -> dict[date, floa
     return _series_from(conn, sql)
 
 
+# Default goal for a measurement, by the field of the specialist who proposed it.
+OWNER_GOAL = {
+    "hypertrophy": "muscle",
+    "metabolic": "body",
+    "conditioning": "cardio",
+    "recovery": "recovery",
+}
+
+
+def custom_goal(conn: duckdb.DuckDBPyConnection, name: str) -> str | None:
+    """The goal a custom measurement serves, as declared when it was proposed."""
+    row = conn.execute(
+        "SELECT goal FROM research_custom_features WHERE name = ?", [name]
+    ).fetchone()
+    return row[0] if row and row[0] else None
+
+
 def propose_custom(
     conn: duckdb.DuckDBPyConnection,
     slug: str,
@@ -317,6 +334,7 @@ def propose_custom(
     unit: str,
     timing: str,
     sql: str,
+    goal: str | None = None,
 ) -> dict:
     """Validate a measurement by running it, then store it as `proposed`.
 
@@ -328,6 +346,10 @@ def propose_custom(
         unit: Unit of the value.
         timing: ``morning`` (read on waking) or ``day`` (accumulated over the day).
         sql: One SELECT returning (date, value), one row per date.
+        goal: The goal it measures when used as an outcome (muscle, body, cardio,
+            recovery); defaults to the owner's field. It sets the goal weight in
+            the value score, so a strength measure proposed by the recovery
+            specialist still counts as muscle.
 
     Returns:
         The stored row's name, status and validation summary.
@@ -343,6 +365,9 @@ def propose_custom(
         raise TeamError("timing must be 'morning' or 'day'")
     if len(description.strip()) < 10 or not unit.strip():
         raise TeamError("description (10+ chars) and unit are required")
+    goal = goal or OWNER_GOAL[owner]
+    if goal not in research.GOAL_WEIGHTS:
+        raise TeamError(f"goal must be one of {', '.join(research.GOAL_WEIGHTS)}")
     existing = conn.execute(
         "SELECT status FROM research_custom_features WHERE name = ?", [name]
     ).fetchone()
@@ -359,8 +384,8 @@ def propose_custom(
         )
     conn.execute("DELETE FROM research_custom_features WHERE name = ?", [name])
     conn.execute(
-        "INSERT INTO research_custom_features (name, owner, description, unit, timing, sql) VALUES (?, ?, ?, ?, ?, ?)",
-        [name, owner, description.strip(), unit.strip(), timing, sql.strip()],
+        "INSERT INTO research_custom_features (name, owner, description, unit, timing, sql, goal) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [name, owner, description.strip(), unit.strip(), timing, sql.strip(), goal],
     )
     summary = {"days": len(s), "first": str(min(s)), "last": str(max(s))}
     research.note(
@@ -454,7 +479,7 @@ def custom_dictionary(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 "unit": unit,
                 "timing": timing,
                 "source": f"custom ({owner})",
-                "goal": research.goal_of(name),
+                "goal": research.goal_of(name, conn),
                 "first": str(min(s)) if s else None,
                 "last": str(last) if last else None,
                 "days": len(s),

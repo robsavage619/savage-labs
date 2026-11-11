@@ -339,10 +339,17 @@ _GOALS = {
 }
 
 
-def goal_of(name: str) -> str:
-    """The goal category an outcome feature serves: muscle, body, cardio, recovery or other."""
+def goal_of(name: str, conn: duckdb.DuckDBPyConnection | None = None) -> str:
+    """The goal category an outcome feature serves: muscle, body, cardio, recovery or other.
+
+    A custom measurement declares its own goal, so it needs `conn` to look it up.
+    """
     if name.partition(":")[0] in _PARAMETRIC:
         return "muscle"
+    if name.startswith("custom:") and conn is not None:
+        from shc import research_team
+
+        return research_team.custom_goal(conn, name) or "other"
     return next((g for g, names in _GOALS.items() if name in names), "other")
 
 
@@ -413,8 +420,8 @@ def _muscle_sets(conn: duckdb.DuckDBPyConnection, muscle: str) -> dict[date, flo
 
 
 def _e1rm_pct14(conn: duckdb.DuckDBPyConnection, muscle: str) -> dict[date, float]:
-    """Per day: mean over the lifts crediting `muscle` of 100 × (best e1RM in the
-    trailing 14 days / best in the 14 before − 1).
+    """Per day: mean over the lifts crediting `muscle` of 100 × (mean session-best
+    e1RM in the trailing 14 days / the same in the 14 before − 1).
 
     Uses the engine's e1RM (Epley over RIR-adjusted, capped reps on per-hand
     load, Hevy working sets only). A lift counts only when trained in both
@@ -438,9 +445,13 @@ def _e1rm_pct14(conn: duckdb.DuckDBPyConnection, muscle: str) -> dict[date, floa
         ),
         w AS (
             SELECT s.day,
-                   MAX(d.e) OVER (PARTITION BY s.ex ORDER BY s.day
+                   -- Mean of session bests, not the window's best: a busier
+                   -- fortnight has more chances at a high max and read as
+                   -- stronger from opportunity alone (found by the hypertrophy
+                   -- specialist: r = +0.20 to +0.29 with the session-count ratio).
+                   AVG(d.e) OVER (PARTITION BY s.ex ORDER BY s.day
                                   ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS cur,
-                   MAX(d.e) OVER (PARTITION BY s.ex ORDER BY s.day
+                   AVG(d.e) OVER (PARTITION BY s.ex ORDER BY s.day
                                   ROWS BETWEEN 27 PRECEDING AND 14 PRECEDING) AS prev
             FROM spine s LEFT JOIN d ON d.ex = s.ex AND d.day = s.day
         )
@@ -1054,7 +1065,7 @@ def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     for r in rows:
         d = dict(zip(keys, r, strict=True))
         d["unit"] = d["unit"] or _unit_of(d["outcome"])
-        d["goal"] = goal_of(d["outcome"])
+        d["goal"] = goal_of(d["outcome"], conn)
         d["scale"] = _scale(d)
         d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else None
         # How much the data has narrowed the prior: 0 = untouched, → 1 = data dominates.
@@ -1503,7 +1514,7 @@ def value_score(
         )
         if same_question:
             novelty = min(novelty, 0.5)
-    goal = goal_of(spec["outcome"])
+    goal = goal_of(spec["outcome"], conn)
     goal_weight = GOAL_WEIGHTS.get(goal, _OTHER_GOAL_WEIGHT)
     return {
         "value": round(uncertainty * decision * feasibility * novelty * goal_weight, 3),
@@ -1570,11 +1581,11 @@ def review_queue(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     return out
 
 
-def _misses(conn: duckdb.DuckDBPyConnection) -> dict:
-    """Where the latest backtest went most wrong: the patterns a curious analyst chases."""
+def _misses(conn: duckdb.DuckDBPyConnection, metric: str = FORECAST_METRIC) -> dict:
+    """Where the latest backtest of `metric` went most wrong: the patterns a curious analyst chases."""
     row = conn.execute(
         "SELECT series FROM research_forecast_skill WHERE metric = ? ORDER BY run_at DESC LIMIT 1",
-        [FORECAST_METRIC],
+        [metric],
     ).fetchone()
     if row is None:
         return {}
@@ -1706,5 +1717,23 @@ def forecast_preview(
     }
 
 
-def misses(conn: duckdb.DuckDBPyConnection) -> dict:
-    return _misses(conn)
+def misses(conn: duckdb.DuckDBPyConnection, metric: str = FORECAST_METRIC) -> dict:
+    if metric not in FORECAST_TARGETS:
+        raise SpecError(f"unknown forecast target {metric!r}")
+    return _misses(conn, metric) | {"metric": metric}
+
+
+def retire(conn: duckdb.DuckDBPyConnection, slug: str, reason: str, author: str) -> dict:
+    """Stop running an active question. Its results stay; it leaves the nightly run and the forecast."""
+    row = conn.execute(
+        "SELECT id, question, status FROM research_hypotheses WHERE slug = ?", [slug]
+    ).fetchone()
+    if row is None:
+        raise SpecError(f"no hypothesis {slug!r}")
+    hid, question, status = row
+    if status != "active":
+        raise SpecError(f"{slug!r} is {status}, not active")
+    # Its results stay valid evidence, so the belief they fed is left as it is.
+    conn.execute("UPDATE research_hypotheses SET status = 'retired' WHERE id = ?", [hid])
+    note(conn, author, "retirement", f"Retired: {question}", reason, ref=hid)
+    return {"slug": slug, "status": "retired"}
