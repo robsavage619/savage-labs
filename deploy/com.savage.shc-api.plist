@@ -15,6 +15,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key><string>__HOME__</string>
+    <key>TAILSCALE_HOST</key><string>__TSHOST__</string>
     <!-- A boot daemon can't unlock the login Keychain, so on this host every secret
          comes from the backend env file and Keychain lookups return nothing. -->
     <key>PYTHON_KEYRING_BACKEND</key><string>keyring.backends.null.Keyring</string>
