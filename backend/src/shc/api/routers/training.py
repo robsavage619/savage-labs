@@ -549,6 +549,103 @@ async def get_muscle_volume(weeks_ago: int = Query(0, ge=0, le=26)) -> dict[str,
         conn.close()
 
 
+@router.get("/training/brief")
+async def get_training_brief(weeks: int = Query(26, ge=4, le=52)) -> dict[str, Any]:
+    """Weekly per-muscle sets beside court days, and each recent lift's working e1RM.
+
+    ``weeks`` lists Monday-start weeks oldest first, each with the engine's own
+    credited sets per muscle (:func:`weekly_muscle_volume`, secondaries 1:1) and
+    the distinct pickleball days in it, so the cost of court weeks to leg volume
+    can be read off one series. ``lifts`` are the Hevy lifts trained in the last
+    90 days: ``e1rm_lbs`` is the WORKING WEIGHTS number the planner prescribes
+    and validates from (:func:`e1rm_by_exercise`, per hand, 90d), ``trend`` is
+    the progression classifier's, and ``series`` the stored weekly e1RM
+    over the same 26 weeks (trained weeks only).
+    """
+    from shc.ai.workout_planner import e1rm_by_exercise
+    from shc.training.load_mechanics import load_unit_label
+    from shc.training.volume import weekly_muscle_volume
+
+    conn = get_read_conn()
+    try:
+        today = date.today()
+        this_week = today - timedelta(days=today.weekday())
+        starts = [this_week - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
+        # One row per date: WHOOP and Apple can both log the same session.
+        court = {
+            r[0]: (int(r[1]), float(r[2] or 0))
+            for r in conn.execute(
+                """
+                SELECT date_trunc('week', d)::DATE AS wk, COUNT(*), SUM(m)
+                FROM (
+                    SELECT date AS d, MAX(duration_min) AS m FROM cardio_sessions
+                    WHERE modality ILIKE '%pickleball%' AND date >= ?
+                    GROUP BY date
+                )
+                GROUP BY wk
+                """,
+                [starts[0]],
+            ).fetchall()
+        }
+        week_rows = []
+        for ws in starts:
+            vol = weekly_muscle_volume(conn, ws)
+            days, minutes = court.get(ws, (0, 0.0))
+            week_rows.append(
+                {
+                    "week_start": ws.isoformat(),
+                    "sets": {m: round(v, 1) for m, v in vol.items()},
+                    "court_days": days,
+                    "court_min": round(minutes),
+                }
+            )
+
+        since = today - timedelta(days=90)
+        recent = conn.execute(
+            """
+            SELECT ws.exercise, MAX(ws.started_at)::DATE, COUNT(DISTINCT ws.started_at::DATE),
+                   ANY_VALUE(m.primary_muscle)
+            FROM workout_sets_dedup ws
+            LEFT JOIN exercise_muscle_map m ON m.exercise_name = ws.exercise
+            WHERE ws.source = 'hevy' AND ws.is_warmup = FALSE AND ws.weight_kg > 0
+              AND ws.started_at::DATE >= ?
+            GROUP BY ws.exercise
+            """,
+            [since],
+        ).fetchall()
+        e1 = e1rm_by_exercise(conn, today)
+        series_from = this_week - timedelta(weeks=25)
+        lifts = []
+        for ex, last, sessions, muscle in recent:
+            if ex not in e1:
+                continue
+            ps = score_exercise(conn, ex)
+            lifts.append(
+                {
+                    "exercise": ex,
+                    "muscle": muscle,
+                    "e1rm_lbs": round(e1[ex] * 2.20462, 1),
+                    "unit": load_unit_label(ex),
+                    "last_done": last.isoformat(),
+                    "sessions_90d": int(sessions),
+                    "trend": ps.trend if ps else None,
+                    "perf_score": ps.perf_score if ps else None,
+                    "recommendation": ps.recommendation if ps else "insufficient history",
+                    "series": [
+                        {
+                            "week_start": w.week_start.isoformat(),
+                            "e1rm_lbs": round(w.e1rm_kg * 2.20462, 1),
+                        }
+                        for w in weekly_e1rm(conn, ex, n_weeks=26)
+                        if w.week_start >= series_from
+                    ],
+                }
+            )
+        return {"as_of": today.isoformat(), "weeks": week_rows, "lifts": lifts}
+    finally:
+        conn.close()
+
+
 @router.get("/training/prescription")
 async def get_prescription() -> dict[str, Any]:
     """This week's self-learning per-muscle volume prescription + rationale.
@@ -573,6 +670,7 @@ async def get_prescription() -> dict[str, Any]:
             "muscles": [asdict(m) for m in rx.muscles],
             "lift_progressions": rx.lift_progressions,
             "exercise_menu": rx.exercise_menu,
+            "exercise_science": rx.exercise_science,
             "session_split": rx.session_split,
             "protein_gate": rx.protein_gate,
         }

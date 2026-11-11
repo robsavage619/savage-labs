@@ -614,6 +614,34 @@ export interface WorkoutExercise {
   notes?: string;
 }
 
+export interface MenuPick {
+  exercise: string;
+  region: string | null;
+  trend: string;
+  tenure: number;
+  last_done: string | null;
+  status: string;
+}
+
+/** /api/training/brief: weekly credited sets per muscle beside court days, and each recent lift's working e1RM. */
+export interface TrainingBrief {
+  as_of: string;
+  weeks: { week_start: string; sets: Record<string, number>; court_days: number; court_min: number }[];
+  lifts: {
+    exercise: string;
+    muscle: string | null;
+    /** WORKING WEIGHTS e1RM: best over 90 days, per hand for paired implements. */
+    e1rm_lbs: number;
+    unit: string;
+    last_done: string;
+    sessions_90d: number;
+    trend: string | null;
+    perf_score: number | null;
+    recommendation: string;
+    series: { week_start: string; e1rm_lbs: number }[];
+  }[];
+}
+
 export interface WorkoutBlock {
   label: string;
   exercises: WorkoutExercise[];
@@ -1465,6 +1493,8 @@ export const api = {
         recommendation: string;
       }[];
       exercise_menu: Record<string, string[]>;
+      /** The rotation the menu proposes: per muscle, each pick's `status` says swapped in / held / due. */
+      exercise_science: Record<string, MenuPick[]>;
     }>("/api/training/prescription"),
   trainingSelfLearning: () =>
     get<{
@@ -1543,6 +1573,7 @@ export const api = {
       total: number;
     }>("/api/pickleball/matches"),
   pickleballEvents: () => get<PickleballEvents>("/api/pickleball/events"),
+  trainingBrief: (weeks = 26) => get<TrainingBrief>(`/api/training/brief?weeks=${weeks}`),
   trainingProgressionAll: (weeks = 8) =>
     get<{
       exercises: {
