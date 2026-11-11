@@ -45,7 +45,7 @@
 .tr-mast { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px; align-items: stretch; padding-top: 6px; }
 .tr-sess { display: flex; flex-direction: column; gap: 18px; padding: 24px 26px 20px; }
 .tr-sess-head { display: grid; gap: 8px; }
-.tr-sess-head h1 { margin: 0; font: 700 clamp(48px, 5.2vw, 80px)/0.95 var(--font-display); letter-spacing: -0.04em; }
+.tr-sess-head h1 { margin: 0 0 4px; font: 700 clamp(48px, 5.2vw, 80px)/1.04 var(--font-display); letter-spacing: -0.04em; }
 .tr-sess-focus { margin: 0; font: 600 16px/1.35 var(--font-display); color: var(--text-muted); }
 .tr-sess-why { margin: 2px 0 0; font-size: 15px; line-height: 1.5; color: var(--text-primary); max-width: 64ch; text-wrap: pretty; }
 .tr-sess-stats { display: grid; grid-template-columns: repeat(4, max-content) minmax(0, 1fr); border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }

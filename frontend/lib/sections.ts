@@ -62,13 +62,11 @@ export const SECTIONS: readonly Section[] = [
   // ── Training + Recovery (split from Week, 2026-11-09) ────────────────────
   { id: "sleep-need", label: "Sleep need", surface: "recovery", keywords: ["need", "debt", "strain", "how much sleep"] },
   { id: "aerobic-base", label: "Aerobic base", surface: "recovery", keywords: ["zone 2", "z2", "z3", "aerobic", "180"] },
-  { id: "growth", label: "Growth zones", surface: "training", keywords: ["mev", "mav", "mrv", "sets", "muscle", "landmarks", "volume", "per-muscle"] },
-  { id: "lifts", label: "Lift scoreboard", surface: "training", keywords: ["e1rm", "progressing", "stalled", "strength", "prs", "most trained"] },
-  { id: "fitness", label: "Fitness vs fatigue", surface: "training", keywords: ["ctl", "atl", "performance", "load"] },
-  { id: "form", label: "Form", surface: "training", keywords: ["tsb", "fresh", "fatigue"] },
-  { id: "monotony", label: "Monotony", surface: "training", keywords: ["foster", "strain", "same", "variety"] },
-  { id: "block", label: "The block", surface: "training", keywords: ["mesocycle", "deload", "periodization", "week"] },
-  { id: "weekly", label: "Weekly volume", surface: "training", keywords: ["consistency", "sets per week", "sessions", "frequency"] },
+  { id: "plan", label: "The session to do", surface: "training", keywords: ["workout", "plan", "lifts", "today"] },
+  { id: "rotation", label: "The rotation", surface: "training", keywords: ["swap", "swapped in", "menu", "held", "plateau", "exercise selection"] },
+  { id: "volume", label: "Sets against target", surface: "training", keywords: ["mev", "mav", "mrv", "sets", "muscle", "landmarks", "volume", "per-muscle", "biceps", "glutes"] },
+  { id: "court", label: "What the court costs", surface: "training", keywords: ["pickleball", "court", "glutes", "leg gate"] },
+  { id: "lifts", label: "Strength", surface: "training", keywords: ["e1rm", "progressing", "stalled", "sliding", "strength", "working weights"] },
   { id: "hrv", label: "HRV vs baseline", surface: "recovery", keywords: ["hrv", "heart rate variability", "band", "nervous system"] },
   { id: "rhr", label: "Resting heart rate", surface: "recovery", keywords: ["rhr", "resting", "heart rate"] },
   { id: "recovery", label: "Recovery score", surface: "recovery", keywords: ["whoop", "green", "red", "score"] },
@@ -78,19 +76,6 @@ export const SECTIONS: readonly Section[] = [
   { id: "spo2", label: "Overnight oxygen", surface: "recovery", keywords: ["spo2", "oxygen", "airway", "vitals"] },
   { id: "patterns", label: "Best and worst days", surface: "recovery", keywords: ["day of week", "weekday", "patterns"] },
   { id: "recovery-trend", label: "Green, yellow, red", surface: "recovery", keywords: ["distribution", "share", "all time"] },
-  // StrengthPanel was one 1,559px card holding six independent blocks — four
-  // of them under 150px tall, trapped in a single column. Split, so each gets
-  // its own grid footprint and its own ⌘K entry.
-  { id: "balance", label: "Push, pull, legs, core", surface: "training", keywords: ["push pull", "ratio", "imbalance", "muscle balance"] },
-  // Was one card holding two components stacked (landmarks 342px + per-muscle
-  // 641px) — the same mistake StrengthPanel made. Split.
-  { id: "cardio", label: "Cardio", surface: "training", keywords: ["zone 2", "z2", "aerobic", "sessions", "log"] },
-  // Tournament history was 678px of a 1,138px card — its own thing.
-  { id: "sport", label: "Pickleball", surface: "training", keywords: ["dupr", "court", "freshness", "play"] },
-  { id: "tournaments", label: "Tournament results", surface: "training", keywords: ["matches", "dupr", "results", "partners", "scores"] },
-  { id: "event-prep", label: "Tournament readiness", surface: "training", keywords: ["taper", "prep", "rest", "before event", "recovery on the day", "peaking"] },
-  { id: "post", label: "Post-workout", surface: "training", keywords: ["debrief", "retrospective", "after action", "sync"] },
-  { id: "goals", label: "2026 goals", surface: "training", keywords: ["scorecard", "targets", "dupr"] },
 
   // ── Body ─────────────────────────────────────────────────────────────────
   { id: "fueling", label: "Fuelling", surface: "body", keywords: ["protein", "calories", "weight", "hydration"] },

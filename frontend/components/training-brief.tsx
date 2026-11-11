@@ -102,7 +102,7 @@ export function SessionBrief() {
   let i = 0;
   return (
     <div className="tr-mast">
-      <div className="tr-card tr-sess">
+      <div className="tr-card tr-sess scroll-mt-24" id="plan">
         <div className="tr-sess-head">
           <span className="tr-eyebrow">
             {day} · {executed ? "trained" : "the session to do"}
@@ -216,7 +216,7 @@ function Rotation({ plan }: { plan: WorkoutPlan }) {
     }
   const programmed = swaps.filter((s) => inPlan.has(s.inn)).length;
   return (
-    <div className="tr-card tr-rotation">
+    <div className="tr-card tr-rotation scroll-mt-24" id="rotation">
       <div className="tr-rot-head">
         <span className="tr-label">The rotation the menu proposes</span>
         <b>
