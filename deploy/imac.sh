@@ -18,7 +18,8 @@ export PATH=$HOME/.local/node/bin:$HOME/.local/bin:$PATH
 (cd backend && uv sync --no-dev --frozen)
 # Empty API base: the browser calls /api on the same origin, which tailscale serve routes to :8000.
 (cd frontend && npm ci --no-audit --no-fund && NEXT_PUBLIC_API_URL= npm run build)
-mkdir -p ~/Library/Logs/shc-sync
+# logging.yaml writes to backend/data/logs; uvicorn fails to boot if it is missing.
+mkdir -p ~/Library/Logs/shc-sync backend/data/logs
 ts=/usr/local/bin/tailscale
 tshost=$($ts status --json | /usr/bin/python3 -c "import json,sys; print(json.load(sys.stdin)[\"Self\"][\"DNSName\"].rstrip(\".\"))")
 tmp=$(mktemp -d)
