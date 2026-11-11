@@ -19,6 +19,8 @@
     <!-- A boot daemon can't unlock the login Keychain, so on this host every secret
          comes from the backend env file and Keychain lookups return nothing. -->
     <key>PYTHON_KEYRING_BACKEND</key><string>keyring.backends.null.Keyring</string>
+    <!-- OAuth tokens rotate on every refresh, so they need a writable store: an owner-only file. -->
+    <key>SHC_TOKEN_FILE</key><string>__HOME__/Projects/savage-health-center/backend/data/secrets.json</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
