@@ -26,7 +26,7 @@ export const SURFACES: readonly Surface[] = [
   { id: "today", route: "/", label: "Today", purpose: "What to train, and log it" },
   { id: "training", route: "/training", label: "Training", purpose: "Am I growing, muscle by muscle" },
   { id: "recovery", route: "/recovery", label: "Recovery", purpose: "Am I absorbing the work" },
-  { id: "body", route: "/body", label: "Body", purpose: "Fuelling, physique, clinical record" },
+  { id: "body", route: "/body", label: "Body", purpose: "Composition, energy out, slow signals, clinical record" },
   { id: "lab", route: "/lab", label: "Lab", purpose: "Trials, findings, what the engine has learned" },
 ] as const;
 
@@ -78,15 +78,12 @@ export const SECTIONS: readonly Section[] = [
   { id: "recovery-trend", label: "Green, yellow, red", surface: "recovery", keywords: ["distribution", "share", "all time"] },
 
   // ── Body ─────────────────────────────────────────────────────────────────
-  { id: "fueling", label: "Fuelling", surface: "body", keywords: ["protein", "calories", "weight", "hydration"] },
-  { id: "physique", label: "Progress photos", surface: "body", keywords: ["photos", "waist", "compare", "upload"] },
+  { id: "ledger", label: "Body readings", surface: "body", keywords: ["stale", "weigh-in", "last reading", "overdue", "food log"] },
+  { id: "energy", label: "Energy out", surface: "body", keywords: ["expenditure", "kcal", "calories", "burn", "court", "tdee"] },
   { id: "composition", label: "Body weight", surface: "body", keywords: ["weight", "scale", "lbs", "recomp"] },
-  { id: "vo2", label: "VO₂ max", surface: "body", keywords: ["vo2", "aerobic", "fitness", "cardio"] },
-  { id: "steps", label: "Daily steps", surface: "body", keywords: ["steps", "walking", "neat", "movement"] },
-  { id: "rhr-devices", label: "Resting HR, both devices", surface: "body", keywords: ["rhr", "apple watch", "whoop", "resting"] },
-  { id: "airway", label: "Overnight oxygen", surface: "body", keywords: ["spo2", "oxygen", "saturation", "apnea", "osa", "cpap"] },
-  { id: "resp", label: "Breathing rate", surface: "body", keywords: ["respiratory", "breathing", "breaths", "illness"] },
-  { id: "tape", label: "Tape measurements", surface: "body", keywords: ["waist", "tape", "girth", "inches"] },
+  { id: "log", label: "Log weight and tape", surface: "body", keywords: ["waist", "tape", "girth", "inches", "weigh in"] },
+  { id: "slow-signals", label: "Six months of slow signals", surface: "body", keywords: ["vo2", "steps", "rhr", "resting", "spo2", "oxygen", "breathing", "apnea", "neat"] },
+  { id: "physique", label: "Progress photos", surface: "body", keywords: ["photos", "waist", "compare", "upload"] },
   { id: "clinical", label: "Clinical record", surface: "body", keywords: ["labs", "meds", "conditions", "bloodwork", "risk"] },
 
   // ── Lab ──────────────────────────────────────────────────────────────────

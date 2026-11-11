@@ -1413,35 +1413,6 @@ export const api = {
         vault_insights: string[];
       } | null;
     }>("/api/workout/retrospective/latest"),
-  fuelingToday: () =>
-    get<{
-      as_of: string;
-      body_mass_kg: number | null;
-      body_mass_lbs: number | null;
-      body_fat_pct: number | null;
-      body_fat_date: string | null;
-      lean_body_mass_kg: number | null;
-      lean_body_mass_lbs: number | null;
-      lean_body_mass_date: string | null;
-      kcal_in: number | null;
-      kcal_active_out: number | null;
-      kcal_basal_out: number | null;
-      kcal_tdee_today: number | null;
-      kcal_balance: number | null;
-      protein_g: number | null;
-      protein_per_kg: number | null;
-      protein_target_g: number | null;
-      carbs_g: number | null;
-      fat_g: number | null;
-      fiber_g: number | null;
-      sugar_g: number | null;
-      water_ml: number | null;
-      water_oz: number | null;
-      sodium_mg: number | null;
-      caffeine_mg: number | null;
-      has_diet_data: boolean;
-      has_body_comp_data: boolean;
-    }>("/api/fueling/today"),
   fuelingTrend: (days = 14) =>
     get<{
       date: string;
