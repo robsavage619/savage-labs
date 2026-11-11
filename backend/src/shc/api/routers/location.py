@@ -24,12 +24,21 @@ def _require_webhook_key(creds: Annotated[HTTPBasicCredentials | None, Depends(_
     """OwnTracks sends HTTP Basic; the password is the webhook key, the username is ignored."""
     if not settings.apple_webhook_key:
         raise HTTPException(status_code=503, detail="apple_webhook_key not configured")
-    if creds is None or not secrets.compare_digest(
-        creds.password.encode(), settings.apple_webhook_key.encode()
-    ):
-        raise HTTPException(
-            status_code=401, detail="invalid key", headers={"WWW-Authenticate": "Basic"}
+    key = settings.apple_webhook_key
+    if creds is not None and secrets.compare_digest(creds.password.encode(), key.encode()):
+        return
+    if creds is None:
+        reason = "no credentials sent"
+    else:
+        trimmed = creds.password.strip().strip('"').strip()
+        reason = (
+            f"password mismatch (sent {len(creds.password)} chars, key is {len(key)}"
+            f"{'; matches once whitespace/quotes are trimmed' if trimmed == key else ''})"
         )
+    log.warning("owntracks 401: %s", reason)
+    raise HTTPException(
+        status_code=401, detail="invalid key", headers={"WWW-Authenticate": "Basic"}
+    )
 
 
 @router.post("/location/owntracks", dependencies=[Depends(_require_webhook_key)])
@@ -39,13 +48,12 @@ async def owntracks(request: Request) -> list[Any]:
         msg = await request.json()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="body is not JSON") from exc
-    if not isinstance(msg, dict):
-        return []
+    # A reconnecting phone can flush its queue as one JSON array.
+    msgs = [m for m in (msg if isinstance(msg, list) else [msg]) if isinstance(m, dict)]
     async with write_ctx() as conn:
-        if places.ingest_owntracks(conn, msg):
-            new = places.update_stays(conn)
-            if new:
-                log.info("location: %d new stays", new)
+        kept = sum(places.ingest_owntracks(conn, m) for m in msgs)
+        new = places.update_stays(conn) if kept else 0
+    log.info("owntracks: %d of %d messages kept, %d new stays", kept, len(msgs), new)
     return []
 
 
