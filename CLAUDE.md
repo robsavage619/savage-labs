@@ -29,6 +29,7 @@ Personal health intelligence platform. Single user (Rob). Always push to main di
 
 ## Servers
 
+- **Live SHC runs on the host iMac** (since 2026-11-11); its DB is the only live copy. On the laptop, `127.0.0.1:8000` is an SSH tunnel to it (LaunchAgent `com.savage.shc-tunnel`), so every `localhost:8000` call already hits live data. Ship code with `deploy/imac.sh <user@host>` after committing. `dev-restart.sh` refuses to run while the tunnel is loaded, because a local API would fork the data.
 - Always use `dev-restart.sh` to start API + frontend. Never start manually.
 - Preview server (when a screenshot is needed): see [feedback_preview_server](~/.claude/projects/-Users-robsavage-Projects-savage-health-center/memory/feedback_preview_server.md).
 - API runs on `:8000`, frontend on `:3000`.

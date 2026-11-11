@@ -12,6 +12,14 @@ WT="${1:-$REPO}"
 
 echo "▶ Restarting SHC from: $WT"
 
+# The live API runs on the host Mac and :8000 here is an SSH tunnel to it. A local
+# API would write to the laptop's frozen copy of the database and fork the data.
+if launchctl print "gui/$(id -u)/com.savage.shc-tunnel" &>/dev/null; then
+  echo "✗ Live SHC runs on the host Mac; :8000 is a tunnel to it. Ship code with deploy/imac.sh."
+  echo "  Local API anyway (forks the data): launchctl bootout gui/$(id -u)/com.savage.shc-tunnel"
+  exit 1
+fi
+
 # Checkpoint DuckDB WAL via the running API before killing (preserves all in-flight writes)
 if lsof -ti :8000 &>/dev/null; then
   echo "▶ Checkpointing DuckDB WAL..."
