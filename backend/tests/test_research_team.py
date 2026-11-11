@@ -274,6 +274,7 @@ def test_custom_outcome_carries_its_declared_goal_weight(conn) -> None:
     )
     assert research.goal_of("custom:copy_muscle", conn) == "muscle"
     assert research.goal_of("custom:copy_default", conn) == "body"
+    assert {r["name"]: r["goal"] for r in rt.list_custom(conn)}["custom:copy_muscle"] == "muscle"
     with pytest.raises(rt.TeamError, match="goal"):
         rt.propose_custom(
             conn,

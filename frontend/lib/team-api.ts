@@ -42,6 +42,7 @@ export interface CustomFeature {
   description: string;
   unit: string;
   timing: "morning" | "day";
+  goal: string | null;
   sql: string;
   status: "proposed" | "approved" | "rejected";
   review_reason: string | null;

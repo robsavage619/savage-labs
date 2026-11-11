@@ -403,8 +403,8 @@ def propose_custom(
 def list_custom(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     """Every custom measurement with its SQL and review state, newest first."""
     rows = conn.execute(
-        "SELECT name, owner, description, unit, timing, sql, status, review_reason, created_at "
-        "FROM research_custom_features ORDER BY created_at DESC"
+        "SELECT name, owner, description, unit, timing, goal, sql, status, review_reason, "
+        "created_at FROM research_custom_features ORDER BY created_at DESC"
     ).fetchall()
     keys = (
         "name",
@@ -412,6 +412,7 @@ def list_custom(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         "description",
         "unit",
         "timing",
+        "goal",
         "sql",
         "status",
         "review_reason",
