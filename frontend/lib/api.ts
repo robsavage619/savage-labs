@@ -384,6 +384,12 @@ export interface WeightPoint {
 
 export interface VO2Point { date: string; vo2max: number; source: "apple_watch" | "estimated" }
 export interface StepPoint { date: string; steps: number }
+export interface ExpenditureTrend {
+  measure: string;
+  as_of?: string;
+  points: { date: string; kcal: number; court: number }[];
+  shift: { window_days: number; lag_days: number; now: number | null; prior: number | null; court_now: number | null; court_prior: number | null } | null;
+}
 export interface RHRPoint { date: string; apple: number | null; whoop: number | null }
 
 export interface Briefing {
@@ -580,6 +586,7 @@ export interface DailyState {
 export interface CheckinPayload {
   propranolol_taken?: boolean | null;
   body_weight_kg?: number | null;
+  force_weight?: boolean;
   soreness_overall?: number | null;
   sleep_quality_1_10?: number | null;
   energy_1_10?: number | null;
@@ -1034,6 +1041,7 @@ export const api = {
   bodyVO2Max: () => get<VO2Point[]>("/api/body/vo2max"),
   bodySteps: (days = 90) => get<StepPoint[]>(`/api/body/steps?days=${days}`),
   bodyRHRTrend: (days = 90) => get<RHRPoint[]>(`/api/body/rhr-trend?days=${days}`),
+  bodyExpenditure: (days = 400) => get<ExpenditureTrend>(`/api/body/expenditure?days=${days}`),
   briefing: () => get<Briefing | Record<string, never>>("/api/briefing"),
   workoutNext: (regen = false) =>
     get<WorkoutPlan>(`/api/workout/next${regen ? "?regen=true" : ""}`),

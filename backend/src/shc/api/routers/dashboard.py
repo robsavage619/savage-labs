@@ -2670,6 +2670,89 @@ async def body_trend() -> list[dict]:
     ]
 
 
+EXPENDITURE_MEASURE = "custom:whoop_kcal_7d"
+
+
+def window_shift(
+    series: dict[date, float], end: date, window: int = 28, lag: int = 90
+) -> tuple[float | None, float | None]:
+    """Mean of the `window` days ending `end` and of the same window `lag` days earlier.
+
+    Days missing from `series` are skipped, not counted as zero; a window with
+    no values at all is None.
+    """
+
+    def mean(stop: date) -> float | None:
+        vals = [
+            series[d]
+            for d in (stop - timedelta(days=i) for i in range(window))
+            if d in series
+        ]
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    return mean(end), mean(end - timedelta(days=lag))
+
+
+def court_kcal_7d(daily: dict[date, float], start: date, end: date) -> dict[date, float]:
+    """Court kcal per day as a trailing 7-day mean; a day with no session counts as zero."""
+    out: dict[date, float] = {}
+    d = start
+    while d <= end:
+        week = sum(daily.get(d - timedelta(days=i), 0.0) for i in range(7))
+        out[d] = round(week / 7, 1)
+        d += timedelta(days=1)
+    return out
+
+
+@router.get("/body/expenditure")
+async def body_expenditure(days: int = Query(400, gt=27, le=2000)) -> dict:
+    """Seven-day energy expenditure from WHOOP cycles, with court time split out.
+
+    `kcal` is the approved Lab measure `custom:whoop_kcal_7d` (cycle kcal over a
+    trailing week, scaled to 24h, dated by cycle end). `court` is the kcal of
+    pickleball sessions on the same trailing week, per day. `shift` compares the
+    last 28 days with the 28 ending 90 days earlier.
+    """
+    from shc import research
+
+    conn = get_read_conn()
+    try:
+        total = research.series(conn, EXPENDITURE_MEASURE)
+        rows = conn.execute(
+            """
+            SELECT started_at::DATE, SUM(kcal) FROM workouts
+            WHERE source = 'whoop' AND sport_name = 'pickleball' AND kcal IS NOT NULL
+            GROUP BY 1
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    if not total:
+        return {"measure": EXPENDITURE_MEASURE, "points": [], "shift": None}
+    end = max(total)
+    start = max(min(total), end - timedelta(days=days - 1))
+    court = court_kcal_7d({r[0]: float(r[1]) for r in rows}, start - timedelta(days=118), end)
+    now, prior = window_shift(total, end)
+    court_now, court_prior = window_shift(court, end)
+    return {
+        "measure": EXPENDITURE_MEASURE,
+        "as_of": end.isoformat(),
+        "points": [
+            {"date": d.isoformat(), "kcal": total[d], "court": court.get(d, 0.0)}
+            for d in sorted(total)
+            if d >= start
+        ],
+        "shift": {
+            "window_days": 28,
+            "lag_days": 90,
+            "now": now,
+            "prior": prior,
+            "court_now": court_now,
+            "court_prior": court_prior,
+        },
+    }
+
+
 @router.get("/body/vo2max")
 async def body_vo2max() -> list[dict]:
     """VO2 max time series.
