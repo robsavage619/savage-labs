@@ -878,21 +878,26 @@ def _exercise_menu(
             "SELECT exercise FROM exercise_preferences WHERE status = 'no'"
         ).fetchall()
     } | set(unavailable_exercises(conn))
+    # One scan for every muscle: the dedup view made a per-muscle query the
+    # single most expensive step of the weekly prescription.
+    by_muscle: dict[str, list[tuple]] = defaultdict(list)
+    for m_name, ex, last in conn.execute(
+        """
+        SELECT m.primary_muscle, m.exercise_name, MAX(ws.started_at)::DATE AS last_done
+        FROM exercise_muscle_map m
+        LEFT JOIN workout_sets_dedup ws
+            ON ws.exercise = m.exercise_name
+           AND COALESCE(ws.is_warmup, FALSE) = FALSE
+        WHERE list_contains(?, m.primary_muscle)
+        GROUP BY m.primary_muscle, m.exercise_name
+        ORDER BY m.primary_muscle, (last_done IS NULL), last_done ASC, m.exercise_name
+        """,
+        [list(muscles)],
+    ).fetchall():
+        by_muscle[m_name].append((ex, last))
     menu: dict[str, list[dict]] = {}
     for muscle in muscles:
-        rows = conn.execute(
-            """
-            SELECT m.exercise_name, MAX(ws.started_at)::DATE AS last_done
-            FROM exercise_muscle_map m
-            LEFT JOIN workout_sets_dedup ws
-                ON ws.exercise = m.exercise_name
-               AND COALESCE(ws.is_warmup, FALSE) = FALSE
-            WHERE m.primary_muscle = ?
-            GROUP BY m.exercise_name
-            ORDER BY (last_done IS NULL), last_done ASC
-            """,
-            [muscle],
-        ).fetchall()
+        rows = by_muscle.get(muscle, [])
         cand = [
             {"exercise": r[0], "last_done": r[1].isoformat() if r[1] else None}
             for r in rows

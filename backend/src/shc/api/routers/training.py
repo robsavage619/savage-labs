@@ -9,6 +9,8 @@ POST /api/training/scores/recompute   → recompute all exercise scores for this
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -550,7 +552,7 @@ async def get_muscle_volume(weeks_ago: int = Query(0, ge=0, le=26)) -> dict[str,
 
 
 @router.get("/training/brief")
-async def get_training_brief(weeks: int = Query(26, ge=4, le=52)) -> dict[str, Any]:
+def get_training_brief(weeks: int = Query(26, ge=4, le=52)) -> dict[str, Any]:
     """Weekly per-muscle sets beside court days, and each recent lift's working e1RM.
 
     ``weeks`` lists Monday-start weeks oldest first, each with the engine's own
@@ -564,7 +566,7 @@ async def get_training_brief(weeks: int = Query(26, ge=4, le=52)) -> dict[str, A
     """
     from shc.ai.workout_planner import e1rm_by_exercise
     from shc.training.load_mechanics import load_unit_label
-    from shc.training.volume import weekly_muscle_volume
+    from shc.training.volume import weekly_muscle_volume_by_week
 
     conn = get_read_conn()
     try:
@@ -587,9 +589,10 @@ async def get_training_brief(weeks: int = Query(26, ge=4, le=52)) -> dict[str, A
                 [starts[0]],
             ).fetchall()
         }
+        by_week = weekly_muscle_volume_by_week(conn, starts)
         week_rows = []
         for ws in starts:
-            vol = weekly_muscle_volume(conn, ws)
+            vol = by_week[ws]
             days, minutes = court.get(ws, (0, 0.0))
             week_rows.append(
                 {
@@ -646,8 +649,31 @@ async def get_training_brief(weeks: int = Query(26, ge=4, le=52)) -> dict[str, A
         conn.close()
 
 
+_rx_lock = threading.Lock()
+_rx_cache: tuple[float, date, Any] | None = None
+
+
+def shared_prescription(conn: Any, max_age_s: float = 60.0) -> Any:
+    """``weekly_prescription(conn)``, computed once per minute for every caller.
+
+    The Training page asks for the prescription and the tier at the same moment, and
+    each built the whole prescription (seconds on the host). The lock makes the second
+    caller wait for the first and reuse it; a minute of staleness is the trade.
+    """
+    global _rx_cache
+    from shc.training.autoregulation import weekly_prescription
+
+    with _rx_lock:
+        now = time.monotonic()
+        if _rx_cache and _rx_cache[1] == date.today() and now - _rx_cache[0] < max_age_s:
+            return _rx_cache[2]
+        rx = weekly_prescription(conn)
+        _rx_cache = (now, date.today(), rx)
+        return rx
+
+
 @router.get("/training/prescription")
-async def get_prescription() -> dict[str, Any]:
+def get_prescription() -> dict[str, Any]:
     """This week's self-learning per-muscle volume prescription + rationale.
 
     Deterministic output of the autoregulation controller
@@ -658,11 +684,9 @@ async def get_prescription() -> dict[str, Any]:
     """
     from dataclasses import asdict
 
-    from shc.training.autoregulation import weekly_prescription
-
     conn = get_read_conn()
     try:
-        rx = weekly_prescription(conn)
+        rx = shared_prescription(conn)
         return {
             "week_start": rx.week_start.isoformat(),
             "mesocycle_id": rx.mesocycle_id,

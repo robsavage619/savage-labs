@@ -141,3 +141,21 @@ def test_build_report_status(conn, seed):
     report = {r.muscle: r for r in build_muscle_report(actuals, volume_targets(conn, None))}
 
     assert report["glutes"].status == "in range"
+
+
+def test_batched_weekly_volume_matches_per_week(conn, seed):
+    """The brief's one-scan series must equal the per-week function, week by week."""
+    from datetime import timedelta
+
+    from shc.training.volume import weekly_muscle_volume_by_week
+
+    monday = _iso_week_start(date.today())
+    seed.workout(monday, "Pull-Up", [(20.0, 8)] * 3)
+    seed.workout(monday - timedelta(days=3), "Hammer Curl (Dumbbell)", [(20.0, 12)] * 2)
+    seed.workout(monday - timedelta(days=10), "Bicep Curl (Barbell)", [(30.0, 10)] * 4)
+    starts = [monday - timedelta(weeks=i) for i in range(3, -1, -1)]
+
+    batched = weekly_muscle_volume_by_week(conn, starts)
+
+    assert batched == {w: weekly_muscle_volume(conn, w) for w in starts}
+    assert any(batched[w] for w in starts)

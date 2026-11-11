@@ -4045,7 +4045,7 @@ async def set_emphasis(body: EmphasisSubmission) -> dict:
 
 
 @router.get("/training/tier")
-async def get_volume_tier() -> dict:
+def get_volume_tier() -> dict:
     """Return each muscle's volume tier + landmarks, and this week's set budget.
 
     ``grow`` muscles are the mesocycle's growth targets (MEV→MAV); ``maintain``
@@ -4054,11 +4054,11 @@ async def get_volume_tier() -> dict:
     """
     conn = get_read_conn()
     try:
-        from shc.training.autoregulation import weekly_prescription
+        from shc.api.routers.training import shared_prescription
         from shc.training.mesocycle import volume_targets
 
         targets = volume_targets(conn)
-        capacity = weekly_prescription(conn).capacity
+        capacity = shared_prescription(conn).capacity
     finally:
         conn.close()
     muscles = [

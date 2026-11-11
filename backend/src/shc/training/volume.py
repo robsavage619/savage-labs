@@ -157,6 +157,54 @@ def weekly_muscle_volume(
     return dict(totals)
 
 
+def weekly_muscle_volume_by_week(
+    conn: duckdb.DuckDBPyConnection, week_starts: list[date]
+) -> dict[date, dict[str, float]]:
+    """:func:`weekly_muscle_volume` for many Monday weeks in two scans, not two per week.
+
+    Same filters and credit, bucketed by ISO week; the dedup view is costly enough
+    that per-week calls dominated the training brief.
+    """
+    if not week_starts:
+        return {}
+    if any(w.weekday() != 0 for w in week_starts):
+        raise ValueError("week_starts must be Mondays")
+    params = [min(week_starts).isoformat(), (max(week_starts) + timedelta(days=7)).isoformat()]
+    where = f"""
+        ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
+          AND NOT ws.is_warmup AND ws.weight_kg > 0 AND {_STIMULATING}
+          AND {_RPE_GATE}"""
+    primary = conn.execute(
+        f"""
+        SELECT date_trunc('week', ws.started_at::DATE)::DATE, m.primary_muscle, COUNT(*)::DOUBLE
+        FROM workout_sets_dedup ws
+        JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
+        WHERE {where}
+        GROUP BY 1, 2
+        """,
+        params,
+    ).fetchall()
+    secondary = conn.execute(
+        f"""
+        SELECT date_trunc('week', ws.started_at::DATE)::DATE, u.sec,
+               SUM(CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
+                        THEN {ARM_SECONDARY_CREDIT} ELSE {SECONDARY_CREDIT} END)
+        FROM workout_sets_dedup ws
+        JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
+        CROSS JOIN UNNEST(m.secondary_muscles) AS u(sec)
+        WHERE {where}
+        GROUP BY 1, 2
+        """,
+        params,
+    ).fetchall()
+
+    out: dict[date, dict[str, float]] = {w: defaultdict(float) for w in week_starts}
+    for wk, muscle, sets in [*primary, *secondary]:
+        if wk in out:
+            out[wk][muscle] += float(sets)
+    return {w: dict(v) for w, v in out.items()}
+
+
 def weekly_region_volume(
     conn: duckdb.DuckDBPyConnection,
     week_start: date,
