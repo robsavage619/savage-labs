@@ -78,7 +78,7 @@ function Overnight() {
   const n = Object.keys(q.data.signals).length;
   const moved = q.data.moved.length;
   return (
-    <div className="td-roster">
+    <div className="td-roster scroll-mt-24" id="overnight">
       <div className="td-roster-head">
         <span className="td-label">Overnight, against your own normal</span>
         <b>{moved === 0 ? "Nothing moved past your normal wobble" : `${moved} of ${n} signals moved past your normal wobble`}</b>
@@ -140,7 +140,7 @@ function ReadinessEquation({ s }: { s: DailyState }) {
   const weakest = logged.length ? logged.reduce((a, b) => ((r.components[a.k] ?? 0) <= (r.components[b.k] ?? 0) ? a : b)) : null;
   const tier = r.tier === "green" ? "positive" : r.tier === "red" ? "negative" : "neutral";
   return (
-    <div className="td-eq">
+    <div className="td-eq scroll-mt-24" id="readiness">
       <div className="td-eq-head">
         <span className="td-label">Readiness, built from four inputs</span>
         <b style={{ color: r.tier ? TONE[tier] : undefined }}>
@@ -188,7 +188,7 @@ export function TheCall() {
   const executed = p?.execution?.executed === true;
   const day = new Date(s.as_of + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
   return (
-    <header className="td-mast">
+    <header className="td-mast scroll-mt-24" id="call">
       <div className="td-mast-l">
         <span className="td-eyebrow">{day} · the call</span>
         <motion.h1 className="td-verdict" style={{ color: TONE[cmd.tone] }} initial={{ opacity: 0.001, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.7, ease }}>
@@ -731,7 +731,7 @@ export function BodyCheck() {
   return (
     <div className="td-body">
       <div className="td-body-top">
-        <div className="td-acwr">
+        <div className="td-acwr scroll-mt-24" id="load-split">
           <span className="td-label">Last 7 days vs the 21 before</span>
           {ratios.map(([label, v, a, c], i) => (
             <div key={label} className="td-acwr-row">
@@ -752,7 +752,7 @@ export function BodyCheck() {
           </div>
           <p className="td-foot">Daily load, last 7 days vs the 21 before. Green is steady building; from 1.5 the engine starts locking muscles.</p>
         </div>
-        <div className="td-fresh">
+        <div className="td-fresh scroll-mt-24" id="fresh">
           <span className="td-label">Days since</span>
           <div className="td-pat">
             {patterns.map(([l, d]) => (
