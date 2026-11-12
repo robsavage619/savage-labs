@@ -1,6 +1,7 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { api, apiUrl } from "@/lib/api";
 
 /**
@@ -10,6 +11,40 @@ import { api, apiUrl } from "@/lib/api";
  * "Reconnect →" click 404'd.
  */
 const OAUTH_SOURCES = new Set(["whoop"]);
+
+/**
+ * The one interactive step for DUPR: adopt a refresh token copied from a signed-in
+ * browser (that sign-in already passed DUPR's emailed code). After it the sync
+ * renews itself, so this should be needed rarely.
+ */
+function DuprLinkForm() {
+  const qc = useQueryClient();
+  const [token, setToken] = useState("");
+  const link = useMutation({
+    mutationFn: () => api.duprLink(token.trim()),
+    onSuccess: () => {
+      setToken("");
+      qc.invalidateQueries({ queryKey: ["oauth-status"] });
+      qc.invalidateQueries({ queryKey: ["freshness"] });
+    },
+  });
+  return (
+    <form
+      className="dupr-link"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (token.trim()) link.mutate();
+      }}
+    >
+      <input type="password" autoComplete="off" value={token} placeholder="Paste dupr_refresh_token" aria-label="DUPR refresh token" onChange={(e) => setToken(e.target.value)} />
+      <button type="submit" disabled={!token.trim() || link.isPending}>
+        {link.isPending ? "Linking…" : "Link DUPR"}
+      </button>
+      {link.isError && <p className="dupr-link-msg bad">{link.error.message}</p>}
+      {link.isSuccess && <p className="dupr-link-msg">Linked. The next sync renews itself.</p>}
+    </form>
+  );
+}
 
 /**
  * A sync problem as a small chip beside LIVE, not a page-wide banner. The
@@ -40,9 +75,12 @@ export function SyncStatus() {
           {reauth
             ? canRedirect
               ? "The connection expired. Reconnect and the next sync picks up where it left off."
-              : "The login was refused or wants an emailed code. Sort it out at the source, then run a manual sync."
+              : issue.source === "dupr"
+                ? "DUPR wants a 6-digit emailed code, which only a browser sign-in can pass. Sign in at dupr.com, open DevTools, Application, Cookies, copy the dupr_refresh_token value and paste it below. You do this once; the sync renews itself after."
+                : "The login was refused or wants an emailed code. Sort it out at the source, then run a manual sync."
             : `New data may be missing. ${issue.last_error ?? ""}`}
         </p>
+        {reauth && issue.source === "dupr" && <DuprLinkForm />}
         {canRedirect && (
           <a className="btn btn-primary" href={apiUrl(`/auth/${issue.source}/login`)}>
             Reconnect {src}

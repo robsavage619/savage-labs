@@ -123,6 +123,85 @@ async def _login(client: httpx.AsyncClient, *, force: bool = False) -> str:
     return token
 
 
+def _extract_tokens(resp: httpx.Response) -> tuple[str | None, str | None]:
+    """(access, refresh) from a refresh response, tolerating the shapes DUPR's clients use.
+
+    The login response nests them under `result`; a refresh may too, or sit at the top
+    level, or arrive as the dupr_access_token / dupr_refresh_token cookies the web app
+    keeps. Field names are logged (never values) so a surprise shows up.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+    node = body.get("result") if isinstance(body.get("result"), dict) else body
+    node = node if isinstance(node, dict) else {}
+    log.info("DUPR refresh response fields: %s", sorted(node))
+    access = node.get("accessToken") or resp.cookies.get("dupr_access_token")
+    refresh = node.get("refreshToken") or resp.cookies.get("dupr_refresh_token")
+    return access, refresh
+
+
+async def _refresh(client: httpx.AsyncClient) -> str | None:
+    """Renew the session from the stored refresh token, as DUPR's own web client does.
+
+    GET /auth/v1.0/refresh with the token in `x-refresh-token` (shape taken from the
+    script on dupr.gg). Returns a fresh access token, or None when there is no refresh
+    token or DUPR refused it. A rotated refresh token is stored before anything else
+    uses the new access token, so a crash cannot strand the chain.
+    """
+    refresh = load_token("dupr", "refresh_token")
+    if not refresh:
+        return None
+    resp = await client.get(
+        f"{DUPR_BASE}/auth/{_VERSION}/refresh",
+        headers={"Accept": "application/json", "x-refresh-token": refresh},
+        timeout=_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        log.warning("DUPR refresh refused (%s)", resp.status_code)
+        return None
+    access, new_refresh = _extract_tokens(resp)
+    if not access:
+        log.warning("DUPR refresh returned 200 but no access token")
+        return None
+    if new_refresh:
+        store_token("dupr", "refresh_token", new_refresh)
+    store_token("dupr", "access_token", access)
+    return access
+
+
+async def _session_token(
+    client: httpx.AsyncClient, *, force_login: bool, renew: bool = False
+) -> str:
+    """A usable access token: the cached one, else a refresh, else a password login."""
+    if not renew:
+        cached = load_token("dupr", "access_token")
+        if cached:
+            return cached
+    return await _refresh(client) or await _login(client, force=force_login)
+
+
+async def link(refresh_token: str) -> dict[str, Any]:
+    """Adopt a refresh token copied from a signed-in browser, check it, and sync.
+
+    This is the one interactive step: the browser's login already passed DUPR's emailed
+    code. After it the sync renews itself without a password login or another email.
+    """
+    previous = load_token("dupr", "refresh_token")
+    store_token("dupr", "refresh_token", refresh_token.strip())
+    async with httpx.AsyncClient() as client:
+        if not await _refresh(client):
+            if previous:
+                store_token("dupr", "refresh_token", previous)
+            raise DuprVerificationRequired(
+                "DUPR refused that refresh token — sign in at dupr.com and copy the "
+                "dupr_refresh_token cookie again"
+            )
+    await _mark_state(needs_reauth=False)
+    return await sync_rating()
+
+
 async def _get_profile(client: httpx.AsyncClient, token: str) -> httpx.Response:
     return await client.get(
         f"{DUPR_BASE}/user/{_VERSION}/profile/",
@@ -249,15 +328,13 @@ async def sync_matches(*, force_login: bool = False) -> dict[str, Any]:
     Pulls up to 200 matches (all known history). offset=0 is required by the
     API — omitting it returns empty hits even when total > 0.
     """
-    token = load_token("dupr", "access_token")
     async with httpx.AsyncClient() as client:
-        if not token:
-            token = await _login(client, force=force_login)
+        token = await _session_token(client, force_login=force_login)
 
         # Get user_id — retry once on expired token
         resp = await _get_profile(client, token)
         if resp.status_code in (401, 403):
-            token = await _login(client, force=force_login)
+            token = await _session_token(client, force_login=force_login, renew=True)
             resp = await _get_profile(client, token)
         resp.raise_for_status()
         user_id: int = (resp.json().get("result") or {}).get("id") or 0
@@ -353,14 +430,12 @@ async def sync_rating(*, force_login: bool = False) -> dict[str, Any]:
     those raised the reauth banner over an API Rob had no way to fix and a
     "Reconnect" link that 404s. Same rule whoop.py already follows.
     """
-    token = load_token("dupr", "access_token")
     async with httpx.AsyncClient() as client:
-        if not token:
-            token = await _login(client, force=force_login)
+        token = await _session_token(client, force_login=force_login)
         resp = await _get_profile(client, token)
         if resp.status_code in (401, 403):
-            log.info("DUPR token rejected (%s) — re-authenticating", resp.status_code)
-            token = await _login(client, force=force_login)
+            log.info("DUPR token rejected (%s) — renewing", resp.status_code)
+            token = await _session_token(client, force_login=force_login, renew=True)
             resp = await _get_profile(client, token)
         try:
             resp.raise_for_status()

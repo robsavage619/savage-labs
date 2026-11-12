@@ -404,17 +404,18 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
-    # DUPR rating snapshot — disabled: logins are paused until the account is
-    # re-verified at dupr.gg. Re-enable this job once that's done.
-    # scheduler.add_job(
-    #     _dupr_sync_safe,
-    #     "cron",
-    #     hour=5,
-    #     minute=30,
-    #     id="dupr_sync",
-    #     replace_existing=True,
-    #     misfire_grace_time=3600,
-    # )
+    # DUPR rating snapshot. The session renews itself from a linked refresh token;
+    # a password login (which emails a code) only runs when that chain is broken, and
+    # it pauses itself after one refusal so this job cannot spam.
+    scheduler.add_job(
+        _dupr_sync_safe,
+        "cron",
+        hour=5,
+        minute=30,
+        id="dupr_sync",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     # A dead OAuth token is silent by construction: the API keeps serving the
     # last-known numbers. Poll often enough that a break costs minutes, not days.
     scheduler.add_job(

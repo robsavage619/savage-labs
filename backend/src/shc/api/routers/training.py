@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, write_ctx
@@ -940,6 +940,26 @@ async def dupr_sync() -> dict[str, Any]:
 
     try:
         return await dupr.sync_rating(force_login=True)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
+
+
+class DuprLink(BaseModel):
+    refresh_token: str = Field(min_length=20, max_length=4000)
+
+
+@router.post("/pickleball/dupr/link", dependencies=[Depends(require_admin_key)])
+async def dupr_link(body: DuprLink) -> dict[str, Any]:
+    """Adopt a DUPR refresh token copied from a signed-in browser, then sync.
+
+    The one interactive step. Afterwards the sync renews itself from the token.
+    """
+    from shc.ingest import dupr
+
+    try:
+        return await dupr.link(body.refresh_token)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:

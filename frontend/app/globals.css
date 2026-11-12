@@ -1578,3 +1578,11 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 /* Check-in undo */
 .ci-undo { appearance: none; border: 0; background: transparent; font: inherit; color: var(--series-1); text-decoration: underline; padding: 8px 10px; margin: -8px 0 -8px 2px; min-height: 32px; }
 
+/* DUPR link form (in the sync popover) */
+.dupr-link { display: grid; gap: 8px; margin-top: 4px; }
+.dupr-link input { font: inherit; color: var(--text-primary); background: oklch(1 0 0 / 0.05); border: 1px solid oklch(1 0 0 / 0.1); border-radius: 8px; padding: 8px 10px; min-height: 40px; min-width: 0; }
+.dupr-link button { appearance: none; border: 0; background: oklch(1 0 0 / 0.08); padding: 0 14px; min-height: 40px; border-radius: 8px; font: inherit; font-size: 13px; color: var(--text-primary); }
+.dupr-link button:disabled { opacity: 0.4; }
+.dupr-link-msg { margin: 0; font-size: 12.5px; color: var(--positive); }
+.dupr-link-msg.bad { color: var(--negative); }
+

@@ -1129,6 +1129,18 @@ export const api = {
     if (!r.ok) throw new Error(`saveTape ${r.status}`);
   },
   places: () => get<PlacesSummary>("/api/places"),
+  duprLink: async (refreshToken: string) => {
+    const r = await fetch(`${BASE}/api/pickleball/dupr/link`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...mutHeaders() },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `duprLink ${r.status}`);
+    }
+    return r.json() as Promise<{ doubles: number | null }>;
+  },
   freshness: () =>
     get<{ key: string; label: string; last_at: string | null; age_h: number | null; stale_after_h: number; state: "ok" | "stale" | "never" }[]>(
       "/api/freshness",
