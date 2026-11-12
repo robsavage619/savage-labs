@@ -3623,6 +3623,18 @@ async def engine_scorecard() -> dict:
         conn.close()
 
 
+@router.get("/scorecard/week")
+async def week_scorecard() -> dict:
+    """Last 7 days against the prior 28, per domain, inside Rob's own noise floor."""
+    from shc.stats.weekly_card import weekly_card
+
+    conn = get_read_conn()
+    try:
+        return weekly_card(conn)
+    finally:
+        conn.close()
+
+
 @router.get("/engine/report-card")
 async def engine_report_card(days: int = 365) -> dict:
     """Does the engine prescribe accurately, and does readiness predict anything?

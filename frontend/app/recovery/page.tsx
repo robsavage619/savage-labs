@@ -20,6 +20,7 @@ import {
   WeekOverWeek,
 } from "@/components/recovery-board";
 import { SurfaceShell } from "@/components/surface-shell";
+import { WeekCard } from "@/components/week-card";
 
 /**
  * RECOVERY: am I absorbing the work?
@@ -42,6 +43,8 @@ export default function RecoveryPage() {
           />
 
           <Verdict />
+
+          <WeekCard />
 
           <Section n="01" title="Nervous system">
             <Panel

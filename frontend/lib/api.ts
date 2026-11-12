@@ -1341,6 +1341,25 @@ export const api = {
       first_review: string;
       metrics: { key: string; label: string; value: number | null; unit: string; status: string }[];
     }>("/api/engine/scorecard"),
+  weekCard: () =>
+    get<{
+      as_of: string;
+      domains: {
+        key: string;
+        label: string;
+        status: "better" | "worse" | "steady" | "moved" | "unknown";
+        value: number | null;
+        baseline: number | null;
+        delta: number | null;
+        days: number;
+      }[];
+      rpe_gap: {
+        sets: number;
+        missing: number;
+        pct_missing: number | null;
+        sessions: { date: string; sets: number; missing: number }[];
+      };
+    }>("/api/scorecard/week"),
   engineReportCard: (days = 365) =>
     get<{
       as_of: string;
