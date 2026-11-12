@@ -1383,6 +1383,9 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
   .lf-misses { grid-template-columns: minmax(0, 1fr); }
   .lf-thread { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "msgs" "more"; }
 }
+@media (max-width: 640px) {
+  .lf-desk-top { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 12px; }
+}
 @media (prefers-reduced-motion: reduce) { .lf-page * { transition: none !important; animation: none !important; } }
 
 /* ── Research team room ───────────────────────────────────────────────────── */
