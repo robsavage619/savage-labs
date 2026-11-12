@@ -113,3 +113,15 @@ def test_working_cached_token_clears_the_pause_without_logging_in(dupr_env):
     assert result["doubles"] == 3.6
     assert _logins(calls) == 1
     assert not _needs_reauth(conn)
+
+
+def test_428_keeps_what_dupr_said(dupr_env):
+    conn, calls, responses = dupr_env
+    responses["/user/"] = httpx.Response(401)
+    responses["/auth/"] = httpx.Response(428, text='{"message": "Verify your device"}')
+
+    with pytest.raises(dupr.DuprVerificationRequired, match="Verify your device"):
+        asyncio.run(dupr.sync_rating())
+
+    row = conn.execute("SELECT last_error FROM oauth_state WHERE source = 'dupr'").fetchone()
+    assert row is not None and "Verify your device" in row[0]

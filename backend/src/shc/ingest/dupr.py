@@ -94,10 +94,13 @@ async def _login(client: httpx.AsyncClient, *, force: bool = False) -> str:
         timeout=_TIMEOUT,
     )
     if resp.status_code == 428:
-        await _mark_state(needs_reauth=True)
+        # Keep what DUPR said: the status alone never told us what it wants.
+        said = resp.text.strip()[:300]
+        log.warning("DUPR login refused with 428: %s", said or "(empty body)")
+        await _mark_state(needs_reauth=True, error=f"428: {said}" if said else "428")
         raise DuprVerificationRequired(
             "DUPR login needs an emailed verification code, which this client cannot "
-            "submit — automatic DUPR logins are paused"
+            f"submit — automatic DUPR logins are paused. DUPR said: {said or '(empty body)'}"
         )
     if resp.status_code in (401, 403):
         # The stored email/password itself is bad — this is the one failure
@@ -106,7 +109,10 @@ async def _login(client: httpx.AsyncClient, *, force: bool = False) -> str:
         # without touching the flag.
         await _mark_state(needs_reauth=True)
     resp.raise_for_status()
-    token = (resp.json().get("result") or {}).get("accessToken")
+    result = resp.json().get("result") or {}
+    # Field names only, never values: shows whether login also issues a longer-lived token.
+    log.info("DUPR login ok; result fields: %s", sorted(result))
+    token = result.get("accessToken")
     if not token:
         raise RuntimeError("DUPR login succeeded but returned no access token")
     store_token("dupr", "access_token", token)
@@ -121,17 +127,19 @@ async def _get_profile(client: httpx.AsyncClient, token: str) -> httpx.Response:
     )
 
 
-async def _mark_state(*, needs_reauth: bool) -> None:
+async def _mark_state(*, needs_reauth: bool, error: str | None = None) -> None:
     async with write_ctx() as conn:
         conn.execute(
             """
-            INSERT INTO oauth_state (source, last_sync_at, needs_reauth)
-            VALUES ('dupr', $ts, $reauth)
+            INSERT INTO oauth_state (source, last_sync_at, needs_reauth, last_error, last_error_at)
+            VALUES ('dupr', $ts, $reauth, $err, CASE WHEN $err IS NULL THEN NULL ELSE $ts END)
             ON CONFLICT (source) DO UPDATE SET
                 last_sync_at = EXCLUDED.last_sync_at,
-                needs_reauth = EXCLUDED.needs_reauth
+                needs_reauth = EXCLUDED.needs_reauth,
+                last_error = EXCLUDED.last_error,
+                last_error_at = EXCLUDED.last_error_at
             """,
-            {"ts": datetime.now(UTC).isoformat(), "reauth": needs_reauth},
+            {"ts": datetime.now(UTC).isoformat(), "reauth": needs_reauth, "err": error},
         )
 
 
