@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -95,7 +96,10 @@ async def _login(client: httpx.AsyncClient, *, force: bool = False) -> str:
     )
     if resp.status_code == 428:
         # Keep what DUPR said: the status alone never told us what it wants.
-        said = resp.text.strip()[:300]
+        # The challenge token is a credential for the emailed code; never keep it.
+        said = re.sub(r'("challengeToken"\s*:\s*")[^"]*"', r'\1<REDACTED>"', resp.text.strip())[
+            :300
+        ]
         log.warning("DUPR login refused with 428: %s", said or "(empty body)")
         await _mark_state(needs_reauth=True, error=f"428: {said}" if said else "428")
         raise DuprVerificationRequired(

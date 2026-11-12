@@ -118,10 +118,14 @@ def test_working_cached_token_clears_the_pause_without_logging_in(dupr_env):
 def test_428_keeps_what_dupr_said(dupr_env):
     conn, calls, responses = dupr_env
     responses["/user/"] = httpx.Response(401)
-    responses["/auth/"] = httpx.Response(428, text='{"message": "Verify your device"}')
+    responses["/auth/"] = httpx.Response(
+        428, text='{"message": "Verify your device", "challengeToken": "abc.def.ghi"}'
+    )
 
-    with pytest.raises(dupr.DuprVerificationRequired, match="Verify your device"):
+    with pytest.raises(dupr.DuprVerificationRequired, match="Verify your device") as exc:
         asyncio.run(dupr.sync_rating())
+    assert "abc.def.ghi" not in str(exc.value)
 
     row = conn.execute("SELECT last_error FROM oauth_state WHERE source = 'dupr'").fetchone()
     assert row is not None and "Verify your device" in row[0]
+    assert "abc.def.ghi" not in row[0]  # the challenge token is a credential
