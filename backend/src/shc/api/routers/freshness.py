@@ -15,7 +15,8 @@ router = APIRouter(tags=["freshness"])
 _SOURCES = [
     ("whoop", "WHOOP", "SELECT last_sync_at FROM oauth_state WHERE source = 'whoop'", 18),
     ("hevy", "Hevy", "SELECT last_sync_at FROM oauth_state WHERE source = 'hevy'", 30),
-    ("dupr", "DUPR", "SELECT last_sync_at FROM oauth_state WHERE source = 'dupr'", 8 * 24),
+    # Not oauth_state: DUPR stamps it on every login attempt, failed ones included.
+    ("dupr", "DUPR", "SELECT max(synced_at) FROM dupr_snapshots", 8 * 24),
     ("stress", "Stress", "SELECT max(sampled_at) FROM whoop_stress_timeline", 36),
     (
         "apple",
