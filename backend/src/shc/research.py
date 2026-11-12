@@ -88,6 +88,9 @@ FEATURES: dict[str, Feature] = {
             _q("SELECT date, AVG(hrv) FROM recovery WHERE hrv > 0 GROUP BY date"),
         ),
         Feature("weekend", "Weekend day", "yes=1", "day", "calendar"),
+        Feature("stress_high_min", "High-stress minutes outside workouts", "min", "day", "WHOOP"),
+        Feature("presleep_stress", "Stress in the 2 h before bed", "0-3", "morning", "WHOOP"),
+        Feature("away_night", "Slept away from home", "yes=1", "morning", "location"),
         Feature("lnhrv_dev_pct", "HRV vs 28-day baseline (log)", "%", "morning", "WHOOP"),
         Feature("lnhrv_7d_pct", "7-day mean HRV vs baseline (log)", "%", "morning", "WHOOP"),
         Feature(
@@ -480,12 +483,44 @@ def _weekend(_conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
     return out
 
 
+_FULL_STRESS_DAY = 900  # samples: a day with under 15 h of readings is a gap, not a calm day
+
+
+def _stress_high_min(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
+    """Minutes of HIGH stress per day, leaving out workouts and the half hour after."""
+    return _rows(
+        conn,
+        "WITH s AS (SELECT t.date, upper(t.level) = 'HIGH' AS hi, EXISTS ("
+        "SELECT 1 FROM workouts w WHERE t.sampled_at >= w.started_at "
+        "AND t.sampled_at < COALESCE(w.ended_at, w.started_at) + INTERVAL 30 MINUTE) AS ex "
+        "FROM whoop_stress_timeline t) "
+        "SELECT date, count(*) FILTER (WHERE hi AND NOT ex) FROM s GROUP BY date "
+        f"HAVING count(*) >= {_FULL_STRESS_DAY}",
+    )
+
+
+def _presleep_stress(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
+    """Mean stress in the two hours before the night's main sleep began, keyed to the wake date."""
+    return _rows(
+        conn,
+        "WITH n AS (SELECT night_date, arg_max(ts_in, epoch(ts_out - ts_in)) AS ts_in FROM sleep "
+        "WHERE NOT COALESCE(is_nap, FALSE) AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
+        "GROUP BY night_date) "
+        "SELECT n.night_date, avg(t.value) FROM n JOIN whoop_stress_timeline t "
+        "ON t.sampled_at >= n.ts_in - INTERVAL 2 HOUR AND t.sampled_at < n.ts_in "
+        "WHERE t.value IS NOT NULL GROUP BY n.night_date HAVING count(*) >= 60",
+    )
+
+
 _DERIVED: dict[str, Callable[[duckdb.DuckDBPyConnection], dict[date, float]]] = {
     "weekend": _weekend,
     "lnhrv_dev_pct": _lnhrv_dev,
     "lnhrv_7d_pct": lambda c: _rolling7(series(c, "lnhrv_dev_pct")),
     "body_mass_7d": lambda c: _rolling7(series(c, "body_mass_lb"), min_n=1),
     "strength_emphasis_pct14": _emphasis,
+    "stress_high_min": _stress_high_min,
+    "presleep_stress": _presleep_stress,
+    "away_night": places.away_nights,
 }
 _DERIVED_KINDS: dict[str, Callable[[duckdb.DuckDBPyConnection, str], dict[date, float]]] = {
     "sets": _muscle_sets,

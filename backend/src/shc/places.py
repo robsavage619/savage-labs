@@ -303,3 +303,25 @@ def summary(conn: duckdb.DuckDBPyConnection, limit: int = 12) -> dict[str, Any]:
         "min_visits": MIN_VISITS,
         "min_span_days": MIN_SPAN.days,
     }
+
+
+def away_nights(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
+    """1.0 for nights slept away from the usual place, 0.0 for home, keyed to the wake date.
+
+    Home is the place most nights began at. Nights with no stay covering sleep
+    onset are left out rather than guessed.
+    """
+    rows = conn.execute(
+        "WITH n AS (SELECT night_date, arg_max(ts_in, epoch(ts_out - ts_in)) AS ts_in FROM sleep "
+        "WHERE NOT COALESCE(is_nap, FALSE) AND ts_in IS NOT NULL AND ts_out IS NOT NULL "
+        "GROUP BY night_date) "
+        "SELECT n.night_date, s.place_id FROM n JOIN place_stays s "
+        "ON n.ts_in >= s.arrived_at AND n.ts_in < s.left_at"
+    ).fetchall()
+    counts: dict[int, int] = defaultdict(int)
+    for _, place in rows:
+        counts[place] += 1
+    if not counts or max(counts.values()) < 3:
+        return {}
+    home = max(counts, key=lambda p: counts[p])
+    return {night: float(place != home) for night, place in rows}
