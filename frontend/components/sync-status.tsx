@@ -13,35 +13,42 @@ import { api, apiUrl } from "@/lib/api";
 const OAUTH_SOURCES = new Set(["whoop"]);
 
 /**
- * The one interactive step for DUPR: adopt a refresh token copied from a signed-in
- * browser (that sign-in already passed DUPR's emailed code). After it the sync
- * renews itself, so this should be needed rarely.
+ * DUPR's sign-in has a second step: a 6-digit code it emails. Ask for one, type it
+ * here, and the app keeps the session DUPR returns. After that the sync renews
+ * itself, so this should be needed rarely.
  */
-function DuprLinkForm() {
+function DuprCodeForm() {
   const qc = useQueryClient();
-  const [token, setToken] = useState("");
-  const link = useMutation({
-    mutationFn: () => api.duprLink(token.trim()),
+  const [code, setCode] = useState("");
+  const ask = useMutation({ mutationFn: () => api.duprRequestCode() });
+  const verify = useMutation({
+    mutationFn: () => api.duprVerify(code.trim()),
     onSuccess: () => {
-      setToken("");
+      setCode("");
       qc.invalidateQueries({ queryKey: ["oauth-status"] });
       qc.invalidateQueries({ queryKey: ["freshness"] });
     },
   });
+  const sent = ask.isSuccess && ask.data.status === "code_sent";
   return (
     <form
       className="dupr-link"
       onSubmit={(e) => {
         e.preventDefault();
-        if (token.trim()) link.mutate();
+        if (/^\d{4,12}$/.test(code.trim())) verify.mutate();
       }}
     >
-      <input type="password" autoComplete="off" value={token} placeholder="Paste dupr_refresh_token" aria-label="DUPR refresh token" onChange={(e) => setToken(e.target.value)} />
-      <button type="submit" disabled={!token.trim() || link.isPending}>
-        {link.isPending ? "Linking…" : "Link DUPR"}
+      <button type="button" onClick={() => ask.mutate()} disabled={ask.isPending}>
+        {ask.isPending ? "Asking DUPR…" : sent ? "Email me another code" : "Email me a code"}
       </button>
-      {link.isError && <p className="dupr-link-msg bad">{link.error.message}</p>}
-      {link.isSuccess && <p className="dupr-link-msg">Linked. The next sync renews itself.</p>}
+      {ask.isError && <p className="dupr-link-msg bad">{ask.error.message}</p>}
+      {sent && <p className="dupr-link-msg">Code sent. Check your email and type it below.</p>}
+      <input inputMode="numeric" autoComplete="one-time-code" value={code} placeholder="6-digit code" aria-label="DUPR code" onChange={(e) => setCode(e.target.value)} />
+      <button type="submit" disabled={!/^\d{4,12}$/.test(code.trim()) || verify.isPending}>
+        {verify.isPending ? "Checking…" : "Verify"}
+      </button>
+      {verify.isError && <p className="dupr-link-msg bad">{verify.error.message}</p>}
+      {verify.isSuccess && <p className="dupr-link-msg">Linked. The next sync renews itself.</p>}
     </form>
   );
 }
@@ -76,11 +83,11 @@ export function SyncStatus() {
             ? canRedirect
               ? "The connection expired. Reconnect and the next sync picks up where it left off."
               : issue.source === "dupr"
-                ? "DUPR wants a 6-digit emailed code, which only a browser sign-in can pass. Sign in at dupr.com, open DevTools, Application, Cookies, copy the dupr_refresh_token value and paste it below. You do this once; the sync renews itself after."
+                ? "DUPR signs in with a 6-digit code it emails. Ask for one, type it below, and the app keeps the session. The sync renews itself after that."
                 : "The login was refused or wants an emailed code. Sort it out at the source, then run a manual sync."
             : `New data may be missing. ${issue.last_error ?? ""}`}
         </p>
-        {reauth && issue.source === "dupr" && <DuprLinkForm />}
+        {reauth && issue.source === "dupr" && <DuprCodeForm />}
         {canRedirect && (
           <a className="btn btn-primary" href={apiUrl(`/auth/${issue.source}/login`)}>
             Reconnect {src}

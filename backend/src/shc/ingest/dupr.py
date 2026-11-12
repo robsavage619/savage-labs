@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from datetime import UTC, date, datetime
+from http.cookies import CookieError, SimpleCookie
 from typing import Any
 
 import httpx
@@ -97,6 +98,12 @@ async def _login(client: httpx.AsyncClient, *, force: bool = False) -> str:
     if resp.status_code == 428:
         # Keep what DUPR said: the status alone never told us what it wants.
         # The challenge token is a credential for the emailed code; never keep it.
+        try:
+            challenge = (resp.json() or {}).get("challengeToken")
+        except ValueError:
+            challenge = None
+        if challenge:
+            store_token("dupr", "challenge_token", challenge)
         said = re.sub(r'("challengeToken"\s*:\s*")[^"]*"', r'\1<REDACTED>"', resp.text.strip())[
             :300
         ]
@@ -123,12 +130,35 @@ async def _login(client: httpx.AsyncClient, *, force: bool = False) -> str:
     return token
 
 
-def _extract_tokens(resp: httpx.Response) -> tuple[str | None, str | None]:
-    """(access, refresh) from a refresh response, tolerating the shapes DUPR's clients use.
+def _cookie_tokens(resp: httpx.Response) -> tuple[str | None, str | None, list[str]]:
+    """(access, refresh, cookie names) from a response's Set-Cookie headers, matched by name.
 
-    The login response nests them under `result`; a refresh may too, or sit at the top
-    level, or arrive as the dupr_access_token / dupr_refresh_token cookies the web app
-    keeps. Field names are logged (never values) so a surprise shows up.
+    DUPR's web client receives its tokens as cookies, not in the body. They are parsed
+    from the raw headers because their Domain need not match the host we called, which
+    httpx's cookie jar would drop.
+    """
+    jar: dict[str, str] = {}
+    for header in resp.headers.get_list("set-cookie"):
+        cookie: SimpleCookie = SimpleCookie()
+        try:
+            cookie.load(header)
+        except CookieError:
+            continue
+        jar.update({name: morsel.value for name, morsel in cookie.items()})
+
+    def pick(word: str, suffix: str) -> str | None:
+        # DUPR's own cookies are __Host-dupr_at (access) and __Host-dupr_rt (refresh).
+        return next(
+            (v for k, v in jar.items() if word in k.lower() or k.lower().endswith(suffix)), None
+        )
+
+    return pick("access", "_at"), pick("refresh", "_rt"), sorted(jar)
+
+
+def _extract_tokens(resp: httpx.Response) -> tuple[str | None, str | None]:
+    """(access, refresh) from a login, verify or refresh response, body or cookies.
+
+    Field and cookie names are logged, never values, so a surprise shows up.
     """
     try:
         body = resp.json()
@@ -136,10 +166,9 @@ def _extract_tokens(resp: httpx.Response) -> tuple[str | None, str | None]:
         body = {}
     node = body.get("result") if isinstance(body.get("result"), dict) else body
     node = node if isinstance(node, dict) else {}
-    log.info("DUPR refresh response fields: %s", sorted(node))
-    access = node.get("accessToken") or resp.cookies.get("dupr_access_token")
-    refresh = node.get("refreshToken") or resp.cookies.get("dupr_refresh_token")
-    return access, refresh
+    c_access, c_refresh, names = _cookie_tokens(resp)
+    log.info("DUPR response fields: %s; cookies: %s", sorted(node), names)
+    return node.get("accessToken") or c_access, node.get("refreshToken") or c_refresh
 
 
 async def _refresh(client: httpx.AsyncClient) -> str | None:
@@ -155,7 +184,12 @@ async def _refresh(client: httpx.AsyncClient) -> str | None:
         return None
     resp = await client.get(
         f"{DUPR_BASE}/auth/{_VERSION}/refresh",
-        headers={"Accept": "application/json", "x-refresh-token": refresh},
+        # The page script sends the header; the dashboard sends the cookie. Send both.
+        headers={
+            "Accept": "application/json",
+            "x-refresh-token": refresh,
+            "Cookie": f"__Host-dupr_rt={refresh}",
+        },
         timeout=_TIMEOUT,
     )
     if resp.status_code != 200:
@@ -182,22 +216,55 @@ async def _session_token(
     return await _refresh(client) or await _login(client, force=force_login)
 
 
-async def link(refresh_token: str) -> dict[str, Any]:
-    """Adopt a refresh token copied from a signed-in browser, check it, and sync.
-
-    This is the one interactive step: the browser's login already passed DUPR's emailed
-    code. After it the sync renews itself without a password login or another email.
-    """
-    previous = load_token("dupr", "refresh_token")
-    store_token("dupr", "refresh_token", refresh_token.strip())
+async def request_code() -> dict[str, Any]:
+    """Start a password login. DUPR emails a 6-digit code and returns a challenge token,
+    which is kept for `verify_code`. Returns `code_sent`, or the sync result if DUPR
+    signed in without asking."""
     async with httpx.AsyncClient() as client:
-        if not await _refresh(client):
-            if previous:
-                store_token("dupr", "refresh_token", previous)
-            raise DuprVerificationRequired(
-                "DUPR refused that refresh token — sign in at dupr.com and copy the "
-                "dupr_refresh_token cookie again"
+        try:
+            await _login(client, force=True)
+        except DuprVerificationRequired:
+            if load_token("dupr", "challenge_token"):
+                return {"status": "code_sent"}
+            raise
+    return {"status": "signed_in", **await sync_rating()}
+
+
+# The web client calls api.dupr.com; this client has always used api.dupr.gg. Try ours first.
+_VERIFY_HOSTS = (DUPR_BASE, "https://api.dupr.com")
+
+
+async def verify_code(code: str) -> dict[str, Any]:
+    """Submit the emailed code with the stored challenge token, keep the session DUPR
+    returns, and sync. After this the sync renews itself from the refresh token."""
+    challenge = load_token("dupr", "challenge_token")
+    if not challenge:
+        raise DuprVerificationRequired("No code was requested — ask for a new one first")
+    async with httpx.AsyncClient() as client:
+        resp = None
+        for host in _VERIFY_HOSTS:
+            resp = await client.post(
+                f"{host}/auth/{_VERSION}/2fa/verify",
+                json={"challengeToken": challenge, "code": code.strip()},
+                timeout=_TIMEOUT,
             )
+            if resp.status_code != 404:
+                break
+        assert resp is not None
+        if resp.status_code != 200:
+            said = re.sub(r'("challengeToken"\s*:\s*")[^"]*"', r'\1<REDACTED>"', resp.text)[:200]
+            log.warning("DUPR code verify refused (%s): %s", resp.status_code, said)
+            raise DuprVerificationRequired(f"DUPR refused the code ({resp.status_code}): {said}")
+        access, refresh = _extract_tokens(resp)
+        if not access:
+            names = _cookie_tokens(resp)[2]
+            raise DuprVerificationRequired(
+                f"DUPR accepted the code but returned no access token; cookies seen: {names}"
+            )
+        store_token("dupr", "access_token", access)
+        if refresh:
+            store_token("dupr", "refresh_token", refresh)
+        store_token("dupr", "challenge_token", "")
     await _mark_state(needs_reauth=False)
     return await sync_rating()
 

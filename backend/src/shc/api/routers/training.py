@@ -946,20 +946,30 @@ async def dupr_sync() -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
 
 
-class DuprLink(BaseModel):
-    refresh_token: str = Field(min_length=20, max_length=4000)
+class DuprCode(BaseModel):
+    code: str = Field(min_length=4, max_length=12, pattern=r"^\d+$")
 
 
-@router.post("/pickleball/dupr/link", dependencies=[Depends(require_admin_key)])
-async def dupr_link(body: DuprLink) -> dict[str, Any]:
-    """Adopt a DUPR refresh token copied from a signed-in browser, then sync.
-
-    The one interactive step. Afterwards the sync renews itself from the token.
-    """
+@router.post("/pickleball/dupr/code", dependencies=[Depends(require_admin_key)])
+async def dupr_request_code() -> dict[str, Any]:
+    """Ask DUPR to email a sign-in code (a password login; one email per call)."""
     from shc.ingest import dupr
 
     try:
-        return await dupr.link(body.refresh_token)
+        return await dupr.request_code()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"DUPR API error: {exc}") from exc
+
+
+@router.post("/pickleball/dupr/verify", dependencies=[Depends(require_admin_key)])
+async def dupr_verify(body: DuprCode) -> dict[str, Any]:
+    """Submit the emailed code; on success the session is kept and the rating synced."""
+    from shc.ingest import dupr
+
+    try:
+        return await dupr.verify_code(body.code)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:

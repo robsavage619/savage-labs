@@ -1129,15 +1129,23 @@ export const api = {
     if (!r.ok) throw new Error(`saveTape ${r.status}`);
   },
   places: () => get<PlacesSummary>("/api/places"),
-  duprLink: async (refreshToken: string) => {
-    const r = await fetch(`${BASE}/api/pickleball/dupr/link`, {
+  duprRequestCode: async () => {
+    const r = await fetch(`${BASE}/api/pickleball/dupr/code`, { method: "POST", headers: mutHeaders() });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `duprRequestCode ${r.status}`);
+    }
+    return r.json() as Promise<{ status: string }>;
+  },
+  duprVerify: async (code: string) => {
+    const r = await fetch(`${BASE}/api/pickleball/dupr/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...mutHeaders() },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify({ code }),
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
-      throw new Error(err.detail || `duprLink ${r.status}`);
+      throw new Error(err.detail || `duprVerify ${r.status}`);
     }
     return r.json() as Promise<{ doubles: number | null }>;
   },
