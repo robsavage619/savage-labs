@@ -20,22 +20,26 @@ def require_admin_key(
 ) -> None:
     """Reject mutating requests that don't carry the configured admin key.
 
-    Trusts two callers without a key: a direct loopback peer (the local CLI,
-    the scheduled sync, an SSH tunnel), and a request `tailscale serve`
-    proxied for a logged-in tailnet user. The proxy also connects from
-    loopback, so a forwarded request is trusted only when it carries
-    `Tailscale-User-Login`, which tailscaled sets for tailnet users and strips
-    from incoming requests. Funnel traffic and tagged devices carry no login and
-    need the key. (The Apple Health and OwnTracks webhooks check their own key.)
+    Trusts two callers without a key: a direct loopback peer (the local CLI, the
+    scheduled sync, an SSH tunnel), and a request `tailscale serve` proxied for a
+    logged-in tailnet user, recognised by the `Tailscale-User-Login` header that
+    tailscaled sets and strips from incoming requests. Behind `serve`, uvicorn
+    rewrites the client address from X-Forwarded-For, so those requests never look
+    like loopback and the header is the only signal. A forwarded request without
+    it (Funnel, a tagged device) needs the key. (The Apple Health and OwnTracks
+    webhooks check their own key.)
 
     Also skips the check when no key is configured (first-run, no .env).
     """
     client = request.client
-    if client is not None and client.host in _LOOPBACK_HOSTS:
-        proxied = "x-forwarded-for" in request.headers
-        # ponytail: any tailnet user is trusted; pin to one login if the tailnet gains others.
-        if not proxied or request.headers.get("tailscale-user-login"):
-            return
+    direct = (
+        client is not None
+        and client.host in _LOOPBACK_HOSTS
+        and "x-forwarded-for" not in request.headers
+    )
+    # ponytail: any tailnet user is trusted; pin to one login if the tailnet gains others.
+    if direct or request.headers.get("tailscale-user-login"):
+        return
 
     effective = settings.effective_admin_key
     if not effective:

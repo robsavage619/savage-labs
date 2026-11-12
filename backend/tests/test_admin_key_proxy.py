@@ -23,6 +23,19 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(app, client=("127.0.0.1", 50000))
 
 
+@pytest.fixture
+def tailnet_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Behind `tailscale serve`, uvicorn rewrites the peer to the caller's tailnet address."""
+    monkeypatch.setattr(settings, "shc_admin_key", "k")
+    app = FastAPI()
+
+    @app.post("/x")
+    def x(_: Annotated[None, Depends(require_admin_key)]) -> dict[str, bool]:
+        return {"ok": True}
+
+    return TestClient(app, client=("100.64.0.2", 0))
+
+
 @pytest.mark.parametrize(
     ("headers", "status"),
     [
@@ -36,3 +49,17 @@ def test_proxied_loopback_needs_tailnet_identity(
     client: TestClient, headers: dict[str, str], status: int
 ) -> None:
     assert client.post("/x", headers=headers).status_code == status
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({"Tailscale-User-Login": "u@example.com"}, 200),  # a logged-in tailnet node
+        ({}, 401),  # Funnel / tagged node: no identity, no key
+        ({"X-SHC-Key": "k"}, 200),
+    ],
+)
+def test_proxied_tailnet_peer_trusted_only_with_identity(
+    tailnet_client: TestClient, headers: dict[str, str], status: int
+) -> None:
+    assert tailnet_client.post("/x", headers=headers).status_code == status
