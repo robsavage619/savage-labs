@@ -7,6 +7,20 @@ import { Eyebrow } from "@/components/ui/metric";
 import { CheckIcon } from "@/components/ui/icons";
 import { BodyDiagram, type Soreness } from "@/components/body-diagram";
 
+// Fields an undo can put back. The API treats null as "no change", so a value that
+// was never set can't be cleared through it; undo only offers to restore a previous one.
+const UNDOABLE = [
+  "soreness_overall",
+  "sleep_quality_1_10",
+  "energy_1_10",
+  "stress_1_10",
+  "motivation_1_10",
+  "propranolol_taken",
+  "illness_flag",
+  "travel_flag",
+  "muscle_soreness",
+] as const;
+
 /**
  * Daily check-in card — drives the deterministic auto-regulation gates.
  *
@@ -29,6 +43,7 @@ export function CheckinCard() {
   const [notes, setNotes] = useState<string>("");
   const [muscleSoreness, setMuscleSoreness] = useState<Soreness>({});
   const [editing, setEditing] = useState<boolean>(false);
+  const [undo, setUndo] = useState<CheckinPayload | null>(null);
   const notesTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -59,8 +74,24 @@ export function CheckinCard() {
   });
 
   function send(patch: CheckinPayload) {
+    const t = today.data;
+    const back: Record<string, unknown> = {};
+    if (t) for (const k of UNDOABLE) if (k in patch && t[k] != null) back[k] = t[k];
+    setUndo(Object.keys(back).length ? (back as CheckinPayload) : null);
     submit.mutate(patch);
   }
+
+  function undoLast() {
+    if (!undo) return;
+    submit.mutate(undo);
+    setUndo(null);
+  }
+
+  useEffect(() => {
+    if (!undo) return;
+    const id = setTimeout(() => setUndo(null), 8000);
+    return () => clearTimeout(id);
+  }, [undo]);
 
   function commitWeight() {
     const v = parseFloat(weightLbs);
@@ -108,7 +139,14 @@ export function CheckinCard() {
         {submit.isPending ? (
           <span className="text-[10px] text-[var(--text-faint)]">saving…</span>
         ) : submit.isSuccess ? (
-          <span className="text-[10px] text-[var(--positive)]">saved</span>
+          <span className="text-[10px] text-[var(--positive)]">
+            saved
+            {undo && (
+              <button type="button" className="ci-undo" onClick={undoLast}>
+                undo
+              </button>
+            )}
+          </span>
         ) : null}
       </div>
 

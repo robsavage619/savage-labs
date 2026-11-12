@@ -14,6 +14,7 @@ from shc.api.routers import (
     auth,
     dashboard,
     events,
+    freshness,
     experiments,
     hevy,
     location,
@@ -70,6 +71,7 @@ app.include_router(auth.router, prefix="/auth")
 app.include_router(apple.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
+app.include_router(freshness.router, prefix="/api")
 app.include_router(hevy.router, prefix="/api")
 app.include_router(location.router, prefix="/api")
 app.include_router(training.router, prefix="/api")

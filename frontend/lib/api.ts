@@ -10,6 +10,9 @@ export interface AccuracyBaseline {
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 const SHC_KEY = process.env.NEXT_PUBLIC_SHC_KEY ?? "";
 
+/** An API URL for a plain link (a redirect, not a fetch): same origin on the host, the tunnel on the laptop. */
+export const apiUrl = (path: string) => `${BASE}${path}`;
+
 // Returns headers including the admin key for mutating endpoints.
 function mutHeaders(extra?: Record<string, string>): Record<string, string> {
   const h: Record<string, string> = { ...(extra ?? {}) };
@@ -1126,6 +1129,10 @@ export const api = {
     if (!r.ok) throw new Error(`saveTape ${r.status}`);
   },
   places: () => get<PlacesSummary>("/api/places"),
+  freshness: () =>
+    get<{ key: string; label: string; last_at: string | null; age_h: number | null; stale_after_h: number; state: "ok" | "stale" | "never" }[]>(
+      "/api/freshness",
+    ),
   events: () => get<{ id: number; day: string; label: string }[]>("/api/events"),
   addEvent: async (day: string, label: string) => {
     const r = await fetch(`${BASE}/api/events`, {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, apiUrl } from "@/lib/api";
 
 /**
  * Sources that actually have a `/auth/<source>/login` redirect on the API.
@@ -44,7 +44,7 @@ export function SyncStatus() {
             : `New data may be missing. ${issue.last_error ?? ""}`}
         </p>
         {canRedirect && (
-          <a className="btn btn-primary" href={`http://127.0.0.1:8000/auth/${issue.source}/login`}>
+          <a className="btn btn-primary" href={apiUrl(`/auth/${issue.source}/login`)}>
             Reconnect {src}
           </a>
         )}
@@ -52,3 +52,33 @@ export function SyncStatus() {
     </>
   );
 }
+
+const ago = (h: number) => (h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`);
+
+/**
+ * Sources that have gone quiet, each against its own cadence. LiveBadge takes the
+ * newest sync of any source, so one fresh feed hid every stale one; this names them.
+ * Hidden when everything is on time.
+ */
+export function Freshness() {
+  const { data } = useQuery({ queryKey: ["freshness"], queryFn: api.freshness, refetchInterval: 5 * 60_000 });
+  const late = (data ?? []).filter((s) => s.state === "stale");
+  if (!late.length) return null;
+  return (
+    <>
+      <button type="button" className="sync-chip warm" popoverTarget="fresh-pop" title="Some data is overdue">
+        <i aria-hidden="true" />
+        {late.length === 1 ? late[0].label : `${late.length} sources`}
+        <em>{late.length === 1 && late[0].age_h != null ? ago(late[0].age_h) : "late"}</em>
+      </button>
+      <div id="fresh-pop" popover="auto" className="sync-pop">
+        <span className="sync-pop-k">Overdue data</span>
+        <b>{late.map((s) => s.label).join(", ")}</b>
+        <p>
+          {late.map((s) => `${s.label}: nothing for ${s.age_h != null ? ago(s.age_h) : "a long while"} (expected every ${ago(s.stale_after_h)})`).join(". ")}.
+        </p>
+      </div>
+    </>
+  );
+}
+

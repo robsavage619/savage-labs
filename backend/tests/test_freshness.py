@@ -1,63 +1,21 @@
 from __future__ import annotations
 
-import uuid
-from datetime import date, timedelta
+from datetime import UTC, datetime, timedelta
 
-from shc.metrics import RecoveryMetrics, SleepMetrics, TrainingLoadMetrics, _freshness
+import duckdb
 
+from shc.api.routers.freshness import freshness
 
-def _iso(days_ago: int) -> str:
-    return (date.today() - timedelta(days=days_ago)).isoformat()
-
-
-def test_hevy_gap_present_when_stale(conn) -> None:
-    load = TrainingLoadMetrics(last_session_date=_iso(5))
-    f = _freshness(conn, date.today(), RecoveryMetrics(), SleepMetrics(), load)
-    assert f.hevy_age_days == 5
-    assert any("Hevy" in g for g in f.gaps)
+NOW = datetime(2026, 3, 1, 12, tzinfo=UTC)
 
 
-def test_hevy_gap_absent_when_fresh(conn) -> None:
-    load = TrainingLoadMetrics(last_session_date=_iso(1))
-    f = _freshness(conn, date.today(), RecoveryMetrics(), SleepMetrics(), load)
-    assert f.hevy_age_days == 1
-    assert not any("Hevy" in g for g in f.gaps)
-
-
-def test_cardio_gap_present_when_stale(conn) -> None:
+def test_each_source_is_judged_against_its_own_cadence(conn: duckdb.DuckDBPyConnection) -> None:
+    # WHOOP fresh, DUPR a month stale, stress never synced.
     conn.execute(
-        "INSERT INTO cardio_sessions (id, date, modality, content_hash) "
-        "VALUES ($id, $d, 'run', 'h')",
-        {"id": str(uuid.uuid4()), "d": _iso(6)},
+        "INSERT INTO oauth_state (source, last_sync_at) VALUES ('whoop', ?), ('dupr', ?)",
+        [NOW - timedelta(hours=2), NOW - timedelta(days=30)],
     )
-    f = _freshness(conn, date.today(), RecoveryMetrics(), SleepMetrics(), TrainingLoadMetrics())
-    assert f.cardio_age_days == 6
-    assert any("Cardio" in g for g in f.gaps)
-
-
-def test_cardio_gap_absent_when_fresh(conn) -> None:
-    conn.execute(
-        "INSERT INTO cardio_sessions (id, date, modality, content_hash) "
-        "VALUES ($id, $d, 'run', 'h')",
-        {"id": str(uuid.uuid4()), "d": _iso(1)},
-    )
-    f = _freshness(conn, date.today(), RecoveryMetrics(), SleepMetrics(), TrainingLoadMetrics())
-    assert f.cardio_age_days == 1
-    assert not any("Cardio" in g for g in f.gaps)
-
-
-def test_whoop_stale_flag_set_when_stale(conn) -> None:
-    rec = RecoveryMetrics(score_date=_iso(4))
-    f = _freshness(conn, date.today(), rec, SleepMetrics(), TrainingLoadMetrics())
-    assert f.whoop_stale is True
-
-
-def test_whoop_stale_flag_false_when_fresh(conn) -> None:
-    rec = RecoveryMetrics(score_date=_iso(1))
-    f = _freshness(conn, date.today(), rec, SleepMetrics(), TrainingLoadMetrics())
-    assert f.whoop_stale is False
-
-
-def test_whoop_stale_flag_false_when_no_data(conn) -> None:
-    f = _freshness(conn, date.today(), RecoveryMetrics(), SleepMetrics(), TrainingLoadMetrics())
-    assert f.whoop_stale is False
+    states = {s["key"]: s["state"] for s in freshness(conn, NOW)}
+    assert states["whoop"] == "ok"
+    assert states["dupr"] == "stale"  # the old LiveBadge took the newest of all, hiding this
+    assert states["stress"] == "never"

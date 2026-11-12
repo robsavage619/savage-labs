@@ -461,7 +461,7 @@ function PlaceName({ p }: { p: Place }) {
   if (draft !== null) {
     return (
       <form
-        className="pl-name"
+        className="pc-name"
         onSubmit={(e) => {
           e.preventDefault();
           save.mutate(draft);
@@ -472,9 +472,9 @@ function PlaceName({ p }: { p: Place }) {
     );
   }
   return (
-    <button type="button" className="pl-name" onClick={() => setDraft(p.name ?? "")} title="Rename">
+    <button type="button" className="pc-name" onClick={() => setDraft(p.name ?? "")} title="Rename">
       {p.name ?? `Place ${p.id}`}
-      {!p.name && <span className="pl-hint"> · name it</span>}
+      {!p.name && <span className="pc-hint"> · name it</span>}
     </button>
   );
 }
@@ -485,7 +485,7 @@ function PlaceActions({ p, others }: { p: Place; others: Place[] }) {
   const merge = useMutation({ mutationFn: (into: number) => api.mergePlace(p.id, into), onSuccess: done });
   const hide = useMutation({ mutationFn: () => api.hidePlace(p.id), onSuccess: done });
   return (
-    <div className="pl-actions">
+    <div className="pc-actions">
       {others.length > 0 && (
         <select
           aria-label={`Merge ${p.name ?? `Place ${p.id}`} into another place`}
@@ -503,7 +503,7 @@ function PlaceActions({ p, others }: { p: Place; others: Place[] }) {
       <button type="button" onClick={() => hide.mutate()}>
         Hide
       </button>
-      {(merge.isError || hide.isError) && <span className="pl-ci">didn&apos;t save</span>}
+      {(merge.isError || hide.isError) && <span className="pc-ci">didn&apos;t save</span>}
     </div>
   );
 }
@@ -515,30 +515,30 @@ function PlaceEffects({ p, minVisits }: { p: Place; minVisits: number }) {
   const s = p.stress;
   const m = p.morning;
   return (
-    <div className="pl-fx">
+    <div className="pc-fx">
       {s ? (
         <div>
           stress <b>{signed(s.effect)}</b>
           {s.ci_low != null && s.ci_high != null && (
-            <span className="pl-ci">
+            <span className="pc-ci">
               {" "}
               ({signed(s.ci_low)} to {signed(s.ci_high)})
             </span>
           )}
         </div>
       ) : (
-        <div className="pl-ci">no stress minutes yet</div>
+        <div className="pc-ci">no stress minutes yet</div>
       )}
       {m && m.effect != null ? (
         <div>
           next-morning HRV <b>{signed(m.effect, 1)}%</b>
-          <span className="pl-ci">
+          <span className="pc-ci">
             {" "}
             ({signed(m.ci_low ?? 0, 1)} to {signed(m.ci_high ?? 0, 1)})
           </span>
         </div>
       ) : (
-        <div className="pl-ci">HRV: needs more days with and without</div>
+        <div className="pc-ci">HRV: needs more days with and without</div>
       )}
     </div>
   );
@@ -569,12 +569,12 @@ export function Places() {
       <p className="ts-lede">
         <b>{d.places.length}</b> places over {d.tracked_days} days, with minute stress on <b>{d.stress_days}</b> of them. Stress is WHOOP&apos;s 0–3 score against the same hours elsewhere.
       </p>
-      <div className="pl-list">
+      <div className="pc-list">
         {d.places.map((p) => (
-          <div className="pl-row" key={p.id}>
-            <div className="pl-who">
+          <div className="pc-row" key={p.id}>
+            <div className="pc-who">
               <PlaceName p={p} />
-              <div className="pl-ci">
+              <div className="pc-ci">
                 {p.usual_days.join(" ")} · arrives ~{clock(p.usual_arrival_hour)} · {p.visits} visits · {p.hours} h ·{" "}
                 <a href={`https://maps.apple.com/?ll=${p.lat},${p.lon}&q=Place%20${p.id}`} target="_blank" rel="noreferrer">
                   map
