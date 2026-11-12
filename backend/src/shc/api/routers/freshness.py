@@ -18,10 +18,12 @@ _SOURCES = [
     # Not oauth_state: DUPR stamps it on every login attempt, failed ones included.
     ("dupr", "DUPR", "SELECT max(synced_at) FROM dupr_snapshots", 8 * 24),
     ("stress", "Stress", "SELECT max(sampled_at) FROM whoop_stress_timeline", 36),
+    # Arrival time, not `ts`: daily Apple totals are stamped at the start of a day, so
+    # a healthy feed is always 24-48 h old by its stamp.
     (
         "apple",
         "Apple Health",
-        "SELECT max(ts) FROM measurements WHERE source = 'apple_health'",
+        "SELECT max(ingested_at) FROM measurements WHERE source = 'apple_health'",
         36,
     ),
     ("location", "Location", "SELECT max(tst) FROM location_points", 72),
