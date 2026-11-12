@@ -323,6 +323,15 @@ async def sync_private_metrics(days: int = 7) -> dict:
     zones = await _attempt("hr_zones", sync_hr_zones()) or []
     impacts = await _attempt("behavior_impact", sync_behavior_impact()) or []
 
+    # Fetch before taking the write lock: the lock serialises every API write, and
+    # a week of stress is a week of network round-trips.
+    fetched: list[tuple[int, _date, dict]] = []
+    for offset in range(days):
+        day = today - timedelta(days=offset)
+        stress = await _attempt(f"stress:{day}", sync_stress(day))
+        if stress is not None:
+            fetched.append((offset, day, stress))
+
     stress_days = 0
     timeline_rows = 0
 
@@ -377,11 +386,7 @@ async def sync_private_metrics(days: int = 7) -> dict:
                 ],
             )
 
-        for offset in range(days):
-            day = today - timedelta(days=offset)
-            stress = await _attempt(f"stress:{day}", sync_stress(day))
-            if stress is None:
-                continue
+        for offset, day, stress in fetched:
             samples = stress.pop("samples", [])
             for stamp, value, level in samples:
                 conn.execute(
