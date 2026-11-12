@@ -38,9 +38,16 @@ def _base() -> str:
     return load_token("dupr", "base_url") or DUPR_BASE
 
 
-def _auth_headers(token: str) -> dict[str, str]:
-    """The session as DUPR's clients present it: a Bearer header and the access cookie."""
-    return {"Authorization": f"Bearer {token}", "Cookie": f"__Host-dupr_at={token}"}
+def _auth_headers(token: str, mode: str | None = None) -> dict[str, str]:
+    """The session as DUPR accepts it: `bearer`, `cookie` (the __Host-dupr_at cookie the
+    web dashboard sends) or `both`. The mode that worked after sign-in is remembered."""
+    mode = mode or load_token("dupr", "auth_mode") or "both"
+    headers: dict[str, str] = {}
+    if mode in ("bearer", "both"):
+        headers["Authorization"] = f"Bearer {token}"
+    if mode in ("cookie", "both"):
+        headers["Cookie"] = f"__Host-dupr_at={token}"
+    return headers
 
 
 def _credentials() -> tuple[str, str]:
@@ -279,12 +286,31 @@ async def verify_code(code: str) -> dict[str, Any]:
         # Check the session before syncing. A refused session must say so here: letting
         # the sync fall back to a password login would email another code and replace
         # the challenge. The pause flag stays set until a sync actually succeeds.
-        check = await _get_profile(client, access)
-        if check.status_code != 200:
+        working = None
+        tried: list[str] = []
+        first_reply = ""
+        for base in dict.fromkeys((host, *_VERIFY_HOSTS)):
+            for mode in ("both", "cookie"):
+                check = await client.get(
+                    f"{base}/user/{_VERSION}/profile/",
+                    headers=_auth_headers(access, mode),
+                    timeout=_TIMEOUT,
+                )
+                tried.append(f"{base.split('//')[1]}+{mode}={check.status_code}")
+                if check.status_code == 200:
+                    working = (base, mode)
+                    break
+                first_reply = first_reply or check.text.strip()[:150]
+            if working:
+                break
+        if not working:
             raise DuprVerificationRequired(
-                f"DUPR accepted the code (via {host}) but then refused the session "
-                f"on the profile call ({check.status_code}); cookies seen: {_cookie_tokens(resp)[2]}"
+                f"DUPR accepted the code (via {host}) but refused the session: "
+                f"{', '.join(tried)}; first reply: {first_reply or '(empty)'}; "
+                f"cookies seen: {_cookie_tokens(resp)[2]}"
             )
+        store_token("dupr", "base_url", working[0])
+        store_token("dupr", "auth_mode", working[1])
     return await sync_rating()
 
 

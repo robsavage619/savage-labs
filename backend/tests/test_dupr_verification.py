@@ -191,7 +191,7 @@ def twofa_env(conn: duckdb.DuckDBPyConnection, monkeypatch):
     cookie_names = {
         "names": ("__Host-dupr_at", "__Host-dupr_rt"),
         "only_host": None,  # serve everything but the login on this host alone
-        "profile_ok": True,
+        "profile_accepts": "any",  # "any", "cookie_only" (a Bearer header breaks it) or None
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -218,10 +218,13 @@ def twofa_env(conn: duckdb.DuckDBPyConnection, monkeypatch):
                 ],
             )
         if path.startswith("/user/"):
-            ok = (
-                cookie_names["profile_ok"] and request.headers.get("authorization") == "Bearer acc1"
+            auth = request.headers.get("authorization")
+            cookie_ok = "__Host-dupr_at=acc1" in request.headers.get("cookie", "")
+            accepts = cookie_names["profile_accepts"]
+            ok = (accepts == "any" and (auth == "Bearer acc1" or cookie_ok)) or (
+                accepts == "cookie_only" and auth is None and cookie_ok
             )
-            return httpx.Response(200, json=_PROFILE) if ok else httpx.Response(401)
+            return httpx.Response(200, json=_PROFILE) if ok else httpx.Response(401, text="nope")
         return httpx.Response(404)
 
     real_client = httpx.AsyncClient
@@ -294,11 +297,24 @@ def test_the_host_that_accepted_the_code_is_the_one_used_afterwards(twofa_env):
 
 def test_a_refused_session_is_reported_without_another_password_login(twofa_env):
     conn, calls, tokens, sent, knobs = twofa_env
-    knobs["profile_ok"] = False
+    knobs["profile_accepts"] = None
     asyncio.run(dupr.request_code())
 
-    with pytest.raises(dupr.DuprVerificationRequired, match="refused the session"):
+    with pytest.raises(dupr.DuprVerificationRequired, match="refused the session") as exc:
         asyncio.run(dupr.verify_code("123456"))
+    assert "api.dupr.gg+both=401" in str(exc.value) and "first reply: nope" in str(exc.value)
 
     logins = [c for c in calls if c[0] == "POST" and "/auth/v1.0/login" in c[1]]
     assert len(logins) == 1  # request_code's; verifying must never email another code
+
+
+def test_it_finds_the_way_of_presenting_the_session_that_the_api_accepts(twofa_env):
+    conn, calls, tokens, sent, knobs = twofa_env
+    knobs["profile_accepts"] = "cookie_only"  # a Bearer header is refused outright
+    asyncio.run(dupr.request_code())
+
+    result = asyncio.run(dupr.verify_code("123456"))
+
+    assert result["doubles"] == 3.6
+    assert tokens["auth_mode"] == "cookie"
+    assert tokens["base_url"] == "https://api.dupr.gg"
