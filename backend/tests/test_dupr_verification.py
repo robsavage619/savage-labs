@@ -188,11 +188,18 @@ def twofa_env(conn: duckdb.DuckDBPyConnection, monkeypatch):
     calls: list[tuple[str, str]] = []
     tokens: dict[str, str] = {}
     sent: dict[str, object] = {}
-    cookie_names = {"names": ("__Host-dupr_at", "__Host-dupr_rt")}
+    cookie_names = {
+        "names": ("__Host-dupr_at", "__Host-dupr_rt"),
+        "only_host": None,  # serve everything but the login on this host alone
+        "profile_ok": True,
+    }
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        calls.append((request.method, path))
+        calls.append((request.method, request.url.host + path))
+        only = cookie_names["only_host"]
+        if only and request.url.host != only and not path.startswith("/auth/v1.0/login"):
+            return httpx.Response(404)
         if path.startswith("/auth/v1.0/login"):
             return httpx.Response(
                 428, json={"errorCode": "2FA_CHALLENGE_REQUIRED", "challengeToken": "chal.jwt"}
@@ -211,7 +218,9 @@ def twofa_env(conn: duckdb.DuckDBPyConnection, monkeypatch):
                 ],
             )
         if path.startswith("/user/"):
-            ok = request.headers.get("authorization") == "Bearer acc1"
+            ok = (
+                cookie_names["profile_ok"] and request.headers.get("authorization") == "Bearer acc1"
+            )
             return httpx.Response(200, json=_PROFILE) if ok else httpx.Response(401)
         return httpx.Response(404)
 
@@ -269,3 +278,27 @@ def test_unrecognised_cookie_names_are_reported_not_guessed(twofa_env):
     with pytest.raises(dupr.DuprVerificationRequired, match=r"cookies seen: \['rid', 'sid'\]"):
         asyncio.run(dupr.verify_code("123456"))
     assert "access_token" not in tokens
+
+
+def test_the_host_that_accepted_the_code_is_the_one_used_afterwards(twofa_env):
+    conn, calls, tokens, sent, knobs = twofa_env
+    knobs["only_host"] = "api.dupr.com"
+    asyncio.run(dupr.request_code())
+
+    result = asyncio.run(dupr.verify_code("123456"))
+
+    assert result["doubles"] == 3.6
+    assert tokens["base_url"] == "https://api.dupr.com"
+    assert ("GET", "api.dupr.com/user/v1.0/profile/") in calls
+
+
+def test_a_refused_session_is_reported_without_another_password_login(twofa_env):
+    conn, calls, tokens, sent, knobs = twofa_env
+    knobs["profile_ok"] = False
+    asyncio.run(dupr.request_code())
+
+    with pytest.raises(dupr.DuprVerificationRequired, match="refused the session"):
+        asyncio.run(dupr.verify_code("123456"))
+
+    logins = [c for c in calls if c[0] == "POST" and "/auth/v1.0/login" in c[1]]
+    assert len(logins) == 1  # request_code's; verifying must never email another code

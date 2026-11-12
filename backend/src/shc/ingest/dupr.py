@@ -33,6 +33,16 @@ _VERSION = "v1.0"
 _TIMEOUT = 30.0
 
 
+def _base() -> str:
+    """The host that issued our session: the one that accepted the emailed code, else the default."""
+    return load_token("dupr", "base_url") or DUPR_BASE
+
+
+def _auth_headers(token: str) -> dict[str, str]:
+    """The session as DUPR's clients present it: a Bearer header and the access cookie."""
+    return {"Authorization": f"Bearer {token}", "Cookie": f"__Host-dupr_at={token}"}
+
+
 def _credentials() -> tuple[str, str]:
     email = load_token("dupr", "email") or settings.dupr_email
     password = load_token("dupr", "password") or settings.dupr_password
@@ -183,7 +193,7 @@ async def _refresh(client: httpx.AsyncClient) -> str | None:
     if not refresh:
         return None
     resp = await client.get(
-        f"{DUPR_BASE}/auth/{_VERSION}/refresh",
+        f"{_base()}/auth/{_VERSION}/refresh",
         # The page script sends the header; the dashboard sends the cookie. Send both.
         headers={
             "Accept": "application/json",
@@ -264,15 +274,24 @@ async def verify_code(code: str) -> dict[str, Any]:
         store_token("dupr", "access_token", access)
         if refresh:
             store_token("dupr", "refresh_token", refresh)
-        store_token("dupr", "challenge_token", "")
-    await _mark_state(needs_reauth=False)
+        store_token("dupr", "base_url", host)
+        store_token("dupr", "challenge_token", "")  # single use
+        # Check the session before syncing. A refused session must say so here: letting
+        # the sync fall back to a password login would email another code and replace
+        # the challenge. The pause flag stays set until a sync actually succeeds.
+        check = await _get_profile(client, access)
+        if check.status_code != 200:
+            raise DuprVerificationRequired(
+                f"DUPR accepted the code (via {host}) but then refused the session "
+                f"on the profile call ({check.status_code}); cookies seen: {_cookie_tokens(resp)[2]}"
+            )
     return await sync_rating()
 
 
 async def _get_profile(client: httpx.AsyncClient, token: str) -> httpx.Response:
     return await client.get(
-        f"{DUPR_BASE}/user/{_VERSION}/profile/",
-        headers={"Authorization": f"Bearer {token}"},
+        f"{_base()}/user/{_VERSION}/profile/",
+        headers=_auth_headers(token),
         timeout=_TIMEOUT,
     )
 
@@ -411,9 +430,9 @@ async def sync_matches(*, force_login: bool = False) -> dict[str, Any]:
         all_hits: list[dict] = []
         for offset in range(0, 500, 25):
             r = await client.post(
-                f"{DUPR_BASE}/match/{_VERSION}/history/",
+                f"{_base()}/match/{_VERSION}/history/",
                 json={"playerId": user_id, "limit": 25, "offset": offset},
-                headers={"Authorization": f"Bearer {token}"},
+                headers=_auth_headers(token),
                 timeout=_TIMEOUT,
             )
             r.raise_for_status()
