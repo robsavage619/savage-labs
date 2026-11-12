@@ -8,6 +8,7 @@ import { SURFACES } from "@/lib/sections";
 import { HeaderHUD } from "@/components/header-hud";
 import { Freshness, SyncStatus } from "@/components/sync-status";
 import { RefreshButton } from "@/components/refresh-button";
+import { QueryErrors } from "@/components/query-errors";
 import { LiveBadge } from "@/components/live-badge";
 import { CommandPalette } from "@/components/command-palette";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -38,6 +39,7 @@ export function SurfaceShell({ children }: { children: ReactNode }) {
           <LiveBadge />
           <SyncStatus />
           <Freshness />
+          <QueryErrors />
           <RefreshButton />
         </div>
 
