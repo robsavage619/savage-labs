@@ -17,6 +17,18 @@ function mutHeaders(extra?: Record<string, string>): Record<string, string> {
   return h;
 }
 
+export interface StressDay {
+  date: string;
+  stress: { m: number; v: number }[];
+  workouts: { from: number; to: number; kind: string | null }[];
+  stays: { from: number; to: number; place: number; name: string | null }[];
+}
+
+export interface StressRhythm {
+  days: number;
+  cells: { dow: number; hour: number; mean: number; n: number }[];
+}
+
 export interface PlaceEffect {
   n_visits: number;
   effect: number;
@@ -1114,6 +1126,8 @@ export const api = {
     if (!r.ok) throw new Error(`saveTape ${r.status}`);
   },
   places: () => get<PlacesSummary>("/api/places"),
+  stressDay: (day?: string) => get<StressDay>(`/api/stress/day${day ? `?day=${day}` : ""}`),
+  stressRhythm: (days = 28) => get<StressRhythm>(`/api/stress/rhythm?days=${days}`),
   namePlace: async (id: number, name: string | null) => {
     const r = await fetch(`${BASE}/api/places/${id}`, {
       method: "PATCH",

@@ -325,3 +325,85 @@ def away_nights(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
         return {}
     home = max(counts, key=lambda p: counts[p])
     return {night: float(place != home) for night, place in rows}
+
+
+def _minute_of_day(ts: datetime, day: date) -> float:
+    """Minutes from local midnight of `day`, clamped to the 24 h around it."""
+    local = ts.astimezone(LOCAL_TZ)
+    midnight = datetime(day.year, day.month, day.day, tzinfo=LOCAL_TZ)
+    return max(0.0, min(1440.0, (local - midnight).total_seconds() / 60))
+
+
+def day_view(conn: duckdb.DuckDBPyConnection, day: date, bin_min: int = 10) -> dict[str, Any]:
+    """One local day: stress in `bin_min`-minute means, with the workouts and stays around it.
+
+    Times are minutes from local midnight so the chart needs no timezone logic.
+    """
+    start = datetime(day.year, day.month, day.day, tzinfo=LOCAL_TZ)
+    end = start + timedelta(days=1)
+    bins: dict[int, list[float]] = defaultdict(list)
+    for ts, v in conn.execute(
+        "SELECT sampled_at, value FROM whoop_stress_timeline "
+        "WHERE sampled_at >= ? AND sampled_at < ? AND value IS NOT NULL",
+        [start, end],
+    ).fetchall():
+        bins[int(_minute_of_day(ts, day) // bin_min)].append(v)
+    names = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM places").fetchall()}
+    workouts = conn.execute(
+        "SELECT started_at, COALESCE(ended_at, started_at), kind FROM workouts "
+        "WHERE started_at < ? AND COALESCE(ended_at, started_at) > ? ORDER BY started_at",
+        [end, start],
+    ).fetchall()
+    stays = conn.execute(
+        "SELECT arrived_at, left_at, place_id FROM place_stays "
+        "WHERE arrived_at < ? AND left_at > ? ORDER BY arrived_at",
+        [end, start],
+    ).fetchall()
+    return {
+        "date": day.isoformat(),
+        "stress": [
+            {"m": b * bin_min + bin_min / 2, "v": round(statistics.fmean(vs), 2)}
+            for b, vs in sorted(bins.items())
+        ],
+        "workouts": [
+            {"from": _minute_of_day(a, day), "to": _minute_of_day(b, day), "kind": k}
+            for a, b, k in workouts
+        ],
+        "stays": [
+            {
+                "from": _minute_of_day(a, day),
+                "to": _minute_of_day(b, day),
+                "place": p,
+                "name": names.get(p),
+            }
+            for a, b, p in stays
+        ],
+    }
+
+
+def rhythm(
+    conn: duckdb.DuckDBPyConnection, days: int = 28, min_samples: int = 20
+) -> dict[str, Any]:
+    """Mean stress by weekday and hour over the last `days`, workouts and their tail left out."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    rows = conn.execute(
+        "SELECT t.sampled_at, t.value FROM whoop_stress_timeline t "
+        "WHERE t.sampled_at >= ? AND t.value IS NOT NULL AND NOT EXISTS ("
+        "SELECT 1 FROM workouts w WHERE t.sampled_at >= w.started_at "
+        "AND t.sampled_at < COALESCE(w.ended_at, w.started_at) + INTERVAL 30 MINUTE)",
+        [since],
+    ).fetchall()
+    cells: dict[tuple[int, int], list[float]] = defaultdict(list)
+    covered: set[date] = set()
+    for ts, v in rows:
+        local = ts.astimezone(LOCAL_TZ)
+        cells[(local.weekday(), local.hour)].append(v)
+        covered.add(local.date())
+    return {
+        "days": len(covered),
+        "cells": [
+            {"dow": d, "hour": h, "mean": round(statistics.fmean(vs), 2), "n": len(vs)}
+            for (d, h), vs in sorted(cells.items())
+            if len(vs) >= min_samples
+        ],
+    }

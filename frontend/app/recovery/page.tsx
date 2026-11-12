@@ -4,6 +4,7 @@ import { GuideProvider, PageHead, Panel, Section } from "@/components/kit";
 import {
   AerobicBase,
   DayOfWeek,
+  DayStrip,
   HrvBand,
   Places,
   RecoveryMix,
@@ -12,7 +13,9 @@ import {
   SleepNeed,
   SleepStages,
   SleepTiming,
+  StressRhythm,
   Spo2Burden,
+  Verdict,
   WeekOverWeek,
 } from "@/components/recovery-board";
 import { SurfaceShell } from "@/components/surface-shell";
@@ -36,6 +39,8 @@ export default function RecoveryPage() {
             question="Am I absorbing the work?"
             lede="Your nervous system and sleep against your own normal, the week against the one before, and the patterns underneath."
           />
+
+          <Verdict />
 
           <Section n="01" title="Nervous system">
             <Panel
@@ -163,7 +168,36 @@ export default function RecoveryPage() {
             </Panel>
           </Section>
 
-          <Section n="04" title="Places">
+          <Section n="04" title="Stress and places">
+            <Panel
+              id="stress-day"
+              span={2}
+              title="Your day, minute by minute"
+              question="Stress through one day, with where you were and when you trained."
+              guide={{
+                what: "WHOOP's stress score across the day in 10-minute averages, over shaded bands for the places you stayed and your workouts.",
+                read: "Higher is more stressed, 0 to 3. Cyan bands are places, copper are workouts. Hover or drag across the line for a value.",
+                why: "A number for the day hides when it went wrong. This shows whether the load was the commute, the desk or the workout.",
+              }}
+            >
+              <DayStrip />
+            </Panel>
+            <Panel
+              id="stress-rhythm"
+              span={2}
+              title="Your week's stress rhythm"
+              question="Which weekday and hour blocks run hot."
+              guide={{
+                what: "Average stress for each weekday and hour over the last four weeks, with workouts left out.",
+                read: "Darker blocks are higher. A block needs 20 readings to show.",
+                why: "Recurring hot blocks are the ones worth changing; one-offs are not.",
+              }}
+            >
+              <StressRhythm />
+            </Panel>
+          </Section>
+
+          <Section n="05" title="Places">
             <Panel
               id="places"
               span={2}
@@ -180,7 +214,7 @@ export default function RecoveryPage() {
             </Panel>
           </Section>
 
-          <Section n="05" title="Patterns">
+          <Section n="06" title="Patterns">
             <Panel
               id="patterns"
               span={2}

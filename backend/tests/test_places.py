@@ -127,3 +127,45 @@ def test_owntracks_webhook_needs_the_key_as_basic_password(monkeypatch) -> None:
     assert c.post("/x").status_code == 401
     assert c.post("/x", auth=("rob", "nope")).status_code == 401
     assert c.post("/x", auth=("anyone", "k")).status_code == 200
+
+
+def test_day_view_reports_minutes_from_local_midnight(conn: duckdb.DuckDBPyConnection) -> None:
+    from datetime import date
+
+    from shc.places import LOCAL_TZ
+
+    day = date(2026, 1, 6)
+    noon = datetime(2026, 1, 6, 12, 0, tzinfo=LOCAL_TZ)
+    for m in range(20):
+        ts = noon + timedelta(minutes=m)
+        conn.execute(
+            "INSERT INTO whoop_stress_timeline (date, sampled_at, value) VALUES (?, ?, ?)",
+            [day, ts, 1.0 if m < 10 else 3.0],
+        )
+    conn.execute(
+        "INSERT INTO places (id, lat, lon, name, first_seen) VALUES (1, 0, 0, 'x', ?)", [noon]
+    )
+    conn.execute(
+        "INSERT INTO place_stays VALUES (?, ?, 1)",
+        [noon - timedelta(hours=2), noon + timedelta(hours=1)],
+    )
+    view = places.day_view(conn, day)
+    assert [(p["m"], p["v"]) for p in view["stress"]] == [(725.0, 1.0), (735.0, 3.0)]
+    assert view["stays"] == [{"from": 600.0, "to": 780.0, "place": 1, "name": "x"}]
+
+
+def test_rhythm_drops_thin_cells(conn: duckdb.DuckDBPyConnection) -> None:
+    now = datetime.now(UTC).replace(minute=0, second=0, microsecond=0) - timedelta(days=1)
+    for m in range(30):
+        ts = now + timedelta(minutes=m)
+        conn.execute(
+            "INSERT INTO whoop_stress_timeline (date, sampled_at, value) VALUES (?, ?, 2.0)",
+            [ts.date(), ts],
+        )
+    ts = now + timedelta(hours=5)
+    conn.execute(
+        "INSERT INTO whoop_stress_timeline (date, sampled_at, value) VALUES (?, ?, 2.0)",
+        [ts.date(), ts],
+    )
+    out = places.rhythm(conn, days=7)
+    assert len(out["cells"]) == 1 and out["cells"][0]["n"] == 30

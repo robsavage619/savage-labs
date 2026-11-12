@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { api, type Place } from "@/lib/api";
-import { ease, fmtX, FillBars, FillLines, FillStackBars } from "@/components/kit";
+import { ease, fmtX, FillBars, FillLines, FillStackBars, useWidth } from "@/components/kit";
 
 /**
  * Recovery, rebuilt on the kit: every chart is read against your own normal,
@@ -550,6 +550,171 @@ export function Places() {
       <p className="ts-foot">
         A place reports once it has {d.min_visits} visits over {d.min_span_days} days. Workouts and the half hour after are left out. These are associations: who you&apos;re with and when you go come along with the place.
       </p>
+    </div>
+  );
+}
+
+// ── Verdict, day strip, weekly rhythm ───────────────────────────────────────
+
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const minClock = (m: number) => clock(m / 60);
+const tierWord = { green: "ready", yellow: "middling", red: "run down" } as const;
+
+export function Verdict() {
+  const q = useState28();
+  const d = q.data;
+  if (!d) return null;
+  const { readiness: r, recovery: rec, sleep } = d;
+  const lead =
+    r.score != null && r.tier ? (
+      <>
+        Readiness <b>{Math.round(r.score)}</b>, {tierWord[r.tier]}.
+      </>
+    ) : (
+      <>No readiness score yet today.</>
+    );
+  const sigma = rec.hrv_sigma;
+  return (
+    <p className="rv-verdict">
+      {lead}{" "}
+      {rec.hrv_ms != null && (
+        <>
+          HRV <b>{Math.round(rec.hrv_ms)} ms</b>
+          {sigma != null && <> ({signed(sigma, 1)}σ from your 28-day average)</>};{" "}
+        </>
+      )}
+      {rec.rhr != null && (
+        <>
+          resting HR <b>{Math.round(rec.rhr)}</b>
+          {rec.rhr_baseline_28d != null && <> against {Math.round(rec.rhr_baseline_28d)}</>};{" "}
+        </>
+      )}
+      {sleep.last_hours != null && (
+        <>
+          last night <b>{sleep.last_hours.toFixed(1)} h</b> of sleep.
+        </>
+      )}
+    </p>
+  );
+}
+
+const isoDay = (offset: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+export function DayStrip() {
+  const [back, setBack] = useState(0);
+  const [hov, setHov] = useState<number | null>(null);
+  const [ref, W] = useWidth();
+  const day = isoDay(-back);
+  const q = useQuery({ queryKey: ["stress-day", day], queryFn: () => api.stressDay(day), staleTime: 5 * 60 * 1000 });
+  if (q.isError) return <Err e={q.error} />;
+  const d = q.data;
+  const H = 170;
+  const P = { l: 28, r: 8, t: 8, b: 22 };
+  const x = (m: number) => P.l + (m / 1440) * (W - P.l - P.r);
+  const y = (v: number) => H - P.b - (v / 3) * (H - P.b - P.t);
+  const pts = d?.stress ?? [];
+  const near = hov != null ? pts.reduce((a, b) => (Math.abs(b.m - hov) < Math.abs(a.m - hov) ? b : a), pts[0]) : null;
+  return (
+    <div className="ts-card">
+      <div className="rv-daynav">
+        <button type="button" onClick={() => setBack(back + 1)} aria-label="Previous day">‹</button>
+        <b>{back === 0 ? "Today" : back === 1 ? "Yesterday" : day}</b>
+        <button type="button" onClick={() => setBack(Math.max(0, back - 1))} disabled={back === 0} aria-label="Next day">›</button>
+      </div>
+      {!d ? (
+        <Skel h={H} />
+      ) : pts.length < 2 ? (
+        <p className="ts-lede">No stress readings for this day.</p>
+      ) : (
+        <div ref={ref}>
+          <svg
+            width={W}
+            height={H}
+            role="img"
+            aria-label="Stress through the day"
+            style={{ touchAction: "pan-y" }}
+            onPointerMove={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setHov(Math.max(0, Math.min(1440, ((e.clientX - r.left - P.l) / (W - P.l - P.r)) * 1440)));
+            }}
+            onPointerLeave={() => setHov(null)}
+          >
+            {d.stays.map((s, i) => (
+              <rect key={`s${i}`} x={x(s.from)} y={P.t} width={Math.max(1, x(s.to) - x(s.from))} height={H - P.b - P.t} fill="var(--series-1)" opacity={0.1 + (i % 2) * 0.07}>
+                <title>{s.name ?? `Place ${s.place}`}, {minClock(s.from)} to {minClock(s.to)}</title>
+              </rect>
+            ))}
+            {d.workouts.map((w, i) => (
+              <rect key={`w${i}`} x={x(w.from)} y={P.t} width={Math.max(2, x(w.to) - x(w.from))} height={H - P.b - P.t} fill="var(--series-2)" opacity={0.3}>
+                <title>{w.kind ?? "Workout"}, {minClock(w.from)} to {minClock(w.to)}</title>
+              </rect>
+            ))}
+            {[0, 1, 2, 3].map((v) => (
+              <g key={v}>
+                <line x1={P.l} x2={W - P.r} y1={y(v)} y2={y(v)} stroke="oklch(1 0 0 / 0.06)" />
+                <text x={P.l - 6} y={y(v) + 4} textAnchor="end" fontSize="10" fill="var(--text-dim)">{v}</text>
+              </g>
+            ))}
+            {[0, 360, 720, 1080].map((m) => (
+              <text key={m} x={x(m)} y={H - 6} fontSize="10" fill="var(--text-dim)">{minClock(m)}</text>
+            ))}
+            <polyline fill="none" stroke="var(--text)" strokeWidth="1.6" strokeLinejoin="round" points={pts.map((p) => `${x(p.m)},${y(p.v)}`).join(" ")} />
+            {near && <circle cx={x(near.m)} cy={y(near.v)} r="4" fill="var(--text)" stroke="var(--bg-elevated)" strokeWidth="2" />}
+          </svg>
+        </div>
+      )}
+      <p className="ts-foot">
+        {near ? <><b>{near.v.toFixed(1)}</b> at {minClock(near.m)}. </> : null}
+        <span className="rv-key rv-key-place" /> where you were · <span className="rv-key rv-key-work" /> workouts · stress is WHOOP&apos;s 0–3 score in 10-minute averages.
+      </p>
+    </div>
+  );
+}
+
+export function StressRhythm() {
+  const q = useQuery({ queryKey: ["stress-rhythm"], queryFn: () => api.stressRhythm(28), staleTime: 30 * 60 * 1000 });
+  const [ref, W] = useWidth();
+  if (q.isError) return <Err e={q.error} />;
+  const d = q.data;
+  if (!d) return <Skel h={200} />;
+  if (!d.cells.length) return <p className="ts-lede">Not enough stress readings yet; a weekday-and-hour pattern needs a couple of weeks.</p>;
+  const max = Math.max(...d.cells.map((c) => c.mean), 0.5);
+  const hot = d.cells.reduce((a, b) => (b.mean > a.mean ? b : a));
+  const L = 34;
+  const cw = (W - L) / 24;
+  const ch = 20;
+  const H = ch * 7 + 20;
+  const cell = new Map(d.cells.map((c) => [`${c.dow}-${c.hour}`, c]));
+  return (
+    <div className="ts-card">
+      <p className="ts-lede">
+        Hottest block: <b>{WEEKDAYS[hot.dow]} {clock(hot.hour)}</b> at {hot.mean.toFixed(1)}, over {d.days} days of readings. Workouts left out.
+      </p>
+      <div ref={ref}>
+        <svg width={W} height={H} role="img" aria-label="Stress by weekday and hour">
+          {WEEKDAYS.map((w, r) => (
+            <text key={w} x={L - 6} y={r * ch + 14} textAnchor="end" fontSize="10" fill="var(--text-dim)">{w}</text>
+          ))}
+          {WEEKDAYS.flatMap((_, r) =>
+            Array.from({ length: 24 }, (_, h) => {
+              const c = cell.get(`${r}-${h}`);
+              return (
+                <rect key={`${r}-${h}`} x={L + h * cw + 1} y={r * ch + 1} width={Math.max(1, cw - 2)} height={ch - 2} rx="2" fill={c ? "var(--series-2)" : "oklch(1 0 0 / 0.04)"} opacity={c ? 0.15 + 0.85 * (c.mean / max) : 1}>
+                  <title>{c ? `${WEEKDAYS[r]} ${clock(h)}: ${c.mean.toFixed(1)} (${c.n} readings)` : `${WEEKDAYS[r]} ${clock(h)}: not enough readings`}</title>
+                </rect>
+              );
+            }),
+          )}
+          {[0, 6, 12, 18].map((h) => (
+            <text key={h} x={L + h * cw} y={H - 4} fontSize="10" fill="var(--text-dim)">{clock(h)}</text>
+          ))}
+        </svg>
+      </div>
+      <p className="ts-foot">Darker is more stressed. A block needs 20 readings before it shows, so early on the grid is patchy.</p>
     </div>
   );
 }

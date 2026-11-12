@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import secrets
+from datetime import date, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
@@ -82,3 +83,23 @@ async def name_place(place_id: int, body: PlaceName) -> dict[str, Any]:
     if row is None:
         raise HTTPException(status_code=404, detail="no such place")
     return {"id": place_id, "name": name or None}
+
+
+@router.get("/stress/day")
+def stress_day(day: date | None = None) -> dict[str, Any]:
+    """One local day of stress with the workouts and stays around it (today by default)."""
+    conn = get_read_conn()
+    try:
+        return places.day_view(conn, day or datetime.now(places.LOCAL_TZ).date())
+    finally:
+        conn.close()
+
+
+@router.get("/stress/rhythm")
+def stress_rhythm(days: int = Query(28, ge=7, le=90)) -> dict[str, Any]:
+    """Mean stress by weekday and hour, workouts left out."""
+    conn = get_read_conn()
+    try:
+        return places.rhythm(conn, days)
+    finally:
+        conn.close()

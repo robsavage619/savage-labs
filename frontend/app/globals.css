@@ -1544,3 +1544,13 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
   .pl-fx { text-align: left; }
 }
 
+/* Recovery verdict, day strip */
+.rv-verdict { margin: 0 0 18px; color: var(--text-muted); font-size: var(--fs-read); max-width: 70ch; }
+.rv-verdict b { color: var(--text); }
+.rv-daynav { display: flex; align-items: center; gap: 12px; }
+.rv-daynav button { all: unset; cursor: pointer; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; background: oklch(1 0 0 / 0.05); color: var(--text); font-size: 20px; }
+.rv-daynav button:disabled { opacity: 0.3; cursor: default; }
+.rv-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
+.rv-key-place { background: var(--series-1); opacity: 0.45; }
+.rv-key-work { background: var(--series-2); opacity: 0.6; }
+
