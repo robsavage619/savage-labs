@@ -701,8 +701,8 @@ export function DayStrip() {
             {[0, 360, 720, 1080].map((m) => (
               <text key={m} x={x(m)} y={H - 6} fontSize="10" fill="var(--text-dim)">{minClock(m)}</text>
             ))}
-            <polyline fill="none" stroke="var(--text)" strokeWidth="1.6" strokeLinejoin="round" points={pts.map((p) => `${x(p.m)},${y(p.v)}`).join(" ")} />
-            {near && <circle cx={x(near.m)} cy={y(near.v)} r="4" fill="var(--text)" stroke="var(--bg-elevated)" strokeWidth="2" />}
+            <polyline fill="none" stroke="var(--text-primary)" strokeWidth="1.6" strokeLinejoin="round" points={pts.map((p) => `${x(p.m)},${y(p.v)}`).join(" ")} />
+            {near && <circle cx={x(near.m)} cy={y(near.v)} r="4" fill="var(--text-primary)" stroke="var(--bg-elevated)" strokeWidth="2" />}
           </svg>
         </div>
       )}

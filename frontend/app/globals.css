@@ -1534,8 +1534,8 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .pc-list { display: grid; gap: 0; min-width: 0; }
 .pc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid oklch(1 0 0 / 0.05); }
 .pc-who { min-width: 0; display: grid; gap: 3px; }
-.pc-name { appearance: none; border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; color: var(--text); font-weight: 600; min-height: 28px; display: flex; align-items: center; }
-.pc-name input { font: inherit; color: var(--text); background: transparent; border: 0; border-bottom: 1px solid var(--series-1); outline: none; width: 100%; padding: 2px 0; }
+.pc-name { appearance: none; border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; color: var(--text-primary); font-weight: 600; min-height: 28px; display: flex; align-items: center; }
+.pc-name input { font: inherit; color: var(--text-primary); background: transparent; border: 0; border-bottom: 1px solid var(--series-1); outline: none; width: 100%; padding: 2px 0; }
 .pc-hint, .pc-ci { color: var(--text-dim); font-size: 12.5px; font-weight: 400; }
 .pc-ci a { color: var(--series-1); }
 .pc-fx { display: grid; gap: 2px; text-align: right; font-size: 13px; color: var(--text-muted); }
@@ -1546,9 +1546,9 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 
 /* Recovery verdict, day strip */
 .rv-verdict { margin: 0 0 18px; color: var(--text-muted); font-size: var(--fs-read); max-width: 70ch; }
-.rv-verdict b { color: var(--text); }
+.rv-verdict b { color: var(--text-primary); }
 .rv-daynav { display: flex; align-items: center; gap: 12px; }
-.rv-daynav button { appearance: none; border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; background: oklch(1 0 0 / 0.05); color: var(--text); font-size: 20px; }
+.rv-daynav button { appearance: none; border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; background: oklch(1 0 0 / 0.05); color: var(--text-primary); font-size: 20px; }
 .rv-daynav button:disabled { opacity: 0.3; cursor: default; }
 .rv-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; }
 .rv-key-place { background: var(--series-1); opacity: 0.45; }
@@ -1557,8 +1557,8 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 /* Event markers, place actions */
 .k-mark { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
 .ev-form { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; }
-.ev-form input, .pc-actions select { font: inherit; color: var(--text); background: oklch(1 0 0 / 0.05); border: 1px solid oklch(1 0 0 / 0.1); border-radius: 8px; padding: 8px 10px; min-height: 40px; min-width: 0; }
-.ev-form button, .pc-actions button { appearance: none; border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; padding: 0 14px; min-height: 40px; display: grid; place-items: center; border-radius: 8px; background: oklch(1 0 0 / 0.08); color: var(--text); font-size: 13px; }
+.ev-form input, .pc-actions select { font: inherit; color: var(--text-primary); background: oklch(1 0 0 / 0.05); border: 1px solid oklch(1 0 0 / 0.1); border-radius: 8px; padding: 8px 10px; min-height: 40px; min-width: 0; }
+.ev-form button, .pc-actions button { appearance: none; border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; padding: 0 14px; min-height: 40px; display: grid; place-items: center; border-radius: 8px; background: oklch(1 0 0 / 0.08); color: var(--text-primary); font-size: 13px; }
 .ev-form button:disabled { opacity: 0.4; cursor: default; }
 .ev-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .ev-list li { display: flex; align-items: center; gap: 8px; min-height: 36px; border-bottom: 1px solid oklch(1 0 0 / 0.05); color: var(--text-muted); }
@@ -1570,7 +1570,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 
 /* Refresh */
 .sl-refresh { appearance: none; border: 0; background: transparent; padding: 0; font: inherit; color: inherit; cursor: pointer; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 999px; color: var(--text-dim); font-size: 17px; line-height: 1; }
-.sl-refresh:hover { color: var(--text); }
+.sl-refresh:hover { color: var(--text-primary); }
 .sl-refresh.spin { animation: sl-spin 0.9s linear infinite; }
 @keyframes sl-spin { to { transform: rotate(360deg); } }
 @media (max-width: 640px) { .sl-refresh { width: 40px; height: 40px; font-size: 20px; } }
