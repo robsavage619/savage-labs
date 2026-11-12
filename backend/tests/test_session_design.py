@@ -153,3 +153,21 @@ def test_leg_day_with_hinge_reads_lower_and_legs_rest_48h(conn, seed) -> None:
     # Two days later the legs have had 48 h and the cycle resumes.
     s2 = scheduled_session(conn, {}, date(2026, 11, 10), None)
     assert s2 is not None and s2.day == "Full Body", s2.reason
+
+
+def test_a_plan_the_session_did_not_follow_is_not_executed(conn, seed) -> None:
+    upper_a = _plan("Upper-A", [("Incline Bench Press (Dumbbell)", "6-8")])
+    _trained(conn, seed, date(2026, 11, 2), upper_a)
+    # Full Body plan stored the same day Rob trained something else entirely.
+    ignored = _plan("Full Body", [("Leg Press (Machine)", "8-10"), ("Cable Fly Crossovers", "12")])
+    conn.execute(
+        "INSERT INTO workout_plans (date, plan_json, source) VALUES (?, ?, 'test')",
+        [date(2026, 11, 3), json.dumps(ignored)],
+    )
+    seed.workout(date(2026, 11, 3), "Lat Pulldown (Cable)", [(100.0, 10)])
+    seed.workout(date(2026, 11, 3), "Seated Cable Row - Bar Grip", [(100.0, 10)])
+
+    s = scheduled_session(conn, {}, date(2026, 11, 5), date(2026, 11, 1))
+    assert s is not None
+    assert s.other_anchors == ("Incline Bench Press (Dumbbell)",)
+    assert "Leg Press (Machine)" not in s.other_anchors

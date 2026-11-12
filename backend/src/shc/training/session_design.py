@@ -124,29 +124,49 @@ def _plan_exercises(plan: dict) -> list[dict]:
 
 
 def executed_days(conn: Any, before: date) -> list[tuple[date, str, str | None, str | None]]:
-    """(date, session_day, opener, opener reps) for designed plans Rob trained, oldest first."""
+    """(date, session_day, opener, opener reps) for designed plans Rob trained, oldest first.
+
+    A plan counts as trained only when at least half of the lifts logged that day
+    are in it. A plan written after a workout (or one Rob ignored) shares a date
+    with the session but not its lifts, and must not advance the rotation or lock
+    an anchor. The opener is None when its lift was not logged.
+    """
     rows = conn.execute(
         """
         SELECT p.date, p.plan_json FROM workout_plans p
-        WHERE p.date < ? AND EXISTS (
-            SELECT 1 FROM workout_sets_dedup s
-            WHERE s.day_d = p.date AND s.source = 'hevy' AND NOT s.is_warmup)
-        ORDER BY p.date
+        WHERE p.date < ? ORDER BY p.date
         """,
         [before],
     ).fetchall()
     out: list[tuple[date, str, str | None, str | None]] = []
     for d, pj in rows:
+        logged = conn.execute(
+            """
+            SELECT DISTINCT exercise, canon_exercise FROM workout_sets_dedup
+            WHERE day_d = ? AND source = 'hevy' AND NOT is_warmup
+            """,
+            [d],
+        ).fetchall()
+        if not logged:
+            continue
         try:
             plan = json.loads(pj)
         except (TypeError, ValueError):
             continue
         day = plan.get("session_day")
-        if day in DAYS:
-            exs = _plan_exercises(plan)
-            first = exs[0] if exs else {}
-            reps = first.get("reps")
-            out.append((d, day, first.get("name"), None if reps is None else str(reps)))
+        exs = _plan_exercises(plan)
+        if day not in DAYS or not exs:
+            continue
+        names = {e.get("name") for e in exs}
+        matched = sum(1 for ex, canon in logged if ex in names or canon in names)
+        if matched * 2 < len(logged):
+            continue
+        first = exs[0]
+        reps = first.get("reps")
+        was_done = any(first.get("name") in (ex, canon) for ex, canon in logged)
+        out.append(
+            (d, day, first.get("name") if was_done else None, None if reps is None else str(reps))
+        )
     return out
 
 
