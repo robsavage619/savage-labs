@@ -5,6 +5,7 @@ import {
   AerobicBase,
   DayOfWeek,
   DayStrip,
+  EventMarkers,
   HrvBand,
   Places,
   RecoveryMix,
@@ -83,6 +84,19 @@ export default function RecoveryPage() {
               }}
             >
               <RecoveryScoreTrend />
+            </Panel>
+            <Panel
+              id="events"
+              span={4}
+              title="What happened"
+              question="Mark illness, travel or a tournament, and the charts above show it."
+              guide={{
+                what: "Dated notes you add yourself, drawn as dashed lines on the HRV and recovery charts.",
+                read: "A dip next to a dashed line has an explanation; a dip with none is worth watching.",
+                why: "Charts show that something changed, not why. A date and a few words supply the why.",
+              }}
+            >
+              <EventMarkers />
             </Panel>
           </Section>
 

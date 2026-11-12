@@ -17,7 +17,13 @@ const useState28 = () => useQuery({ queryKey: ["daily-state"], queryFn: api.dail
 
 // ── Nervous system ──────────────────────────────────────────────────────────
 
+function useMarks() {
+  const q = useQuery({ queryKey: ["events"], queryFn: api.events, staleTime: 10 * 60 * 1000 });
+  return (q.data ?? []).map((e) => ({ at: e.day, label: e.label }));
+}
+
 export function HrvBand() {
+  const marks = useMarks();
   const q = useQuery({ queryKey: ["hrv-trend", 90], queryFn: () => api.hrvTrend(90), staleTime: 10 * 60 * 1000 });
   if (q.isError) return <Err e={q.error} />;
   const p = q.data ?? [];
@@ -36,6 +42,7 @@ export function HrvBand() {
           { name: "28-day average", color: "var(--series-2)", y: p.map((x) => x.avg) },
         ]}
         band={p.map((x) => [x.avg - x.sd, x.avg + x.sd] as [number, number])}
+        marks={marks}
         min={260}
       />
     </div>
@@ -65,6 +72,7 @@ export function RhrTrend() {
 }
 
 export function RecoveryScoreTrend() {
+  const marks = useMarks();
   const q = useRecovery90();
   if (q.isError) return <Err e={q.error} />;
   const p = q.data ?? [];
@@ -82,6 +90,7 @@ export function RecoveryScoreTrend() {
           { y: 67, label: "green 67" },
           { y: 34, label: "red 34" },
         ]}
+        marks={marks}
         min={220}
       />
     </div>
@@ -470,6 +479,35 @@ function PlaceName({ p }: { p: Place }) {
   );
 }
 
+function PlaceActions({ p, others }: { p: Place; others: Place[] }) {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries({ queryKey: ["places"] });
+  const merge = useMutation({ mutationFn: (into: number) => api.mergePlace(p.id, into), onSuccess: done });
+  const hide = useMutation({ mutationFn: () => api.hidePlace(p.id), onSuccess: done });
+  return (
+    <div className="pl-actions">
+      {others.length > 0 && (
+        <select
+          aria-label={`Merge ${p.name ?? `Place ${p.id}`} into another place`}
+          value=""
+          onChange={(e) => e.target.value && merge.mutate(Number(e.target.value))}
+        >
+          <option value="">Same place as…</option>
+          {others.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name ?? `Place ${o.id}`}
+            </option>
+          ))}
+        </select>
+      )}
+      <button type="button" onClick={() => hide.mutate()}>
+        Hide
+      </button>
+      {(merge.isError || hide.isError) && <span className="pl-ci">didn&apos;t save</span>}
+    </div>
+  );
+}
+
 function PlaceEffects({ p, minVisits }: { p: Place; minVisits: number }) {
   if (p.status === "collecting") {
     return <span className="nf-chip">collecting {Math.min(p.visits, minVisits)}/{minVisits}</span>;
@@ -544,6 +582,7 @@ export function Places() {
               </div>
             </div>
             <PlaceEffects p={p} minVisits={d.min_visits} />
+            <PlaceActions p={p} others={d.places.filter((o) => o.id !== p.id)} />
           </div>
         ))}
       </div>
@@ -715,6 +754,54 @@ export function StressRhythm() {
         </svg>
       </div>
       <p className="ts-foot">Darker is more stressed. A block needs 20 readings before it shows, so early on the grid is patchy.</p>
+    </div>
+  );
+}
+
+// ── Event markers ───────────────────────────────────────────────────────────
+
+export function EventMarkers() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["events"], queryFn: api.events, staleTime: 10 * 60 * 1000 });
+  const [day, setDay] = useState(isoDay(0));
+  const [label, setLabel] = useState("");
+  const refresh = () => qc.invalidateQueries({ queryKey: ["events"] });
+  const add = useMutation({
+    mutationFn: () => api.addEvent(day, label.trim()),
+    onSuccess: () => {
+      setLabel("");
+      refresh();
+    },
+  });
+  const del = useMutation({ mutationFn: (id: number) => api.deleteEvent(id), onSuccess: refresh });
+  if (q.isError) return <Err e={q.error} />;
+  return (
+    <div className="ts-card">
+      <form
+        className="ev-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (label.trim()) add.mutate();
+        }}
+      >
+        <input type="date" value={day} max={isoDay(0)} onChange={(e) => setDay(e.target.value)} aria-label="Date" />
+        <input value={label} maxLength={60} placeholder="Illness, travel, tournament…" onChange={(e) => setLabel(e.target.value)} aria-label="What happened" />
+        <button type="submit" disabled={!label.trim() || add.isPending}>
+          Add
+        </button>
+      </form>
+      {add.isError && <p className="ts-error">Couldn&apos;t save that marker.</p>}
+      <ul className="ev-list">
+        {(q.data ?? []).slice(0, 12).map((e) => (
+          <li key={e.id}>
+            <span className="ev-day">{e.day}</span> {e.label}
+            <button type="button" onClick={() => del.mutate(e.id)} aria-label={`Delete ${e.label}`}>
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="ts-foot">Markers draw as dashed lines on the HRV and recovery charts above.</p>
     </div>
   );
 }

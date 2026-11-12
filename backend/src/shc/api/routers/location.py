@@ -85,6 +85,39 @@ async def name_place(place_id: int, body: PlaceName) -> dict[str, Any]:
     return {"id": place_id, "name": name or None}
 
 
+class PlaceMerge(BaseModel):
+    into: int
+
+
+@router.post("/places/{place_id}/merge", dependencies=[Depends(require_admin_key)])
+async def merge_place(place_id: int, body: PlaceMerge) -> dict[str, Any]:
+    """Fold a place into another, for one real place that was split in two."""
+    async with write_ctx() as conn:
+        try:
+            moved = places.merge_places(conn, place_id, body.into)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"merged": place_id, "into": body.into, "stays_moved": moved}
+
+
+class PlaceHide(BaseModel):
+    hidden: bool = True
+
+
+@router.post("/places/{place_id}/hide", dependencies=[Depends(require_admin_key)])
+async def hide_place(place_id: int, body: PlaceHide) -> dict[str, Any]:
+    """Drop a place from the card (or bring it back). Its stays still count elsewhere."""
+    async with write_ctx() as conn:
+        row = conn.execute(
+            "UPDATE places SET hidden = ? WHERE id = ? RETURNING id", [body.hidden, place_id]
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="no such place")
+    return {"id": place_id, "hidden": body.hidden}
+
+
 @router.get("/stress/day")
 def stress_day(day: date | None = None) -> dict[str, Any]:
     """One local day of stress with the workouts and stays around it (today by default)."""

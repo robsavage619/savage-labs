@@ -122,11 +122,11 @@ def update_stays(conn: duckdb.DuckDBPyConnection, now: datetime | None = None) -
     points = conn.execute(
         "SELECT tst, lat, lon FROM location_points WHERE tst >= ? ORDER BY tst", [since]
     ).fetchall()
-    places = conn.execute("SELECT id, lat, lon FROM places").fetchall()
+    places = conn.execute("SELECT id, lat, lon, merged_into FROM places").fetchall()
     for arrived, left, lat, lon in _stays(points):
         near = min(places, key=lambda p: distance_m(lat, lon, p[1], p[2]), default=None)
         if near is not None and distance_m(lat, lon, near[1], near[2]) <= PLACE_RADIUS_M:
-            place_id = near[0]
+            place_id = near[3] or near[0]
         else:
             row = conn.execute(
                 "INSERT INTO places (lat, lon, first_seen) VALUES (?, ?, ?) RETURNING id",
@@ -134,7 +134,7 @@ def update_stays(conn: duckdb.DuckDBPyConnection, now: datetime | None = None) -
             ).fetchone()
             assert row is not None
             place_id = row[0]
-            places.append((place_id, lat, lon))
+            places.append((place_id, lat, lon, None))
         conn.execute(
             "INSERT INTO place_stays (arrived_at, left_at, place_id) VALUES (?, ?, ?) "
             "ON CONFLICT (arrived_at) DO NOTHING",
@@ -249,13 +249,18 @@ def summary(conn: duckdb.DuckDBPyConnection, limit: int = 12) -> dict[str, Any]:
     stays = conn.execute(
         "SELECT place_id, arrived_at, left_at FROM place_stays ORDER BY arrived_at"
     ).fetchall()
-    meta = {r[0]: r[1:] for r in conn.execute("SELECT id, lat, lon, name FROM places").fetchall()}
+    meta = {
+        r[0]: r[1:]
+        for r in conn.execute(
+            "SELECT id, lat, lon, name FROM places WHERE merged_into IS NULL AND NOT COALESCE(hidden, FALSE)"
+        ).fetchall()
+    }
     by_place: dict[int, list[tuple[datetime, datetime]]] = defaultdict(list)
     for p, a, b in stays:
         by_place[p].append((a, b))
 
     ranked = sorted(
-        (p for p, v in by_place.items() if len(v) >= 2),
+        (p for p, v in by_place.items() if len(v) >= 2 and p in meta),
         key=lambda p: -sum((b - a).total_seconds() for a, b in by_place[p]),
     )[:limit]
     stress = place_stress(conn) if ranked else {}
@@ -407,3 +412,25 @@ def rhythm(
             if len(vs) >= min_samples
         ],
     }
+
+
+def merge_places(conn: duckdb.DuckDBPyConnection, src: int, dst: int) -> int:
+    """Fold place `src` into `dst`. Returns the number of stays moved.
+
+    `src` stays in the table as an alias, so a later stay near it resolves to `dst`.
+    """
+    if src == dst:
+        raise ValueError("cannot merge a place into itself")
+    row = conn.execute("SELECT merged_into FROM places WHERE id = ?", [dst]).fetchone()
+    if row is None or conn.execute("SELECT 1 FROM places WHERE id = ?", [src]).fetchone() is None:
+        raise LookupError("no such place")
+    root = row[0] or dst
+    if root == src:
+        raise ValueError("that place was merged into this one")
+    moved = conn.execute(
+        "UPDATE place_stays SET place_id = ? WHERE place_id = ?", [root, src]
+    ).fetchone()
+    conn.execute(
+        "UPDATE places SET merged_into = ? WHERE id = ? OR merged_into = ?", [root, src, src]
+    )
+    return int(moved[0]) if moved else 0

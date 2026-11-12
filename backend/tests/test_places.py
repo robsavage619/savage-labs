@@ -169,3 +169,45 @@ def test_rhythm_drops_thin_cells(conn: duckdb.DuckDBPyConnection) -> None:
     )
     out = places.rhythm(conn, days=7)
     assert len(out["cells"]) == 1 and out["cells"][0]["n"] == 30
+
+
+def test_merged_place_stays_an_alias_and_hidden_places_leave_the_card(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    # Two neighbouring spots founded separately, then merged.
+    for i, where in enumerate((A, B), start=1):
+        conn.execute(
+            "INSERT INTO places (id, lat, lon, first_seen) VALUES (?, ?, ?, ?)", [i, *where, T0]
+        )
+    for k, pid in enumerate((1, 1, 2, 2)):
+        a = T0 + timedelta(days=k)
+        conn.execute("INSERT INTO place_stays VALUES (?, ?, ?)", [a, a + timedelta(hours=1), pid])
+    assert places.merge_places(conn, 2, 1) == 2
+    assert conn.execute("SELECT count(DISTINCT place_id) FROM place_stays").fetchone() == (1,)
+    assert [p["id"] for p in places.summary(conn)["places"]] == [1]
+
+    # A fresh stay where place 2 used to be joins place 1 instead of founding a third.
+    for minutes, where in (
+        (10 * 24 * 60, B),
+        (10 * 24 * 60 + 40, B),
+        (10 * 24 * 60 + 90, (10.5, 20.0)),
+    ):
+        _pt(conn, minutes, where)
+    places.update_stays(conn, now=T0 + timedelta(days=11))
+    assert conn.execute("SELECT count(*) FROM places").fetchone() == (2,)
+    assert conn.execute("SELECT count(*) FROM place_stays WHERE place_id = 1").fetchone() == (5,)
+
+    conn.execute("UPDATE places SET hidden = TRUE WHERE id = 1")
+    assert places.summary(conn)["places"] == []
+
+
+def test_merge_refuses_a_loop(conn: duckdb.DuckDBPyConnection) -> None:
+    import pytest
+
+    for i in (1, 2):
+        conn.execute("INSERT INTO places (id, lat, lon, first_seen) VALUES (?, 0, 0, ?)", [i, T0])
+    places.merge_places(conn, 2, 1)
+    with pytest.raises(ValueError):
+        places.merge_places(conn, 1, 2)
+    with pytest.raises(ValueError):
+        places.merge_places(conn, 1, 1)

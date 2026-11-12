@@ -1126,6 +1126,35 @@ export const api = {
     if (!r.ok) throw new Error(`saveTape ${r.status}`);
   },
   places: () => get<PlacesSummary>("/api/places"),
+  events: () => get<{ id: number; day: string; label: string }[]>("/api/events"),
+  addEvent: async (day: string, label: string) => {
+    const r = await fetch(`${BASE}/api/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...mutHeaders() },
+      body: JSON.stringify({ day, label }),
+    });
+    if (!r.ok) throw new Error(`addEvent ${r.status}`);
+  },
+  deleteEvent: async (id: number) => {
+    const r = await fetch(`${BASE}/api/events/${id}`, { method: "DELETE", headers: mutHeaders() });
+    if (!r.ok) throw new Error(`deleteEvent ${r.status}`);
+  },
+  mergePlace: async (id: number, into: number) => {
+    const r = await fetch(`${BASE}/api/places/${id}/merge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...mutHeaders() },
+      body: JSON.stringify({ into }),
+    });
+    if (!r.ok) throw new Error(`mergePlace ${r.status}`);
+  },
+  hidePlace: async (id: number) => {
+    const r = await fetch(`${BASE}/api/places/${id}/hide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...mutHeaders() },
+      body: JSON.stringify({ hidden: true }),
+    });
+    if (!r.ok) throw new Error(`hidePlace ${r.status}`);
+  },
   stressDay: (day?: string) => get<StressDay>(`/api/stress/day${day ? `?day=${day}` : ""}`),
   stressRhythm: (days = 28) => get<StressRhythm>(`/api/stress/rhythm?days=${days}`),
   namePlace: async (id: number, name: string | null) => {

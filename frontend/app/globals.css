@@ -1554,3 +1554,17 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .rv-key-place { background: var(--series-1); opacity: 0.45; }
 .rv-key-work { background: var(--series-2); opacity: 0.6; }
 
+/* Event markers, place actions */
+.k-mark { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.7; }
+.ev-form { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; }
+.ev-form input, .pl-actions select { font: inherit; color: var(--text); background: oklch(1 0 0 / 0.05); border: 1px solid oklch(1 0 0 / 0.1); border-radius: 8px; padding: 8px 10px; min-height: 40px; min-width: 0; }
+.ev-form button, .pl-actions button { all: unset; cursor: pointer; padding: 0 14px; min-height: 40px; display: grid; place-items: center; border-radius: 8px; background: oklch(1 0 0 / 0.08); color: var(--text); font-size: 13px; }
+.ev-form button:disabled { opacity: 0.4; cursor: default; }
+.ev-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ev-list li { display: flex; align-items: center; gap: 8px; min-height: 36px; border-bottom: 1px solid oklch(1 0 0 / 0.05); color: var(--text-muted); }
+.ev-list li button { all: unset; cursor: pointer; margin-left: auto; width: 36px; height: 36px; display: grid; place-items: center; color: var(--text-dim); font-size: 18px; }
+.ev-day { color: var(--text-dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.pl-actions { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pl-actions button, .pl-actions select { min-height: 36px; font-size: 12.5px; }
+@media (max-width: 640px) { .ev-form { grid-template-columns: minmax(0, 1fr) auto; } .ev-form input[type="date"] { grid-column: 1 / -1; } }
+

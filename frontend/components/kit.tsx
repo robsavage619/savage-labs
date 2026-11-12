@@ -434,6 +434,7 @@ export function Lines({
   height = 180,
   fmt = (v) => String(Math.round(v)),
   refs = [],
+  marks = [],
 }: {
   labels: string[];
   series: Series[];
@@ -441,6 +442,8 @@ export function Lines({
   height?: number;
   fmt?: (v: number) => string;
   refs?: { y: number; label: string }[];
+  /** Dated markers: `at` is one of `labels`; a dated event drawn as a dashed vertical line. */
+  marks?: { at: string; label: string }[];
 }) {
   const [ref, W] = useWidth();
   const gid = useId().replace(/:/g, "");
@@ -514,6 +517,19 @@ export function Lines({
             </text>
           </g>
         ))}
+        {marks.map((m, j) => {
+          const i = labels.indexOf(m.at);
+          if (i < 0) return null;
+          const flip = x(i) > W * 0.7;
+          return (
+            <g key={`${m.at}-${j}`}>
+              <line x1={x(i)} x2={x(i)} y1={P.t} y2={height - P.b} className="k-mark" />
+              <text x={x(i) + (flip ? -4 : 4)} y={P.t + 9} className="k-tick" textAnchor={flip ? "end" : "start"}>
+                {m.label}
+              </text>
+            </g>
+          );
+        })}
         {series.map((s, i) => (
           <motion.path
             key={s.name}
