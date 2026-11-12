@@ -3,14 +3,25 @@
 # Usage, from anywhere: deploy/imac.sh user@host
 # Code only. The database and the backend env file live on the host and are never
 # touched here (rsync --delete leaves excluded paths alone); they moved once, by hand.
+# Ships the COMMITTED revision (git archive HEAD), not the working tree: this checkout
+# is shared, so uncommitted edits must not reach the live host, and the host records
+# which revision it runs in .deployed-rev.
 set -euo pipefail
 host=$1
 cd "${0:A:h}/.."
 
+rev=$(git rev-parse --short HEAD)
+dirty=$(git status --porcelain --untracked-files=no | grep -vc ' .claude/worktrees' || true)
+[ "$dirty" -gt 0 ] && echo "note: $dirty uncommitted file(s) are NOT deployed; commit first to ship them"
+src=$(mktemp -d)
+trap 'rm -rf "$src"' EXIT
+git archive HEAD | tar -x -C "$src"
+echo "$rev" > "$src/.deployed-rev"
+
 rsync -az --delete \
   --exclude node_modules --exclude .venv --exclude .next --exclude .git \
   --exclude 'backend/data/' --exclude '.claude/' --exclude '.env*' \
-  ./ "${host}:Projects/savage-health-center/"
+  "$src/" "${host}:Projects/savage-health-center/"
 
 ssh -t "$host" 'set -e
 cd ~/Projects/savage-health-center
@@ -36,4 +47,4 @@ done
 sudo $ts serve --bg --set-path /api http://127.0.0.1:8000/api
 sudo $ts serve --bg --set-path /auth http://127.0.0.1:8000/auth
 sudo $ts serve --bg http://127.0.0.1:3000
-echo "deployed: https://$tshost"'
+echo "deployed $(cat .deployed-rev): https://$tshost"'
