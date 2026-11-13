@@ -458,6 +458,9 @@ class CheckinSubmission(BaseModel):
     notes: str | None = None
     muscle_soreness: dict[str, int] | None = None  # {muscle_key: severity 1-3}
     protein_grams: int | None = None  # total protein consumed today (grams)
+    # Joint pain after a session, {region: 1-3}. {} means asked and none, which is
+    # data; None means not asked.
+    joint_pain: dict[str, int] | None = None
     # Override the weight plausibility check. A genuine 25%+ swing is possible
     # over a long enough gap, so the gate must be answerable rather than final.
     force_weight: bool = False
@@ -650,8 +653,11 @@ async def post_checkin(body: CheckinSubmission) -> dict:
         if v is not None and not 1 <= v <= 10:
             raise HTTPException(status_code=422, detail=f"{k} must be 1-10")
 
+    if body.joint_pain and not all(1 <= v <= 3 for v in body.joint_pain.values()):
+        raise HTTPException(status_code=422, detail="joint_pain severities must be 1-3")
     target_date = body.date if body.date else date.today().isoformat()
     ms_json = json.dumps(body.muscle_soreness) if body.muscle_soreness is not None else None
+    jp_json = json.dumps(body.joint_pain) if body.joint_pain is not None else None
     async with write_ctx() as conn:
         if body.body_weight_kg is not None and not body.force_weight:
             problem = check_weight_plausible(
@@ -664,8 +670,9 @@ async def post_checkin(body: CheckinSubmission) -> dict:
             INSERT INTO daily_checkin
                 (date, propranolol_taken, body_weight_kg, soreness_overall,
                  sleep_quality_1_10, energy_1_10, stress_1_10, motivation_1_10,
-                 illness_flag, travel_flag, notes, muscle_soreness, protein_grams)
-            VALUES ($dt, $prop, $wt, $sor, $sq, $en, $st, $mo, $ill, $tr, $no, $ms, $prot)
+                 illness_flag, travel_flag, notes, muscle_soreness, protein_grams,
+                 joint_pain_by_region_json)
+            VALUES ($dt, $prop, $wt, $sor, $sq, $en, $st, $mo, $ill, $tr, $no, $ms, $prot, $jp)
             ON CONFLICT (date) DO UPDATE SET
                 propranolol_taken = COALESCE(EXCLUDED.propranolol_taken, daily_checkin.propranolol_taken),
                 body_weight_kg    = COALESCE(EXCLUDED.body_weight_kg, daily_checkin.body_weight_kg),
@@ -678,7 +685,9 @@ async def post_checkin(body: CheckinSubmission) -> dict:
                 travel_flag       = COALESCE(EXCLUDED.travel_flag, daily_checkin.travel_flag),
                 notes             = COALESCE(EXCLUDED.notes, daily_checkin.notes),
                 muscle_soreness   = COALESCE(EXCLUDED.muscle_soreness, daily_checkin.muscle_soreness),
-                protein_grams     = COALESCE(EXCLUDED.protein_grams, daily_checkin.protein_grams)
+                protein_grams     = COALESCE(EXCLUDED.protein_grams, daily_checkin.protein_grams),
+                joint_pain_by_region_json = COALESCE(EXCLUDED.joint_pain_by_region_json,
+                                                     daily_checkin.joint_pain_by_region_json)
             """,
             {
                 "dt": target_date,
@@ -694,9 +703,38 @@ async def post_checkin(body: CheckinSubmission) -> dict:
                 "no": body.notes,
                 "ms": ms_json,
                 "prot": body.protein_grams,
+                "jp": jp_json,
             },
         )
     return {"status": "ok", "date": target_date}
+
+
+def pain_due(conn, today: date) -> dict:
+    """The latest Hevy session from today or yesterday whose pain question is unanswered."""
+    row = conn.execute(
+        """
+        SELECT w.started_at::DATE
+        FROM workouts w
+        LEFT JOIN daily_checkin c ON c.date = w.started_at::DATE
+        WHERE w.source = 'hevy' AND w.started_at::DATE >= ?
+          AND c.joint_pain_by_region_json IS NULL
+        GROUP BY 1 ORDER BY 1 DESC LIMIT 1
+        """,
+        [today - timedelta(days=1)],
+    ).fetchone()
+    if row is None:
+        return {"due": False, "date": None}
+    return {"due": True, "date": row[0].isoformat()}
+
+
+@router.get("/checkin/pain-due")
+async def get_pain_due() -> dict:
+    """Whether to ask about joint pain from the last session."""
+    conn = get_read_conn()
+    try:
+        return pain_due(conn, date.today())
+    finally:
+        conn.close()
 
 
 # ── Plan adherence (closed-loop tracking) ────────────────────────────────────

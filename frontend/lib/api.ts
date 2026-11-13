@@ -654,6 +654,8 @@ export interface CheckinPayload {
   travel_flag?: boolean | null;
   notes?: string | null;
   muscle_soreness?: Record<string, number> | null;
+  joint_pain?: Record<string, number> | null;
+  date?: string;
 }
 
 export interface CheckinToday extends CheckinPayload {
@@ -1260,6 +1262,7 @@ export const api = {
       attribution: string;
     }>(`/api/training/monotony?weeks=${weeks}`),
   checkinToday: () => get<CheckinToday>("/api/checkin/today"),
+  painDue: () => get<{ due: boolean; date: string | null }>("/api/checkin/pain-due"),
   checkinSubmit: async (body: CheckinPayload) => {
     const r = await fetch(`${BASE}/api/checkin`, {
       method: "POST",
