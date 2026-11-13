@@ -4,9 +4,13 @@ Why things are the way they are. Each entry records the problem, what was
 considered, what was chosen, and what it cost. Split by month; this page is the
 index.
 
-48 decisions recorded, 2026-04 to 2026-10.
+49 decisions recorded, 2026-04 to 2026-11.
 
 ---
+
+## November 2026
+
+- **2026-11-13** [Below fever range, skin temp is a note, not an illness cap](docs/decisions/2026-11.md#2026-11-13-below-fever-range-skin-temp-is-a-note-not-an-illness-cap)
 
 ## October 2026
 

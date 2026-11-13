@@ -113,7 +113,7 @@ class AutoRegGates:
 | Condition | Gate |
 |---|---|
 | ACWR > 1.5 | `max_intensity = "rest"` |
-| Skin temp Δ ≥ 0.5°C | Z2 only, possible illness |
+| Skin temp Δ ≥ 2.0°F (fever range) | Z2 only, possible illness; 0.9-2.0°F is a note only |
 | Muscle group < 48h (72h compound legs) | Group forbidden |
 | Compound soreness ≥ 2 muscles at severity 2 | Cap to moderate |
 | e1RM regression > 3% over 4 weeks | `deload_required = True` |

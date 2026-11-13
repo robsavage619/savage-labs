@@ -1857,25 +1857,23 @@ def _gates(
             g.max_intensity = "low"
             reasons.append(f"HRV {rec.hrv_sigma:+.2f}σ → red — cap intensity LOW")
         if rec.skin_temp_delta is not None and rec.skin_temp_delta >= 0.9:
-            # skin_temp_delta is already °F. 0.9°F ≈ 0.5°C. Only elevated (positive)
-            # deltas signal risk. But a lone skin-temp rise is heavily confounded by
-            # allergic vasodilation/environment for a chronic-rhinitis athlete, so it
-            # only caps when a fever-range spike OR an independent illness signal
-            # corroborates it (see _illness_gate_corroborated).
-            fever_range = rec.skin_temp_delta >= _SKIN_TEMP_FEVER_DELTA
-            if fever_range or _illness_gate_corroborated(rec):
+            # skin_temp_delta is already °F. Below fever range it is a note, not a cap:
+            # replayed over 800 days against 9 self-reported sick episodes
+            # (2024-01..2026-05), the corroborated 0.9°F rule caught 4/9 against 4.2/9
+            # by chance while capping ~11% of days, and skin temp sat BELOW baseline
+            # on 18 of 23 sick days. The RR sentinel beat chance (6/9 vs 2.5/9), so
+            # it keeps its cap. Only a fever-range spike still caps here.
+            if rec.skin_temp_delta >= _SKIN_TEMP_FEVER_DELTA:
                 g.max_intensity = "low"
                 g.z2_only = True
-                cause = "fever-range spike" if fever_range else "corroborated by HRV/RHR/recovery"
                 reasons.append(
                     f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline "
-                    f"({cause}) — possible illness, Z2 only"
+                    "(fever-range spike) — possible illness, Z2 only"
                 )
             else:
                 reasons.append(
-                    f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline but recovery green "
-                    "& HRV normal — reads as allergy/environment, not illness; not capping "
-                    "[allergic-rhinitis-confounds-recovery-metrics]"
+                    f"Skin-temp Δ+{rec.skin_temp_delta:.1f}°F above baseline — note only; "
+                    "below fever range it did not predict your sick days"
                 )
         if rec.spo2_pct is not None and rec.spo2_pct < 92.0:
             # Clinical threshold for sleep-disordered breathing / hypoxia overnight.

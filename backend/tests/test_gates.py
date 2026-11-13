@@ -148,17 +148,17 @@ def test_no_deload_when_regression_none() -> None:
 # ── a couple of sanity checks on the legitimate intensity gates ──────────────
 
 
-def test_skin_temp_elevation_caps_low_when_recovery_data_absent() -> None:
-    # No recovery evidence to disambiguate allergy from illness → fail conservative.
+def test_sub_fever_skin_temp_is_a_note_not_a_cap_when_recovery_data_absent() -> None:
+    # Replay 2026-11-13: below fever range skin temp caught sick episodes at chance.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
     rec.skin_temp_delta = 1.0
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert g.max_intensity == "low"
+    assert g.max_intensity == "high"
+    assert not g.z2_only
+    assert any("note only" in r for r in g.reasons)
 
 
 def test_skin_temp_elevation_does_not_cap_on_green_recovery() -> None:
-    # Chronic-rhinitis confound: an isolated skin-temp bump on a green-recovery,
-    # normal-HRV day reads as allergy/environment, not illness — must NOT cap.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
     rec.skin_temp_delta = 1.1
     rec.score = 68.0
@@ -178,14 +178,16 @@ def test_skin_temp_fever_range_caps_even_on_green() -> None:
     assert g.max_intensity == "low"
 
 
-def test_skin_temp_elevation_caps_when_corroborated_by_hrv() -> None:
-    # Skin-temp rise + suppressed HRV = genuine illness pattern → cap.
+def test_corroborated_sub_fever_skin_temp_no_longer_forces_z2_only() -> None:
+    # HRV -1.2σ corroborates (< -1.0) without tripping the HRV cap (< -1.5), so
+    # any cap here could only come from skin temp, which is now a note.
     rec, sleep, load, chk, readiness = _baseline_gate_inputs()
     rec.skin_temp_delta = 1.1
-    rec.score = 45.0
-    rec.hrv_sigma = -1.6
+    rec.score = 55.0
+    rec.hrv_sigma = -1.2
     g = _gates(rec, sleep, load, chk, readiness, None)
-    assert g.max_intensity == "low"
+    assert not g.z2_only
+    assert not any("possible illness" in r for r in g.reasons)
 
 
 def test_resp_rate_alone_does_not_cap_on_green_recovery() -> None:
