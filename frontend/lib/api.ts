@@ -1153,6 +1153,18 @@ export const api = {
     get<{ key: string; label: string; last_at: string | null; age_h: number | null; stale_after_h: number; state: "ok" | "stale" | "never" }[]>(
       "/api/freshness",
     ),
+  recordView: (path: string) =>
+    fetch(`${BASE}/api/views`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...mutHeaders() },
+      body: JSON.stringify({ path }),
+    }).catch(() => undefined),
+  views: () =>
+    get<{
+      days: number;
+      counting_since: string | null;
+      surfaces: { path: string; opens: number; days_opened: number; last: string }[];
+    }>("/api/views"),
   events: () => get<{ id: number; day: string; label: string }[]>("/api/events"),
   addEvent: async (day: string, label: string) => {
     const r = await fetch(`${BASE}/api/events`, {

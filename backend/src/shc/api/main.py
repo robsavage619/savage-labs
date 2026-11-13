@@ -25,6 +25,7 @@ from shc.api.routers import (
     subject,
     training,
     vault,
+    views,
 )
 from shc.config import settings
 from shc.db.schema import init_db
@@ -76,6 +77,7 @@ app.include_router(hevy.router, prefix="/api")
 app.include_router(location.router, prefix="/api")
 app.include_router(training.router, prefix="/api")
 app.include_router(vault.router, prefix="/api")
+app.include_router(views.router, prefix="/api")
 app.include_router(progress_photos.router, prefix="/api")
 app.include_router(report.router, prefix="/api")
 app.include_router(experiments.router, prefix="/api")

@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { EngineReportCard } from "@/components/engine-report-card";
 import { EngineStatusPanel } from "@/components/engine-status-panel";
+import { ScreenViews } from "@/components/insight-cards";
 import { GuideProvider, Panel, Section } from "@/components/kit";
 import { BeliefLenses, Coverage, ForecastDesk, Masthead, Misses, Pipeline, Threads } from "@/components/lab-floor";
 import { EffectForest, HrvDrivers, PriorsShelf, ScorecardBullets, TrialProgress } from "@/components/lab-charts";
@@ -109,6 +110,9 @@ export default function LabPage() {
               </Block>
               <Block id="coverage" explain={<CoverageExplain />} n="07" kicker="Data" title="What the team can see">
                 <Coverage />
+              </Block>
+              <Block id="views" n="08" kicker="Use" title="Which screens you open" lede="Opens per surface over the last 30 days. One that never gets opened is a candidate to delete.">
+                <ScreenViews />
               </Block>
             </>
           ) : (

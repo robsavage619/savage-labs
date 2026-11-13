@@ -1,9 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { api } from "@/lib/api";
 import { SURFACES } from "@/lib/sections";
 import { HeaderHUD } from "@/components/header-hud";
 import { Freshness, SyncStatus } from "@/components/sync-status";
@@ -27,6 +28,9 @@ import { ErrorBoundary } from "@/components/error-boundary";
  */
 export function SurfaceShell({ children }: { children: ReactNode }) {
   const path = usePathname();
+  useEffect(() => {
+    api.recordView(path);
+  }, [path]);
 
   return (
     <main className="sl-shell min-h-screen max-w-[1680px] mx-auto">
