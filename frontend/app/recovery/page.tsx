@@ -19,6 +19,7 @@ import {
   Verdict,
   WeekOverWeek,
 } from "@/components/recovery-board";
+import { PickleballHrCost } from "@/components/insight-cards";
 import { SurfaceShell } from "@/components/surface-shell";
 import { WeekCard } from "@/components/week-card";
 
@@ -257,6 +258,23 @@ export default function RecoveryPage() {
               }}
             >
               <RecoveryMix />
+            </Panel>
+          </Section>
+
+          <Section n="07" title="Court">
+            <Panel
+              id="pickleball-hr"
+              span={4}
+              title="What a pickleball session costs your heart"
+              question="Median session and peak heart rate per quarter, from WHOOP."
+              guide={{
+                what: "Each quarter with eight or more WHOOP pickleball sessions: median average HR, median peak HR, session length, and calories per minute.",
+                read: "Falling session HR at similar length can mean fitter, but a falling PEAK usually means something else: propranolol, easier games, or strap fit. Peak HR barely moves with fitness.",
+                why: "Court is your biggest conditioning dose. If its cost is falling, it is either doing less for you or you are adapting, and the peak tells those apart.",
+                ctx: "Propranolol days are only known when the check-in marks them, and none have been marked yet, so this can't separate the drug from the trend.",
+              }}
+            >
+              <PickleballHrCost />
             </Panel>
           </Section>
         </div>

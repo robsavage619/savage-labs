@@ -1263,6 +1263,17 @@ export const api = {
     }>(`/api/training/monotony?weeks=${weeks}`),
   checkinToday: () => get<CheckinToday>("/api/checkin/today"),
   painDue: () => get<{ due: boolean; date: string | null }>("/api/checkin/pain-due"),
+  pickleballHrCost: () =>
+    get<
+      {
+        quarter: string;
+        sessions: number;
+        avg_hr: number;
+        peak_hr: number | null;
+        minutes: number | null;
+        kcal_per_min: number | null;
+      }[]
+    >("/api/pickleball/hr-cost"),
   measurementsDue: () =>
     get<{
       review_on: string;

@@ -3745,6 +3745,18 @@ async def week_scorecard() -> dict:
         conn.close()
 
 
+@router.get("/pickleball/hr-cost")
+async def pickleball_hr_cost() -> list[dict]:
+    """Median session HR and peak HR per quarter, quarters with 8+ sessions."""
+    from shc.stats.pickleball import hr_cost
+
+    conn = get_read_conn()
+    try:
+        return hr_cost(conn)
+    finally:
+        conn.close()
+
+
 @router.get("/engine/report-card")
 async def engine_report_card(days: int = 365) -> dict:
     """Does the engine prescribe accurately, and does readiness predict anything?
