@@ -5,7 +5,7 @@ import { CheckinCard } from "@/components/checkin-card";
 import { MiddaySessionCard } from "@/components/midday-session-card";
 import { SurfaceShell } from "@/components/surface-shell";
 import { Block, BodyCheck, SessionSheet, Tape, TheCall, WriteUp } from "@/components/today-brief";
-import { PainTap } from "@/components/today-nudges";
+import { MeasurementsDue, PainTap } from "@/components/today-nudges";
 
 /**
  * TODAY: should I push, what do I do, and why.
@@ -20,6 +20,7 @@ export default function TodayPage() {
       <div className="td-page">
         <TheCall />
         <PainTap />
+        <MeasurementsDue />
         <Block n="02" title="Four weeks of mornings" sub="Each night's HRV against your normal band, resting HR, WHOOP recovery, sleep, and the training that came before it. Hover a day to read it across.">
           <Tape />
         </Block>

@@ -1263,6 +1263,12 @@ export const api = {
     }>(`/api/training/monotony?weeks=${weeks}`),
   checkinToday: () => get<CheckinToday>("/api/checkin/today"),
   painDue: () => get<{ due: boolean; date: string | null }>("/api/checkin/pain-due"),
+  measurementsDue: () =>
+    get<{
+      review_on: string;
+      days_to_review: number;
+      items: { key: string; label: string; due: boolean; detail: string }[];
+    }>("/api/body/measurements-due"),
   checkinSubmit: async (body: CheckinPayload) => {
     const r = await fetch(`${BASE}/api/checkin`, {
       method: "POST",

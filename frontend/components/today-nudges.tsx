@@ -18,6 +18,30 @@ const REGIONS: [string, string][] = [
 const LEVEL = ["", "twinge", "limited a lift", "stopped a lift"];
 const TONE = ["", "clear", "soft", "hard"];
 
+const WHERE: Record<string, string> = { scale: "/body#composition", tape: "/body#composition", photos: "/body#physique" };
+
+/** What the Feb 1 growth review still needs. Stays up until every item is current. */
+export function MeasurementsDue() {
+  const { data } = useQuery({ queryKey: ["measurements-due"], queryFn: api.measurementsDue });
+  const due = data?.items.filter((i) => i.due) ?? [];
+  if (!data || !due.length || data.days_to_review < 0) return null;
+  return (
+    <section className="wk-card">
+      <p className="wk-label">
+        Growth review on {data.review_on}, {data.days_to_review} days out. Without these it can only say &ldquo;unknown&rdquo; again.
+      </p>
+      <div className="wk-grid">
+        {due.map((i) => (
+          <a key={i.key} href={WHERE[i.key]} className="wk-cell" data-status="worse">
+            <span className="wk-label">{i.label}</span>
+            <span className="wk-status">{i.detail}</span>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /** One tap after a lifting session: any joint pain? Tap a region again to raise its severity. */
 export function PainTap() {
   const qc = useQueryClient();

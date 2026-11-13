@@ -640,6 +640,78 @@ async def get_tape() -> dict:
     }
 
 
+# The 2026-11-01 growth review's cheapest measurement plan, judged on 2027-02-01.
+GROWTH_REVIEW_ON = date(2027, 2, 1)
+_WEIGH_INS_PER_WEEK = 3
+_TAPE_EVERY_DAYS = 28
+_PHOTOS_EVERY_DAYS = 56
+
+
+def measurements_due(conn, today: date) -> dict:
+    """Which of scale, tape and photos is behind the growth-review cadence."""
+    weigh_days = conn.execute(
+        """
+        SELECT COUNT(DISTINCT day) FROM (
+            SELECT ts::DATE AS day FROM measurements WHERE metric = 'body_mass_kg'
+            UNION ALL
+            SELECT date FROM daily_checkin WHERE body_weight_kg IS NOT NULL
+        ) WHERE day > ?
+        """,
+        [today - timedelta(days=7)],
+    ).fetchone()
+    tape = dict(
+        conn.execute(
+            "SELECT metric, MAX(ts)::DATE FROM measurements "
+            "WHERE source = 'manual' AND metric LIKE '%circumference_cm' GROUP BY 1"
+        ).fetchall()
+    )
+    tape_dates = [tape.get(m) for m in _TAPE_METRICS.values()]
+    tape_last = None if None in tape_dates else min(d for d in tape_dates if d is not None)
+    photo = conn.execute("SELECT MAX(photo_date) FROM progress_photos").fetchone()
+    photo_last = photo[0] if photo else None
+
+    tape_age = (today - tape_last).days if tape_last else None
+    photo_age = (today - photo_last).days if photo_last else None
+    weighed = int(weigh_days[0]) if weigh_days else 0
+    items = [
+        {
+            "key": "scale",
+            "label": "Scale",
+            "due": weighed < _WEIGH_INS_PER_WEEK,
+            "detail": f"{weighed} of {_WEIGH_INS_PER_WEEK} weigh-ins this week",
+        },
+        {
+            "key": "tape",
+            "label": "Tape (waist, arm, thigh, chest)",
+            "due": tape_age is None or tape_age >= _TAPE_EVERY_DAYS,
+            "detail": "never measured all four"
+            if tape_age is None
+            else f"last full set {tape_age} days ago",
+        },
+        {
+            "key": "photos",
+            "label": "Photos",
+            "due": photo_age is None or photo_age >= _PHOTOS_EVERY_DAYS,
+            "detail": "none yet" if photo_age is None else f"last {photo_age} days ago",
+        },
+    ]
+    return {
+        "review_on": GROWTH_REVIEW_ON.isoformat(),
+        "days_to_review": (GROWTH_REVIEW_ON - today).days,
+        "items": items,
+    }
+
+
+@router.get("/body/measurements-due")
+async def get_measurements_due() -> dict:
+    """Scale 3x a week, tape every 4 weeks, photos every 8, for the Feb 1 growth review."""
+    conn = get_read_conn()
+    try:
+        return measurements_due(conn, date.today())
+    finally:
+        conn.close()
+
+
 @router.post("/checkin", dependencies=[Depends(require_admin_key)])
 async def post_checkin(body: CheckinSubmission) -> dict:
     """Upsert today's daily check-in. Drives the auto-regulation gates."""
