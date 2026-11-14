@@ -314,12 +314,38 @@ _PARAMETRIC: dict[str, tuple[str, str, str, str]] = {
     "e1rm_pct14": ("Strength, 14 days vs prior 14", "%", "day", "Hevy"),
     "sets": ("Working sets", "sets", "day", "Hevy"),
 }
-EMPHASIS_MUSCLES = ("biceps", "glutes")
-
-# What each outcome is for, in the subject's goal order: muscle first, then body
-# composition, then aerobic fitness. Recovery signals are mediators, not goals.
+# What each outcome is for, in the subject's goal order for the stored training
+# phase. Build: muscle, then body composition, then aerobic fitness. Cut: body
+# composition first, muscle (retention) second. Recovery signals are mediators.
 GOAL_WEIGHTS = {"muscle": 1.0, "body": 0.85, "cardio": 0.7, "recovery": 0.6}
+_CUT_GOAL_WEIGHTS = {"body": 1.0, "muscle": 0.85, "cardio": 0.75, "recovery": 0.6}
 _OTHER_GOAL_WEIGHT = 0.5
+_GOAL_TEXT = {
+    "build": (
+        "Build muscle first ({emphasis} emphasis), then body recomposition at "
+        "maintenance, then aerobic fitness."
+    ),
+    "cut": (
+        "Lose fat while keeping muscle: body composition first (bodyweight trend, "
+        "0.5-1.0%/week), muscle retention second (main-lift strength holding; "
+        "{emphasis} emphasis), then aerobic fitness."
+    ),
+}
+
+
+def goal_weights(conn: duckdb.DuckDBPyConnection) -> dict[str, float]:
+    """Goal weights for Rob's stored training phase."""
+    from shc.training.autoregulation import load_training_phase
+
+    return _CUT_GOAL_WEIGHTS if load_training_phase(conn) == "cut" else GOAL_WEIGHTS
+
+
+def _emphasis_muscles(conn: duckdb.DuckDBPyConnection) -> list[str]:
+    from shc.training.autoregulation import _resolve_emphasis, load_emphasis
+
+    return sorted(_resolve_emphasis(load_emphasis(conn)))
+
+
 _GOALS = {
     "muscle": {"strength_emphasis_pct14", "session_quality", "working_sets", "lift_tonnes"},
     "body": {"body_mass_lb", "body_mass_7d"},
@@ -469,7 +495,7 @@ def _e1rm_pct14(conn: duckdb.DuckDBPyConnection, muscle: str) -> dict[date, floa
 
 def _emphasis(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
     """Mean 14-day strength change across the emphasis muscles, on days all of them have one."""
-    parts = [_e1rm_pct14(conn, m) for m in EMPHASIS_MUSCLES]
+    parts = [_e1rm_pct14(conn, m) for m in _emphasis_muscles(conn)]
     days = set.intersection(*(set(p) for p in parts))
     return {d: mean(p[d] for p in parts) for d in days}
 
@@ -1552,7 +1578,7 @@ def value_score(
         if same_question:
             novelty = min(novelty, 0.5)
     goal = goal_of(spec["outcome"], conn)
-    goal_weight = GOAL_WEIGHTS.get(goal, _OTHER_GOAL_WEIGHT)
+    goal_weight = goal_weights(conn).get(goal, _OTHER_GOAL_WEIGHT)
     return {
         "value": round(uncertainty * decision * feasibility * novelty * goal_weight, 3),
         "uncertainty": round(uncertainty, 3),
@@ -1673,6 +1699,8 @@ def _misses(conn: duckdb.DuckDBPyConnection, metric: str = FORECAST_METRIC) -> d
 def brief(conn: duckdb.DuckDBPyConnection) -> dict:
     """Everything the analyst reads before proposing, rebuilt from the database on
     every call so no agent works from memory of a previous conversation."""
+    from shc.training.autoregulation import load_training_phase
+
     fc = forecast_view(conn).get("backtest") or {}
     return {
         "rules": {
@@ -1680,8 +1708,11 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
             "max_days_to_answer": MAX_DAYS_TO_ANSWER,
             "min_per_arm": _MIN_PER_ARM,
             "value_formula": "uncertainty × decision × feasibility × novelty × goal_weight (see value_score); computed by the server, not the proposer.",
-            "goal_weights": GOAL_WEIGHTS | {"other": _OTHER_GOAL_WEIGHT},
-            "goals": "Build muscle first (biceps and glutes emphasis), then body recomposition at maintenance, then aerobic fitness. HRV, sleep and RHR are mediators. Outcomes: e1rm_pct14:<muscle>, sets:<muscle>, strength_emphasis_pct14, session_quality, body_mass_lb, body_mass_7d, vo2_max.",
+            "goal_weights": goal_weights(conn) | {"other": _OTHER_GOAL_WEIGHT},
+            "goals": _GOAL_TEXT[load_training_phase(conn)].format(
+                emphasis=" and ".join(m.replace("_", " ") for m in _emphasis_muscles(conn))
+            )
+            + " HRV, sleep and RHR are mediators. Outcomes: e1rm_pct14:<muscle>, sets:<muscle>, strength_emphasis_pct14, session_quality, body_mass_lb, body_mass_7d, vo2_max.",
             "spec_shape": {
                 "exposure": {
                     "feature": "<feature name>",

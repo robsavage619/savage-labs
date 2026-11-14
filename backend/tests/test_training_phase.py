@@ -62,3 +62,15 @@ def test_goal_lines_follow_phase_and_live_emphasis(conn):
     assert "150 min/week" in cut
     assert "lats and side delts" in cut
     assert "biceps" not in cut
+
+
+def test_research_goals_follow_phase(conn):
+    from shc import research
+
+    assert research.goal_weights(conn)["muscle"] > research.goal_weights(conn)["body"]
+    assert research.brief(conn)["rules"]["goals"].startswith("Build muscle first")
+    _set_phase(conn, "cut")
+    weights = research.goal_weights(conn)
+    assert weights["body"] > weights["muscle"]
+    assert set(weights) == set(research.GOAL_WEIGHTS)  # research_team validates goal keys
+    assert research.brief(conn)["rules"]["goals"].startswith("Lose fat while keeping muscle")
