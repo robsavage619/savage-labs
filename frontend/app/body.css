@@ -47,6 +47,13 @@
 .bo-quiet-lbl { font: 600 10.5px var(--font-data); letter-spacing: .1em; text-transform: uppercase; fill: var(--text-faint); }
 .bo-tape-foot { margin-top: 8px; padding-bottom: 12px; max-width: 120ch; }
 
+/* 04: tape progress, one small panel per site */
+.bo-tape-grid { display: grid; gap: 18px 16px; }
+.bo-tape-cell { display: grid; gap: 6px; min-width: 0; }
+.bo-tape-head { display: grid; gap: 2px; }
+.bo-tape-head b { font: 600 22px/1.1 var(--font-data); font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.bo-tape-head small { font: 500 12px var(--font-data); color: var(--text-muted); }
+
 /* 03: the record beside the form */
 .bo-pair { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: stretch; }
 .bo-log { display: flex; flex-direction: column; gap: 18px; padding: 20px 22px; border: 1px solid color-mix(in oklch, var(--sl-accent) 30%, transparent); border-radius: 16px; background: linear-gradient(180deg, var(--sl-accent-soft), transparent 60%); min-width: 0; scroll-margin-top: 96px; }

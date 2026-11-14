@@ -1,4 +1,4 @@
-"""Growth-review cadence: scale 3x/week, all four tape sites every 28 days."""
+"""Growth-review cadence: scale 3x/week, all five tape sites every 28 days."""
 
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ def test_three_weigh_ins_satisfy_scale_from_either_source(conn) -> None:
     assert _due(conn)["scale"] is False
 
 
-def test_tape_needs_all_four_sites_and_ages_by_the_oldest(conn) -> None:
-    for site in ("waist", "arm", "thigh"):
+def test_tape_needs_all_five_sites_and_ages_by_the_oldest(conn) -> None:
+    for site in ("waist", "hip", "arm", "thigh"):
         _m(conn, f"{site}_circumference_cm", TODAY - timedelta(days=1))
     assert _due(conn)["tape"] is True
     _m(conn, "chest_circumference_cm", TODAY - timedelta(days=30))

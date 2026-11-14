@@ -458,6 +458,7 @@ export function WeightRecord() {
 
 const TAPE: { key: TapeField; label: string }[] = [
   { key: "waist_in", label: "Waist" },
+  { key: "hip_in", label: "Hips, widest" },
   { key: "arm_in", label: "Arm, flexed" },
   { key: "thigh_in", label: "Mid-thigh" },
   { key: "chest_in", label: "Chest" },
@@ -486,7 +487,7 @@ export function LogReading() {
       setLbs("");
       setVals({});
       setForce(false);
-      ["body-trend", "body-tape", "checkin-today", "daily-state"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+      ["body-trend", "body-tape", "body-tape-history", "checkin-today", "daily-state"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     },
   });
   const lastW = w.data?.[w.data.length - 1];
@@ -531,7 +532,110 @@ export function LogReading() {
   );
 }
 
-// ── 04 The slow signals ─────────────────────────────────────────────────────
+// ── 04 Tape progress ────────────────────────────────────────────────────────
+
+const PROGRESS: { key: TapeField; label: string }[] = [
+  { key: "arm_in", label: "Arm, flexed" },
+  { key: "waist_in", label: "Waist" },
+  { key: "hip_in", label: "Hips" },
+  { key: "thigh_in", label: "Mid-thigh" },
+  { key: "chest_in", label: "Chest" },
+];
+
+/** One panel per tape site on a shared time axis and a shared inch span, so slopes compare across panels. */
+export function TapeProgress() {
+  const q = useQuery({ queryKey: ["body-tape-history"], queryFn: api.tapeHistory, staleTime: STALE });
+  const st = useDailyState();
+  const [ref, W] = useWidth(1200);
+  if (q.isError || !q.data || !st.data)
+    return (
+      <div className="bo-chart" ref={ref}>
+        {q.isError ? <Err what="the tape history" e={q.error} /> : <Skel h={220} />}
+      </div>
+    );
+  const today = st.data.as_of;
+  const data = q.data;
+  const all = PROGRESS.flatMap(({ key }) => data[key] ?? []);
+  const first = all.length ? all.reduce((a, b) => (a.date < b.date ? a : b)).date : today;
+  // At least eight weeks of axis, so a first reading sits at the left with room to grow.
+  const t0 = Math.min(t(first), t(today) - 56 * DAY);
+  const t1 = t(today);
+  const span = Math.max(2, ...PROGRESS.map(({ key }) => {
+    const v = (data[key] ?? []).map((p) => p.inches);
+    return v.length ? Math.max(...v) - Math.min(...v) : 0;
+  })) * 1.3;
+  const cols = Math.max(1, Math.min(PROGRESS.length, Math.floor(W / 150)));
+  const pw = (W - (cols - 1) * 16) / cols;
+  const P = { l: 34, r: 10, t: 10, b: 22 };
+  const H = 130;
+  const x = (iso: string) => P.l + ((t(iso) - t0) / (t1 - t0 || 1)) * (pw - P.l - P.r);
+  return (
+    <div className="bo-chart" ref={ref}>
+      <div className="bo-tape-grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        {PROGRESS.map(({ key, label }) => {
+          const pts = data[key] ?? [];
+          const last = pts[pts.length - 1];
+          const mid = pts.length ? (Math.max(...pts.map((p) => p.inches)) + Math.min(...pts.map((p) => p.inches))) / 2 : 0;
+          const lo = mid - span / 2;
+          const y = (v: number) => P.t + (1 - (v - lo) / span) * (H - P.t - P.b);
+          const ticks = pts.length ? niceTicks(lo, lo + span, 2).filter((v) => v >= lo && v <= lo + span) : [];
+          const delta = pts.length > 1 ? last.inches - pts[0].inches : null;
+          return (
+            <div key={key} className="bo-tape-cell">
+              <div className="bo-tape-head">
+                <span className="td-label">{label}</span>
+                <b>{last ? `${last.inches.toFixed(2).replace(/\.?0+$/, "")} in` : "–"}</b>
+                <small>
+                  {!last
+                    ? "not taped yet"
+                    : delta == null
+                      ? `first, ${short(last.date)}`
+                      : `${delta > 0 ? "+" : delta < 0 ? "−" : "±"}${Math.abs(delta).toFixed(2).replace(/\.?0+$/, "")} since ${short(pts[0].date)}`}
+                </small>
+              </div>
+              <svg width={pw} height={H} role="img" aria-label={`${label} tape readings over time`}>
+                {ticks.map((v) => (
+                  <g key={v}>
+                    <line x1={P.l} x2={pw - P.r} y1={y(v)} y2={y(v)} className="td-week" />
+                    <text x={P.l - 6} y={y(v) + 4} textAnchor="end" className="td-tick">
+                      {v}
+                    </text>
+                  </g>
+                ))}
+                <line x1={P.l} x2={pw - P.r} y1={H - P.b} y2={H - P.b} className="td-grid" />
+                {pts.length > 1 && (
+                  <motion.path d={pts.map((p, i) => `${i ? "L" : "M"}${x(p.date).toFixed(1)},${y(p.inches).toFixed(1)}`).join("")} fill="none" stroke="var(--series-1)" strokeWidth={2} strokeLinejoin="round" initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 0.9, ease }} />
+                )}
+                {pts.map((p, i) => (
+                  <g key={p.date}>
+                    <circle cx={x(p.date)} cy={y(p.inches)} r={i === pts.length - 1 ? 4.5 : 3} fill="var(--series-1)" className={i === pts.length - 1 ? "td-enddot" : undefined} />
+                    <circle cx={x(p.date)} cy={y(p.inches)} r={12} fill="transparent">
+                      <title>{`${label}: ${p.inches} in · ${short(p.date)} ${p.date.slice(0, 4)}`}</title>
+                    </circle>
+                  </g>
+                ))}
+                {!pts.length && (
+                  <text x={(P.l + pw - P.r) / 2} y={(H - P.b) / 2 + 4} textAnchor="middle" className="td-tick">
+                    log one in the form above
+                  </text>
+                )}
+                <text x={P.l} y={H - 6} className="td-tick">
+                  {short(new Date(t0).toISOString().slice(0, 10))}
+                </text>
+                <text x={pw - P.r} y={H - 6} textAnchor="end" className="td-tick today">
+                  today
+                </text>
+              </svg>
+            </div>
+          );
+        })}
+      </div>
+      <p className="td-foot">Every tape reading logged here, one panel per site. Every panel spans the same number of inches, so a steeper line is a bigger change. Tape all five every four weeks; hover a dot for its reading.</p>
+    </div>
+  );
+}
+
+// ── 05 The slow signals ─────────────────────────────────────────────────────
 
 type SLane = { key: string; label: string; unit: string; kind: "line" | "bar" | "dot"; y: (number | null)[]; color: (v: number) => string; fmt: (v: number) => string; ref?: { v: number; label: string }; quiet: number; note?: string; run?: boolean };
 

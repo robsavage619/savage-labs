@@ -579,6 +579,7 @@ async def get_checkin_today() -> dict:
 
 _TAPE_METRICS = {
     "waist_in": "waist_circumference_cm",
+    "hip_in": "hip_circumference_cm",
     "arm_in": "arm_circumference_cm",
     "thigh_in": "thigh_circumference_cm",
     "chest_in": "chest_circumference_cm",
@@ -587,6 +588,7 @@ _TAPE_METRICS = {
 
 class TapeSubmission(BaseModel):
     waist_in: float | None = Field(default=None, gt=10, lt=90)
+    hip_in: float | None = Field(default=None, gt=10, lt=90)
     arm_in: float | None = Field(default=None, gt=5, lt=40)
     thigh_in: float | None = Field(default=None, gt=5, lt=60)
     chest_in: float | None = Field(default=None, gt=10, lt=90)
@@ -640,6 +642,32 @@ async def get_tape() -> dict:
     }
 
 
+def tape_history(conn) -> dict[str, list[dict]]:
+    """Every manual tape reading per site, oldest first, in inches."""
+    names = {v: k for k, v in _TAPE_METRICS.items()}
+    rows = conn.execute(
+        "SELECT ts::DATE, metric, value_num FROM measurements "
+        "WHERE source = 'manual' AND metric LIKE '%circumference_cm' ORDER BY ts"
+    ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for d, metric, cm in rows:
+        if metric in names:
+            out.setdefault(names[metric], []).append(
+                {"date": str(d), "inches": round(cm / 2.54, 2)}
+            )
+    return out
+
+
+@router.get("/body/tape/history")
+async def get_tape_history() -> dict[str, list[dict]]:
+    """All tape readings by site, for the progress charts."""
+    conn = get_read_conn()
+    try:
+        return tape_history(conn)
+    finally:
+        conn.close()
+
+
 # The 2026-11-01 growth review's cheapest measurement plan, judged on 2027-02-01.
 GROWTH_REVIEW_ON = date(2027, 2, 1)
 _WEIGH_INS_PER_WEEK = 3
@@ -678,9 +706,9 @@ def measurements_due(conn, today: date) -> dict:
         },
         {
             "key": "tape",
-            "label": "Tape (waist, arm, thigh, chest)",
+            "label": "Tape (waist, hip, arm, thigh, chest)",
             "due": tape_age is None or tape_age >= _TAPE_EVERY_DAYS,
-            "detail": "never measured all four"
+            "detail": "never measured all five"
             if tape_age is None
             else f"last full set {tape_age} days ago",
         },

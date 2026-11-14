@@ -1,4 +1,4 @@
-export type TapeField = "waist_in" | "arm_in" | "thigh_in" | "chest_in";
+export type TapeField = "waist_in" | "hip_in" | "arm_in" | "thigh_in" | "chest_in";
 
 export interface AccuracyBaseline {
   logged: number;
@@ -1122,6 +1122,7 @@ export const api = {
     get<Partial<Record<TapeField, { date: string; inches: number; readings: number }>>>(
       "/api/body/tape",
     ),
+  tapeHistory: () => get<Partial<Record<TapeField, { date: string; inches: number }[]>>>("/api/body/tape/history"),
   saveTape: async (values: Partial<Record<TapeField, number>>) => {
     const r = await fetch(`${BASE}/api/body/tape`, {
       method: "POST",

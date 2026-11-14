@@ -4,7 +4,7 @@ import "../today.css";
 import "../body.css";
 import { ClinicalOverview } from "@/components/clinical-overview";
 import { SurfaceShell } from "@/components/surface-shell";
-import { EnergyOut, Fold, LogReading, SlowSignals, TheRead, WeightRecord } from "@/components/body-brief";
+import { EnergyOut, Fold, LogReading, SlowSignals, TapeProgress, TheRead, WeightRecord } from "@/components/body-brief";
 import { Block } from "@/components/today-brief";
 
 /**
@@ -30,10 +30,13 @@ export default function BodyPage() {
             <LogReading />
           </div>
         </Block>
-        <Block id="slow-signals" n="04" title="Six months of the slow signals" sub="Resting heart rate, everyday movement, aerobic fitness and the airway overnight on one tape. A hatched stretch is a source that stopped reporting. Hover a day to read it across.">
+        <Block id="tape" n="04" title="Tape progress" sub="Arms, waist, hips, legs and chest, every tape reading on one time axis. The tape sees what the scale can't: where the change is landing.">
+          <TapeProgress />
+        </Block>
+        <Block id="slow-signals" n="05" title="Six months of the slow signals" sub="Resting heart rate, everyday movement, aerobic fitness and the airway overnight on one tape. A hatched stretch is a source that stopped reporting. Hover a day to read it across.">
           <SlowSignals />
         </Block>
-        <Block n="05" title="The record" sub="The clinical record behind it all.">
+        <Block n="06" title="The record" sub="The clinical record behind it all.">
           <Fold id="clinical" label="Clinical record" title="Conditions, labs, and what's overdue for a re-draw" sub="The full record runs long, so it opens on request.">
             <ClinicalOverview />
           </Fold>
