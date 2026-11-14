@@ -640,6 +640,22 @@ async def get_tape() -> dict:
     }
 
 
+def tape_history(conn) -> list[dict]:
+    """Every manual tape reading, oldest first, in centimetres."""
+    names = {v: k.removesuffix("_in") for k, v in _TAPE_METRICS.items()}
+    rows = conn.execute(
+        "SELECT ts::DATE, metric, value_num FROM measurements "
+        "WHERE source = 'manual' AND metric LIKE '%circumference_cm' ORDER BY ts, metric"
+    ).fetchall()
+    return [{"date": str(d), "site": names[m], "cm": round(v, 1)} for d, m, v in rows if m in names]
+
+
+@router.get("/body/tape/history")
+async def get_tape_history() -> list[dict]:
+    """All tape readings, so photo-derived girths can be checked against them."""
+    return tape_history(get_read_conn())
+
+
 # The 2026-11-01 growth review's cheapest measurement plan, judged on 2027-02-01.
 GROWTH_REVIEW_ON = date(2027, 2, 1)
 _WEIGH_INS_PER_WEEK = 3
