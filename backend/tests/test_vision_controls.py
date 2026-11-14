@@ -15,6 +15,8 @@ integration control activates automatically if a fixture is dropped in
 
 from __future__ import annotations
 
+import socket
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -72,7 +74,7 @@ def fake_cv(monkeypatch):
     """
     state: dict[str, np.ndarray] = {"mask": _trapezoid_mask(40)}
 
-    monkeypatch.setattr(pipeline, "detect_landmarks", lambda _rgb: _fake_landmarks())
+    monkeypatch.setattr(pipeline, "detect_landmarks", lambda _rgb, _mask: _fake_landmarks())
     monkeypatch.setattr(
         pipeline, "remove", lambda _rgb, session=None: _rgba_from_mask(state["mask"])
     )
@@ -151,3 +153,39 @@ def test_real_photo_same_image_no_change():
     b = {k: v[1] for k, v in pipeline.analyze_photo(_FIXTURES / "front.jpg").measurements.items()}
     for metric in a:
         assert not classify_change(metric, a[metric], b[metric]).detectable
+
+
+def test_stalled_model_download_fails_instead_of_hanging(tmp_path, monkeypatch):
+    """A download that stops mid-body raises within the timeout rather than hanging."""
+    release = threading.Event()
+    server = socket.create_server(("127.0.0.1", 0))
+
+    def serve() -> None:
+        conn, _ = server.accept()
+        conn.recv(4096)
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n" + b"x" * 10)
+        release.wait(10)
+        conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    url = f"http://127.0.0.1:{server.getsockname()[1]}/model.onnx"
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    monkeypatch.setattr(pipeline, "_POSE_MODEL_URL", url)
+    monkeypatch.setattr(pipeline, "_DOWNLOAD_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(pipeline.settings, "data_dir", tmp_path)
+
+    errors: list[RuntimeError] = []
+
+    def download() -> None:
+        try:
+            pipeline._pose_model_path()
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=download, daemon=True)
+    worker.start()
+    worker.join(5)
+    release.set()
+    assert not worker.is_alive(), "model download hung on a stalled connection"
+    assert errors, "a stalled download must raise"
+    assert not list((tmp_path / "models").glob("*.onnx")), "no partial model may be left behind"

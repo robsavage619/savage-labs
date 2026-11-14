@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Line,
@@ -25,10 +25,6 @@ const FLAG_LABEL: Record<string, string> = {
 const METRIC_LABEL: Record<string, string> = {
   waist_to_shoulder: "Waist : shoulder",
   waist_to_hip: "Waist : hip",
-  waist_width: "Waist width",
-  shoulder_width: "Shoulder width",
-  hip_width: "Hip width",
-  silhouette_area: "Silhouette area",
 };
 
 const today = () => localDate();
@@ -48,6 +44,7 @@ type QueueStatus = "pending" | "uploading" | "ok" | "flagged" | "error";
 interface QueueItem {
   id: string;
   file: File;
+  preview: string;
   angle: string;
   status: QueueStatus;
   message: string;
@@ -69,23 +66,44 @@ function UploadRow({ onDone }: { onDone: () => void }) {
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+
+  // Preview URLs hold the file in memory until revoked.
+  const previews = useRef(new Set<string>());
+  useEffect(() => {
+    const urls = previews.current;
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, []);
 
   const addFiles = (files: FileList | null | undefined) => {
     if (!files) return;
-    const items = Array.from(files)
-      .filter((f) => f.type.startsWith("image/"))
-      .map((f) => ({
+    const picked = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (!picked.length) return;
+    // The first photo queued dates the session: the day it was taken, not the day it is uploaded.
+    if (queue.length === 0) setPhotoDate(localDate(new Date(picked[0].lastModified)));
+    const items = picked.map((f) => {
+      const preview = URL.createObjectURL(f);
+      previews.current.add(preview);
+      return {
         id: crypto.randomUUID(),
         file: f,
+        preview,
         angle: inferAngle(f.name),
         status: "pending" as QueueStatus,
         message: "",
-      }));
-    if (items.length) setQueue((q) => [...q, ...items]);
+      };
+    });
+    setQueue((q) => [...q, ...items]);
   };
 
   const patch = (id: string, p: Partial<QueueItem>) =>
     setQueue((q) => q.map((it) => (it.id === id ? { ...it, ...p } : it)));
+
+  const remove = (item: QueueItem) => {
+    URL.revokeObjectURL(item.preview);
+    previews.current.delete(item.preview);
+    setQueue((q) => q.filter((x) => x.id !== item.id));
+  };
 
   const pending = queue.filter((it) => it.status === "pending" || it.status === "error");
 
@@ -100,8 +118,8 @@ function UploadRow({ onDone }: { onDone: () => void }) {
           status: res.quality_pass ? "ok" : "flagged",
           message: res.quality_pass
             ? note
-              ? `ok · ${note}`
-              : `pose ${res.pose_conf.toFixed(2)}`
+              ? `Measured. ${note}`
+              : "Measured"
             : res.quality_flags.map((f) => FLAG_LABEL[f] ?? f).join("; "),
         });
       } catch (e) {
@@ -144,33 +162,48 @@ function UploadRow({ onDone }: { onDone: () => void }) {
           accept="image/*"
           multiple
           className="hidden"
-          onChange={(e) => addFiles(e.target.files)}
+          onChange={(e) => {
+            addFiles(e.target.files);
+            e.target.value = ""; // so picking the same file again still fires
+          }}
         />
       </div>
 
       {queue.length > 0 && (
-        <ul className="space-y-1">
+        <ul className="space-y-1.5">
           {queue.map((it) => (
             <li key={it.id} className="flex items-center gap-2 text-[11px] font-mono">
-              <span className="flex-1 truncate text-[var(--text-muted)]">{it.file.name}</span>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={it.preview}
+                alt=""
+                className="h-14 w-[42px] shrink-0 rounded object-cover"
+                style={{ background: "var(--card-hover)" }}
+                // Chrome can't decode HEIC; the server can, so only the thumbnail is lost.
+                onError={(e) => (e.currentTarget.style.visibility = "hidden")}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[var(--text-muted)]">{it.file.name}</p>
+                <p className="leading-snug" style={{ color: STATUS_COLOR[it.status] }}>
+                  {it.status === "uploading" ? "Measuring…" : it.message || "Ready"}
+                </p>
+              </div>
               <select
                 value={it.angle}
                 disabled={busy || it.status === "ok"}
                 onChange={(e) => patch(it.id, { angle: e.target.value })}
+                aria-label={`Angle for ${it.file.name}`}
                 className="bg-[var(--card-hover)] border rounded px-1 py-0.5 disabled:opacity-50"
                 style={{ borderColor: "var(--hairline-strong)" }}
               >
                 <option value="front">front</option>
                 <option value="side">side</option>
               </select>
-              <span className="w-28 truncate text-right" style={{ color: STATUS_COLOR[it.status] }}>
-                {it.status === "uploading" ? "analyzing…" : it.message || it.status}
-              </span>
               <button
                 disabled={busy}
-                onClick={() => setQueue((q) => q.filter((x) => x.id !== it.id))}
+                onClick={() => remove(it)}
                 className="text-[var(--text-faint)] disabled:opacity-30 px-1"
-                aria-label="remove"
+                aria-label={`Remove ${it.file.name}`}
               >
                 ✕
               </button>
@@ -180,10 +213,32 @@ function UploadRow({ onDone }: { onDone: () => void }) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
+        <button
+          disabled={busy}
+          onClick={() => cameraRef.current?.click()}
+          className="border rounded px-3 py-1 text-[11px] font-mono disabled:opacity-40"
+          style={{ borderColor: "var(--hairline-strong)" }}
+        >
+          Take photo
+        </button>
+        {/* Kept outside the drop zone, whose click handler would open the library picker too.
+            `capture` opens the phone's rear camera; desktops fall back to a file picker. */}
+        <input
+          ref={cameraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          onChange={(e) => {
+            addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
         <input
           type="date"
           value={photoDate}
           onChange={(e) => setPhotoDate(e.target.value)}
+          aria-label="Date the photos were taken"
           className="bg-[var(--card-hover)] border rounded px-2 py-1 text-[11px] font-mono"
           style={{ borderColor: "var(--hairline-strong)" }}
         />
@@ -193,9 +248,108 @@ function UploadRow({ onDone }: { onDone: () => void }) {
           className="border rounded px-3 py-1 text-[11px] font-mono disabled:opacity-40"
           style={{ borderColor: "var(--hairline-strong)" }}
         >
-          {busy ? "Analyzing…" : `Upload ${pending.length || ""}`.trim()}
+          {busy ? "Measuring…" : `Upload ${pending.length || ""}`.trim()}
         </button>
       </div>
+    </div>
+  );
+}
+
+function SessionGallery() {
+  const { data = [] } = useQuery({
+    queryKey: ["progress-photos", "all"],
+    queryFn: () => api.progressPhotos(),
+  });
+  const sessions = useMemo(() => {
+    const byDate = new Map<string, typeof data>();
+    for (const p of data) byDate.set(p.photo_date, [...(byDate.get(p.photo_date) ?? []), p]);
+    return [...byDate.entries()].sort(([a], [b]) => b.localeCompare(a));
+  }, [data]);
+
+  if (sessions.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <Eyebrow>Sessions · newest first</Eyebrow>
+      <ul className="flex gap-3 overflow-x-auto pb-1">
+        {sessions.map(([date, photos]) => (
+          <li key={date} className="shrink-0 space-y-1">
+            <div className="flex gap-1">
+              {["front", "side"].flatMap((angle) => {
+                const p = photos.find((x) => x.angle === angle);
+                if (!p) return [];
+                return (
+                  <a
+                    key={angle}
+                    href={api.progressPhotoUrl(angle, date, 1600)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="relative block"
+                    title={`${date} ${angle}: open full size`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={api.progressPhotoUrl(angle, date, 240)}
+                      alt={`${angle} photo, ${date}`}
+                      className="h-[128px] w-24 rounded border object-cover"
+                      style={{ borderColor: p.quality_pass ? "var(--hairline-strong)" : "var(--negative)" }}
+                    />
+                    <span
+                      className="absolute bottom-1 left-1 rounded px-1 text-[9px] font-mono"
+                      style={{ background: "oklch(0 0 0 / 0.6)", color: p.quality_pass ? "var(--text-muted)" : "var(--negative)" }}
+                    >
+                      {p.quality_pass ? angle : `${angle} · not measured`}
+                    </span>
+                  </a>
+                );
+              })}
+            </div>
+            <p className="text-[10px] font-mono text-[var(--text-faint)]">{date}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Two registered photos under one draggable divider. The range input carries drag and keyboard. */
+function CompareSlider({ before, after }: { before: string; after: string }) {
+  const [pos, setPos] = useState(50);
+  return (
+    <div
+      className="relative mx-auto w-full max-w-[360px] select-none overflow-hidden rounded border"
+      style={{ borderColor: "var(--hairline-strong)" }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={api.progressPhotoUrl("front", before, 720)} alt={`Front photo, ${before}`} className="block w-full" />
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={api.progressPhotoUrl("front", after, 720, before)}
+        alt={`Front photo, ${after}, aligned to ${before}`}
+        className="absolute inset-0 h-full w-full"
+        style={{ clipPath: `inset(0 0 0 ${pos}%)` }}
+      />
+      <div className="pointer-events-none absolute inset-y-0 w-px" style={{ left: `${pos}%`, background: "var(--sl-accent)" }} />
+      {[
+        { label: before, side: "left-1" },
+        { label: after, side: "right-1" },
+      ].map((t) => (
+        <span
+          key={t.label}
+          className={`pointer-events-none absolute top-1 ${t.side} rounded px-1 text-[9px] font-mono text-[var(--text-muted)]`}
+          style={{ background: "oklch(0 0 0 / 0.6)" }}
+        >
+          {t.label}
+        </span>
+      ))}
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={pos}
+        onChange={(e) => setPos(Number(e.target.value))}
+        aria-label={`Slide between ${before} and ${after}`}
+        className="absolute inset-0 h-full w-full cursor-ew-resize opacity-0"
+      />
     </div>
   );
 }
@@ -317,29 +471,40 @@ function ComparePanel() {
     queryFn: () => api.progressPhotos("front"),
   });
   const dates = data.filter((p) => p.quality_pass).map((p) => p.photo_date);
-  const [before, setBefore] = useState("");
-  const [after, setAfter] = useState("");
+  const [picked, setPicked] = useState<{ before?: string; after?: string }>({});
+  // Until chosen otherwise: first session against the latest.
+  const before = picked.before ?? dates[0] ?? "";
+  const after = picked.after ?? dates.at(-1) ?? "";
+  const ready = Boolean(before && after && before !== after);
 
   const compare = useQuery<ProgressComparison>({
     queryKey: ["progress-compare", before, after],
     queryFn: () => api.progressPhotoCompare("front", before, after),
-    enabled: Boolean(before && after && before !== after),
+    enabled: ready,
   });
 
+  if (dates.length < 2)
+    return (
+      <p className="text-[11px] text-[var(--text-faint)]">
+        Before/after needs two measured front photos. {dates.length === 1 ? "One on record so far." : ""}
+      </p>
+    );
+
+  const selectClass = "bg-[var(--card-hover)] border rounded px-2 py-1";
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
         <span className="text-[var(--text-faint)]">Compare</span>
-        <select value={before} onChange={(e) => setBefore(e.target.value)} className="bg-[var(--card-hover)] border rounded px-2 py-1" style={{ borderColor: "var(--hairline-strong)" }}>
-          <option value="">before…</option>
+        <select aria-label="Before date" value={before} onChange={(e) => setPicked((p) => ({ ...p, before: e.target.value }))} className={selectClass} style={{ borderColor: "var(--hairline-strong)" }}>
           {dates.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
         <span className="text-[var(--text-faint)]">→</span>
-        <select value={after} onChange={(e) => setAfter(e.target.value)} className="bg-[var(--card-hover)] border rounded px-2 py-1" style={{ borderColor: "var(--hairline-strong)" }}>
-          <option value="">after…</option>
+        <select aria-label="After date" value={after} onChange={(e) => setPicked((p) => ({ ...p, after: e.target.value }))} className={selectClass} style={{ borderColor: "var(--hairline-strong)" }}>
           {dates.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
       </div>
+
+      {ready && <CompareSlider before={before} after={after} />}
 
       {compare.data && (
         <div className="space-y-2">
@@ -452,6 +617,7 @@ export function ProgressPhotoPanel() {
         <Eyebrow>Capture · standardized morning, fasted, ≥24h post-training</Eyebrow>
         <UploadRow onDone={() => qc.invalidateQueries({ queryKey: ["progress-photos"] })} />
       </div>
+      <SessionGallery />
       <div className="space-y-2">
         <Eyebrow>Waist ratios · front · lower is leaner trunk</Eyebrow>
         <RatioTrend />

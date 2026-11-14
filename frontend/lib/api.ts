@@ -1752,13 +1752,20 @@ export const api = {
       headers: mutHeaders(),
       body: form,
     });
-    if (!r.ok) throw new Error(`progressPhotoUpload ${r.status}`);
+    if (!r.ok) {
+      // The server says why (no pose found, unreadable file); a bare status code does not.
+      const detail = (await r.json().catch(() => null))?.detail;
+      throw new Error(typeof detail === "string" ? detail : `upload failed (${r.status})`);
+    }
     return r.json() as Promise<ProgressPhotoUploadResult>;
   },
   progressPhotoCompare: (angle: string, before: string, after: string) =>
     get<ProgressComparison>(
       `/api/progress-photos/compare?angle=${angle}&before=${before}&after=${after}`,
     ),
+  /** A stored photo as a JPEG; with `alignTo`, registered onto that date's frame. */
+  progressPhotoUrl: (angle: string, date: string, width: number, alignTo?: string) =>
+    `${BASE}/api/progress-photos/image?angle=${angle}&date=${date}&width=${width}${alignTo ? `&align_to=${alignTo}` : ""}`,
   progressHeatmapUrl: (angle: string, before: string, after: string) =>
     `${BASE}/api/progress-photos/heatmap?angle=${angle}&before=${before}&after=${after}`,
   dailyReport: () => get<{ report: DailyReport | null }>("/api/daily/report"),

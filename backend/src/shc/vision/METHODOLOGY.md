@@ -131,3 +131,45 @@ drifting with daily lighting it is **hybrid and anchored**:
 
 Backed by the blind-control eval (`tests/test_vision_controls.py`): same-photo-twice
 yields "no change"; known-direction pairs call direction correctly.
+
+## 7. Measured pipeline noise (2026-11-13)
+
+§2 borrows its 2% floor from tape-measure studies. This section is the pipeline's own
+number. `backend/scripts/vision_stability.py` re-measures one photo after mirroring,
+rescaling (0.75x, 0.5x, 0.33x), cropping 4% off each edge, tilting ±1° and ±2°, relighting
+(x0.75, x1.25), lowering contrast and re-compressing at JPEG q50: 13 variants of the same
+body. Worst deviation from the untouched reading, on the 2026-05-25 session:
+
+| Metric | Front | Side |
+|---|---|---|
+| waist_to_shoulder | 0.52% | 0.57% |
+| waist_to_hip | 0.44% | 1.60% |
+| shoulder_width / trunk span | 5.58% | 4.04% |
+| waist_width / trunk span | 5.60% | 4.12% |
+| hip_width / trunk span | 5.54% | 2.64% |
+
+**What follows from it.**
+
+- The two ratios sit inside the 2% floor, so §2's gate stands for them.
+- Widths scaled by the shoulder->hip span do not. The span comes from pose landmarks, and
+  re-framing the same photo moves it about 5%. A 2% gate on those would report framing as
+  change. `noise.COMPARABLE_METRICS` therefore limits change verdicts to the two ratios;
+  the widths are still stored.
+- This is a lower bound. The script cannot re-pose or re-breathe the subject. Two or three
+  shots per angle in one session would measure that directly; none exist yet.
+
+**Models, chosen on the same script.**
+
+- Silhouette: rembg `u2net`. Its torso outline moved 0.16% on average under the
+  perturbations. `birefnet-general-lite` matched it at 14x the runtime,
+  `u2net_human_seg` was slightly worse, `isnet-general-use` moved 5%.
+- Pose: MediaPipe Pose (BlazePose), in OpenCV Zoo's ONNX export, run through `cv2.dnn`.
+  It replaced the `mediapipe` package, which has no Intel-Mac wheel for Python 3.13 and
+  aborts the process when it cannot reach a Metal GPU service. Same model family, so the
+  visibility thresholds in §3 carry over. The network is fed a square crop around the
+  silhouette instead of a detector box. Against the stored MediaPipe readings for
+  2026-05-25 the ratios moved +1.0% and -0.1% (front), -1.5% and -1.0% (side): inside the
+  floor, but re-upload old sessions so every reading comes from one pipeline.
+- Rejected on measurement: the pose model's own person mask as the silhouette (ratios
+  moved up to 20%), and re-centring the crop on the model's auxiliary landmarks (widths
+  got worse, not better).

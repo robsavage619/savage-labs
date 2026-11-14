@@ -1,9 +1,10 @@
 """Deterministic measurement pipeline — pose, silhouette, geometry.
 
-No language model is involved. MediaPipe's PoseLandmarker (Tasks API) locates
-anatomical landmarks; rembg (U²-Net) extracts the body silhouette; geometry is read
-off the silhouette at the landmark heights and normalized to a scale-invariant
-reference length (shoulder→ankle). See METHODOLOGY.md §1, §4.
+No language model is involved. rembg (U²-Net) extracts the body silhouette; MediaPipe
+Pose (BlazePose, OpenCV Zoo's ONNX export run through cv2.dnn) locates anatomical
+landmarks inside it; geometry is read off the silhouette at the landmark heights and
+normalized to a scale-invariant reference length (shoulder→hip). See METHODOLOGY.md
+§1, §4, §7.
 
 The pose model bundle and the rembg weights are fetched once to a local cache on
 first use (model assets, not photo data — photos never leave the machine).
@@ -12,15 +13,14 @@ first use (model assets, not photo data — photos never leave the machine).
 from __future__ import annotations
 
 import logging
-import urllib.request
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 import cv2
-import mediapipe as mp
 import numpy as np
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision as mp_vision
+import pooch
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 from rembg import new_session, remove
@@ -52,13 +52,30 @@ _MEASURE_LANDMARKS = (_L_SHOULDER, _R_SHOULDER, _L_HIP, _R_HIP)
 
 _MASK_THRESHOLD = 128  # alpha cutoff for foreground
 
+# Pinned to a commit and checked by hash: the file is fetched once, then trusted.
 _POSE_MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
-    "pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/"
+    "48b10fa505aeb51fbd127fc60a5c660040e823b7/models/pose_estimation_mediapipe/"
+    "pose_estimation_mediapipe_2023mar.onnx"
 )
+_POSE_MODEL_SHA256 = "9d89c599319a18fb7d2e28451a883476164543182bafca5f09eb2cf767ed2f3f"
+# Per socket read, so a transfer that stalls mid-body fails instead of hanging the upload.
+_DOWNLOAD_TIMEOUT_S = 30.0
+_POSE_INPUT_PX = 256
+_ROI_ENLARGE = 1.25  # MediaPipe's own enlargement of the person box
+_MIN_PERSON_CONF = 0.5
 
 _rembg_session = None
-_pose_landmarker = None
+_pose_net: cv2.dnn.Net | None = None
+_pose_lock = threading.Lock()  # cv2.dnn.Net is not safe to share across threads
+
+
+class Landmark(NamedTuple):
+    """One pose landmark, in image-normalized coordinates."""
+
+    x: float
+    y: float
+    visibility: float
 
 
 def _get_rembg_session():
@@ -70,26 +87,33 @@ def _get_rembg_session():
 
 
 def _pose_model_path() -> Path:
-    """Path to the cached pose model bundle, downloading it once if absent."""
-    models_dir = settings.data_dir / "models"
-    models_dir.mkdir(parents=True, exist_ok=True)
-    path = models_dir / "pose_landmarker_lite.task"
-    if not path.exists():
-        log.info("downloading pose landmarker model bundle (one-time)")
-        urllib.request.urlretrieve(_POSE_MODEL_URL, path)  # noqa: S310 (fixed https URL)
-    return path
+    """Path to the cached pose model, downloading and hash-checking it once if absent.
 
-
-def _get_pose_landmarker():
-    """Lazily build and cache the PoseLandmarker (single-image mode)."""
-    global _pose_landmarker
-    if _pose_landmarker is None:
-        options = mp_vision.PoseLandmarkerOptions(
-            base_options=mp_python.BaseOptions(model_asset_path=str(_pose_model_path())),
-            running_mode=mp_vision.RunningMode.IMAGE,
+    Raises:
+        RuntimeError: If the download fails or the file's hash is not the pinned one.
+    """
+    try:
+        path = pooch.retrieve(
+            _POSE_MODEL_URL,
+            known_hash=f"sha256:{_POSE_MODEL_SHA256}",
+            fname="pose_estimation_mediapipe_2023mar.onnx",
+            path=settings.data_dir / "models",
+            # pooch's Downloader protocol names its parameters differently from its own class.
+            downloader=pooch.HTTPDownloader(  # pyright: ignore[reportArgumentType]
+                timeout=_DOWNLOAD_TIMEOUT_S, progressbar=False
+            ),
         )
-        _pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
-    return _pose_landmarker
+    except (OSError, ValueError) as exc:  # network failure, or pooch's hash mismatch
+        raise RuntimeError(f"pose model unavailable: {exc}") from exc
+    return Path(path)
+
+
+def _get_pose_net() -> cv2.dnn.Net:
+    """Lazily load and cache the pose network."""
+    global _pose_net
+    if _pose_net is None:
+        _pose_net = cv2.dnn.readNet(str(_pose_model_path()))
+    return _pose_net
 
 
 def load_rgb(path: str | Path) -> np.ndarray:
@@ -103,21 +127,57 @@ def load_rgb(path: str | Path) -> np.ndarray:
     return np.asarray(img)
 
 
-def detect_landmarks(rgb: np.ndarray) -> list | None:
-    """Return the first detected person's pose landmarks, or None.
+def detect_landmarks(rgb: np.ndarray, mask: np.ndarray) -> list[Landmark] | None:
+    """Return the pose landmarks of the person in ``mask``, or None.
+
+    The network sees a square crop around the silhouette, the same framing MediaPipe's
+    person detector would hand it, so no detector model is needed.
 
     Args:
         rgb: HxWx3 uint8 RGB image.
+        mask: HxW boolean silhouette of the person.
 
     Returns:
-        A list of normalized landmarks (each with ``.x``, ``.y``, ``.visibility``),
-        or None if no pose was detected.
+        Landmarks in MediaPipe Pose order (33 body points, then 6 auxiliary), or None
+        if the mask is empty or the network sees no person.
     """
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
-    result = _get_pose_landmarker().detect(mp_image)
-    if not result.pose_landmarks:
+    ys, xs = np.where(mask)
+    if xs.size == 0:
         return None
-    return result.pose_landmarks[0]
+    h, w = rgb.shape[:2]
+    side = int(_ROI_ENLARGE * max(xs.max() - xs.min(), ys.max() - ys.min())) + 1
+    x0 = int((xs.min() + xs.max()) / 2 - side / 2)
+    y0 = int((ys.min() + ys.max()) / 2 - side / 2)
+    x1, y1 = x0 + side, y0 + side
+    roi = cv2.copyMakeBorder(
+        rgb[max(y0, 0) : min(y1, h), max(x0, 0) : min(x1, w)],
+        max(-y0, 0),
+        max(y1 - h, 0),
+        max(-x0, 0),
+        max(x1 - w, 0),
+        cv2.BORDER_CONSTANT,
+        value=(0, 0, 0),
+    )
+    blob = cv2.resize(roi, (_POSE_INPUT_PX, _POSE_INPUT_PX), interpolation=cv2.INTER_AREA)
+    with _pose_lock:
+        net = _get_pose_net()
+        net.setInput(blob.astype(np.float32)[np.newaxis] / 255.0)
+        outs = net.forward(net.getUnconnectedOutLayersNames())
+
+    conf = next(o for o in outs if o.size == 1)
+    if float(conf.ravel()[0]) < _MIN_PERSON_CONF:
+        return None
+    # (39, 5): x, y, z in input pixels, then visibility and presence logits.
+    raw = next(o for o in outs if o.size == 195).reshape(39, 5)
+    k = side / _POSE_INPUT_PX
+    return [
+        Landmark(
+            x=float(x0 + lx * k) / w,
+            y=float(y0 + ly * k) / h,
+            visibility=float(1.0 / (1.0 + np.exp(-vis))),
+        )
+        for lx, ly, _z, vis, _presence in raw
+    ]
 
 
 @dataclass
@@ -211,7 +271,8 @@ def analyze_photo(path: str | Path, baseline_scale_px: float | None = None) -> P
     rgb = load_rgb(path)
     h, w = rgb.shape[:2]
 
-    lm = detect_landmarks(rgb)
+    mask = _silhouette_mask(rgb)
+    lm = detect_landmarks(rgb, mask)
     if lm is None:
         raise ValueError("no pose detected in image")
 
@@ -232,7 +293,6 @@ def analyze_photo(path: str | Path, baseline_scale_px: float | None = None) -> P
     # Scale = shoulder→hip trunk span (stable, present in any torso-framed shot).
     scale_px = float(np.linalg.norm(sh_mid - hip_mid)) or 1.0
 
-    mask = _silhouette_mask(rgb)
     # Remove arms so widths reflect the torso, not arm position.
     torso = mask & ~_arm_mask(lm, h, w, scale_px)
 

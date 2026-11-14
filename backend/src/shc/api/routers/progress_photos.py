@@ -13,21 +13,23 @@ import uuid
 from datetime import date
 from types import ModuleType
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
+from shc.api.deps import require_admin_key
 from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
 from shc.metrics import compute_daily_state
-from shc.vision.noise import GIRTH_NOISE_FRACTION, classify_change
+from shc.vision.noise import COMPARABLE_METRICS, GIRTH_NOISE_FRACTION, classify_change
 
 
 def _vision() -> tuple[ModuleType, ModuleType]:
     """Load the pose/silhouette stack lazily, so the API still boots where it can't install."""
     try:
         from shc.vision import overlay, pipeline
-    except ImportError as exc:  # mediapipe/onnxruntime ship no Intel-Mac wheels
+    except ImportError as exc:
         raise HTTPException(503, "photo analysis isn't available on this host") from exc
     return pipeline, overlay
 
@@ -56,7 +58,7 @@ def _baseline_scale(angle: str) -> float | None:
     return float(row[0]) if row and row[0] is not None else None
 
 
-@router.post("/progress-photos")
+@router.post("/progress-photos", dependencies=[Depends(require_admin_key)])
 async def upload_photo(
     file: UploadFile = File(...),
     photo_date: str = Form(...),
@@ -84,18 +86,32 @@ async def upload_photo(
         raise HTTPException(422, f"unsupported file type {ext}")
 
     pipeline, _ = _vision()
-    dest = _photo_dir() / f"{pdate.isoformat()}_{angle}{ext}"
-    dest.write_bytes(await file.read())
-
+    photo_dir = _photo_dir()
+    stem = f"{pdate.isoformat()}_{angle}"
+    # Analyze a staged copy first: a retake that can't be measured must not cost
+    # the photo already stored for this date and angle.
+    staged = photo_dir / f".{stem}.staged{ext}"
+    staged.write_bytes(await file.read())
     try:
-        analysis = pipeline.analyze_photo(dest, baseline_scale_px=_baseline_scale(angle))
+        analysis = await run_in_threadpool(
+            pipeline.analyze_photo, staged, baseline_scale_px=_baseline_scale(angle)
+        )
     except ValueError as exc:
-        dest.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
         raise HTTPException(422, str(exc)) from exc
     except OSError as exc:  # includes PIL.UnidentifiedImageError
-        dest.unlink(missing_ok=True)
-        log.warning("could not decode uploaded image %s: %s", dest.name, exc)
+        staged.unlink(missing_ok=True)
+        log.warning("could not decode uploaded image %s: %s", file.filename, exc)
         raise HTTPException(422, "could not read this image — try a JPG or PNG") from exc
+    except RuntimeError as exc:  # pose model could not be fetched or failed its hash
+        staged.unlink(missing_ok=True)
+        log.error("photo analysis unavailable: %s", exc)
+        raise HTTPException(503, str(exc)) from exc
+
+    for previous in photo_dir.glob(f"{stem}.*"):  # same date and angle, any extension
+        previous.unlink()
+    dest = photo_dir / f"{stem}{ext}"
+    staged.rename(dest)
 
     assert analysis.quality is not None
     photo_id = str(uuid.uuid4())
@@ -221,7 +237,7 @@ async def compare(
         raise HTTPException(404, "measurements missing for one or both dates")
 
     verdicts = []
-    for metric in sorted(set(m0) & set(m1)):
+    for metric in sorted(set(m0) & set(m1) & COMPARABLE_METRICS):
         v = classify_change(metric, m0[metric], m1[metric])
         verdicts.append(
             {
@@ -280,10 +296,62 @@ async def heatmap(
 
     _, overlay = _vision()
     try:
-        png = overlay.change_heatmap(paths[0], paths[1])
+        png = await run_in_threadpool(overlay.change_heatmap, paths[0], paths[1])
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return Response(content=png, media_type="image/png")
+
+
+@router.get("/progress-photos/image")
+async def photo_image(
+    angle: str = Query(...),
+    photo_date: str = Query(..., alias="date"),
+    align_to: str | None = Query(None),
+    width: int = Query(900, ge=64, le=2400),
+):
+    """Return one stored photo as a JPEG, optionally registered onto another date's frame.
+
+    Args:
+        angle: 'front' or 'side'.
+        photo_date: ISO date of the photo to show.
+        align_to: ISO date of a same-angle photo; when given, this photo is scaled,
+            rotated and shifted so its shoulders and hips sit where that one's do,
+            which makes the pair comparable under a before/after slider.
+        width: Output width in pixels.
+
+    Returns:
+        JPEG bytes.
+    """
+    paths: list[str] = []
+    for d in (photo_date, align_to):
+        if d is None:
+            continue
+        try:
+            parsed = date.fromisoformat(d)
+        except ValueError as exc:
+            raise HTTPException(422, "dates must be ISO format") from exc
+        row = (
+            get_read_conn()
+            .execute(
+                "SELECT file_path FROM progress_photos WHERE photo_date = $d AND angle = $a",
+                {"d": parsed, "a": angle},
+            )
+            .fetchone()
+        )
+        if not row:
+            raise HTTPException(404, f"no {angle} photo on {d}")
+        paths.append(str(settings.uploads_dir / row[0]))
+
+    _, overlay = _vision()
+    try:
+        jpeg = await run_in_threadpool(
+            overlay.render_jpeg, paths[0], align_to=paths[1] if align_to else None, width=width
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return Response(
+        content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"}
+    )
 
 
 # ── Physique critique (copy-prompt → CC → POST-back) ─────────────────────────
@@ -374,7 +442,7 @@ class CritiqueSubmission(BaseModel):
     visible_detail_md: str | None = None
 
 
-@router.post("/progress-photos/critique")
+@router.post("/progress-photos/critique", dependencies=[Depends(require_admin_key)])
 async def submit_critique(body: CritiqueSubmission):
     """Persist a Claude-generated critique, anchored to the current gated state."""
     bc = _latest_body_comp()

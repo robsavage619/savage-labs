@@ -13,6 +13,10 @@ from dataclasses import dataclass
 # ISAK intra-rater girth TEM upper bound (METHODOLOGY.md §2).
 GIRTH_NOISE_FRACTION = 0.02
 
+# Only the width/width ratios get a change verdict. Widths scaled by the trunk span
+# move about 5% with framing alone (METHODOLOGY.md §7), far outside the 2% floor.
+COMPARABLE_METRICS = frozenset({"waist_to_shoulder", "waist_to_hip"})
+
 
 @dataclass(frozen=True)
 class ChangeVerdict:

@@ -306,7 +306,7 @@ The honest state of the system. Full list in [docs/evaluation.md](docs/evaluatio
 
 ## Stack
 
-Python 3.12+, FastAPI, DuckDB, APScheduler, Pydantic, NumPy, OpenCV and MediaPipe
+Python 3.12+, FastAPI, DuckDB, APScheduler, Pydantic, NumPy, OpenCV and rembg
 for the photo pipeline. Next.js 16, React 19, TypeScript, Tailwind 4, TanStack
 Query, Recharts, Motion. Claude as the external planner. Obsidian as the research
 corpus. `uv` for packaging, `ruff` for lint and format, `pyright` for types,
