@@ -2326,8 +2326,10 @@ _FIB4_BANDS = {
 
 # ── Atherogenic lipids beyond LDL-C ─────────────────────────────────────────
 #
-# `LDL Cholesterol (calc)` is Friedewald — checkable on any panel by comparing
-# the reported value against TC - HDL - TG/5. Friedewald assumes a FIXED
+# `LDL Cholesterol (calc)` was Friedewald through 2023; Kaiser NW switched to
+# the (Modified) Sampson equation by the 2026-11-13 draw. The lab row carries no
+# method, so `_ldl_method` identifies it per draw by reproducing the reported
+# value from TC/HDL/TG. Friedewald assumes a FIXED
 # triglyceride:VLDL ratio of 5, and Martin 2013 (JAMA, n=1,350,908) showed the
 # real ratio has a median of 5.2 but an IQR of 4.5-6.0 and a full range of
 # 0.4-145 — a fixed factor cannot represent that. Measured cost, for samples
@@ -2356,6 +2358,34 @@ _FIB4_BANDS = {
 # in when the table is sourced, not before.
 _TG_FRIEDEWALD_UNRELIABLE = 150.0
 _TG_FRIEDEWALD_INVALID = 400.0
+# Sampson 2020 (JAMA Cardiol, NIH Equation 2) is validated up to TG 800.
+_TG_SAMPSON_INVALID = 800.0
+# Reported LDL is a whole number, so a method matches if it rounds to it.
+_LDL_MATCH_TOL = 0.5
+
+
+def _friedewald(tc: float, hdl: float, tg: float) -> float:
+    return tc - hdl - tg / 5
+
+
+def _sampson(tc: float, hdl: float, tg: float) -> float:
+    non_hdl = tc - hdl
+    return tc / 0.948 - hdl / 0.971 - (tg / 8.56 + tg * non_hdl / 2140 - tg**2 / 16100) - 9.44
+
+
+def _ldl_method(tc: float, hdl: float, tg: float | None, ldl: float | None) -> str | None:
+    """Which equation the lab used, recovered by reproducing its reported LDL-C."""
+    if tg is None or ldl is None:
+        return None
+    friedewald = abs(_friedewald(tc, hdl, tg) - ldl) <= _LDL_MATCH_TOL
+    sampson = abs(_sampson(tc, hdl, tg) - ldl) <= _LDL_MATCH_TOL
+    if friedewald and sampson:
+        return "Friedewald or Sampson"
+    if friedewald:
+        return "Friedewald"
+    if sampson:
+        return "Sampson"
+    return None
 
 # Non-HDL-C target runs 30 mg/dL above the LDL target for the same risk tier.
 _NON_HDL_TARGET = 130.0
@@ -2392,9 +2422,16 @@ def _lipid_panel(lab_by_name: dict) -> dict | None:
     non_hdl = tc_v - hdl_v
     remnant = (tc_v - hdl_v - ldl_v) if ldl_v is not None else None
 
-    friedewald_reliable = None
-    if tg_v is not None:
-        friedewald_reliable = tg_v < _TG_FRIEDEWALD_UNRELIABLE
+    method = _ldl_method(tc_v, hdl_v, tg_v, ldl_v)
+    reliable: bool | None = None
+    valid: bool | None = None
+    if tg_v is not None and method is not None:
+        if method == "Sampson":
+            valid = tg_v < _TG_SAMPSON_INVALID
+            reliable = valid
+        else:
+            valid = tg_v < _TG_FRIEDEWALD_INVALID
+            reliable = tg_v < _TG_FRIEDEWALD_UNRELIABLE
 
     return {
         "collected_at": sorted(draws)[-1] if draws else None,
@@ -2430,13 +2467,14 @@ def _lipid_panel(lab_by_name: dict) -> dict | None:
         },
         "ldl_estimate": {
             "value": ldl_v,
-            "method": "Friedewald",
+            # None when neither equation reproduces the reported value.
+            "method": method,
             "triglycerides": tg_v,
-            "reliable": friedewald_reliable,
-            "valid": (tg_v < _TG_FRIEDEWALD_INVALID) if tg_v is not None else None,
+            "reliable": reliable,
+            "valid": valid,
             "caveat": (
                 None
-                if friedewald_reliable is not False
+                if reliable is not False or method == "Sampson"
                 else (
                     f"Triglycerides {tg_v:.0f} mg/dL exceed {_TG_FRIEDEWALD_UNRELIABLE:.0f}, "
                     "where Friedewald's fixed 5:1 VLDL ratio degrades and tends to "

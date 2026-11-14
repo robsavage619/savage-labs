@@ -378,7 +378,7 @@ export interface LipidPanel {
   ratios: { tc_hdl: number | null; tg_hdl: number | null };
   ldl_estimate: {
     value: number | null;
-    method: string;
+    method: string | null;
     triglycerides: number | null;
     /** False above 150 mg/dL TG, where Friedewald tends to understate LDL-C. */
     reliable: boolean | null;

@@ -49,16 +49,47 @@ def test_friedewald_is_flagged_unreliable_above_150_tg():
 
 
 def test_friedewald_is_reliable_at_normal_triglycerides():
-    panel = dict(_PANEL, **{"Triglycerides": {"value": 90.0, "collected_at": "2024-01-15"}})
+    panel = dict(
+        _PANEL,
+        **{
+            "Triglycerides": {"value": 90.0, "collected_at": "2024-01-15"},
+            "LDL Cholesterol (calc)": {"value": 142.0, "collected_at": "2024-01-15"},
+        },
+    )
     est = _lipid_panel(panel)["ldl_estimate"]
     assert est["reliable"] is True
     assert est["caveat"] is None
 
 
 def test_friedewald_goes_formally_invalid_at_400():
-    panel = dict(_PANEL, **{"Triglycerides": {"value": 420.0, "collected_at": "2024-01-15"}})
+    panel = dict(
+        _PANEL,
+        **{
+            "Triglycerides": {"value": 420.0, "collected_at": "2024-01-15"},
+            "LDL Cholesterol (calc)": {"value": 76.0, "collected_at": "2024-01-15"},
+        },
+    )
     est = _lipid_panel(panel)["ldl_estimate"]
     assert est["valid"] is False
+
+
+def test_method_is_identified_per_draw():
+    """A lab that switches equations must not keep the old label."""
+    assert _lipid_panel(_PANEL)["ldl_estimate"]["method"] == "Friedewald"
+    # Synthetic: Sampson gives 131.97 here, Friedewald 130.
+    sampson = {
+        "Total Cholesterol": {"value": 200.0, "collected_at": "2024-01-15"},
+        "HDL Cholesterol": {"value": 50.0, "collected_at": "2024-01-15"},
+        "Triglycerides": {"value": 100.0, "collected_at": "2024-01-15"},
+        "LDL Cholesterol (calc)": {"value": 132.0, "collected_at": "2024-01-15"},
+    }
+    est = _lipid_panel(sampson)["ldl_estimate"]
+    assert est["method"] == "Sampson"
+    assert est["caveat"] is None
+    unknown = dict(
+        sampson, **{"LDL Cholesterol (calc)": {"value": 120.0, "collected_at": "2024-01-15"}}
+    )
+    assert _lipid_panel(unknown)["ldl_estimate"]["method"] is None
 
 
 def test_mixed_draws_are_flagged_not_silently_subtracted():
