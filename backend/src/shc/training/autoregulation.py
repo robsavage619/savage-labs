@@ -490,6 +490,31 @@ def _resolve_emphasis(db_emphasis: dict[str, float] | None = None) -> set[str]:
     return set(db_emphasis) if db_emphasis else set(EMPHASIS_MUSCLES)
 
 
+# Body-composition phase, stored as athlete_profile key 'training_phase'.
+# 'cut' = fat loss while keeping muscle. Helms 2018 (QSG program building,
+# "Training During a Caloric Deficit"): step down one volume tier for recovery
+# lost to the deficit. Here that is a MAV ceiling instead of MRV. The other two
+# Helms rules are already structural: the calendar mesocycle deloads after every
+# block, and autoregulation runs every week.
+TRAINING_PHASES: frozenset[str] = frozenset({"build", "cut"})
+
+
+def load_training_phase(conn: duckdb.DuckDBPyConnection) -> str:
+    """Rob's stored training phase, ``'build'`` when unset or unrecognized."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM athlete_profile WHERE key = 'training_phase'"
+        ).fetchone()
+    except duckdb.Error as exc:
+        log.warning("athlete_profile unavailable, defaulting to build phase: %s", exc)
+        return "build"
+    phase = str(row[0]).strip().lower() if row else "build"
+    if phase not in TRAINING_PHASES:
+        log.warning("unknown training_phase %r, defaulting to build", phase)
+        return "build"
+    return phase
+
+
 def _decide(
     muscle: str,
     current: float,
@@ -515,6 +540,7 @@ def _decide(
     # metrics._gates can never diverge (`_decide` stays a pure function of
     # primitives — no DB access — so the personalization happens one level up).
     leg_hold_threshold: float = 1.5,
+    phase: str = "build",
 ) -> MusclePrescription:
     """Apply the RP set-progression tree + emphasis + interference for one muscle.
 
@@ -546,6 +572,9 @@ def _decide(
     muscles well above it (at the 1:1 rate a row credits biceps 1.0 + traps 1.0),
     and stripping productive volume that costs no dedicated budget would be the
     opposite of the point. The tier only stops the engine *demanding* more.
+
+    ``phase == 'cut'`` lowers the growth ceiling from MRV to MAV (see
+    :data:`TRAINING_PHASES`); a muscle already above MAV is cut back toward it.
 
     Two guards, both deliberate. (1) An ``emphasis`` muscle can never maintain,
     whatever the tier says — invariant 7 forbids freezing a lagging bring-up
@@ -595,6 +624,8 @@ def _decide(
     # Emphasis muscles floor at the MEV–MAV midpoint (keeps an accumulation
     # runway), not at MAV; everything else floors at MEV (panel review M3).
     grow_floor = (mev + (mav - mev) // 2) if emphasis else mev
+    ceiling = mav if phase == "cut" else mrv
+    ceiling_label = "MAV (cut phase)" if phase == "cut" else "MRV"
     # Emphasized muscles ramp at +2 (not just on the progressing branch) so a
     # LAGGING priority muscle — which rarely shows perf≥4 and has thin,
     # low-confidence direct history — actually climbs instead of crawling +1.
@@ -635,9 +666,9 @@ def _decide(
         # At/above floor: back off one set, floored there.
         desired = max(min(cur, floor), cur - 1)
         reason = f"under-recovered (soreness {soreness:.1f}/3) → back off a set"
-    elif cur >= mrv:
-        desired = mrv
-        reason = "at MRV — volume ceiling; hold (deload candidate next block)"
+    elif cur >= ceiling:
+        desired = ceiling
+        reason = f"at {ceiling_label} — volume ceiling; hold (deload candidate next block)"
     elif leg_interference:
         # Pickleball/cardio IS the leg stimulus this week — hold in place.
         desired = cur
@@ -660,7 +691,7 @@ def _decide(
         # Emphasis muscles ramp +2.
         desired = cur + ramp_step
         tag = " + emphasis" if emphasized else ""
-        reason = f"progressing (perf {perf}/5){tag} → add toward MRV"
+        reason = f"progressing (perf {perf}/5){tag} → add toward {ceiling_label}"
     elif perf == 3 and rpe_headroom and not emphasized:
         # Stalled AND the athlete has been running sustained under-target RPE
         # (rpe_drift_signed_mean <= -0.75, see _rpe_headroom): more sets is
@@ -766,7 +797,7 @@ def _decide(
     # safety cut (regressing) is never floored above its decision. The climb to
     # this floor is still rate-limited above MEV by the step clamp below.
     if emphasized and not hold_below_mev and tree_target >= cur:
-        desired = max(desired, min(grow_floor, mrv))
+        desired = max(desired, min(grow_floor, ceiling))
     elif emphasized and leg_interference and not under_recovered:
         # An emphasis lower-body muscle (e.g. glutes) is never frozen below MEV
         # by conditioning interference alone. Court/cardio load debits leg
@@ -791,7 +822,7 @@ def _decide(
     # initialization), not crawled there at +2/wk — that crawl was leaving a
     # fresh, recovered athlete with a 1-set-per-muscle session. Only the ramp
     # ABOVE MEV is rate-limited to +MAX_WEEKLY_ADD/wk.
-    target = max(0, min(mrv, desired))
+    target = max(0, min(ceiling, desired))
     add_ceiling = max(cur + MAX_WEEKLY_ADD, mev_floor)
     target = max(cur - MAX_WEEKLY_CUT, min(add_ceiling, target))
     delta = target - cur
@@ -2611,6 +2642,7 @@ def weekly_prescription(
     signal_quality = read_signal_quality_cache(conn)
 
     emphasis_muscles = _resolve_emphasis(load_emphasis(conn))
+    phase = load_training_phase(conn)
 
     # Per-muscle historical prescription accuracy (#10): hedge muscles the engine
     # has called poorly. Helper is the self_learning read path; absent → no hedge.
@@ -2658,6 +2690,7 @@ def weekly_prescription(
             leg_hold_threshold=leg_hold_threshold,
             tier=vt.tier if vt else "grow",
             mv=vt.mv if vt else 2,
+            phase=phase,
         )
         # `_decide` reports its input as current_sets; split it back into the two
         # quantities consumers actually ask for.

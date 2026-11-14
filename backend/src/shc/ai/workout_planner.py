@@ -100,6 +100,63 @@ def _retrospective_lines(conn: Any) -> list[str]:
     return lines
 
 
+def _emphasis_names(conn: Any) -> str:
+    """Live emphasis muscles as prose, e.g. ``'lats and side delts'``."""
+    from shc.training.autoregulation import _resolve_emphasis, load_emphasis
+
+    names = sorted(m.replace("_", " ") for m in _resolve_emphasis(load_emphasis(conn)))
+    if len(names) <= 2:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + f", and {names[-1]}"
+
+
+def _goal_lines(conn: Any) -> list[str]:
+    """PRIMARY GOAL / BODY-COMP / CARDIO prompt lines for the stored training phase."""
+    from shc.training.autoregulation import load_training_phase
+
+    emphasis = _emphasis_names(conn)
+    if load_training_phase(conn) == "cut":
+        return [
+            "PRIMARY GOAL: lose midsection fat while KEEPING the muscle already built. The",
+            "  size is there; fat is the limiter for both physique and labs (see the body",
+            "  composition assessment in personal context). Strength on the main lifts is the",
+            "  muscle-retention signal: hold load and effort, do not chase new volume.",
+            "  Volume runs MEV→MAV only this phase (one tier down for deficit recovery,",
+            "  Helms 2018). The PER-MUSCLE VOLUME table and THIS WEEK'S PRESCRIPTION below",
+            "  already apply that ceiling — build the session from them.",
+            f"  Emphasis: {emphasis} (V-taper) — bias direct volume toward them, up to MAV,",
+            "  whenever the gates and recovery allow.",
+            "",
+            "BODY-COMP: fat-loss phase, target 0.5–1.0% bodyweight/week. The diet supplies",
+            "  most of the deficit; training's job is to give the muscle a reason to stay.",
+            "  Heavy compounds first, kept heavy. If main-lift e1RMs drop faster than",
+            "  bodyweight, say so — the deficit is too deep, not the program too soft.",
+            "",
+            "CARDIO is a programmed track this phase, second only to the lifts: at least",
+            "  150 min/week of easy, low-impact cardio (bike, rower, sled, incline walk —",
+            "  forefoot rules apply), with pickleball minutes counting toward it, and at",
+            "  most ONE hard conditioning finisher a week. Easy cardio adds to the deficit",
+            "  without the strength interference hard conditioning carries; it never",
+            "  displaces or pre-fatigues a lift on a green day.",
+        ]
+    return [
+        "PRIMARY GOAL: build muscle. Engineer the physique through per-muscle volume",
+        "  progression — drive each muscle through MEV→MAV→MRV, add stimulus where it's",
+        "  productive, back off where recovery says so. The PER-MUSCLE VOLUME table and",
+        "  THIS WEEK'S PRESCRIPTION below are the program — build the session from them.",
+        f"  Emphasis: {emphasis} are prioritized — bias direct volume",
+        "  toward them whenever the gates and recovery allow.",
+        "",
+        "BODY-COMP: strict recomp at maintenance — build muscle and lean out at the same",
+        "  time. Heavy compounds first for the strength base, then targeted hypertrophy",
+        "  volume for the lagging and emphasis muscles.",
+        "",
+        "CARDIO is a supporting track — Z2 aerobic base + conditioning finishers for work",
+        "  capacity, recovery, and the fat-loss side of recomp. It serves the build; it",
+        "  never displaces a lift on a green day.",
+    ]
+
+
 def build_training_context(conn, planning_date: date | None = None) -> tuple[str, date]:
     """Build the per-request dynamic context string for plan generation.
 
@@ -835,24 +892,11 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         lines.extend(cond_lines)
 
     lines.append("\n## MISSION + GOALS")
-    lines.append("Rob is 40 and refuses to let age define his ceiling. This is not a maintenance")
-    lines.append("program — it is a hypertrophy program engineered to build muscle. Age brings")
-    lines.append("wisdom about recovery; it does not lower the ambition.")
+    lines.append("Rob is 40 and refuses to let age define his ceiling. This is a serious")
+    lines.append("training program, not a wellness routine. Age brings wisdom about recovery;")
+    lines.append("it does not lower the ambition.")
     lines.append("")
-    lines.append("PRIMARY GOAL: build muscle. Engineer the physique through per-muscle volume")
-    lines.append("  progression — drive each muscle through MEV→MAV→MRV, add stimulus where it's")
-    lines.append("  productive, back off where recovery says so. The PER-MUSCLE VOLUME table and")
-    lines.append("  THIS WEEK'S PRESCRIPTION below are the program — build the session from them.")
-    lines.append("  Emphasis: biceps and glutes are lagging and prioritized — bias direct volume")
-    lines.append("  toward them whenever the gates and recovery allow.")
-    lines.append("")
-    lines.append("BODY-COMP: strict recomp at maintenance — build muscle and lean out at the same")
-    lines.append("  time. Heavy compounds first for the strength base, then targeted hypertrophy")
-    lines.append("  volume for the lagging and emphasis muscles.")
-    lines.append("")
-    lines.append("CARDIO is a supporting track — Z2 aerobic base + conditioning finishers for work")
-    lines.append("  capacity, recovery, and the fat-loss side of recomp. It serves the build; it")
-    lines.append("  never displaces a lift on a green day.")
+    lines.extend(_goal_lines(conn))
     lines.append("")
     lines.append("PICKLEBALL is logged load only — Rob trains his own court skills. Treat his play")
     lines.append("  purely as a leg/conditioning stimulus that debits lower-body recovery; never")
@@ -2826,14 +2870,22 @@ def build_midday_context(conn) -> str:
         lines.append(f"  · {r}")
 
     lines.append("\n## TRAINING MANDATE")
-    lines.append(
-        "Rob is training to build muscle. This is not a wellness routine — it is a hypertrophy"
-    )
-    lines.append("program. The midday session is a CORE training block, not a bonus.")
+    from shc.training.autoregulation import load_training_phase
+
+    cutting = load_training_phase(conn) == "cut"
+    emphasis = _emphasis_names(conn)
+    lines.append("This is not a wellness routine. The midday session is a CORE training block,")
+    lines.append("not a bonus.")
     lines.append("")
-    lines.append("Primary goal: build muscle — drive per-muscle volume through MEV→MAV→MRV, with")
-    lines.append("biceps and glutes prioritized as lagging-emphasis muscles. Body-comp: strict")
-    lines.append("recomp at maintenance (build muscle, lean out concurrently).")
+    if cutting:
+        lines.append("Phase: FAT LOSS, keep muscle. Volume caps at MAV; main-lift strength is the")
+        lines.append(f"retention signal; {emphasis} are the emphasis muscles. Weekly target: at")
+        lines.append("least 150 min easy low-impact cardio (pickleball counts), one hard")
+        lines.append("finisher max.")
+    else:
+        lines.append("Primary goal: build muscle — drive per-muscle volume through MEV→MAV→MRV,")
+        lines.append(f"with {emphasis} prioritized as emphasis muscles. Body-comp: strict")
+        lines.append("recomp at maintenance (build muscle, lean out concurrently).")
     lines.append("")
     lines.append(
         "DEFAULT TO WORK. Recovery is prescribed when the body signals it (ACWR, HRV, gates)."
@@ -2847,11 +2899,15 @@ def build_midday_context(conn) -> str:
     )
     lines.append("on a green-light day is a missed adaptation window and a failure of this system.")
     lines.append("")
-    lines.append("Specific midday contributions to the build:")
-    lines.append(
-        "- 2-a-day accessory lift: the highest-value midday option — add direct volume to a"
-    )
-    lines.append("  lagging/emphasis muscle (biceps, glutes) or any muscle below MAV for the week.")
+    lines.append("Specific midday contributions:")
+    if cutting:
+        lines.append(
+            "- Easy low-impact cardio: the highest-value midday option this phase while the"
+        )
+        lines.append("  week is under its 150 min target — as long as it does not pre-fatigue the")
+        lines.append("  next lift.")
+    lines.append("- 2-a-day accessory lift: add direct volume to an emphasis muscle")
+    lines.append(f"  ({emphasis}) or any muscle below MAV for the week.")
     lines.append(
         "- Easy aerobic cardio: use conversational pace and perceived effort; do not invent a bpm target."
     )
