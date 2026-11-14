@@ -83,7 +83,6 @@ export const SECTIONS: readonly Section[] = [
   { id: "composition", label: "Body weight", surface: "body", keywords: ["weight", "scale", "lbs", "recomp"] },
   { id: "log", label: "Log weight and tape", surface: "body", keywords: ["waist", "tape", "girth", "inches", "weigh in"] },
   { id: "slow-signals", label: "Six months of slow signals", surface: "body", keywords: ["vo2", "steps", "rhr", "resting", "spo2", "oxygen", "breathing", "apnea", "neat"] },
-  { id: "physique", label: "Progress photos", surface: "body", keywords: ["photos", "waist", "compare", "upload"] },
   { id: "clinical", label: "Clinical record", surface: "body", keywords: ["labs", "meds", "conditions", "bloodwork", "risk"] },
 
   // ── Lab ──────────────────────────────────────────────────────────────────

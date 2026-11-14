@@ -1,11 +1,9 @@
 """Unified daily report — one AI report covering all areas.
 
-Collapses the previously separate briefing / health-story / workout / body-comp
-loops into a single copy-prompt → Claude → POST-back pass. The prompt instructs the
-Claude Code session to pull the aggregated `/api/daily/brief` (DailyState incl. body
-composition, vault notes, training) plus the latest physique-critique signal, then
-POST one structured report back here. The photo critique stays its own step (it needs
-images) but its stored result feeds this report.
+Collapses the previously separate briefing / health-story / workout loops into a
+single copy-prompt → Claude → POST-back pass. The prompt instructs the Claude Code
+session to pull the aggregated `/api/daily/brief` (DailyState, vault notes, training),
+then POST one structured report back here.
 """
 
 from __future__ import annotations
@@ -107,13 +105,12 @@ health-story, workout, and analytics dashboard. Be thorough and analytical, neve
    slope, sleep avg/consistency/debt analytics.
 5. GET http://127.0.0.1:8000/api/insights AND /api/insights/correlations — detected
    patterns.
-6. GET http://127.0.0.1:8000/api/progress-photos/critique — physique verdict (null → say so).
-7. GET http://127.0.0.1:8000/api/clinical/risk — cardiometabolic strip, overdue lab gaps,
+6. GET http://127.0.0.1:8000/api/clinical/risk — cardiometabolic strip, overdue lab gaps,
    medication advisories, and the `hepatic` FIB-4 fibrosis index. Health-story material.
-8. GET http://127.0.0.1:8000/api/experiments — pre-registered n-of-1 studies. A CONFIRMED
+7. GET http://127.0.0.1:8000/api/experiments — pre-registered n-of-1 studies. A CONFIRMED
    study is Rob's OWN evidence and outranks a general vault note where the two disagree;
    say so explicitly when one bears on today.
-9. GET http://127.0.0.1:8000/api/pickleball/events — per-tournament readiness shape (7 days
+8. GET http://127.0.0.1:8000/api/pickleball/events — per-tournament readiness shape (7 days
    before → 3 after, joined to W-L and net DUPR movement). Use it when an event is recent
    or upcoming, and honor its `sample_warning` rather than over-reading a small n.
 
@@ -132,7 +129,7 @@ per-muscle **muscle_recovery** (two clocks, don't confuse them: `days_since_dose
 minutes (z0–z5)** read against **hr_zone_bounds** (WHOOP's real boundaries — Z5 starts at
 ~93% of max, not the textbook 90%), **cardio_aerobic_base_min_7d**, max HR. Plus readiness
 (weighted, β-blocker), check-in subjectives, gates (including **forbid_muscles** and
-**e1rm_regression_cause**), body_composition, freshness.
+**e1rm_regression_cause**), freshness.
 
 Two traps in that set. `cardio_high_intensity_min_7d` reads roughly 10× high — cross-check
 it against z3+z4+z5 and cite the zone sum, never the field. And `cardio_z2_min_7d` is
@@ -140,7 +137,7 @@ WHOOP's Z2 band alone, while the ~180 min/wk aerobic-base dose spans WHOOP Z2 **
 answer "is he getting enough Z2?" from `cardio_aerobic_base_min_7d`, or you undercount by
 about 40%.
 
-If any source returned `ok: false`, any metric is null, or the photo critique is null,
+If any source returned `ok: false` or any metric is null,
 SAY SO in the relevant section — never silently fabricate a number around missing data.
 
 ## Ground it in the research — DO NOT lose this
@@ -222,8 +219,6 @@ read after a 409 instead of before the first exercise.
   design sessions that honor that. Push hard when gates allow.
   Cite vault notes.
 - **Health story** — knowledgeable-friend narrative tying it together.
-- **Body composition** — waist:shoulder / waist:hip + critique verdict vs lean-out-keep-size.
-  No change claims the gated trend doesn't support; no body-fat %.
 
 ## Depth — this is the whole point, do NOT write thin
 Each section must REASON, not just list. For every signal: say what it means, WHY it
@@ -232,7 +227,7 @@ matters today, how it connects to the others, and the so-what. Name tensions exp
 of numbers is a failure — lead with interpretation and back it with the number, not the
 reverse. Earlier reports were 2-4 substantive sentences (or a short lead paragraph +
 explained bullets) per section; match that. Bullets are scaffolding for analysis, never a
-substitute for it. The body-comp and training sections especially should explain mechanism
+substitute for it. The training section especially should explain mechanism
 and trade-offs, citing the vault research by concept.
 
 Format in markdown (`**bold**` key numbers, occasional `##` subheads, bullets where they
@@ -247,8 +242,7 @@ Direct and analytical, never flattering or padded.
               {"title": "Metrics & progression", "body_md": "..."},
               {"title": "Patterns", "body_md": "..."},
               {"title": "Today's session" (post_workout) OR "Training call + session" (pre_workout), "body_md": "..."},
-              {"title": "Health story", "body_md": "..."},
-              {"title": "Body composition", "body_md": "..."}],
+              {"title": "Health story", "body_md": "..."}],
  "sources": ["effective-reps-hypertrophy.md", "..."],
  "model": "claude"}
 

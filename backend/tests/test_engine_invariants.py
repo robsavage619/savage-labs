@@ -116,7 +116,6 @@ def test_progressing_muscle_never_frozen(confidence, cur, emphasis) -> None:
         soreness=0.0,
         conditioning_acwr=None,
         emphasis=emphasis,
-        emphasis_factor=1.0,
         confidence=confidence,
         scored_weeks=74,
         accuracy=None,
@@ -140,7 +139,6 @@ def test_progressing_muscle_at_mrv_holds() -> None:
         soreness=0.0,
         conditioning_acwr=None,
         emphasis=True,
-        emphasis_factor=1.0,
         confidence=0.08,
         scored_weeks=74,
         accuracy=None,
@@ -168,7 +166,6 @@ def test_conditioning_interference_never_freezes_emphasis_below_mev() -> None:
         perf=None,  # no outcome signal — the exact case that fell to the hold
         soreness=0.0,
         conditioning_acwr=1.65,  # > default leg_hold_threshold (1.5) → interference active
-        emphasis_factor=1.0,
         confidence=0.09,  # glutes' real thin-data confidence
         scored_weeks=8,
         accuracy=None,
@@ -247,7 +244,6 @@ def test_speculative_add_still_shrunk() -> None:
         soreness=0.0,
         conditioning_acwr=None,
         emphasis=False,
-        emphasis_factor=1.0,
         confidence=0.05,
         scored_weeks=3,
         accuracy=None,
@@ -419,7 +415,6 @@ def test_low_confidence_athlete_still_climbs_to_mrv(conn) -> None:
             soreness=0.0,
             conditioning_acwr=None,
             emphasis=True,
-            emphasis_factor=1.0,
             confidence=sq["confidence"],
             scored_weeks=int(sq["scored_weeks"]),
             accuracy=None,

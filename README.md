@@ -6,7 +6,7 @@
 
 **Lab thinking, consumer sensors, daily action.**
 
-<sub>Wearable physiology, training logs, subjective context, progress photos, sport outcomes, research priors, and deterministic gates, fused into one decision, every morning.</sub>
+<sub>Wearable physiology, training logs, subjective context, sport outcomes, research priors, and deterministic gates, fused into one decision, every morning.</sub>
 
 <br /><br />
 
@@ -77,7 +77,7 @@ dropping whatever does not fit.
 
 ## Architecture
 
-<img src="images/diagrams/architecture.svg" width="100%" alt="Architecture: seven sources flow through ingestion into DuckDB, then the metrics engine, then the API, board and planner contract. The self-experiment engine and research vault feed the engine from below." />
+<img src="images/diagrams/architecture.svg" width="100%" alt="Architecture: six sources flow through ingestion into DuckDB, then the metrics engine, then the API, board and planner contract. The self-experiment engine and research vault feed the engine from below." />
 
 Sources are pulled on a schedule, normalized, and written idempotently, so a
 re-sync never rewrites a row that did not change. One engine pass turns the store
@@ -306,8 +306,7 @@ The honest state of the system. Full list in [docs/evaluation.md](docs/evaluatio
 
 ## Stack
 
-Python 3.12+, FastAPI, DuckDB, APScheduler, Pydantic, NumPy, OpenCV and rembg
-for the photo pipeline. Next.js 16, React 19, TypeScript, Tailwind 4, TanStack
+Python 3.12+, FastAPI, DuckDB, APScheduler, Pydantic, NumPy. Next.js 16, React 19, TypeScript, Tailwind 4, TanStack
 Query, Recharts, Motion. Claude as the external planner. Obsidian as the research
 corpus. `uv` for packaging, `ruff` for lint and format, `pyright` for types,
 `pytest` for the suite.
@@ -317,7 +316,7 @@ corpus. `uv` for packaging, `ruff` for lint and format, `pyright` for types,
 WHOOP (public OAuth API plus the private iOS API for signals the public one does
 not expose), Apple Health XML export, Hevy for strength logging, DUPR for
 pickleball rating and match history, blood work from a YAML clinical profile,
-progress photos, and a daily subjective check-in.
+tape measurements, and a daily subjective check-in.
 
 ## Privacy
 

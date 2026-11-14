@@ -3,9 +3,8 @@
 import "../today.css";
 import "../body.css";
 import { ClinicalOverview } from "@/components/clinical-overview";
-import { ProgressPhotoPanel } from "@/components/progress-photo-panel";
 import { SurfaceShell } from "@/components/surface-shell";
-import { EnergyOut, Fold, LogReading, Sheet, SlowSignals, TheRead, WeightRecord } from "@/components/body-brief";
+import { EnergyOut, Fold, LogReading, SlowSignals, TheRead, WeightRecord } from "@/components/body-brief";
 import { Block } from "@/components/today-brief";
 
 /**
@@ -14,7 +13,7 @@ import { Block } from "@/components/today-brief";
  * A ledger of change, read top to bottom: whether the composition can be read
  * at all and what it would take, the energy that kept reporting, the weight
  * record with its silence drawn honestly beside the form that ends it, six
- * months of the slow signals, then photos and the clinical record. Food
+ * months of the slow signals, then the clinical record. Food
  * intake sits in the ledger until a logger feeds it.
  */
 export default function BodyPage() {
@@ -34,10 +33,7 @@ export default function BodyPage() {
         <Block id="slow-signals" n="04" title="Six months of the slow signals" sub="Resting heart rate, everyday movement, aerobic fitness and the airway overnight on one tape. A hatched stretch is a source that stopped reporting. Hover a day to read it across.">
           <SlowSignals />
         </Block>
-        <Block n="05" title="Photos and the record" sub="The physique check against your own last session, then the clinical record behind it all.">
-          <Sheet id="physique" label="Progress photos" title="Same light, same spot, morning, fasted.">
-            <ProgressPhotoPanel />
-          </Sheet>
+        <Block n="05" title="The record" sub="The clinical record behind it all.">
           <Fold id="clinical" label="Clinical record" title="Conditions, labs, and what's overdue for a re-draw" sub="The full record runs long, so it opens on request.">
             <ClinicalOverview />
           </Fold>

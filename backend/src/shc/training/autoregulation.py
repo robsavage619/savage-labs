@@ -61,19 +61,10 @@ log = logging.getLogger(__name__)
 # adaptive volume, not a baseline, and starting there removes the low-fatigue
 # accumulation runway (panel review M3).
 #
-# This frozenset is the DEFAULT/PRIOR only. The live emphasis set is derived at
-# prescription time by :func:`_resolve_emphasis`, which folds in the metrics
-# engine's physique_volume_bias() so emphasis shifts as muscles catch up — a
-# muscle the silhouette/critique trend no longer flags drops out; a softening
-# taper muscle (e.g. side_delts, lats) is promoted. This prior is Rob's stated
-# focus set (biceps/glutes) and applies when the physique signal is absent.
+# This frozenset is the DEFAULT/PRIOR only. The live emphasis set is Rob's stored
+# priorities (muscle_emphasis), resolved at prescription time by
+# :func:`_resolve_emphasis`; this prior applies when none are stored.
 EMPHASIS_MUSCLES: frozenset[str] = frozenset({"biceps", "glutes"})
-
-# A physique-bias factor at/above this promotes a muscle into the emphasis set
-# even if it isn't in the biceps/glutes prior. The factor is in
-# [1-_PHYSIQUE_BIAS_MAX, 1+_PHYSIQUE_BIAS_MAX] (metrics.py); >1 means the trended
-# silhouette/critique signal wants more volume there.
-EMPHASIS_PROMOTE_FACTOR = 1.05
 
 # Confidence floor at/above which an ADD gets full authority; below it the add is
 # scaled by confidence/_CONFIDENCE_FULL. CALIBRATION (fixed 2026-06-27, re-verified
@@ -490,35 +481,13 @@ def load_emphasis(conn: duckdb.DuckDBPyConnection) -> dict[str, float]:
     return {str(m): float(w) for m, w in rows}
 
 
-def _resolve_emphasis(
-    physique_bias: dict[str, float] | None,
-    db_emphasis: dict[str, float] | None = None,
-) -> tuple[set[str], dict[str, float]]:
-    """Resolve the live emphasis set + per-muscle factor (#26/#3).
+def _resolve_emphasis(db_emphasis: dict[str, float] | None = None) -> set[str]:
+    """Resolve the live emphasis set (#26/#3).
 
-    Starts from Rob's persisted priorities (``db_emphasis``, from
-    :func:`load_emphasis`) — falling back to the biceps/glutes prior
-    (:data:`EMPHASIS_MUSCLES`) when none are stored — and folds in the metrics
-    engine's ``physique_volume_bias()`` so emphasis tracks both stated intent and
-    measured development instead of a static frozenset:
-
-    * Any muscle the physique signal nudges at/above
-      :data:`EMPHASIS_PROMOTE_FACTOR` joins the emphasis set (a softening taper
-      promotes side_delts/lats, say).
-    * The stored/prior muscles stay in the set regardless, but their ramp/floor
-      can be relaxed if the physique signal no longer flags them (factor → 1.0).
-
-    Returns ``(emphasis_muscles, factor_by_muscle)``. The factor defaults to 1.0
-    for muscles the physique signal does not mention.
+    Rob's persisted priorities (``db_emphasis``, from :func:`load_emphasis`), or
+    the biceps/glutes prior (:data:`EMPHASIS_MUSCLES`) when none are stored.
     """
-    emphasis = set(db_emphasis) if db_emphasis else set(EMPHASIS_MUSCLES)
-    factors: dict[str, float] = {}
-    if physique_bias:
-        for muscle, factor in physique_bias.items():
-            factors[muscle] = factor
-            if factor >= EMPHASIS_PROMOTE_FACTOR:
-                emphasis.add(muscle)
-    return emphasis, factors
+    return set(db_emphasis) if db_emphasis else set(EMPHASIS_MUSCLES)
 
 
 def _decide(
@@ -534,7 +503,6 @@ def _decide(
     landmark_source: str = "population",
     rpe_factor: float = 1.0,
     emphasis: bool = False,
-    emphasis_factor: float = 1.0,
     confidence: float = 0.0,
     scored_weeks: int = 0,
     accuracy: float | None = None,
@@ -556,8 +524,8 @@ def _decide(
     When ``deload`` is set, the normal tree is bypassed: volume is halved toward
     MEV in a single deliberate drop (the step clamp does not apply to a deload).
 
-    ``emphasis`` is now resolved dynamically by the caller (biceps/glutes prior
-    modulated by physique_volume_bias) rather than read from a static frozenset.
+    ``emphasis`` is resolved by the caller (Rob's stored priorities, or the
+    biceps/glutes prior) rather than read from a static frozenset.
     ``confidence``/``scored_weeks``/``accuracy`` gate the ADD: a low-confidence or
     historically-mis-prescribed muscle has its add shrunk toward zero, and a
     large (>1 set) add is suppressed unless confidence clears
@@ -627,11 +595,10 @@ def _decide(
     # Emphasis muscles floor at the MEV–MAV midpoint (keeps an accumulation
     # runway), not at MAV; everything else floors at MEV (panel review M3).
     grow_floor = (mev + (mav - mev) // 2) if emphasis else mev
-    # A muscle is "emphasized" if it's in the set or carries a strong physique
-    # nudge; emphasized muscles ramp at +2 (not just on the progressing branch)
-    # so a LAGGING priority muscle — which rarely shows perf≥4 and has thin,
+    # Emphasized muscles ramp at +2 (not just on the progressing branch) so a
+    # LAGGING priority muscle — which rarely shows perf≥4 and has thin,
     # low-confidence direct history — actually climbs instead of crawling +1.
-    emphasized = emphasis or emphasis_factor >= EMPHASIS_PROMOTE_FACTOR
+    emphasized = emphasis
     ramp_step = 2 if emphasized else 1
     cur = round(current)
     under_recovered = soreness >= SORENESS_BLOCK
@@ -690,9 +657,7 @@ def _decide(
                 f"(MV {floor}); weekly budget goes to the grow-tier muscles"
             )
     elif perf is not None and perf >= 4:
-        # Emphasis muscles ramp +2; a strong physique nudge (emphasis_factor well
-        # above 1) can lift a non-emphasis progressing muscle to +2 too, so the
-        # ramp tracks the live development signal rather than a static membership.
+        # Emphasis muscles ramp +2.
         desired = cur + ramp_step
         tag = " + emphasis" if emphasized else ""
         reason = f"progressing (perf {perf}/5){tag} → add toward MRV"
@@ -2645,17 +2610,7 @@ def weekly_prescription(
 
     signal_quality = read_signal_quality_cache(conn)
 
-    # Dynamic emphasis (#26/#3): biceps/glutes prior modulated by the metrics
-    # engine's physique signal. Degrade gracefully if the helper is unavailable.
-    physique_bias: dict[str, float] | None = None
-    try:
-        from shc.metrics import physique_volume_bias
-
-        physique_bias = physique_volume_bias(conn)
-    except Exception as exc:  # noqa: BLE001 — physique signal optional → prior only
-        log.debug("physique_volume_bias unavailable, using emphasis prior: %s", exc)
-    db_emphasis = load_emphasis(conn)
-    emphasis_muscles, emphasis_factors = _resolve_emphasis(physique_bias, db_emphasis)
+    emphasis_muscles = _resolve_emphasis(load_emphasis(conn))
 
     # Per-muscle historical prescription accuracy (#10): hedge muscles the engine
     # has called poorly. Helper is the self_learning read path; absent → no hedge.
@@ -2696,7 +2651,6 @@ def weekly_prescription(
             landmark_source=vt.source if vt else "population",
             rpe_factor=rpe_factor,
             emphasis=r.muscle in emphasis_muscles,
-            emphasis_factor=emphasis_factors.get(r.muscle, 1.0),
             confidence=float(sq.get("confidence", 0.0)),
             scored_weeks=int(sq.get("scored_weeks", 0)),
             accuracy=accuracy,

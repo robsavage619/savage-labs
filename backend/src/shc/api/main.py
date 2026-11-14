@@ -18,7 +18,6 @@ from shc.api.routers import (
     experiments,
     hevy,
     location,
-    progress_photos,
     report,
     research,
     research_team,
@@ -78,7 +77,6 @@ app.include_router(location.router, prefix="/api")
 app.include_router(training.router, prefix="/api")
 app.include_router(vault.router, prefix="/api")
 app.include_router(views.router, prefix="/api")
-app.include_router(progress_photos.router, prefix="/api")
 app.include_router(report.router, prefix="/api")
 app.include_router(experiments.router, prefix="/api")
 app.include_router(subject.router, prefix="/api")

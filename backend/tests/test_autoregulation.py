@@ -33,11 +33,11 @@ def _d(muscle, current, perf, soreness=0.0, cond=None, mev=10, mav=16, mrv=22, r
     # clearing confidence so the tree's add/cut/hold decision is what's asserted,
     # not the suppression layer (which has its own coverage below).
     #
-    # Emphasis is now resolved by the CALLER (#3/#26 — dynamic, via
-    # _resolve_emphasis) rather than inside _decide. With no physique signal the
-    # caller's emphasis set is just the biceps/glutes prior, so mirror that here
-    # to keep the emphasis cases (biceps/glutes) genuinely exercising the
-    # emphasis branch instead of silently falling through to the default.
+    # Emphasis is resolved by the CALLER (#3/#26, via _resolve_emphasis) rather
+    # than inside _decide. With nothing stored the caller's emphasis set is the
+    # biceps/glutes prior, so mirror that here to keep the emphasis cases
+    # (biceps/glutes) genuinely exercising the emphasis branch instead of
+    # silently falling through to the default.
     return _decide(
         muscle,
         current,
@@ -224,14 +224,14 @@ def test_resolve_emphasis_honors_db_over_prior(conn):
     # this is the path that lets what Rob sets actually reach the prescription,
     # instead of being a hardcoded frozenset he can't change.
     conn.execute("INSERT INTO muscle_emphasis (muscle) VALUES ('side_delts')")
-    emphasis, _ = _resolve_emphasis(physique_bias=None, db_emphasis=load_emphasis(conn))
+    emphasis = _resolve_emphasis(db_emphasis=load_emphasis(conn))
     assert "side_delts" in emphasis
 
 
 def test_resolve_emphasis_falls_back_to_prior_when_empty():
     # No DB rows → fall back to the frozenset prior so the engine stays robust
     # whether or not the migration has run.
-    emphasis, _ = _resolve_emphasis(physique_bias=None, db_emphasis={})
+    emphasis = _resolve_emphasis(db_emphasis={})
     assert emphasis == set(EMPHASIS_MUSCLES)
 
 

@@ -1,4 +1,4 @@
-"""Growth-review cadence: scale 3x/week, all four tape sites every 28 days, photos every 56."""
+"""Growth-review cadence: scale 3x/week, all four tape sites every 28 days."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _m(conn, metric: str, day: date, source: str = "manual") -> None:
 
 
 def test_empty_store_is_all_due(conn) -> None:
-    assert _due(conn) == {"scale": True, "tape": True, "photos": True}
+    assert _due(conn) == {"scale": True, "tape": True}
 
 
 def test_three_weigh_ins_satisfy_scale_from_either_source(conn) -> None:

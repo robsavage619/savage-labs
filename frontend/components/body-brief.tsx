@@ -34,7 +34,6 @@ const Err = ({ what, e }: { what: string; e: unknown }) => (
 
 const useWeight = () => useQuery({ queryKey: ["body-trend"], queryFn: api.bodyTrend, staleTime: STALE });
 const useTape = () => useQuery({ queryKey: ["body-tape"], queryFn: api.tape, staleTime: STALE });
-const usePhotos = () => useQuery({ queryKey: ["progress-photos"], queryFn: () => api.progressPhotos(), staleTime: STALE });
 const useVo2 = () => useQuery({ queryKey: ["body-vo2"], queryFn: api.bodyVO2Max, staleTime: STALE });
 const useSteps = () => useQuery({ queryKey: ["body-steps", 180], queryFn: () => api.bodySteps(180), staleTime: STALE });
 const useFood = () => useQuery({ queryKey: ["fueling-trend", 90], queryFn: () => api.fuelingTrend(90), staleTime: STALE });
@@ -56,7 +55,7 @@ const agePos = (d: number) => Math.min(100, (Math.log1p(Math.max(0, d)) / Math.l
 
 function useReadings(): { rows: Reading[] | null; today: string | null; error: unknown } {
   const st = useDailyState();
-  const qs = { w: useWeight(), tape: useTape(), ph: usePhotos(), vo2: useVo2(), steps: useSteps(), food: useFood(), burn: useBurn() };
+  const qs = { w: useWeight(), tape: useTape(), vo2: useVo2(), steps: useSteps(), food: useFood(), burn: useBurn() };
   const err = [st, ...Object.values(qs)].find((q) => q.isError);
   if (err) return { rows: null, today: null, error: err.error };
   if (!st.data || Object.values(qs).some((q) => !q.data)) return { rows: null, today: null, error: null };
@@ -67,7 +66,6 @@ function useReadings(): { rows: Reading[] | null; today: string | null; error: u
   const rows: Reading[] = [
     { key: "weight", label: "Weigh-in", last: lastOf(qs.w.data!.map((p) => p.date)), every: 3, need: "morning weigh-ins, fasted", src: "scale or check-in" },
     { key: "waist", label: "Waist tape", last: qs.tape.data!.waist_in?.date ?? null, every: 7, need: "a waist reading each week", src: "logged here" },
-    { key: "photos", label: "Progress photos", last: lastOf(qs.ph.data!.map((p) => p.photo_date)), every: 28, need: "front and side every four weeks", src: "uploaded here" },
     { key: "vo2", label: "VO₂ max", last: lastOf(qs.vo2.data!.filter((p) => p.source === "apple_watch").map((p) => p.date)), every: 14, need: "an Apple Health import", src: "Apple Watch" },
     { key: "steps", label: "Steps", last: lastOf(run), every: 2, need: "an Apple Health import", src: "Apple Health" },
     { key: "food", label: "Food log", last: lastOf(qs.food.data!.filter((p) => p.kcal_in != null).map((p) => p.date)), every: 2, need: "intake from the food logger", src: "food logger" },
@@ -148,7 +146,7 @@ export function TheRead() {
   const sh = burn.data.shift;
   const dT = sh?.now != null && sh.prior != null ? sh.now - sh.prior : null;
   const dC = sh?.court_now != null && sh.court_prior != null ? sh.court_now - sh.court_prior : null;
-  const needs = rows.filter((r) => ["weight", "waist", "photos"].includes(r.key) && status(r, today) !== "current");
+  const needs = rows.filter((r) => ["weight", "waist"].includes(r.key) && status(r, today) !== "current");
   const day = new Date(today + "T12:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
   return (
     <header className="td-mast bo-mast" id="read">
@@ -685,19 +683,6 @@ export function Fold({ label, title, sub, children, id }: { label: string; title
         <span className="bo-fold-go">{open ? "Close ↑" : "Open ↓"}</span>
       </button>
       {open && <div className="bo-fold-body">{children}</div>}
-    </div>
-  );
-}
-
-/** A labelled card wrapper for the reused log panels at the foot of the page. */
-export function Sheet({ label, title, children, id }: { label: string; title: string; children: ReactNode; id?: string }) {
-  return (
-    <div className="bo-sheet" id={id}>
-      <div className="bo-sheet-head">
-        <span className="td-label">{label}</span>
-        <b>{title}</b>
-      </div>
-      {children}
     </div>
   );
 }

@@ -1738,43 +1738,8 @@ export const api = {
       }[];
       as_of: string;
     }>(`/api/training/progression/all?weeks=${weeks}`),
-  progressPhotos: (angle?: string) =>
-    get<ProgressPhoto[]>(
-      `/api/progress-photos${angle ? `?angle=${angle}` : ""}`,
-    ),
-  progressPhotoUpload: async (file: File, photoDate: string, angle: string) => {
-    const form = new FormData();
-    form.append("file", file);
-    form.append("photo_date", photoDate);
-    form.append("angle", angle);
-    const r = await fetch(`${BASE}/api/progress-photos`, {
-      method: "POST",
-      headers: mutHeaders(),
-      body: form,
-    });
-    if (!r.ok) {
-      // The server says why (no pose found, unreadable file); a bare status code does not.
-      const detail = (await r.json().catch(() => null))?.detail;
-      throw new Error(typeof detail === "string" ? detail : `upload failed (${r.status})`);
-    }
-    return r.json() as Promise<ProgressPhotoUploadResult>;
-  },
-  progressPhotoCompare: (angle: string, before: string, after: string) =>
-    get<ProgressComparison>(
-      `/api/progress-photos/compare?angle=${angle}&before=${before}&after=${after}`,
-    ),
-  /** A stored photo as a JPEG; with `alignTo`, registered onto that date's frame. */
-  progressPhotoUrl: (angle: string, date: string, width: number, alignTo?: string) =>
-    `${BASE}/api/progress-photos/image?angle=${angle}&date=${date}&width=${width}${alignTo ? `&align_to=${alignTo}` : ""}`,
-  progressHeatmapUrl: (angle: string, before: string, after: string) =>
-    `${BASE}/api/progress-photos/heatmap?angle=${angle}&before=${before}&after=${after}`,
   dailyReport: () => get<{ report: DailyReport | null }>("/api/daily/report"),
   dailyReportPrompt: () => get<{ prompt: string }>("/api/daily/report/prompt"),
-  progressCritique: () => get<ProgressCritiqueState>("/api/progress-photos/critique"),
-  progressCritiquePrompt: () =>
-    get<{ prompt: string; attach_photos: { front: string | null; side: string | null }; basis: Record<string, number> }>(
-      "/api/progress-photos/critique-prompt",
-    ),
   subjectProfile: () => get<SubjectProfile>("/api/subject/profile"),
   experimentSuggestions: () => get<ExperimentSuggestion[]>("/api/experiments/suggestions"),
 };
@@ -1789,52 +1754,6 @@ export interface DailyReport {
   sections: { title: string; body_md: string }[];
   sources: string[];
 }
-
-export interface ProgressCritiqueState {
-  critique: {
-    created_at: string;
-    verdict: string;
-    shape_change_md: string;
-    visible_detail_md: string | null;
-  } | null;
-  stale: boolean;
-  reason: string;
-}
-
-export interface ProgressPhoto {
-  photo_date: string;
-  angle: string;
-  quality_pass: boolean;
-  quality_flags: string[];
-  measurements: Record<string, number>;
-}
-
-export interface ProgressPhotoUploadResult {
-  id: string;
-  photo_date: string;
-  angle: string;
-  quality_pass: boolean;
-  quality_flags: string[];
-  advisories: string[];
-  pose_conf: number;
-  measurements: Record<string, number>;
-}
-
-export interface ProgressComparison {
-  angle: string;
-  before: string;
-  after: string;
-  verdicts: {
-    metric: string;
-    detectable: boolean;
-    direction: string;
-    pct_change: number | null;
-  }[];
-  any_detectable: boolean;
-  weight_kg: { before: number | null; after: number | null };
-  conflict: string | null;
-}
-
 
 // --- WHOOP private-API surfaces (empty until `shc whoop-private sync-metrics`) ---
 

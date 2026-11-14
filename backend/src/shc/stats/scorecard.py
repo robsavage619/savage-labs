@@ -204,10 +204,6 @@ def _outcomes(conn: duckdb.DuckDBPyConnection, since: date, today: date) -> dict
         """,
         [since],
     ).fetchone()
-    photos = conn.execute(
-        "SELECT COUNT(DISTINCT photo_date) FROM progress_photos WHERE photo_date >= ?",
-        [since],
-    ).fetchone()
     trained = {
         r[0]
         for r in conn.execute(
@@ -224,7 +220,6 @@ def _outcomes(conn: duckdb.DuckDBPyConnection, since: date, today: date) -> dict
         "scale_readings": scale[0] if scale else 0,
         "last_scale_reading": str(scale[1]) if scale and scale[1] else None,
         "tape_readings": tape[0] if tape else 0,
-        "photo_sessions": photos[0] if photos else 0,
         "zero_training_weeks": sum(w not in trained for w in weeks if w >= since),
     }
 

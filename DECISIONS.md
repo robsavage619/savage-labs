@@ -4,12 +4,13 @@ Why things are the way they are. Each entry records the problem, what was
 considered, what was chosen, and what it cost. Split by month; this page is the
 index.
 
-50 decisions recorded, 2026-04 to 2026-11.
+51 decisions recorded, 2026-04 to 2026-11.
 
 ---
 
 ## November 2026
 
+- **2026-11-14** [Progress photos removed](docs/decisions/2026-11.md#2026-11-14-progress-photos-removed)
 - **2026-11-13** [Photo analysis runs on OpenCV and rembg, no MediaPipe package](docs/decisions/2026-11.md#2026-11-13-photo-analysis-runs-on-opencv-and-rembg-no-mediapipe-package)
 - **2026-11-13** [Below fever range, skin temp is a note, not an illness cap](docs/decisions/2026-11.md#2026-11-13-below-fever-range-skin-temp-is-a-note-not-an-illness-cap)
 

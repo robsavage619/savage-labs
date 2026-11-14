@@ -30,16 +30,7 @@ dependencies = [
     "pytz>=2026.1.post1",
     "pyyaml>=6",
     "model2vec>=0.8.1",
-    # Vision — progress-photo body tracking (all local, no external calls)
-    "rembg[cpu]>=2.0",
-    # The host is an Intel Mac. onnxruntime 1.23.2 and numba 0.62.1 (rembg -> pymatting)
-    # are the last releases with wheels for it; later ones would build from source.
-    "onnxruntime<1.24; sys_platform == 'darwin' and platform_machine == 'x86_64'",
-    "numba<0.63; sys_platform == 'darwin' and platform_machine == 'x86_64'",
-    "opencv-python-headless>=4.10",
-    "pillow>=10",
     "numpy>=1.26",
-    "pillow-heif>=1.3.0",
 ]
 
 [project.scripts]

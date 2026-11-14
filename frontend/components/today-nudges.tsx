@@ -18,7 +18,7 @@ const REGIONS: [string, string][] = [
 const LEVEL = ["", "twinge", "limited a lift", "stopped a lift"];
 const TONE = ["", "clear", "soft", "hard"];
 
-const WHERE: Record<string, string> = { scale: "/body#composition", tape: "/body#composition", photos: "/body#physique" };
+const WHERE: Record<string, string> = { scale: "/body#composition", tape: "/body#composition" };
 
 /** What the Feb 1 growth review still needs. Stays up until every item is current. */
 export function MeasurementsDue() {
