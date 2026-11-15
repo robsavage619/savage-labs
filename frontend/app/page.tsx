@@ -21,7 +21,7 @@ export default function TodayPage() {
         <TheCall />
         <PainTap />
         <MeasurementsDue />
-        <Block n="02" title="Four weeks of mornings" sub="Each night's HRV against your normal band, resting HR, WHOOP recovery, sleep, and the training that came before it. Hover a day to read it across.">
+        <Block n="02" title="Four weeks of mornings" sub="Each night's HRV against your normal band, resting HR, WHOOP recovery, sleep, and the training that came before it. Hover or drag across a day to read it.">
           <Tape />
         </Block>
         <Block id="session" n="03" title="The session" sub="Every lift with where today's load sits on its own history. Click a lift for its full progression.">

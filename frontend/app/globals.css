@@ -1600,3 +1600,94 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .wk-cell[data-status="better"] .wk-status { color: var(--positive); }
 .wk-cell[data-status="worse"] .wk-status { color: var(--warn); }
 .wk-rpe { margin: 10px 0 0; font-size: 13px; color: var(--text-secondary, var(--text-muted)); overflow-wrap: anywhere; }
+
+/* ── Phone legibility floor (generated from the micro sizes above) ─────────
+   ponytail: a micro size added later needs adding here; one --fs-micro token if this list keeps growing. */
+@media (max-width: 640px) {
+  .sl-classified-badge,
+  .sl-live-badge { font-size: 10px; }
+  .btn-step,
+  .sl-wordmark-beta,
+  .gz-name em,
+  .lf-learned small,
+  .lf-day small,
+  .tm-status { font-size: 10.5px; }
+  .eyebrow,
+  .shc-helptext,
+  .card-help-more,
+  .nf-axis,
+  .rd-label small,
+  .ls-axis,
+  .ab-zone small,
+  .tp-name em,
+  .fp-tick,
+  .fp-val small, .dv-val small,
+  .sb-status,
+  .pl-head small,
+  .pl-val small,
+  .mf-patterns span,
+  .lb-counts span,
+  .st-stats span, .wk-tile span,
+  .k-tag,
+  .k-guide dt,
+  .th-stat span,
+  .lf-label, .lf-kicker, .lf-eyebrow,
+  .lf-roster small,
+  .lf-tick,
+  .lf-betlabel,
+  .lf-chip,
+  .lf-lens footer span,
+  .lf-src,
+  .lf-q-ring span,
+  .lf-status,
+  .lf-msg-top,
+  .lf-betcap,
+  .lf-ctx span,
+  .lf-years span,
+  .lf-cdays,
+  .tm-label,
+  .tm-start li em,
+  .tm-foot,
+  .lf-switch button,
+  .lf-x-btn,
+  .lf-x-k,
+  .sync-chip,
+  .sync-pop-k,
+  .sl-tab,
+  .sl-shell .lf-stats span { font-size: 11px; }
+}
+
+/* ── Phone polish ─────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  /* Same legibility floor for the Tailwind micro sizes used inline in components. */
+  .sl-shell :is(.text-\[10px\], .text-\[10\.5px\]) { font-size: 11px; }
+  .sl-shell :is(.text-\[9px\], .text-\[9\.5px\]) { font-size: 10.5px; }
+  .sl-shell .text-\[8\.5px\] { font-size: 10px; }
+  /* iOS zooms the whole page when a focused field is under 16px. */
+  .ev-form input, .pc-actions select, .dupr-link input, .pc-name input { font-size: 16px; }
+  /* A long session name at the desktop hero size ran four lines and filled the screen. */
+  .sl-shell .tr-sess-head h1 { font-size: 34px; line-height: 1.08; text-wrap: balance; }
+  .sl-shell :is(.td-why, .tr-sess-head p) { text-wrap: pretty; }
+  /* Lift names wrap instead of ending in an ellipsis: the name is the thing being read. */
+  .sl-shell :is(.tr-sess-name b, .tr-lrow-name b, .tr-held b) { white-space: normal; overflow: visible; }
+  .sl-shell .td-ex-name { padding: 8px 0; }
+  /* Tab bar: icon over label, the active surface lit. */
+  .sl-tabbar { padding-top: 0; background: color-mix(in oklch, var(--bg) 90%, transparent); }
+  .sl-tab { position: relative; gap: 4px; min-height: 56px; padding-top: 4px; font-size: 11px; letter-spacing: .06em; transition: color .2s, transform .12s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .sl-tab:active { transform: scale(0.92); }
+  .sl-tab svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .25s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .sl-tab i { position: absolute; top: 0; left: 50%; width: 28px; margin-left: -14px; height: 2px; border-radius: 0 0 2px 2px; }
+  .sl-tab[aria-current="page"] { color: var(--sl-accent); }
+  .sl-tab[aria-current="page"] svg { transform: translateY(-1px) scale(1.08); filter: drop-shadow(0 0 6px color-mix(in oklch, var(--sl-accent) 55%, transparent)); }
+}
+@media (max-width: 640px) and (prefers-reduced-motion: reduce) {
+  .sl-tab, .sl-tab svg { transition: none; }
+  .sl-tab:active { transform: none; }
+}
+/* Touch: small controls keep their look but answer across a 44px band. */
+@media (pointer: coarse) {
+  :is(.td-ex-cue, .td-why-btn, .xp-open, .sync-chip, .lf-more, .lf-x-btn, .tr-inline, .tr-sess-go, .pc-name, .rv-daynav button) { position: relative; }
+  :is(.td-ex-cue, .td-why-btn, .xp-open, .sync-chip, .lf-more, .lf-x-btn, .tr-inline, .tr-sess-go, .pc-name, .rv-daynav button)::after {
+    content: ""; position: absolute; left: -4px; right: -4px; top: 50%; height: 44px; transform: translateY(-50%);
+  }
+}

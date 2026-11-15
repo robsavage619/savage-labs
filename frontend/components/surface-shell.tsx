@@ -26,6 +26,15 @@ import { ErrorBoundary } from "@/components/error-boundary";
  * SyncStatus sits beside LIVE as a chip: it carries the WHOOP reauth link, the
  * one control nothing else in the app can substitute for, without a page-wide bar.
  */
+/** Phone tab bar glyphs, one stroked path each on a 24px grid. */
+const TAB_ICON: Record<string, string> = {
+  today: "M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z",
+  training: "M3 12h18M6 7v10M18 7v10M3.5 9.5v5M20.5 9.5v5",
+  recovery: "M3 12h4l2-5 4 10 2-5h6",
+  body: "M12 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4ZM6 10h12M12 10v5M12 15l-3 6M12 15l3 6",
+  lab: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 18l-5-9V3M7.5 15h9",
+};
+
 export function SurfaceShell({ children }: { children: ReactNode }) {
   const path = usePathname();
   useEffect(() => {
@@ -107,8 +116,17 @@ export function SurfaceShell({ children }: { children: ReactNode }) {
               href={s.route}
               aria-current={active ? "page" : undefined}
               className="sl-tab no-tactile"
+              onClick={(e) => {
+                // Tapping the surface you are on returns to its top, as a phone tab bar does.
+                if (!active) return;
+                e.preventDefault();
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
             >
               <i aria-hidden="true" />
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d={TAB_ICON[s.id]} />
+              </svg>
               {s.label}
             </Link>
           );

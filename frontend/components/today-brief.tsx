@@ -326,10 +326,13 @@ export function Tape() {
     { key: "load", label: "Training load", unit: "", kind: "bar", y: dates.map((d) => L.get(d)?.load ?? null), color: () => "var(--series-2)", fmt: (v) => v.toFixed(1) },
   ];
 
-  const P = { l: 150, r: 64, t: 6, b: 26 };
+  // On a phone the 150px name gutter left the plot a ~100px sliver; the name and value sit above each lane instead.
+  const narrow = W < 520;
+  const P = { l: narrow ? 0 : 150, r: narrow ? 56 : 64, t: 6, b: 26 };
   const LH = 56;
-  const GAP = 16;
-  const height = P.t + lanes.length * LH + (lanes.length - 1) * GAP + P.b;
+  const HEAD = narrow ? 48 : 0;
+  const GAP = narrow ? 20 : 16;
+  const height = P.t + lanes.length * (LH + HEAD) + (lanes.length - 1) * GAP + P.b;
   const step = (W - P.l - P.r) / DAYS;
   const cx = (i: number) => P.l + step * (i + 0.5);
   const hi = hov ?? DAYS - 1;
@@ -342,7 +345,8 @@ export function Tape() {
         )}
         <rect x={cx(hi) - step / 2} y={P.t} width={step} height={height - P.t - P.b} className="td-hovcol" />
         {lanes.map((ln, li) => {
-          const top = P.t + li * (LH + GAP);
+          const head = P.t + li * (LH + HEAD + GAP);
+          const top = head + HEAD;
           const vals = [...ln.y, ...(ln.band ?? []).flatMap((b) => b ?? []), ...(ln.ref ? [ln.ref.v] : [])].filter((v): v is number => v != null);
           if (!vals.length)
             return (
@@ -378,10 +382,10 @@ export function Tape() {
           return (
             <g key={ln.key}>
               <line x1={P.l} x2={W - P.r} y1={top + LH} y2={top + LH} className="td-grid" />
-              <text x={0} y={top + 14} className="td-lane-name">
+              <text x={0} y={head + 14} className="td-lane-name">
                 {ln.label}
               </text>
-              <text x={0} y={top + 40} className="td-lane-val" style={{ fill: shown != null ? ln.color(shown) : undefined }}>
+              <text x={0} y={head + 40} className="td-lane-val" style={{ fill: shown != null ? ln.color(shown) : undefined }}>
                 {shown == null ? "–" : ln.fmt(shown)}
                 <tspan className="td-lane-unit">{ln.unit ? ` ${ln.unit}` : ""}</tspan>
               </text>
@@ -418,7 +422,7 @@ export function Tape() {
           );
         })}
         {dates.map((d, i) =>
-          i % 7 === DAYS % 7 || i === DAYS - 1 ? (
+          (i % (narrow ? 14 : 7) === DAYS % 7 && (!narrow || DAYS - 1 - i > 3)) || i === DAYS - 1 ? (
             <text key={d} x={cx(i)} y={height - 8} textAnchor="middle" className={`td-tick${i === DAYS - 1 ? " today" : ""}`}>
               {i === DAYS - 1 ? "today" : short(d)}
             </text>
@@ -430,7 +434,8 @@ export function Tape() {
           width={Math.max(0, W - P.l - P.r)}
           height={height - P.t - P.b}
           fill="transparent"
-          onMouseMove={(e) => {
+          style={{ touchAction: "pan-y" }}
+          onPointerMove={(e) => {
             const r = (e.currentTarget as SVGRectElement).getBoundingClientRect();
             const i = Math.floor(((e.clientX - r.left) / r.width) * DAYS);
             setHov(i >= 0 && i < DAYS ? i : null);

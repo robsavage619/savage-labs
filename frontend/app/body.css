@@ -95,3 +95,14 @@
 .bo-fill { display: flex; flex-direction: column; }
 .bo-mast .bo-stats { margin-top: 0; flex: 1 1 auto; }
 .bo-mast .bo-stats > div { align-content: center; }
+
+/* ── Phone legibility floor (generated from the micro sizes above) ─────────
+   ponytail: a micro size added later needs adding here; one --fs-micro token if this list keeps growing. */
+@media (max-width: 640px) {
+  .bo-row-name small,
+  .bo-row-age small,
+  .bo-age-axis,
+  .bo-gap-sub,
+  .bo-quiet-lbl,
+  .bo-field small { font-size: 11px; }
+}

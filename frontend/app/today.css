@@ -234,3 +234,25 @@ button.td-sig:hover { background: oklch(1 0 0 / 0.025); }
 .td-acwr-row > span:first-child { display: grid; gap: 1px; }
 .td-acwr-row small { font: 500 10.5px var(--font-data); color: var(--text-faint); }
 .td-foot { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+
+/* ── Phone legibility floor (generated from the micro sizes above) ─────────
+   ponytail: a micro size added later needs adding here; one --fs-micro token if this list keeps growing. */
+@media (max-width: 640px) {
+  .td-doses i { font-size: 10.5px; }
+  .td-label, .td-eyebrow,
+  .td-ticket-k,
+  .td-eq-lbl em,
+  .td-sig-val small,
+  .td-sig-delta small,
+  .td-sig-axis,
+  .td-lane-name,
+  .td-ex-head,
+  .td-ex-blabel,
+  .td-spark-note,
+  .td-ex-dose small, .td-ex-load small, .td-ex-rpe small, .td-ex-rest small,
+  .td-ex-cue,
+  .td-acwr-axis,
+  .td-pat span,
+  .td-wu-tabs button em,
+  .td-acwr-row small { font-size: 11px; }
+}

@@ -211,3 +211,23 @@
   .tr-sess-row { grid-template-columns: 22px minmax(0, 1fr) max-content; }
   .tr-sess-tag, .tr-sess-dose { display: none; }
 }
+
+/* ── Phone legibility floor (generated from the micro sizes above) ─────────
+   ponytail: a micro size added later needs adding here; one --fs-micro token if this list keeps growing. */
+@media (max-width: 640px) {
+  .tr-rot,
+  .tr-swap-m em,
+  .tr-mrow-name em { font-size: 10.5px; }
+  .tr-label, .tr-eyebrow,
+  .tr-chip,
+  .tr-lane-name,
+  .tr-sess-name small,
+  .tr-swap-why,
+  .tr-swap-today,
+  .tr-held span,
+  .tr-mtable-key,
+  .tr-drought-lbl,
+  .tr-str-grp,
+  .tr-lrow-name small,
+  .tr-lrow-val small { font-size: 11px; }
+}

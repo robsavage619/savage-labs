@@ -674,10 +674,13 @@ export function SlowSignals() {
     { key: "spo2", label: "SpO₂, 7-night", unit: "%", kind: "line", y: pick(air.data.nights, (r) => r.spo2_7d), color: () => "var(--series-1)", fmt: (v) => v.toFixed(1), ref: { v: 95, label: "95" }, quiet: 4 },
     { key: "resp", label: "Breathing, 7-night", unit: "br/min", kind: "line", y: pick(air.data.nights, (r) => r.resp_7d), color: () => "var(--series-2)", fmt: (v) => v.toFixed(1), quiet: 4 },
   ];
-  const P = { l: 168, r: 64, t: 6, b: 26 };
+  // Same phone layout as Today's tape: name and value above each lane, the plot at full width.
+  const narrow = W < 520;
+  const P = { l: narrow ? 0 : 168, r: narrow ? 56 : 64, t: 6, b: 26 };
   const LH = 58;
-  const GAP = 18;
-  const height = P.t + lanes.length * LH + (lanes.length - 1) * GAP + P.b;
+  const HEAD = narrow ? 48 : 0;
+  const GAP = narrow ? 20 : 18;
+  const height = P.t + lanes.length * (LH + HEAD) + (lanes.length - 1) * GAP + P.b;
   const step = (W - P.l - P.r) / SIX;
   const cx = (i: number) => P.l + step * (i + 0.5);
   return (
@@ -691,7 +694,8 @@ export function SlowSignals() {
         {dates.map((d, i) => (d.slice(8) === "01" ? <line key={d} x1={cx(i) - step / 2} x2={cx(i) - step / 2} y1={P.t} y2={height - P.b + 4} className="td-week" /> : null))}
         {hov != null && <rect x={cx(hov) - Math.max(step, 3) / 2} y={P.t} width={Math.max(step, 3)} height={height - P.t - P.b} className="td-hovcol" />}
         {lanes.map((ln, li) => {
-          const top = P.t + li * (LH + GAP);
+          const head = P.t + li * (LH + HEAD + GAP);
+          const top = head + HEAD;
           // A `run` lane reads only days inside a run (a neighbour each side), so neither a lone
           // snapshot nor the half-imported last day passes for a current count.
           const last = ln.y.reduce<number | null>((acc, v, i) => (v != null && (!ln.run || (ln.y[i - 1] != null && ln.y[i + 1] != null)) ? i : acc), null);
@@ -717,18 +721,18 @@ export function SlowSignals() {
           return (
             <g key={ln.key}>
               <line x1={P.l} x2={W - P.r} y1={top + LH} y2={top + LH} className="td-grid" />
-              <text x={0} y={top + 14} className="td-lane-name">
+              <text x={0} y={head + 14} className="td-lane-name">
                 {ln.label}
               </text>
-              <text x={0} y={top + 40} className="td-lane-val" style={{ fill: shown != null ? ln.color(shown) : "var(--text-faint)" }}>
+              <text x={0} y={head + 40} className="td-lane-val" style={{ fill: shown != null ? ln.color(shown) : "var(--text-faint)" }}>
                 {shown == null ? "–" : ln.fmt(shown)}
                 <tspan className="td-lane-unit"> {ln.unit}</tspan>
               </text>
               {quietFrom != null && (
                 <g>
                   <rect x={cx(quietFrom) - step / 2} y={top} width={W - P.r - (cx(quietFrom) - step / 2)} height={LH} rx={6} fill="url(#bo-quiet)" />
-                  <text x={cx(quietFrom) + 10} y={top + LH / 2 + 4} className="bo-quiet-lbl">
-                    {last == null ? "no readings in six months" : `nothing since ${short(dates[last])}${ln.note ? ` · ${ln.note}` : ""}`}
+                  <text x={narrow ? W : cx(quietFrom) + 10} y={narrow ? head + 14 : top + LH / 2 + 4} textAnchor={narrow ? "end" : "start"} className="bo-quiet-lbl">
+                    {last == null ? "no readings in six months" : `nothing since ${short(dates[last])}${ln.note && !narrow ? ` · ${ln.note}` : ""}`}
                   </text>
                 </g>
               )}
@@ -750,9 +754,9 @@ export function SlowSignals() {
           );
         })}
         {dates.map((d, i) =>
-          d.slice(8) === "01" && i < SIX - 12 ? (
+          d.slice(8) === "01" && i < SIX - (narrow ? 24 : 12) ? (
             <text key={d} x={cx(i)} y={height - 8} textAnchor="middle" className="td-tick">
-              {monthLbl(d)}
+              {narrow ? MON[+d.slice(5, 7) - 1] : monthLbl(d)}
             </text>
           ) : null,
         )}
@@ -765,7 +769,8 @@ export function SlowSignals() {
           width={Math.max(0, W - P.l - P.r)}
           height={height - P.t - P.b}
           fill="transparent"
-          onMouseMove={(e) => {
+          style={{ touchAction: "pan-y" }}
+          onPointerMove={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             const i = Math.floor(((e.clientX - r.left) / r.width) * SIX);
             setHov(i >= 0 && i < SIX ? i : null);

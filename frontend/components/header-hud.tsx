@@ -113,9 +113,9 @@ function HudStat({ label, value, color }: { label: string; value: string; color?
     <div className="flex flex-col items-center gap-[3px]">
       <span style={{
         fontFamily: "var(--font-orbitron)",
-        fontSize: 7.5,
+        fontSize: 9,
         fontWeight: 500,
-        letterSpacing: "0.18em",
+        letterSpacing: "0.14em",
         color: "var(--text-dim)",
         textTransform: "uppercase",
       }}>
