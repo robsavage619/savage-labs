@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import duckdb
 import pytest
@@ -43,6 +43,12 @@ async def test_network_fetches_finish_before_the_write_lock_is_taken(
     monkeypatch.setattr(m, "sync_sleeping_hr_baseline", none)
     monkeypatch.setattr(m, "sync_hr_zones", empty)
     monkeypatch.setattr(m, "sync_behavior_impact", empty)
+
+    async def vo2(today) -> dict:  # noqa: ANN001
+        events.append("fetch")
+        return {date(2026, 1, 6): 35.0}
+
+    monkeypatch.setattr(m, "sync_vo2_max", vo2)
     monkeypatch.setattr("shc.db.schema.write_ctx", fake_write_ctx)
 
     result = await m.sync_private_metrics(days=3)
@@ -50,3 +56,4 @@ async def test_network_fetches_finish_before_the_write_lock_is_taken(
     assert events.count("lock") == 1
     assert events.index("lock") == len(events) - 1
     assert result["stress_days"] == 3
+    assert (result["vo2_max_weeks"], result["vo2_max_latest"]) == (1, 35.0)

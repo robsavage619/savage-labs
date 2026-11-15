@@ -1,6 +1,9 @@
 """Ingest for WHOOP signals that have no public-API equivalent.
 
-Covers four surfaces, all reached through `whoop_private.get`:
+Covers five surfaces, all reached through `whoop_private.get`:
+
+* **VO2 max** — WHOOP's weekly cardio-fitness estimate (updated Tuesdays, whole
+  mL/kg/min). The public API has no VO2 field, and Apple Health's feed stopped.
 
 * **Sleep need + optimal window** — WHOOP's recommended bedtime window, which is
   the target Rob's midpoint variability should actually be measured against.
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from datetime import date as _date
 from typing import Any
@@ -41,6 +45,7 @@ _STRESS_PATH = "/health-service/v2/stress-bff/{date}"
 _IMPACT_PATH = "/behavior-impact-service/v1/impact"
 _ZONES_PATH = "/hr-zones-service/v1/bff/zones"
 _SLEEP_HR_BASELINE_PATH = "/sleep-service/v1/heart-rate/baseline"
+_VO2_PATH = "/progression-service/v3/trends/VO2_MAX"
 
 
 def _hash(*parts: object) -> str:
@@ -295,6 +300,110 @@ async def sync_hr_zones() -> list[dict]:
     ]
 
 
+_VO2_SEGMENTS = ("six_month_time_segment", "month_time_segment", "week_time_segment")
+_VO2_PLAUSIBLE = (20.0, 100.0)  # mL/kg/min; outside it is a parse error, not physiology
+_WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+_MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+_SCRUBBER_LABEL = re.compile(r"([A-Za-z]{3}), ([A-Za-z]{3}) (\d{1,2})")
+
+
+def _label_date(label: Any, end: _date) -> _date | None:
+    """Parse a scrubber label ("TUE, NOV 10") to a date on or before `end`.
+
+    The label carries no year, so take the latest year that does not land after
+    `end`. The weekday must agree with the date: a label the guess cannot
+    satisfy is dropped rather than filed under a wrong day.
+    """
+    match = _SCRUBBER_LABEL.fullmatch(label.strip()) if isinstance(label, str) else None
+    if match is None:
+        return None
+    weekday, month_name, day = match[1].upper(), match[2].upper(), int(match[3])
+    if weekday not in _WEEKDAYS or month_name not in _MONTHS:
+        return None
+    for year in (end.year, end.year - 1):
+        try:
+            candidate = _date(year, _MONTHS.index(month_name) + 1, day)
+        except ValueError:
+            continue
+        if candidate <= end and _WEEKDAYS[candidate.weekday()] == weekday:
+            return candidate
+    return None
+
+
+def _vo2_points(payload: dict, end: _date) -> dict[_date, float]:
+    """Weekly VO2 max estimates from a trends payload, as {date: mL/kg/min}.
+
+    Each point's number is only a rendered string (`value_display`); the
+    structured `value` is null. The widest window is read first and the shorter
+    ones only fill gaps, so a restated week keeps one value.
+
+    Raises:
+        WHOOPPrivateSchemaError: The payload has no time segments, or has points
+            and none of them parsed: WHOOP changed the shape, and an empty
+            result would pass as "no data".
+    """
+    from shc.ingest.whoop_private import WHOOPPrivateSchemaError
+
+    segments = [payload.get(key) for key in _VO2_SEGMENTS]
+    if not any(isinstance(seg, dict) for seg in segments):
+        raise WHOOPPrivateSchemaError("VO2_MAX trend has no time segments")
+    found: dict[_date, float] = {}
+    seen = 0
+    for seg in segments:
+        for plot in ((seg or {}).get("graph") or {}).get("plots") or []:
+            if plot.get("type") != "LINE_PLOT":  # the TREND_PLOT carries bucket averages
+                continue
+            for line in (plot.get("plot") or {}).get("segments") or []:
+                for point in line.get("points") or []:
+                    seen += 1
+                    detail = point.get("data_scrubber_details") or {}
+                    day = _label_date(detail.get("primary_contextual_display"), end)
+                    value = _num(detail.get("value_display"))
+                    if day is None or value is None:
+                        continue
+                    if not _VO2_PLAUSIBLE[0] <= value <= _VO2_PLAUSIBLE[1]:
+                        log.warning("WHOOP VO2 max %s on %s is implausible; dropped", value, day)
+                        continue
+                    found.setdefault(day, value)
+    if seen and not found:
+        raise WHOOPPrivateSchemaError(f"VO2_MAX trend had {seen} points and none parsed")
+    return found
+
+
+async def sync_vo2_max(today: _date | None = None) -> dict[_date, float]:
+    """Fetch WHOOP's weekly VO2 max estimates, newest six months."""
+    from shc.ingest.whoop_private import get
+
+    end = today or datetime.now(_LOCAL_TZ).date()
+    return _vo2_points(await get(_VO2_PATH, {"endDate": end.isoformat()}), end)
+
+
+def _upsert_vo2(conn: Any, vo2: dict[_date, float]) -> None:
+    """Store weekly estimates as `vo2_max_whoop`, a series of its own.
+
+    A separate metric keeps Apple Watch readings (a different estimator) from
+    blending into the same series. WHOOP restates its estimate
+    as it learns, so an existing week is updated, not skipped.
+    """
+    for day, value in sorted(vo2.items()):
+        conn.execute(
+            """
+            INSERT INTO measurements
+                (source, metric, ts, value_num, unit, external_id, content_hash)
+            VALUES ('whoop_private', 'vo2_max_whoop', ?, ?, 'mL/kg/min', ?, ?)
+            ON CONFLICT (source, metric, ts, external_id) DO UPDATE SET
+                value_num    = EXCLUDED.value_num,
+                content_hash = EXCLUDED.content_hash
+            """,
+            [
+                datetime(day.year, day.month, day.day, tzinfo=_LOCAL_TZ),
+                value,
+                f"whoop:vo2_max:{day}",
+                _hash(day, value),
+            ],
+        )
+
+
 async def sync_private_metrics(days: int = 7) -> dict:
     """Pull every private-API metric surface and persist it.
 
@@ -322,6 +431,7 @@ async def sync_private_metrics(days: int = 7) -> dict:
     baseline = await _attempt("sleeping_hr_baseline", sync_sleeping_hr_baseline())
     zones = await _attempt("hr_zones", sync_hr_zones()) or []
     impacts = await _attempt("behavior_impact", sync_behavior_impact()) or []
+    vo2 = await _attempt("vo2_max", sync_vo2_max(today)) or {}
 
     # Fetch before taking the write lock: the lock serialises every API write, and
     # a week of stress is a week of network round-trips.
@@ -358,6 +468,8 @@ async def sync_private_metrics(days: int = 7) -> dict:
                     datetime.now(UTC),
                 ],
             )
+
+        _upsert_vo2(conn, vo2)
 
         for row in impacts:
             conn.execute(
@@ -417,6 +529,8 @@ async def sync_private_metrics(days: int = 7) -> dict:
         "stress_samples": timeline_rows,
         "hr_zones": len(zones),
         "behavior_impacts": len(impacts),
+        "vo2_max_weeks": len(vo2),
+        "vo2_max_latest": vo2[max(vo2)] if vo2 else None,
         "sleep_need": bool(need),
         "sleeping_hr_baseline": baseline,
         "failed": failures,

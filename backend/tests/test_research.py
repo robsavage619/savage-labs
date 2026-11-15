@@ -518,3 +518,20 @@ def test_a_hairline_skill_is_called_a_tie(conn) -> None:
     assert research._skill_call([(a, 0.8 * a) for a, _ in noise]) == "better"
     assert research._skill_call([(a, -a) for a, _ in noise]) == "worse"
     assert research._skill_call(noise[:5]) is None
+
+
+def _vo2(conn, source: str, metric: str, day: date, value: float) -> None:
+    conn.execute(
+        "INSERT INTO measurements (source, metric, ts, value_num, unit, external_id, content_hash) "
+        "VALUES (?, ?, ?, ?, 'mL/kg/min', ?, ?)",
+        [source, metric, f"{day} 12:00:00", value, f"{metric}:{day}", f"h{day}{metric}"],
+    )
+
+
+def test_vo2_reads_one_estimator_at_a_time_whoop_first(conn) -> None:
+    _vo2(conn, "apple_health", "vo2_max", date(2026, 3, 3), 38.2)
+    assert research.series(conn, "vo2_max") == {date(2026, 3, 3): 38.2}
+    # Once WHOOP has rows the series is WHOOP's alone: no step from changing source.
+    _vo2(conn, "whoop_private", "vo2_max_whoop", date(2026, 3, 3), 39.0)
+    _vo2(conn, "whoop_private", "vo2_max_whoop", date(2026, 3, 10), 38.0)
+    assert research.series(conn, "vo2_max") == {date(2026, 3, 3): 39.0, date(2026, 3, 10): 38.0}

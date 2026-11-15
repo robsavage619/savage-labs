@@ -302,9 +302,14 @@ FEATURES: dict[str, Feature] = {
             "VO₂ max estimate",
             "mL/kg/min",
             "day",
-            "Apple Health",
+            "WHOOP, else Apple Health",
+            # One estimator at a time: WHOOP's weekly series once it has any rows,
+            # Apple Watch's before that. Blending them would put a step in the
+            # series where the source changed.
             _q(
-                "SELECT date, AVG(value_avg) FROM v_daily_metrics WHERE metric = 'vo2_max' GROUP BY date"
+                "SELECT date, AVG(value_avg) FROM v_daily_metrics WHERE metric = "
+                "CASE WHEN EXISTS (SELECT 1 FROM measurements WHERE metric = 'vo2_max_whoop') "
+                "THEN 'vo2_max_whoop' ELSE 'vo2_max' END GROUP BY date"
             ),
         ),
         Feature(
