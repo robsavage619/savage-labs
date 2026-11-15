@@ -1098,6 +1098,7 @@ export const api = {
   clinicalOverview: () => get<ClinicalOverview>("/api/clinical/overview"),
   clinicalRisk: () => get<ClinicalRisk>("/api/clinical/risk"),
   bodyTrend: () => get<WeightPoint[]>("/api/body/trend"),
+  trainingPhase: () => get<{ phase: "build" | "cut" }>("/api/training/phase"),
   bodyVO2Max: () => get<VO2Point[]>("/api/body/vo2max"),
   bodySteps: (days = 90) => get<StepPoint[]>(`/api/body/steps?days=${days}`),
   bodyRHRTrend: (days = 90) => get<RHRPoint[]>(`/api/body/rhr-trend?days=${days}`),

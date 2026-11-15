@@ -39,6 +39,7 @@ const useSteps = () => useQuery({ queryKey: ["body-steps", 180], queryFn: () => 
 const useFood = () => useQuery({ queryKey: ["fueling-trend", 90], queryFn: () => api.fuelingTrend(90), staleTime: STALE });
 const useBurn = () => useQuery({ queryKey: ["body-expenditure", 400], queryFn: () => api.bodyExpenditure(400), staleTime: STALE });
 const useRhr = () => useQuery({ queryKey: ["body-rhr", 180], queryFn: () => api.bodyRHRTrend(180), staleTime: STALE });
+const usePhase = () => useQuery({ queryKey: ["training-phase"], queryFn: api.trainingPhase, staleTime: STALE });
 const useAirway = () => useQuery({ queryKey: ["sleep-airway", 180], queryFn: () => api.sleepAirway(180), staleTime: STALE });
 
 // ── 01 The read ─────────────────────────────────────────────────────────────
@@ -132,15 +133,19 @@ function Ledger({ rows, today }: { rows: Reading[]; today: string }) {
 export function TheRead() {
   const st = useDailyState();
   const burn = useBurn();
+  const ph = usePhase();
   const { rows, today, error } = useReadings();
-  if (error) return <Err what="the body readings" e={error} />;
-  if (!rows || !today || !st.data || !burn.data) return <Skel h={520} />;
+  if (error || ph.isError) return <Err what="the body readings" e={error ?? ph.error} />;
+  if (!rows || !today || !st.data || !burn.data || !ph.data) return <Skel h={520} />;
+  const cut = ph.data.phase === "cut";
   const by = Object.fromEntries(rows.map((r) => [r.key, r]));
   const w = by.weight;
   const wAge = w.last ? ago(w.last, today) : null;
   const trend = st.data.checkin.body_weight_trend_4wk;
   const blind = wAge == null || wAge > 14;
-  const verdict = blind ? "Unmeasured" : trend == null ? "Weighing in" : Math.abs(trend) < 0.5 ? "Holding" : trend > 0 ? "Gaining" : "Losing";
+  // Cut target is 0.5-1.0% a week, so -2% to -4% over the four-week trend.
+  const pace = trend == null ? null : trend > 0.5 ? "Gaining" : trend > -2 ? "Too slow" : trend >= -4 ? "On pace" : "Too fast";
+  const verdict = blind ? "Unmeasured" : trend == null ? "Weighing in" : cut ? pace : Math.abs(trend) < 0.5 ? "Holding" : trend > 0 ? "Gaining" : "Losing";
   const tone = blind ? "var(--neutral)" : "var(--text-primary)";
   const waist = by.waist.last;
   const sh = burn.data.shift;
@@ -157,8 +162,8 @@ export function TheRead() {
         </motion.h1>
         <p className="td-why">
           {blind
-            ? `No weigh-in for ${wAge == null ? "as long as the record runs" : `${wAge} days`}${waist ? `, waist last taped ${short(waist)}` : " and no waist tape on record"}, so whether the recomposition is working can't be read yet.`
-            : `Weight ${trend == null ? "is logging again" : `${trend > 0 ? "up" : trend < 0 ? "down" : "flat"} ${Math.abs(trend).toFixed(1)}% over four weeks`}. Under recomposition the target is flat weight while the lifts climb.`}
+            ? `No weigh-in for ${wAge == null ? "as long as the record runs" : `${wAge} days`}${waist ? `, waist last taped ${short(waist)}` : " and no waist tape on record"}, so whether the ${cut ? "cut" : "recomposition"} is working can't be read yet.`
+            : `Weight ${trend == null ? "is logging again" : `${trend > 0 ? "up" : trend < 0 ? "down" : "flat"} ${Math.abs(trend).toFixed(1)}% over four weeks${cut && trend != null && Math.abs(trend) >= 0.2 ? `, about ${Math.abs(trend / 4).toFixed(1)}% a week` : ""}`}. ${cut ? "The cut targets a 0.5–1.0% loss a week with the lifts holding; faster than that starts costing muscle." : "Under recomposition the target is flat weight while the lifts climb."}`}
           {dT != null && (
             <>
               {" "}
