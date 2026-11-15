@@ -438,3 +438,83 @@ def test_more_sessions_do_not_read_as_more_strength(conn, seed) -> None:
         seed.workout(end - timedelta(days=k), "Synthetic Curl", [(w, 10)], rpe=None)
     pct = research.series(conn, "e1rm_pct14:biceps")
     assert pct[end] == pytest.approx(0.0, abs=0.01)
+
+
+def _status(conn, slug: str) -> str:
+    return conn.execute("SELECT status FROM research_hypotheses WHERE slug = ?", [slug]).fetchone()[
+        0
+    ]
+
+
+def test_a_revision_registers_the_reviewers_design_as_active(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    research.register(conn, "s6", "q", SPEC, None, "hypertrophy")
+    # A design that cannot answer in time is refused before anything is written.
+    with pytest.raises(research.SpecError, match="limit is 120"):
+        research.review(
+            conn, "s6", "revise", "adjust for drift", "methodologist", SPEC | {"lag": 2}
+        )
+    assert _status(conn, "s6") == "proposed"
+    fixed = SPEC | {"min_effect": 10, "adjust": ["time_years"], "start_date": "2025-09-01"}
+    out = research.review(conn, "s6", "revise", "adjust for drift", "methodologist", fixed)
+    assert out["revised_as"] == "s6-r1"
+    assert (_status(conn, "s6"), _status(conn, "s6-r1")) == ("rejected", "active")
+    new = next(h for h in research.hypotheses(conn) if h["slug"] == "s6-r1")
+    assert new["author"] == "hypertrophy" and new["spec"] == fixed
+
+
+def test_start_date_and_trend_restrict_and_adjust(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    full = research.estimate(conn, SPEC, today=TODAY)
+    late = research.estimate(conn, SPEC | {"start_date": "2026-01-01"}, today=TODAY)
+    assert 0 < late["n_a"] + late["n_b"] < full["n_a"] + full["n_b"]
+    s = research.series(conn, "time_years")
+    assert s[date(2025, 1, 1)] == pytest.approx(1.0, abs=0.01)
+    with pytest.raises(research.SpecError, match="start_date"):
+        research.validate_spec(conn, SPEC | {"start_date": "last spring"})
+
+
+def test_live_questions_that_cannot_answer_retire_themselves(conn) -> None:
+    _setup_belief(conn, effect_pct=0)
+    # Answerable and fed: left alone. Unanswered with years to go: retired.
+    done = research.estimate(conn, SPEC | {"min_effect": 10}, today=TODAY)
+    assert research._dead_reason(conn, SPEC, done, today=TODAY) is None
+    tiny = SPEC | {"min_effect": 0.2}
+    stuck = research.estimate(conn, tiny, today=TODAY)
+    assert stuck["verdict"] == "inconclusive"
+    assert "current pace" in research._dead_reason(conn, tiny, stuck, today=TODAY)
+    # The seeded feed stopped on TODAY, months before the real date run_all uses.
+    out = research.run_all(conn)
+    assert "no data since" in out[0]["retired"]
+    assert _status(conn, "strain-hrv") == "retired"
+    assert research.run_all(conn) == []
+
+
+def test_an_untested_belief_ranks_the_same_whatever_prior_its_proposer_wrote(conn) -> None:
+    fast = {"needed_per_arm": 50, "days_to_answer": 30, "outcome_sd": 10}
+    ids = [
+        research.add_belief(conn, f"c{sd}", "lnhrv_dev_pct", 0.0, sd, "test prior", "d", "t")
+        for sd in (1.0, 50.0)
+    ]
+    narrow, wide = (research.value_score(conn, SPEC, b, fast) for b in ids)
+    assert narrow["value"] == wide["value"] and narrow["uncertainty"] == 3.0
+    small = research.value_score(conn, SPEC | {"min_effect": 0.5}, ids[0], fast)
+    assert small["uncertainty"] == narrow["uncertainty"]
+
+
+def test_review_queue_rescores_power_on_current_data(conn) -> None:
+    _seed(conn, effect_pct=0, days=60)
+    research.register(conn, "s7", "q", SPEC, None, "analyst")
+    conn.execute("UPDATE research_hypotheses SET power = '{\"days_to_answer\": 1}'")
+    item = research.review_queue(conn)[0]
+    assert item["power_at_proposal"] == {"days_to_answer": 1}
+    assert item["power"] == research.estimate(conn, SPEC).get("power")
+
+
+def test_a_hairline_skill_is_called_a_tie(conn) -> None:
+    rng = random.Random(1)
+    noise = [(rng.gauss(0, 20), rng.gauss(0, 1)) for _ in range(200)]
+    assert research._skill_call(noise) == "tie"
+    assert research._skill_call([(a, 0.8 * a) for a, _ in noise]) == "better"
+    assert research._skill_call([(a, -a) for a, _ in noise]) == "worse"
+    assert research._skill_call(noise[:5]) is None

@@ -171,9 +171,12 @@ async def backtest(metric: str | None = None) -> dict:
 
 
 class ReviewIn(BaseModel):
-    decision: str = Field(pattern=r"^(approve|reject)$")
+    decision: str = Field(pattern=r"^(approve|reject|revise)$")
     reasons: str = Field(min_length=10)
     author: str = "methodologist"
+    # With `revise`: the design the reviewer would accept, registered as active.
+    revised_spec: dict[str, Any] | None = None
+    revised_question: str | None = None
 
 
 class ScoreIn(BaseModel):
@@ -217,7 +220,15 @@ async def score_candidate(body: ScoreIn) -> dict:
 async def review(slug: str, body: ReviewIn) -> dict:
     async with write_ctx() as conn:
         try:
-            return research.review(conn, slug, body.decision, body.reasons, body.author)
+            return research.review(
+                conn,
+                slug,
+                body.decision,
+                body.reasons,
+                body.author,
+                body.revised_spec,
+                body.revised_question,
+            )
         except research.SpecError as exc:
             raise HTTPException(409, str(exc)) from exc
 

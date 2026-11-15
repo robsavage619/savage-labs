@@ -88,6 +88,7 @@ FEATURES: dict[str, Feature] = {
             _q("SELECT date, AVG(hrv) FROM recovery WHERE hrv > 0 GROUP BY date"),
         ),
         Feature("weekend", "Weekend day", "yes=1", "day", "calendar"),
+        Feature("time_years", "Years since 2024 (linear trend)", "years", "day", "calendar"),
         Feature("stress_high_min", "High-stress minutes outside workouts", "min", "day", "WHOOP"),
         Feature("presleep_stress", "Stress in the 2 h before bed", "0-3", "morning", "WHOOP"),
         Feature("away_night", "Slept away from home", "yes=1", "morning", "location"),
@@ -278,13 +279,23 @@ FEATURES: dict[str, Feature] = {
             "Body weight",
             "lb",
             "day",
-            "Apple Health",
+            "Check-in + Apple Health",
+            # Manual weigh-ins land in daily_checkin, not measurements; read both,
+            # as /body does, or a logged weight never reaches the lab.
             _q(
-                "SELECT date, AVG(value_avg) * 2.20462 FROM v_daily_metrics WHERE metric = 'body_mass_kg' GROUP BY date"
+                "SELECT day, AVG(kg) * 2.20462 FROM ("
+                "SELECT date AS day, body_weight_kg AS kg FROM daily_checkin "
+                "WHERE body_weight_kg IS NOT NULL UNION ALL "
+                "SELECT date AS day, value_avg AS kg FROM v_daily_metrics "
+                "WHERE metric = 'body_mass_kg') GROUP BY day"
             ),
         ),
         Feature(
-            "body_mass_7d", "Body weight, 7-day mean of weigh-ins", "lb", "day", "Apple Health"
+            "body_mass_7d",
+            "Body weight, 7-day mean of weigh-ins",
+            "lb",
+            "day",
+            "Check-in + Apple Health",
         ),
         Feature(
             "vo2_max",
@@ -509,6 +520,19 @@ def _weekend(_conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
     return out
 
 
+_CALENDAR = {"weekend", "time_years"}
+
+
+def _time_years(_conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
+    """Years since 2024-01-01: adjusting for it removes a steady drift across
+    eras (a season of regular play, a training block) from an arm contrast."""
+    d, end, out = date(2014, 1, 1), date.today() + timedelta(days=1), {}
+    while d <= end:
+        out[d] = (d - date(2024, 1, 1)).days / 365.25
+        d += timedelta(days=1)
+    return out
+
+
 _FULL_STRESS_DAY = 900  # samples: a day with under 15 h of readings is a gap, not a calm day
 
 
@@ -540,6 +564,7 @@ def _presleep_stress(conn: duckdb.DuckDBPyConnection) -> dict[date, float]:
 
 _DERIVED: dict[str, Callable[[duckdb.DuckDBPyConnection], dict[date, float]]] = {
     "weekend": _weekend,
+    "time_years": _time_years,
     "lnhrv_dev_pct": _lnhrv_dev,
     "lnhrv_7d_pct": lambda c: _rolling7(series(c, "lnhrv_dev_pct")),
     "body_mass_7d": lambda c: _rolling7(series(c, "body_mass_lb"), min_n=1),
@@ -706,6 +731,11 @@ def validate_spec(conn: duckdb.DuckDBPyConnection, spec: dict) -> None:
         raise SpecError("min_effect must be a positive number in the outcome's units")
     if not isinstance(spec.get("lag", 1), int) or not 0 <= spec.get("lag", 1) <= 14:
         raise SpecError("lag must be an integer from 0 to 14")
+    if "start_date" in spec:
+        try:
+            date.fromisoformat(str(spec["start_date"]))
+        except ValueError as exc:
+            raise SpecError("start_date must be an ISO date (YYYY-MM-DD)") from exc
 
 
 def _weekly(s: dict[date, float]) -> dict[date, float]:
@@ -733,6 +763,9 @@ def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = N
     lag = int(spec.get("lag", 1))
     window = int(spec.get("window_days", 730))
     start = today - timedelta(days=window)
+    # A fixed start keeps one era in scope as the days pass; window_days slides.
+    if "start_date" in spec:
+        start = max(start, date.fromisoformat(str(spec["start_date"])))
     span = (start, today)
     exp_name, out_name = spec["exposure"]["feature"], spec["outcome"]
     adj = list(spec.get("adjust", []))
@@ -1090,13 +1123,51 @@ def run(conn: duckdb.DuckDBPyConnection, slug: str, author: str = "runner") -> d
     return res | {"slug": slug}
 
 
+_QUIET_DAYS = 30
+# ponytail: auto-retire at twice the review limit so a slow month can't retire
+# a question the methodologist approved; tighten if dead questions linger.
+_RETIRE_AFTER_DAYS = 2 * MAX_DAYS_TO_ANSWER
+
+
+def _dead_reason(
+    conn: duckdb.DuckDBPyConnection, spec: dict, res: dict, today: date | None = None
+) -> str | None:
+    """Why a live question can never answer, or None while it still can.
+
+    Applies the review's own rules to a question already running: its exposure
+    or outcome has gone quiet, or it has no answer yet and cannot reach one.
+    """
+    today = today or date.today()
+    for name in (spec["exposure"]["feature"], spec["outcome"]):
+        if name in _CALENDAR or name in _ZERO_FILL or name.startswith(_ZERO_FILL_KINDS):
+            continue  # absence is a real zero or a calendar fact, not a dead feed
+        s = series(conn, name)
+        last = max(s) if s else None
+        if last is None or (today - last).days > _QUIET_DAYS:
+            return f"{name} has had no data since {last or 'ever'}, so no new days can arrive."
+    if res.get("verdict") not in ("inconclusive", "insufficient") or not res.get("power"):
+        return None
+    days = res["power"]["days_to_answer"]
+    if days is None:
+        return f"One arm gained no {res.get('unit', 'day')}s in {_PACE_WINDOW_DAYS} days, so it cannot answer."
+    if days > _RETIRE_AFTER_DAYS:
+        return f"Needs {days} more days at the current pace; the limit is {MAX_DAYS_TO_ANSWER}."
+    return None
+
+
 def run_all(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Run every active question, then retire the ones that can never answer."""
     out = []
-    for (slug,) in conn.execute(
-        "SELECT slug FROM research_hypotheses WHERE status = 'active' ORDER BY created_at"
+    for slug, spec_json in conn.execute(
+        "SELECT slug, spec FROM research_hypotheses WHERE status = 'active' ORDER BY created_at"
     ).fetchall():
         try:
-            out.append(run(conn, slug, author="nightly"))
+            res = run(conn, slug, author="nightly")
+            dead = _dead_reason(conn, json.loads(spec_json), res)
+            if dead:
+                retire(conn, slug, dead, "nightly")
+                res["retired"] = dead
+            out.append(res)
         except (SpecError, ValueError, duckdb.Error) as exc:
             log.exception("research run failed: %s", slug)
             note(conn, "nightly", "error", f"Run failed: {slug}", f"{type(exc).__name__}: {exc}")
@@ -1323,6 +1394,24 @@ def _skill(pairs: list[tuple[float, float]]) -> float | None:
     return 1 - sum((a - p) ** 2 for a, p in pairs) / base
 
 
+# ponytail: treats scored points as independent; move to a Diebold-Mariano
+# variance with lags if the forecast ever beats baseline by a hair.
+def _skill_call(pairs: list[tuple[float, float]]) -> str | None:
+    """Whether the lab beats the baseline guess beyond chance: better, worse or tie.
+
+    Tests the mean per-point gain in squared error (baseline minus lab) against
+    its own standard error, so a skill a hair above zero reads as a tie.
+    """
+    if len(pairs) < 10:
+        return None
+    gain = [a * a - (a - p) ** 2 for a, p in pairs]
+    m = mean(gain)
+    se = math.sqrt(sum((g - m) ** 2 for g in gain) / (len(gain) - 1) / len(gain))
+    if se == 0 or abs(m) <= 1.96 * se:
+        return "tie"
+    return "better" if m > 0 else "worse"
+
+
 def backtest(
     conn: duckdb.DuckDBPyConnection, today: date | None = None, metric: str = FORECAST_METRIC
 ) -> dict:
@@ -1502,6 +1591,9 @@ def forecast_view(
             "run_at": row[0].isoformat(),
             "metric": row[1],
             "skill": row[2],
+            "call": None
+            if row[2] is None
+            else _skill_call([(x["actual"], x["predicted"]) for x in json.loads(row[7])]),
             "n": row[3],
             "rmse_lab": row[4],
             "rmse_base": row[5],
@@ -1532,8 +1624,8 @@ def forecast_view(
 
 # ── The team's workflow: value, review, brief ───────────────────────────────
 
-# Typical prior width when a question isn't tied to a belief yet.
-_DEFAULT_PRIOR_SD = 5.0
+# Ceiling on the uncertainty term, and its value for a belief with no result yet.
+_UNCERTAINTY_CAP = 3.0
 
 
 def value_score(
@@ -1543,20 +1635,24 @@ def value_score(
 
     value = uncertainty × decision × feasibility × novelty × goal, where
     uncertainty is the belief's current 95% half-width in units of the smallest
-    effect worth acting on (capped at 3), decision is 1 when an answer would
+    effect worth acting on (capped at 3) once it has a result, and the cap
+    itself before that: an untested belief is fully open whatever prior width
+    its proposer wrote, so neither a wide prior nor a small min_effect can
+    raise a new question's rank. decision is 1 when an answer would
     change what the engine does and 0.5 otherwise, feasibility is 1 inside 120
     days and decays beyond, novelty drops for a question the team has already
     asked, and goal weights the outcome by what it serves (GOAL_WEIGHTS: muscle
     above body composition above cardio above recovery mediators).
     """
-    sd, decision = _DEFAULT_PRIOR_SD, 0.5
+    uncertainty, decision = _UNCERTAINTY_CAP, 0.5
     if belief_id:
         b = conn.execute(
-            "SELECT post_sd, decision FROM research_beliefs WHERE id = ?", [belief_id]
+            "SELECT post_sd, decision, n_results FROM research_beliefs WHERE id = ?", [belief_id]
         ).fetchone()
         if b is not None:
-            sd, decision = float(b[0]), 1.0 if b[1] else 0.5
-    uncertainty = min(3.0, 1.96 * sd / float(spec["min_effect"]))
+            decision = 1.0 if b[1] else 0.5
+            if b[2]:
+                uncertainty = min(_UNCERTAINTY_CAP, 1.96 * float(b[0]) / float(spec["min_effect"]))
     days = (power or {}).get("days_to_answer")
     feasibility = (
         0.05 if days is None else 1.0 if days <= MAX_DAYS_TO_ANSWER else MAX_DAYS_TO_ANSWER / days
@@ -1590,21 +1686,112 @@ def value_score(
     }
 
 
-def review(
-    conn: duckdb.DuckDBPyConnection, slug: str, decision: str, reasons: str, author: str
+def _revise(
+    conn: duckdb.DuckDBPyConnection,
+    original: tuple,
+    reasons: str,
+    author: str,
+    spec: dict | None,
+    question: str | None,
 ) -> dict:
-    """The methodologist's call on a proposed question: approve makes it active,
-    reject retires it with the reasons in the notebook."""
-    if decision not in ("approve", "reject"):
-        raise SpecError("decision must be 'approve' or 'reject'")
+    """Reject a proposal as written and register the reviewer's design as active.
+
+    Everything that can refuse runs before the first write: the connection has
+    no transaction to roll back a half-applied revision.
+    """
+    hid, slug, old_question, belief_id, proposer = original
+    if not spec:
+        raise SpecError("revise needs revised_spec: the design you would accept")
+    validate_spec(conn, spec)
+    days = (estimate(conn, spec).get("power") or {}).get("days_to_answer")
+    if days is None or days > MAX_DAYS_TO_ANSWER:
+        raise SpecError(
+            f"the revised design answers in {days if days is not None else 'no finite number of'} "
+            f"days; the limit is {MAX_DAYS_TO_ANSWER}. Reject instead, or revise further."
+        )
+    canon = json.dumps(spec, sort_keys=True)
+    for (other,) in conn.execute(
+        "SELECT spec FROM research_hypotheses WHERE status <> 'rejected'"
+    ).fetchall():
+        if json.dumps(json.loads(other), sort_keys=True) == canon:
+            raise SpecError("the revised spec is identical to one already registered")
+    n = conn.execute(
+        "SELECT count(*) FROM research_hypotheses WHERE slug LIKE ?", [f"{slug}-r%"]
+    ).fetchone()
+    new_slug = f"{slug}-r{(n[0] if n else 0) + 1}"
+    conn.execute("UPDATE research_hypotheses SET status = 'rejected' WHERE id = ?", [hid])
+    note(
+        conn,
+        author,
+        "rejection",
+        f"Revised: {old_question}",
+        reasons,
+        ref=hid,
+        data={"revised_as": new_slug},
+    )
+    new = register(
+        conn,
+        new_slug,
+        (question or old_question).strip(),
+        spec,
+        belief_id,
+        proposer,
+        rationale=f"The methodologist's revision of {slug}, approved as designed.",
+    )
+    conn.execute("UPDATE research_hypotheses SET status = 'active' WHERE id = ?", [new["id"]])
+    note(conn, author, "review", f"Approved: {question or old_question}", reasons, ref=new["id"])
+    return {"slug": slug, "status": "rejected", "revised_as": new_slug}
+
+
+def review(
+    conn: duckdb.DuckDBPyConnection,
+    slug: str,
+    decision: str,
+    reasons: str,
+    author: str,
+    revised_spec: dict | None = None,
+    revised_question: str | None = None,
+) -> dict:
+    """The methodologist's call on a proposed question.
+
+    Args:
+        conn: Write connection.
+        slug: The proposed question.
+        decision: ``approve`` makes it active; ``reject`` closes it; ``revise``
+            closes it and registers `revised_spec` as an active question, so a
+            fixable design is not left as prose in a rejection.
+        reasons: Why, in plain sentences.
+        author: Who reviewed.
+        revised_spec: The design the reviewer would accept (``revise`` only).
+        revised_question: The question reworded for that design, if it changed.
+
+    Returns:
+        The slug and its new status, plus ``revised_as`` for a revision.
+
+    Raises:
+        SpecError: On an unknown or already-reviewed slug, a bad decision, or a
+            revision that is invalid, a duplicate, or cannot answer in time.
+    """
+    if decision not in ("approve", "reject", "revise"):
+        raise SpecError("decision must be 'approve', 'reject' or 'revise'")
     row = conn.execute(
-        "SELECT id, question, status FROM research_hypotheses WHERE slug = ?", [slug]
+        "SELECT id, question, status, belief_id, author FROM research_hypotheses WHERE slug = ?",
+        [slug],
     ).fetchone()
     if row is None:
         raise SpecError(f"no hypothesis {slug!r}")
-    hid, question, status = row
+    hid, question, status, belief_id, proposer = row
     if status != "proposed":
         raise SpecError(f"{slug!r} is {status}, not awaiting review")
+    if decision == "revise":
+        return _revise(
+            conn,
+            (hid, slug, question, belief_id, proposer),
+            reasons,
+            author,
+            revised_spec,
+            revised_question,
+        )
     new_status = "active" if decision == "approve" else "rejected"
     conn.execute("UPDATE research_hypotheses SET status = ? WHERE id = ?", [new_status, hid])
     note(
@@ -1620,28 +1807,35 @@ def review(
 
 def review_queue(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     """What the methodologist sees: the spec, its power and value, the data
-    behind each feature. Never the analyst's rationale, so the review is blind."""
+    behind each feature. Never the analyst's rationale, so the review is blind.
+
+    Power and value are re-scored on today's data and code. A spec is frozen
+    by hash but the features it names are not, so the numbers stored when it
+    was proposed go stale; `power_at_proposal` keeps them for comparison.
+    """
     rows = conn.execute(
-        "SELECT slug, question, spec, power, value_score, created_at FROM research_hypotheses "
-        "WHERE status = 'proposed' ORDER BY value_score DESC NULLS LAST, created_at"
+        "SELECT slug, question, spec, power, belief_id, created_at FROM research_hypotheses "
+        "WHERE status = 'proposed' ORDER BY created_at"
     ).fetchall()
     feats = {f["name"]: f for f in dictionary(conn)}
     out = []
-    for slug, question, spec_json, pw, value, created in rows:
+    for slug, question, spec_json, pw, belief_id, created in rows:
         spec = json.loads(spec_json)
         names = [spec["exposure"]["feature"], spec["outcome"], *spec.get("adjust", [])]
+        live = estimate(conn, spec).get("power")
         out.append(
             {
                 "slug": slug,
                 "question": question,
                 "spec": spec,
-                "power": json.loads(pw) if pw else None,
-                "value_score": value,
+                "power": live,
+                "power_at_proposal": json.loads(pw) if pw else None,
+                "value_score": value_score(conn, spec, belief_id, power=live)["value"],
                 "created_at": created.isoformat(),
                 "features": [feats.get(n, {"name": n}) for n in names],
             }
         )
-    return out
+    return sorted(out, key=lambda q: -q["value_score"])
 
 
 def _misses(conn: duckdb.DuckDBPyConnection, metric: str = FORECAST_METRIC) -> dict:
@@ -1722,7 +1916,11 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
                 "outcome": "<feature name>",
                 "lag": "days (or weeks when unit is week) from exposure to outcome, 0-14",
                 "unit": "day | week",
-                "adjust": ["<feature names measured on the exposure date>"],
+                "adjust": [
+                    "<feature names measured on the exposure date; time_years removes a steady drift across eras>"
+                ],
+                "start_date": "optional YYYY-MM-DD: ignore everything before it (keeps one era in scope)",
+                "window_days": "optional look-back from today, default 730",
                 "expected_sign": "+ | - (predicted sign of B − A)",
                 "min_effect": "<smallest effect worth acting on, in outcome units>",
             },
