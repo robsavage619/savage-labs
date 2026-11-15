@@ -62,6 +62,10 @@ class EmphasisSubmission(BaseModel):
     note: str | None = None
 
 
+class PhaseSubmission(BaseModel):
+    phase: Literal["build", "cut"]
+
+
 class TierSubmission(BaseModel):
     """Set which muscles are growth targets this mesocycle (migration 0078).
 
@@ -4232,6 +4236,32 @@ async def set_emphasis(body: EmphasisSubmission) -> dict:
             [muscle, body.weight, body.note],
         )
     return {"status": "ok", "muscle": muscle, "weight": body.weight}
+
+
+@router.get("/training/phase")
+async def get_training_phase() -> dict:
+    """Return the stored training phase ('build' or 'cut')."""
+    from shc.training.autoregulation import load_training_phase
+
+    conn = get_read_conn()
+    try:
+        return {"phase": load_training_phase(conn)}
+    finally:
+        conn.close()
+
+
+@router.post("/training/phase", dependencies=[Depends(require_admin_key)])
+async def set_training_phase(body: PhaseSubmission) -> dict:
+    """Set the training phase that drives volume ceilings and the planner goal."""
+    async with write_ctx() as conn:
+        conn.execute(
+            """
+            INSERT INTO athlete_profile (key, value) VALUES ('training_phase', ?)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """,
+            [body.phase],
+        )
+    return {"status": "ok", "phase": body.phase}
 
 
 @router.get("/training/tier")
