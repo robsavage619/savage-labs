@@ -1240,6 +1240,10 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .lf-roster small { display: grid; justify-items: end; gap: 2px; font: 500 10.5px var(--font-data); color: var(--text-dim); }
 .lf-roster small i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); margin-right: 6px; }
 .lf-roster small i.on { background: var(--positive); box-shadow: 0 0 0 3px var(--positive-soft); }
+.lf-roster small i.late { background: var(--series-2); }
+.lf-roster small em.late { color: var(--series-2); }
+.lf-quiet-outcomes { margin: 18px 0 0; padding: 10px 14px; border-left: 2px solid var(--series-2); font-size: 13px; line-height: 1.5; color: var(--text-muted); max-width: 62ch; }
+.lf-quiet-outcomes b { font-weight: 600; color: var(--text-primary); }
 .lf-roster em { font-style: normal; color: var(--text-faint); }
 .lf-av { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; font: 700 13px var(--font-display); color: var(--bg); flex: none; }
 .lf-av-analyst { background: var(--lf-analyst); } .lf-av-methodologist { background: var(--lf-methodologist); }
@@ -1262,6 +1266,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .lf-desk-top p { margin: 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
 .lf-big { font: 600 56px/0.95 var(--font-display); letter-spacing: -0.03em; }
 .lf-big.up { color: var(--series-1); } .lf-big.down { color: var(--series-2); }
+.lf-big.flat { color: var(--text-muted); }
 .lf-ribbon { position: relative; }
 .lf-ribbon svg { display: block; }
 .lf-grid { stroke: var(--chart-grid); } .lf-axis0 { stroke: var(--hairline-strong); stroke-dasharray: 2 3; }
@@ -1303,6 +1308,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .lf-learned small { font: 500 9.5px var(--font-data); color: var(--text-faint); text-transform: uppercase; letter-spacing: .08em; }
 .lf-ring-bg { fill: none; stroke: oklch(1 0 0 / 0.08); stroke-width: 3.5; }
 .lf-ring { fill: none; stroke: var(--sl-accent); stroke-width: 3.5; stroke-linecap: round; }
+.lf-learned.open .lf-ring { stroke: var(--text-faint); }
 .lf-src { margin: 0; font: 500 10.5px var(--font-data); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .lf-pipe { display: grid; gap: 18px; }

@@ -977,6 +977,8 @@ export interface ResearchForecast {
     run_at: string;
     metric: string;
     skill: number | null;
+    /** Whether that skill beats the baseline guess beyond chance. */
+    call?: "better" | "tie" | "worse" | null;
     n: number;
     rmse_lab: number | null;
     rmse_base: number | null;
@@ -1070,6 +1072,8 @@ export interface FeatureInfo {
   days: number;
   coverage_90d_pct: number | null;
   stale: boolean;
+  /** The goal this feature serves as an outcome: muscle, body, cardio, recovery or other. */
+  goal?: string;
 }
 
 export const api = {

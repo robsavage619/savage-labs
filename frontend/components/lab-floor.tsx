@@ -30,13 +30,27 @@ const Skel = ({ h }: { h: number }) => <div className="ts-skeleton" style={{ hei
 // ── Masthead and roster ─────────────────────────────────────────────────────
 
 const ROLES = [
-  { key: "specialists", name: "Specialists", does: "Four researchers chasing their own leads", cadence: "One a day, Mon–Thu", authors: ["hypertrophy", "recovery", "conditioning", "metabolic", "analyst"] },
-  { key: "methodologist", name: "Methodologist", does: "Reviews every proposal and new measure blind", cadence: "After each specialist", authors: ["methodologist"] },
-  { key: "forecaster", name: "Forecaster", does: "Bets on each morning before it happens", cadence: "Nightly 04:50", authors: ["forecaster"] },
-  { key: "runner", name: "Runner", does: "Re-runs every live question", cadence: "Nightly 04:50", authors: ["nightly", "runner"] },
+  { key: "specialists", name: "Specialists", does: "Four researchers chasing their own leads", cadence: "One a day, Mon–Thu", maxAgeH: 100, authors: ["hypertrophy", "recovery", "conditioning", "metabolic", "analyst"] },
+  { key: "methodologist", name: "Methodologist", does: "Reviews every proposal and new measure blind", cadence: "After each specialist", maxAgeH: 100, authors: ["methodologist"] },
+  { key: "forecaster", name: "Forecaster", does: "Bets on each morning before it happens", cadence: "Nightly 04:50", maxAgeH: 36, authors: ["forecaster"] },
+  { key: "runner", name: "Runner", does: "Re-runs every live question", cadence: "Nightly 04:50", maxAgeH: 36, authors: ["nightly", "runner"] },
 ] as const;
 
+/** Outcomes the goals are judged on that have stopped arriving. */
+function QuietOutcomes() {
+  const q = useQuery({ queryKey: ["research-features"], queryFn: api.researchFeatures, staleTime: STALE });
+  const quiet = (q.data ?? []).filter((f) => f.stale && f.last && ["muscle", "body", "cardio"].includes(f.goal ?? "") && !f.name.includes(":") && !f.name.endsWith("_7d"));
+  if (quiet.length === 0) return null;
+  return (
+    <p className="lf-quiet-outcomes" role="status">
+      <b>No fresh readings:</b> {quiet.map((f) => `${f.label} (last ${short(f.last!)})`).join(", ")}. {`Questions about ${quiet.length === 1 ? "it" : "them"} can't move until readings resume.`}
+    </p>
+  );
+}
+
 export function Masthead() {
+  // Read once on mount: a role is overdue against the clock, and render stays pure.
+  const [now] = useState(() => Date.now());
   const notes = useNotes();
   const hyps = useHyps();
   const beliefs = useBeliefs();
@@ -63,10 +77,12 @@ export function Masthead() {
             </div>
           ))}
         </div>
+        <QuietOutcomes />
       </div>
       <ol className="lf-roster">
         {ROLES.map((r, i) => {
           const at = last(r.authors);
+          const late = at ? now - new Date(at).getTime() > r.maxAgeH * 3600e3 : false;
           return (
             <motion.li key={r.key} initial={{ opacity: 0.001, x: 16 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.08 * i, duration: 0.5, ease }}>
               <span className={`lf-av lf-av-${r.key}`}>{r.name[0]}</span>
@@ -75,9 +91,9 @@ export function Masthead() {
                 <span>{r.does}</span>
               </div>
               <small>
-                <i className={at ? "on" : ""} />
+                <i className={at ? (late ? "late" : "on") : ""} />
                 {at ? `last ${when(at)}` : "not yet run"}
-                <em>{r.cadence}</em>
+                <em className={late ? "late" : ""}>{late ? `Overdue · ${r.cadence}` : r.cadence}</em>
               </small>
             </motion.li>
           );
@@ -247,6 +263,9 @@ export function ForecastDesk() {
     );
   }
   const miss = bt.rmse_lab ?? cfg.floor;
+  // `call` is the server's test of skill against chance; older payloads lack it.
+  const call = bt.call ?? (bt.skill > 0 ? "better" : "worse");
+  const lead = call === "tie" ? "No better than" : call === "better" ? "Better than" : "Worse than";
   const max = Math.max(1, ...p.data.terms.map((t) => Math.abs(t.contribution)));
   const live = p.data.terms.filter((t) => t.contribution !== 0);
   const quiet = p.data.terms.filter((t) => t.contribution === 0);
@@ -257,10 +276,10 @@ export function ForecastDesk() {
         <div className="lf-desk-top">
           <div>
             <span className="lf-label">Forecast skill on {cfg.points} it never saw</span>
-            <b className={`lf-big ${bt.skill > 0 ? "up" : "down"}`}>{signed(bt.skill * 100, 1)}%</b>
+            <b className={`lf-big ${call === "better" ? "up" : call === "worse" ? "down" : "flat"}`}>{signed(bt.skill * 100, 1)}%</b>
           </div>
           <p>
-            Better than guessing &quot;{cfg.base}&quot; across {bt.n} {cfg.points}. The line is the lab&apos;s forecast, the band its typical miss of ±{miss.toFixed(miss < 10 ? 1 : 0)}%, the dots what {cfg.subject} actually did; copper dots landed outside the band.
+            {lead} guessing &quot;{cfg.base}&quot; across {bt.n} {cfg.points}{call === "tie" ? ": a gap this small is inside the noise" : ""}. The line is the lab&apos;s forecast, the band its typical miss of ±{miss.toFixed(miss < 10 ? 1 : 0)}%, the dots what {cfg.subject} actually did; copper dots landed outside the band.
           </p>
         </div>
         <Fill min={deskW < 760 ? 240 : 280}>{(h) => <Ribbon series={bt.series} bet={{ date: p.data!.target_date, v: p.data!.predicted }} miss={miss} height={h} floor={cfg.floor} tag={cfg.tag} />}</Fill>
@@ -402,13 +421,13 @@ function Lens({ b, ext }: { b: ResearchBelief; ext: number }) {
             90%: {inUnit(lo, b.unit, ext)} to {inUnit(hi, b.unit, ext)}
           </span>
         </div>
-        <div className="lf-learned">
+        <div className={`lf-learned${clear ? "" : " open"}`} title="How far your data has narrowed the starting range. Whether the answer is clear is the 90% range, not this ring.">
           <svg width="34" height="34" viewBox="0 0 34 34">
             <circle cx="17" cy="17" r="14" className="lf-ring-bg" />
             <motion.circle cx="17" cy="17" r="14" className="lf-ring" initial={{ pathLength: 0 }} animate={{ pathLength: Math.max(0, b.learned ?? 0) }} transition={{ duration: 1.1, ease }} transform="rotate(-90 17 17)" />
           </svg>
           <span>
-            {Math.round(Math.max(0, b.learned ?? 0) * 100)}%<small>learned</small>
+            {Math.round(Math.max(0, b.learned ?? 0) * 100)}%<small>{clear ? "narrowed · clear" : "narrowed"}</small>
           </span>
         </div>
       </footer>
@@ -449,7 +468,7 @@ const STAGES: { key: Stage; label: string }[] = [
   { key: "proposed", label: "Awaiting review" },
   { key: "running", label: "Running" },
   { key: "answered", label: "Answered" },
-  { key: "rejected", label: "Rejected blind" },
+  { key: "rejected", label: "Closed" },
 ];
 const VERDICT: Record<string, string> = { supported: "supported", against: "runs the other way", ruled_out: "ruled out", inconclusive: "not clear yet", insufficient: "too few days" };
 
@@ -477,6 +496,7 @@ function QuestionCard({ h }: { h: ResearchHypothesis }) {
               <b>{signed(r.effect)}%</b> ({signed(r.ci_low)} to {signed(r.ci_high)}) · {VERDICT[r.verdict] ?? r.verdict} ·{" "}
             </>
           ) : null}
+          {st === "rejected" ? `${h.status} · ` : ""}
           {need ? `${have}/${need} ${unit} a side` : "unsized"} · value {h.value_score?.toFixed(2) ?? "–"} · {h.author}
         </p>
       </div>
@@ -489,7 +509,7 @@ export function Pipeline() {
   const [stage, setStage] = useState<Stage | "all">("all");
   if (!q.data) return <Skel h={300} />;
   const counts = Object.fromEntries(STAGES.map((s) => [s.key, q.data.filter((h) => stageOf(h) === s.key).length])) as Record<Stage, number>;
-  const shown = q.data.filter((h) => stage === "all" || stageOf(h) === stage).sort((a, b) => STAGES.findIndex((s) => s.key === stageOf(a)) - STAGES.findIndex((s) => s.key === stageOf(b)));
+  const shown = q.data.filter((h) => (stage === "all" ? stageOf(h) !== "rejected" : stageOf(h) === stage)).sort((a, b) => STAGES.findIndex((s) => s.key === stageOf(a)) - STAGES.findIndex((s) => s.key === stageOf(b)));
   return (
     <div className="lf-pipe">
       <div className="lf-line" role="tablist" aria-label="Filter questions by stage">
@@ -505,8 +525,9 @@ export function Pipeline() {
         {shown.map((h) => (
           <QuestionCard key={h.slug} h={h} />
         ))}
+        {shown.length === 0 && <p className="lf-quiet">Nothing here right now.</p>}
       </div>
-      <p className="lf-foot">The ring fills toward the days each question needs to see its effect. Click a stage to filter.</p>
+      <p className="lf-foot">The ring fills toward the days each question needs to see its effect. Click a stage to filter; closed questions (rejected in review, or retired because they could not answer) stay folded until you open that stage.</p>
     </div>
   );
 }
@@ -525,6 +546,18 @@ const roleOf = (author: string) => {
   return "analyst";
 };
 
+/** Consecutive re-runs with the same verdict fold into the latest one. */
+const fold = (entries: NotebookEntry[]) => {
+  const out: { e: NotebookEntry; n: number; since: string }[] = [];
+  for (const e of entries) {
+    const prev = out[out.length - 1];
+    if (prev && e.kind === "result" && prev.e.kind === "result" && prev.e.title === e.title) out[out.length - 1] = { e, n: prev.n + 1, since: prev.since };
+    else out.push({ e, n: 1, since: e.written_at });
+  }
+  return out;
+};
+const lastSaid = (entries: NotebookEntry[]) => ([...entries].reverse().find((e) => e.kind !== "result") ?? entries[entries.length - 1]).written_at;
+
 export function Threads() {
   const notes = useNotes();
   const hyps = useHyps();
@@ -536,7 +569,7 @@ export function Threads() {
     return hyps.data
       .filter((h) => byRef.has(h.id) && (byRef.get(h.id)!.length > 1 || h.status !== "active"))
       .map((h) => ({ h, entries: [...byRef.get(h.id)!].reverse() }))
-      .sort((a, b) => b.entries[b.entries.length - 1].written_at.localeCompare(a.entries[a.entries.length - 1].written_at))
+      .sort((a, b) => lastSaid(b.entries).localeCompare(lastSaid(a.entries)))
       .slice(0, 4);
   }, [notes.data, hyps.data]);
   if (!notes.data || !hyps.data) return <Skel h={320} />;
@@ -551,13 +584,13 @@ export function Threads() {
               <h4>{h.question}</h4>
             </header>
             <ol>
-              {entries.map((e) => (
+              {fold(entries).map(({ e, n, since }) => (
                 <li key={e.id} className={`lf-msg lf-msg-${roleOf(e.author)}`}>
                   <span className={`lf-av lf-av-${roleOf(e.author)}`}>{roleOf(e.author)[0].toUpperCase()}</span>
                   <div>
                     <div className="lf-msg-top">
                       <b>{roleOf(e.author)}</b>
-                      <span>{e.kind}</span>
+                      <span>{n > 1 ? `${e.kind} · unchanged ×${n} since ${short(since)}` : e.kind}</span>
                       <time>{when(e.written_at)}</time>
                     </div>
                     <p className={isOpen ? "" : "clamp"}>{e.body || e.title}</p>
@@ -571,7 +604,7 @@ export function Threads() {
           </article>
         );
       })}
-      {threads.length === 0 && <p className="lf-quiet">No exchanges yet. The first weekly cycle runs Sunday at 1 PM.</p>}
+      {threads.length === 0 && <p className="lf-quiet">No exchanges yet. A specialist runs each day, Monday to Thursday.</p>}
     </div>
   );
 }
