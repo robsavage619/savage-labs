@@ -636,7 +636,7 @@ async def get_tape() -> dict:
         conn.close()
     names = {v: k for k, v in _TAPE_METRICS.items()}
     return {
-        names[r[0]]: {"date": str(r[1]), "inches": round(r[2] / 2.54, 1), "readings": r[3]}
+        names[r[0]]: {"date": str(r[1]), "inches": round(r[2] / 2.54, 2), "readings": r[3]}
         for r in rows
         if r[0] in names
     }
