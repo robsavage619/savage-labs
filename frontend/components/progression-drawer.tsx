@@ -64,13 +64,19 @@ export function ProgressionDrawer({ exercise, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex justify-end"
+      className="fixed inset-0 z-[80] flex justify-end"
       style={{ background: "oklch(0 0 0 / 0.55)" }}
       onClick={onClose}
     >
       <aside
         className="h-full w-full max-w-[560px] overflow-y-auto p-6 space-y-5"
-        style={{ background: "var(--card)", borderLeft: "1px solid var(--hairline-strong)" }}
+        style={{
+          background: "var(--card)",
+          borderLeft: "1px solid var(--hairline-strong)",
+          // Home-screen app: keep the close button out from under the status bar.
+          paddingTop: "calc(24px + env(safe-area-inset-top, 0px))",
+          paddingBottom: "calc(24px + env(safe-area-inset-bottom, 0px))",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-3">
@@ -98,7 +104,7 @@ export function ProgressionDrawer({ exercise, onClose }: Props) {
           </div>
           <button
             onClick={onClose}
-            className="rounded-md p-1.5 text-[var(--text-faint)] hover:text-[var(--text-primary)] hover:bg-[var(--card-hover)] transition-colors"
+            className="-m-2.5 rounded-md p-4 text-[var(--text-faint)] hover:text-[var(--text-primary)] hover:bg-[var(--card-hover)] transition-colors"
             aria-label="Close"
           >
             <XIcon size={14} />

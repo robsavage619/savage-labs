@@ -975,7 +975,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
 .xp-open { font: 500 11.5px var(--font-data); color: var(--sl-accent); border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); padding: 4px 9px; white-space: nowrap; background: none; }
 .xp-open:hover { background: var(--sl-accent-soft); }
 .xp-scrim { position: fixed; inset: 0; z-index: 60; background: oklch(0.08 0.01 250 / 0.6); backdrop-filter: blur(2px); animation: xp-fade 200ms ease both; }
-.xp-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 61; width: min(640px, 100vw); overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 24px; background: var(--bg-elevated); border-left: 1px solid var(--hairline-strong); box-shadow: -24px 0 60px oklch(0.05 0.01 250 / 0.5); animation: xp-in 320ms cubic-bezier(.22,1,.36,1) both; }
+.xp-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 61; width: min(640px, 100vw); overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: calc(24px + env(safe-area-inset-top, 0px)) 24px calc(24px + env(safe-area-inset-bottom, 0px)); background: var(--bg-elevated); border-left: 1px solid var(--hairline-strong); box-shadow: -24px 0 60px oklch(0.05 0.01 250 / 0.5); animation: xp-in 320ms cubic-bezier(.22,1,.36,1) both; }
 @keyframes xp-in { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes xp-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .xp-drawer, .xp-scrim { animation: none; } }
