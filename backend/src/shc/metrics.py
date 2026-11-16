@@ -614,15 +614,31 @@ def pickleball_match_load(conn, lookback_days: int = 28) -> dict[str, Any] | Non
     }
 
 
+WHOOP_VO2_METRIC = "vo2_max_whoop"
+APPLE_VO2_METRIC = "vo2_max"
+
+
+def vo2_metric(conn) -> str:
+    """The VO2 max series to read: WHOOP's weekly estimate once it has rows, else Apple Watch's.
+
+    One estimator at a time, so a series never steps where the source changed.
+    Apple's feed stopped; WHOOP's arrives through the private-metrics sync.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM measurements WHERE metric = ? LIMIT 1", [WHOOP_VO2_METRIC]
+    ).fetchone()
+    return WHOOP_VO2_METRIC if row else APPLE_VO2_METRIC
+
+
 def vo2max_series(conn, lookback_days: int = 90) -> dict[str, Any] | None:
     """Latest VO2max and a short trend for the cardio-prescription path.
 
-    VO2max is ingested into ``measurements`` (metric ``vo2_max``, Apple Watch
-    HKQuantityTypeIdentifierVO2Max) but no training reader existed — the cardio
-    planner had no aerobic-fitness anchor. Reads the daily-averaged series over
-    ``lookback_days`` and returns the latest value plus the signed change vs the
-    earliest reading in the window. Filters obviously bad values (≤20 mL/kg/min)
-    the same way the dashboard endpoint does.
+    VO2max comes from ``measurements``: WHOOP's weekly estimate (metric
+    ``vo2_max_whoop``) once it exists, else Apple Watch's
+    (``vo2_max``, HKQuantityTypeIdentifierVO2Max); see `vo2_metric`. Reads the
+    daily-averaged series over ``lookback_days`` and returns the latest value
+    plus the signed change vs the earliest reading in the window. Filters
+    obviously bad values (≤20 mL/kg/min) the same way the dashboard endpoint does.
 
     Args:
         conn: DuckDB connection.
@@ -637,12 +653,15 @@ def vo2max_series(conn, lookback_days: int = 90) -> dict[str, Any] | None:
             """
             SELECT ts::DATE AS day, AVG(value_num) AS vo2max
             FROM measurements
-            WHERE metric = 'vo2_max' AND value_num IS NOT NULL AND value_num > 20
+            WHERE metric = $m AND value_num IS NOT NULL AND value_num > 20
               AND ts >= $s
             GROUP BY day
             ORDER BY day
             """,
-            {"s": (date.today() - timedelta(days=lookback_days)).isoformat()},
+            {
+                "m": vo2_metric(conn),
+                "s": (date.today() - timedelta(days=lookback_days)).isoformat(),
+            },
         ).fetchall()
     except Exception as exc:
         log.warning("vo2_max series unavailable: %s", exc)

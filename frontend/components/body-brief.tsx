@@ -67,7 +67,7 @@ function useReadings(): { rows: Reading[] | null; today: string | null; error: u
   const rows: Reading[] = [
     { key: "weight", label: "Weigh-in", last: lastOf(qs.w.data!.map((p) => p.date)), every: 3, need: "morning weigh-ins, fasted", src: "scale or check-in" },
     { key: "waist", label: "Waist tape", last: qs.tape.data!.waist_in?.date ?? null, every: 7, need: "a waist reading each week", src: "logged here" },
-    { key: "vo2", label: "VO₂ max", last: lastOf(qs.vo2.data!.filter((p) => p.source === "apple_watch").map((p) => p.date)), every: 14, need: "an Apple Health import", src: "Apple Watch" },
+    { key: "vo2", label: "VO₂ max", last: lastOf(qs.vo2.data!.filter((p) => p.source !== "estimated").map((p) => p.date)), every: qs.vo2.data!.some((p) => p.source === "whoop") ? 8 : 14, need: qs.vo2.data!.some((p) => p.source === "whoop") ? "WHOOP's Tuesday estimate" : "an Apple Health import", src: qs.vo2.data!.some((p) => p.source === "whoop") ? "WHOOP" : "Apple Watch" },
     { key: "steps", label: "Steps", last: lastOf(run), every: 2, need: "an Apple Health import", src: "Apple Health" },
     { key: "food", label: "Food log", last: lastOf(qs.food.data!.filter((p) => p.kcal_in != null).map((p) => p.date)), every: 2, need: "intake from the food logger", src: "food logger" },
     { key: "burn", label: "Energy out", last: qs.burn.data!.as_of ?? null, every: 2, need: "the strap worn", src: "WHOOP cycles" },
@@ -670,7 +670,7 @@ export function SlowSignals() {
   const lanes: SLane[] = [
     { key: "rhr", label: "Resting HR", unit: "bpm", kind: "line", y: pick(rhr.data, (r) => r.whoop), color: () => "var(--series-2)", fmt: (v) => v.toFixed(0), quiet: 3 },
     { key: "steps", label: "Steps", unit: "/day", kind: "bar", y: pick(steps.data, (r) => r.steps), color: (v) => (v >= 10_000 ? "var(--series-1)" : "var(--series-2)"), fmt: (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(0)), ref: { v: 10_000, label: "10k" }, quiet: 3, note: "import paused", run: true },
-    { key: "vo2", label: "VO₂ max", unit: "ml/kg", kind: "dot", y: pick(vo2.data.filter((r) => r.source === "apple_watch"), (r) => r.vo2max), color: () => "var(--series-1)", fmt: (v) => v.toFixed(1), quiet: 21, note: "import paused" },
+    { key: "vo2", label: "VO₂ max", unit: "ml/kg", kind: "dot", y: pick(vo2.data.filter((r) => r.source !== "estimated"), (r) => r.vo2max), color: () => "var(--series-1)", fmt: (v) => v.toFixed(1), quiet: 21, note: "import paused" },
     { key: "spo2", label: "SpO₂, 7-night", unit: "%", kind: "line", y: pick(air.data.nights, (r) => r.spo2_7d), color: () => "var(--series-1)", fmt: (v) => v.toFixed(1), ref: { v: 95, label: "95" }, quiet: 4 },
     { key: "resp", label: "Breathing, 7-night", unit: "br/min", kind: "line", y: pick(air.data.nights, (r) => r.resp_7d), color: () => "var(--series-2)", fmt: (v) => v.toFixed(1), quiet: 4 },
   ];

@@ -273,7 +273,7 @@ function VO2MaxPanel() {
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between">
-        <Eyebrow>VO₂ max · {latest?.source === "apple_watch" ? "Apple Watch" : "estimated from WHOOP RHR"}</Eyebrow>
+        <Eyebrow>VO₂ max · {latest?.source === "whoop" ? "WHOOP" : latest?.source === "apple_watch" ? "Apple Watch" : "estimated from WHOOP RHR"}</Eyebrow>
         {latest && zone && (
           <span className="text-[10.5px] font-medium" style={{ color: zone.color }}>{zone.label} for age (39)</span>
         )}
@@ -318,9 +318,11 @@ function VO2MaxPanel() {
             </p>
           )}
           <p className="text-[10px] text-[var(--text-faint)] leading-snug">
-            {latest && latest.source === "apple_watch"
-              ? "Direct Apple Watch measurement (cardiorespiratory fitness test)."
-              : "Uth-Sørensen: 15.3 × HRmax/RHR · HRmax = 208 − (0.7 × age) = 180.7 (Tanaka). Propranolol PRN suppresses RHR → floor estimate on dosing days."}
+            {latest && latest.source === "whoop"
+              ? "WHOOP's weekly cardio-fitness estimate, updated Tuesdays. It uses your logged body weight."
+              : latest && latest.source === "apple_watch"
+                ? "Direct Apple Watch measurement (cardiorespiratory fitness test)."
+                : "Uth-Sørensen: 15.3 × HRmax/RHR · HRmax = 208 − (0.7 × age) = 180.7 (Tanaka). Propranolol PRN suppresses RHR → floor estimate on dosing days."}
           </p>
           <ResponsiveContainer width="100%" height={80}>
             <ComposedChart data={formatted} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>

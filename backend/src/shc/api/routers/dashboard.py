@@ -29,7 +29,7 @@ from shc.db.schema import get_read_conn, get_write_conn, write_ctx
 from shc.ingest.clinical_profile import subject_dob
 from shc.stats import classify_change, swc
 from shc.lab import _welch_t as _lab_welch
-from shc.metrics import MUSCLE_TO_GROUP, compute_daily_state
+from shc.metrics import MUSCLE_TO_GROUP, WHOOP_VO2_METRIC, compute_daily_state, vo2_metric
 from shc.metrics import muscle_group as _mg
 from shc.training.load_mechanics import (
     COMBINED_LOGGING_ENDED,
@@ -2928,7 +2928,9 @@ async def body_vo2max() -> list[dict]:
     """VO2 max time series.
 
     Priority order:
-    1. Direct Apple Watch readings (HKQuantityTypeIdentifierVO2Max) from measurements table.
+    1. WHOOP's weekly VO2 max estimate (private API) once it has rows, else direct
+       Apple Watch readings (HKQuantityTypeIdentifierVO2Max); never both in one
+       series, since they are different estimators. See `vo2_metric`.
     2. Uth-Sørensen estimate from WHOOP RHR: VO2max ≈ 15.3 × HRmax / HRrest
        HRmax = 208 − (0.7 × 39) = 180.7 bpm  (Tanaka et al., 2001 — more accurate than 220−age).
 
@@ -2938,21 +2940,24 @@ async def body_vo2max() -> list[dict]:
     HR_MAX = round(208 - 0.7 * AGE, 1)  # Tanaka formula: 180.7 for age 39
     conn = get_read_conn()
     try:
-        # Check for direct Apple Health VO2Max readings
-        apple_rows = conn.execute(
+        # Direct readings: WHOOP's weekly estimate, else Apple Health's VO2Max
+        metric = vo2_metric(conn)
+        direct_rows = conn.execute(
             """
             SELECT ts::DATE AS day, AVG(value_num) AS vo2max
             FROM measurements
-            WHERE metric = 'vo2_max' AND value_num IS NOT NULL AND value_num > 20
+            WHERE metric = $m AND value_num IS NOT NULL AND value_num > 20
             GROUP BY day
             ORDER BY day
-            """
+            """,
+            {"m": metric},
         ).fetchall()
 
-        if apple_rows:
+        if direct_rows:
+            source = "whoop" if metric == WHOOP_VO2_METRIC else "apple_watch"
             return [
-                {"date": str(r[0]), "vo2max": round(float(r[1]), 1), "source": "apple_watch"}
-                for r in apple_rows
+                {"date": str(r[0]), "vo2max": round(float(r[1]), 1), "source": source}
+                for r in direct_rows
                 if r[1]
             ]
 

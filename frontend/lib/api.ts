@@ -440,7 +440,7 @@ export interface WeightPoint {
   source: "apple_health" | "checkin";
 }
 
-export interface VO2Point { date: string; vo2max: number; source: "apple_watch" | "estimated" }
+export interface VO2Point { date: string; vo2max: number; source: "apple_watch" | "whoop" | "estimated" }
 export interface StepPoint { date: string; steps: number }
 export interface ExpenditureTrend {
   measure: string;
