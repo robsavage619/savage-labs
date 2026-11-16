@@ -98,3 +98,24 @@ def test_cut_tracking_excludes_pickleball_and_flags_blind_weight(conn):
     assert "Pickleball 231 min" in text
     assert "about 4 workday-lunch session(s)" in text
     assert "UNMEASURED — 0 weigh-in(s)" in text
+
+
+def _steps(conn: duckdb.DuckDBPyConnection, day: date, n: int) -> None:
+    conn.execute(
+        "INSERT INTO measurements (source, metric, ts, value_num, external_id, content_hash) "
+        "VALUES ('apple', 'step_count', ?, ?, ?, 'h')",
+        [day, n, f"apple:{day}"],
+    )
+
+
+def test_cut_tracking_flags_a_step_drop_against_worn_baseline(conn):
+    today = date(2026, 11, 16)
+    for i in range(7, 30):
+        _steps(conn, today - timedelta(days=i), 14000)
+    for i in range(5):
+        _steps(conn, today - timedelta(days=i), 6000)
+    _steps(conn, today - timedelta(days=5), 300)  # Watch off: not a worn day
+    text = "\n".join(_cut_tracking_lines(conn, today))
+    assert "Steps: 6,000/day over 5 worn days vs 14,000 baseline" in text
+    assert "-57%" in text
+    assert "lunch walk" in text

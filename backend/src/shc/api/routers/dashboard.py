@@ -29,7 +29,13 @@ from shc.db.schema import get_read_conn, get_write_conn, write_ctx
 from shc.ingest.clinical_profile import subject_dob
 from shc.stats import classify_change, swc
 from shc.lab import _welch_t as _lab_welch
-from shc.metrics import MUSCLE_TO_GROUP, WHOOP_VO2_METRIC, compute_daily_state, vo2_metric
+from shc.metrics import (
+    MUSCLE_TO_GROUP,
+    WHOOP_VO2_METRIC,
+    compute_daily_state,
+    daily_steps,
+    vo2_metric,
+)
 from shc.metrics import muscle_group as _mg
 from shc.training.load_mechanics import (
     COMBINED_LOGGING_ENDED,
@@ -3077,40 +3083,12 @@ async def whoop_patterns() -> dict:
 
 @router.get("/body/steps")
 async def body_steps(days: int = Query(90, gt=0, le=5000)) -> list[dict]:
-    since = (date.today() - timedelta(days=days)).isoformat()
     conn = get_read_conn()
     try:
-        rows = conn.execute(
-            """
-            -- Three sources can write step_count for the same day (apple XML intervals,
-            -- HAE daily total, Shortcuts snapshot). Pick the highest-priority source per
-            -- day to avoid triple-counting: apple intervals (1) > HAE total (2) > shortcut (3).
-            WITH ranked AS (
-                SELECT
-                    ts::DATE AS day,
-                    value_num,
-                    CASE
-                        WHEN external_id LIKE 'apple:%' THEN 1
-                        WHEN external_id LIKE 'hae:%'   THEN 2
-                        ELSE                                 3
-                    END AS prio
-                FROM measurements
-                WHERE metric = 'step_count' AND ts::DATE >= $since
-            ),
-            best_prio AS (
-                SELECT day, MIN(prio) AS prio FROM ranked GROUP BY day
-            )
-            SELECT r.day, SUM(r.value_num) AS steps
-            FROM ranked r
-            JOIN best_prio b ON r.day = b.day AND r.prio = b.prio
-            GROUP BY r.day
-            ORDER BY r.day
-            """,
-            {"since": since},
-        ).fetchall()
+        rows = daily_steps(conn, date.today() - timedelta(days=days))
     finally:
         conn.close()
-    return [{"date": str(r[0]), "steps": int(r[1] or 0)} for r in rows]
+    return [{"date": str(d), "steps": n} for d, n in rows]
 
 
 @router.get("/body/rhr-trend")

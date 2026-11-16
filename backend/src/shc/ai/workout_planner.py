@@ -26,6 +26,7 @@ from shc.metrics import (
     MEANINGFUL_DOSE_SETS,
     MUSCLE_TO_GROUP,
     compute_daily_state,
+    daily_steps,
     muscle_group,
     polarized_zone_distribution,
     vo2max_series,
@@ -162,6 +163,8 @@ def _goal_lines(conn: Any) -> list[str]:
 
 CUT_CARDIO_TARGET_MIN_WK = 150
 _LUNCH_SESSION_MIN = 30
+_STEP_WEAR_MIN = 1500  # a day under this is a Watch left off, not a real total
+_STEP_DROP_FLAG = 0.8
 _NOT_NON_COURT_CARDIO = ("pickleball", "yoga", "meditation", "cross country skiing")
 
 
@@ -201,6 +204,27 @@ def _cut_tracking_lines(conn: Any, today: date) -> list[str]:
         )
     else:
         lines.append("  Target met: hold it, don't add more.")
+
+    worn = [(d, n) for d, n in daily_steps(conn, today - timedelta(days=96)) if n >= _STEP_WEAR_MIN]
+    recent = [n for d, n in worn if d >= start]
+    base = [n for d, n in worn if d < start]
+    if len(recent) < 4 or len(base) < 14:
+        lines.append(
+            f"- Steps: not judged — {len(recent)} worn day(s) in the last 7 and "
+            f"{len(base)} in the prior 90 (need 4 and 14). Tell Rob to wear the Watch daily."
+        )
+    else:
+        now, ref = statistics.fmean(recent), statistics.median(base)
+        line = (
+            f"- Steps: {now:,.0f}/day over {len(recent)} worn days vs {ref:,.0f} baseline "
+            f"(median of {len(base)} prior days), {(now / ref - 1) * 100:+.0f}%."
+        )
+        if now < ref * _STEP_DROP_FLAG:
+            line += (
+                " Background movement is falling, which quietly erases the deficit. A "
+                "30-min lunch walk is ~3,500 steps and counts toward both targets."
+            )
+        lines.append(line)
 
     weigh_ins = conn.execute(
         """
@@ -631,7 +655,11 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             label = sev_label.get(int(sev), f"{sev}")
             sore_groups.append(f"{muscle.replace('_', ' ')} {label}")
         lines.append(f"- Muscle soreness (body diagram): {', '.join(sore_groups)}")
-    if chk["body_weight_trend_4wk"] is not None:
+    from shc.training.autoregulation import load_training_phase
+
+    # In a cut, CUT TRACKING owns the weight rate; this two-point trend reads
+    # +0.00% off sparse weigh-ins and would contradict it.
+    if chk["body_weight_trend_4wk"] is not None and load_training_phase(conn) != "cut":
         lines.append(f"- Body weight trend (4wk): {chk['body_weight_trend_4wk']:+.2f}%")
     if fresh["gaps"]:
         for g in fresh["gaps"]:

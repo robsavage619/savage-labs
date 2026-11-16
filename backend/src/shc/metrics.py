@@ -630,6 +630,41 @@ def vo2_metric(conn) -> str:
     return WHOOP_VO2_METRIC if row else APPLE_VO2_METRIC
 
 
+def daily_steps(conn: Any, since: date) -> list[tuple[date, int]]:
+    """One step total per day from ``since``, deduplicated across step sources.
+
+    Three sources can write step_count for the same day (apple XML intervals, HAE
+    daily total, Shortcuts snapshot); the highest-priority source per day wins so
+    a day is never triple-counted: apple intervals (1) > HAE total (2) > shortcut (3).
+    """
+    rows = conn.execute(
+        """
+        WITH ranked AS (
+            SELECT
+                ts::DATE AS day,
+                value_num,
+                CASE
+                    WHEN external_id LIKE 'apple:%' THEN 1
+                    WHEN external_id LIKE 'hae:%'   THEN 2
+                    ELSE                                 3
+                END AS prio
+            FROM measurements
+            WHERE metric = 'step_count' AND ts::DATE >= $since
+        ),
+        best_prio AS (
+            SELECT day, MIN(prio) AS prio FROM ranked GROUP BY day
+        )
+        SELECT r.day, SUM(r.value_num) AS steps
+        FROM ranked r
+        JOIN best_prio b ON r.day = b.day AND r.prio = b.prio
+        GROUP BY r.day
+        ORDER BY r.day
+        """,
+        {"since": since.isoformat()},
+    ).fetchall()
+    return [(r[0], int(r[1] or 0)) for r in rows]
+
+
 def vo2max_series(conn, lookback_days: int = 90) -> dict[str, Any] | None:
     """Latest VO2max and a short trend for the cardio-prescription path.
 
