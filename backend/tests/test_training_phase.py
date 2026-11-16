@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import duckdb
 
-from shc.ai.workout_planner import _goal_lines
+from shc.ai.workout_planner import _bodyweight_rate_pct_wk, _cut_tracking_lines, _goal_lines
 from shc.training.autoregulation import _decide, load_training_phase
 
 
@@ -74,3 +76,25 @@ def test_research_goals_follow_phase(conn):
     assert weights["body"] > weights["muscle"]
     assert set(weights) == set(research.GOAL_WEIGHTS)  # research_team validates goal keys
     assert research.brief(conn)["rules"]["goals"].startswith("Lose fat while keeping muscle")
+
+
+def test_bodyweight_rate_needs_enough_weigh_ins_and_reads_loss_per_week():
+    d0 = date(2026, 11, 1)
+    assert _bodyweight_rate_pct_wk([(d0, 100.0), (d0 + timedelta(days=20), 98.0)]) is None
+    pts = [(d0 + timedelta(days=i), 100.0 - 0.1 * i) for i in range(0, 15, 2)]
+    assert round(_bodyweight_rate_pct_wk(pts), 2) == -0.70
+
+
+def test_cut_tracking_excludes_pickleball_and_flags_blind_weight(conn):
+    today = date(2026, 11, 16)
+    conn.execute(
+        "INSERT INTO cardio_sessions (id, date, modality, duration_min, content_hash) VALUES "
+        "('a', ?, 'pickleball', 231, 'h'), ('b', ?, 'walking', 40, 'h'), "
+        "('c', ?, 'cross country skiing', 60, 'h'), ('d', ?, 'walking', 90, 'h')",
+        [today, today - timedelta(days=2), today, today - timedelta(days=7)],
+    )
+    text = "\n".join(_cut_tracking_lines(conn, today))
+    assert "Non-court cardio: 40 / 150 min" in text
+    assert "Pickleball 231 min" in text
+    assert "about 4 workday-lunch session(s)" in text
+    assert "UNMEASURED — 0 weigh-in(s)" in text

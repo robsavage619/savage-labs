@@ -17,6 +17,7 @@ directly; it only:
 import json
 import logging
 import re
+import statistics
 from datetime import date, timedelta
 from typing import Any
 
@@ -133,9 +134,11 @@ def _goal_lines(conn: Any) -> list[str]:
             "  bodyweight, say so — the deficit is too deep, not the program too soft.",
             "",
             "CARDIO is a programmed track this phase, second only to the lifts: at least",
-            "  150 min/week of easy, low-impact cardio (bike, rower, sled, incline walk —",
-            "  forefoot rules apply), with pickleball minutes counting toward it, and at",
-            "  most ONE hard conditioning finisher a week. Easy cardio adds to the deficit",
+            "  150 min/week of easy, low-impact NON-COURT cardio (bike, rower, sled, incline",
+            "  walk — forefoot rules apply). Pickleball does not count: it is the court load",
+            "  that gates legs, and it alone can clear 150, which would leave the target",
+            "  inert. Workday lunch is the slot for it (see CUT TRACKING). At most ONE hard",
+            "  conditioning finisher a week. Easy cardio adds to the deficit",
             "  without the strength interference hard conditioning carries; it never",
             "  displaces or pre-fatigues a lift on a green day.",
         ]
@@ -155,6 +158,83 @@ def _goal_lines(conn: Any) -> list[str]:
         "  capacity, recovery, and the fat-loss side of recomp. It serves the build; it",
         "  never displaces a lift on a green day.",
     ]
+
+
+CUT_CARDIO_TARGET_MIN_WK = 150
+_LUNCH_SESSION_MIN = 30
+_NOT_NON_COURT_CARDIO = ("pickleball", "yoga", "meditation", "cross country skiing")
+
+
+def _bodyweight_rate_pct_wk(points: list[tuple[date, float]]) -> float | None:
+    """Least-squares bodyweight change in %/week; None under 4 weigh-ins or a 10-day span."""
+    if len(points) < 4 or (points[-1][0] - points[0][0]).days < 10:
+        return None
+    x0 = points[0][0]
+    fit = statistics.linear_regression([(d - x0).days for d, _ in points], [kg for _, kg in points])
+    return fit.slope * 7 / statistics.fmean(kg for _, kg in points) * 100
+
+
+def _cut_tracking_lines(conn: Any, today: date) -> list[str]:
+    """Measured cut progress: non-court cardio against target, and the bodyweight rate."""
+    start = today - timedelta(days=6)
+    non_court, court = conn.execute(
+        f"""
+        SELECT
+          COALESCE(SUM(duration_min) FILTER (
+            WHERE COALESCE(modality, '') NOT IN {_NOT_NON_COURT_CARDIO}), 0),
+          COALESCE(SUM(duration_min) FILTER (WHERE modality = 'pickleball'), 0)
+        FROM cardio_sessions WHERE date BETWEEN $s AND $t
+        """,
+        {"s": start, "t": today},
+    ).fetchone()
+    lines = ["\n## CUT TRACKING (measured, rolling 7 days)"]
+    gap = CUT_CARDIO_TARGET_MIN_WK - int(non_court)
+    lines.append(
+        f"- Non-court cardio: {int(non_court)} / {CUT_CARDIO_TARGET_MIN_WK} min. "
+        f"Pickleball {int(court)} min is court load, tracked apart, and does not count."
+    )
+    if gap > 0:
+        sessions = -(-gap // _LUNCH_SESSION_MIN)
+        lines.append(
+            f"  Short {gap} min → about {sessions} workday-lunch session(s) of "
+            f"{_LUNCH_SESSION_MIN} min: brisk or incline walk, or bike, conversational pace."
+        )
+    else:
+        lines.append("  Target met: hold it, don't add more.")
+
+    weigh_ins = conn.execute(
+        """
+        SELECT day, AVG(kg) FROM (
+          SELECT ts::DATE AS day, value_num AS kg FROM measurements
+          WHERE metric = 'body_mass_kg' AND value_num IS NOT NULL
+          UNION ALL
+          SELECT date, body_weight_kg FROM daily_checkin WHERE body_weight_kg IS NOT NULL
+        ) WHERE day BETWEEN $s AND $t GROUP BY day ORDER BY day
+        """,
+        {"s": today - timedelta(days=27), "t": today},
+    ).fetchall()
+    points = [(d, float(kg)) for d, kg in weigh_ins]
+    rate = _bodyweight_rate_pct_wk(points)
+    if rate is None:
+        last = points[-1][0].isoformat() if points else "none"
+        lines.append(
+            f"- Bodyweight rate: UNMEASURED — {len(points)} weigh-in(s) in 28 days "
+            f"(last {last}). The 0.5–1.0%/wk check is blind; tell Rob to weigh daily, "
+            "same conditions, and do not quote a fat-loss rate."
+        )
+    elif rate <= -1.0:
+        lines.append(
+            f"- Bodyweight {rate:+.2f}%/wk: faster than 1.0%/wk. The deficit is too deep "
+            "for muscle retention; say so and hold main-lift load."
+        )
+    elif rate <= -0.5:
+        lines.append(f"- Bodyweight {rate:+.2f}%/wk: on target (0.5–1.0%/wk loss).")
+    else:
+        lines.append(
+            f"- Bodyweight {rate:+.2f}%/wk: slower than the 0.5%/wk target. The deficit is "
+            "the lever; closing the non-court cardio gap is the training-side fix."
+        )
+    return lines
 
 
 def build_training_context(conn, planning_date: date | None = None) -> tuple[str, date]:
@@ -448,7 +528,9 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         log.debug("trial assignments unavailable: %s", _exc)
         _assign = []
     if _assign:
-        lines.append("\n## TODAY'S TRIAL ASSIGNMENTS (randomized n-of-1 — state these in the plan notes)")
+        lines.append(
+            "\n## TODAY'S TRIAL ASSIGNMENTS (randomized n-of-1 — state these in the plan notes)"
+        )
         for _a in _assign:
             lines.append(f"- {_a['hypothesis']} Today is arm {_a['arm']}: **{_a['condition']}**.")
 
@@ -495,7 +577,11 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
         avg = f" · 7d avg {sleep['avg_7d']:.1f}h" if sleep["avg_7d"] else ""
         lines.append(f"- Sleep last night: {sleep['last_hours']:.1f}h{deep}{spo2}{avg}")
     if load["acwr"] is not None:
-        zone = "usual" if 0.8 <= load["acwr"] <= 1.3 else ("above usual" if load["acwr"] > 1.3 else "low")
+        zone = (
+            "usual"
+            if 0.8 <= load["acwr"] <= 1.3
+            else ("above usual" if load["acwr"] > 1.3 else "low")
+        )
         lines.append(
             f"- ACWR (uncoupled 7:21 load ratio, pooled): {load['acwr']} ({zone}) — "
             f"acute {load['acute_load_7d']:.1f} / chronic {load['chronic_load_21d']:.1f}"
@@ -887,9 +973,19 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             cond_lines.append(
                 "  → Polarized distribution is on target — hold the easy/hard balance."
             )
+    from shc.training.autoregulation import load_training_phase
+
+    cutting = load_training_phase(conn) == "cut"
+    if cutting and vo2 and vo2.get("latest") is not None:
+        cond_lines.append(
+            f"  Cut phase: the {CUT_CARDIO_TARGET_MIN_WK} min non-court target in CUT "
+            "TRACKING supersedes this Z2 dose; the Z2 minutes sit inside it."
+        )
     if cond_lines:
         lines.append("\n## CONDITIONING GUIDANCE (measured fitness, not ACWR alone)")
         lines.extend(cond_lines)
+    if cutting:
+        lines.extend(_cut_tracking_lines(conn, today))
 
     lines.append("\n## MISSION + GOALS")
     lines.append("Rob is 40 and refuses to let age define his ceiling. This is a serious")
@@ -2670,9 +2766,7 @@ def validate_plan(
 
         _gates = state.get("gates", {})
         _meso = active_mesocycle(conn)
-        sched = scheduled_session(
-            conn, _gates, session_date, _meso.started_on if _meso else None
-        )
+        sched = scheduled_session(conn, _gates, session_date, _meso.started_on if _meso else None)
         if sched is not None:
             problem = check_session(conn, plan, sched, _rep_bounds, override_reason)
             if problem:
@@ -2880,8 +2974,9 @@ def build_midday_context(conn) -> str:
     if cutting:
         lines.append("Phase: FAT LOSS, keep muscle. Volume caps at MAV; main-lift strength is the")
         lines.append(f"retention signal; {emphasis} are the emphasis muscles. Weekly target: at")
-        lines.append("least 150 min easy low-impact cardio (pickleball counts), one hard")
-        lines.append("finisher max.")
+        lines.append(f"least {CUT_CARDIO_TARGET_MIN_WK} min easy low-impact NON-COURT cardio")
+        lines.append("(pickleball does not count), one hard finisher max.")
+        lines.extend(_cut_tracking_lines(conn, today))
     else:
         lines.append("Primary goal: build muscle — drive per-muscle volume through MEV→MAV→MRV,")
         lines.append(f"with {emphasis} prioritized as emphasis muscles. Body-comp: strict")
@@ -2904,8 +2999,9 @@ def build_midday_context(conn) -> str:
         lines.append(
             "- Easy low-impact cardio: the highest-value midday option this phase while the"
         )
-        lines.append("  week is under its 150 min target — as long as it does not pre-fatigue the")
-        lines.append("  next lift.")
+        lines.append("  CUT TRACKING above shows the week short of target. This is a workday")
+        lines.append("  lunch slot: 30 min walk/incline walk/bike, no shower-level sweat needed,")
+        lines.append("  and never one that pre-fatigues the next lift.")
     lines.append("- 2-a-day accessory lift: add direct volume to an emphasis muscle")
     lines.append(f"  ({emphasis}) or any muscle below MAV for the week.")
     lines.append(
