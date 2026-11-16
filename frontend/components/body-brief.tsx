@@ -779,7 +779,7 @@ export function SlowSignals() {
       </svg>
       <span className="td-tape-day">{hov == null ? `Today · ${short(dates[SIX - 1])}` : new Date(dates[hov] + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</span>
       <p className="td-foot bo-tape-foot">
-        Resting HR is the strap&apos;s. Steps and VO₂ max come from Apple Health, whose last import ran through mid-September; steps before May also counted phone and watch together, which is why the older record reads high. Oxygen and breathing are 7-night means of the strap&apos;s nightly averages, not an apnea count.
+        Resting HR is the strap&apos;s, and VO₂ max is WHOOP&apos;s weekly estimate. Steps come from Apple Health, whose last import ran through mid-September; steps before May also counted phone and watch together, which is why the older record reads high. Oxygen and breathing are 7-night means of the strap&apos;s nightly averages, not an apnea count.
       </p>
     </div>
   );
