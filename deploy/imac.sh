@@ -23,6 +23,9 @@ rsync -az --delete \
   --exclude 'backend/data/' --exclude '.claude/' --exclude '.env*' \
   "$src/" "${host}:Projects/savage-health-center/"
 
+# The unattended jobs read copies of the memory files, skill, agents and runner.
+deploy/sync-claude-copies.sh "$host"
+
 ssh -t "$host" 'set -e
 cd ~/Projects/savage-health-center
 export PATH=$HOME/.local/node/bin:$HOME/.local/bin:$PATH
