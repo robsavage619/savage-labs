@@ -1006,7 +1006,7 @@ export interface ResearchHypothesis {
   value_score: number | null;
   /** The value score's inputs as computed at registration (null for questions registered before it was stored). */
   value_parts: { value: number; uncertainty: number; decision: number; feasibility: number; novelty: number; goal?: string; goal_weight?: number } | null;
-  power: { needed_per_arm: number; days_to_answer: number | null; outcome_sd: number } | null;
+  power: { needed_per_arm: number; days_to_answer: number | null; days_to_confirm?: number | null; outcome_sd: number } | null;
   created_at: string;
   result: {
     verdict: "supported" | "direction" | "retrospective" | "against" | "ruled_out" | "inconclusive" | "insufficient" | "error";

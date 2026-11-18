@@ -11,10 +11,10 @@ from shc import research
 TODAY = date(2026, 6, 30)
 
 
-def _seed(conn, effect_pct: float, days: int = 360, seed: int = 3) -> None:
+def _seed(conn, effect_pct: float, days: int = 360, seed: int = 3, end: date = TODAY) -> None:
     """Strain on day d moves day d+1's HRV by `effect_pct` when strain is high."""
     rng = random.Random(seed)
-    start = TODAY - timedelta(days=days)
+    start = end - timedelta(days=days)
     high_prev = False
     for i in range(days + 1):
         d = start + timedelta(days=i)
@@ -165,8 +165,8 @@ def test_new_questions_wait_for_review_and_only_active_ones_run(conn) -> None:
 
 def test_value_score_rewards_open_feasible_new_questions(conn) -> None:
     _seed(conn, effect_pct=-10)
-    fast = {"needed_per_arm": 50, "days_to_answer": 30, "outcome_sd": 10}
-    slow = {"needed_per_arm": 900, "days_to_answer": 1200, "outcome_sd": 20}
+    fast = {"needed_per_arm": 50, "days_to_confirm": 30, "outcome_sd": 10}
+    slow = {"needed_per_arm": 900, "days_to_confirm": 1200, "outcome_sd": 20}
     assert (
         research.value_score(conn, SPEC, None, fast)["value"]
         > research.value_score(conn, SPEC, None, slow)["value"]
@@ -306,7 +306,7 @@ def test_per_muscle_features_validate_and_measure(conn, seed) -> None:
 
 
 def test_value_score_weights_outcomes_by_goal(conn) -> None:
-    fast = {"needed_per_arm": 50, "days_to_answer": 30, "outcome_sd": 10}
+    fast = {"needed_per_arm": 50, "days_to_confirm": 30, "outcome_sd": 10}
     hrv = research.value_score(conn, SPEC, None, fast)
     muscle = research.value_score(conn, SPEC | {"outcome": "e1rm_pct14:biceps"}, None, fast)
     body = research.value_score(conn, SPEC | {"outcome": "body_mass_7d"}, None, fast)
@@ -447,7 +447,8 @@ def _status(conn, slug: str) -> str:
 
 
 def test_a_revision_registers_the_reviewers_design_as_active(conn) -> None:
-    _seed(conn, effect_pct=-10)
+    # The limit is judged on days still to come, so the feed has to be live.
+    _seed(conn, effect_pct=-10, end=date.today())
     research.register(conn, "s6", "q", SPEC, None, "hypertrophy")
     # A design that cannot answer in time is refused before anything is written.
     with pytest.raises(research.SpecError, match="limit is 120"):
@@ -455,7 +456,7 @@ def test_a_revision_registers_the_reviewers_design_as_active(conn) -> None:
             conn, "s6", "revise", "adjust for drift", "methodologist", SPEC | {"lag": 2}
         )
     assert _status(conn, "s6") == "proposed"
-    fixed = SPEC | {"min_effect": 10, "adjust": ["time_years"], "start_date": "2025-09-01"}
+    fixed = SPEC | {"min_effect": 12, "adjust": ["time_years"], "start_date": "2025-09-01"}
     out = research.review(conn, "s6", "revise", "adjust for drift", "methodologist", fixed)
     assert out["revised_as"] == "s6-r1"
     assert (_status(conn, "s6"), _status(conn, "s6-r1")) == ("rejected", "active")
@@ -491,7 +492,7 @@ def test_live_questions_that_cannot_answer_retire_themselves(conn) -> None:
 
 
 def test_an_untested_belief_ranks_the_same_whatever_prior_its_proposer_wrote(conn) -> None:
-    fast = {"needed_per_arm": 50, "days_to_answer": 30, "outcome_sd": 10}
+    fast = {"needed_per_arm": 50, "days_to_confirm": 30, "outcome_sd": 10}
     ids = [
         research.add_belief(conn, f"c{sd}", "lnhrv_dev_pct", 0.0, sd, "test prior", "d", "t")
         for sd in (1.0, 50.0)
@@ -562,3 +563,22 @@ def test_days_seen_before_registration_cannot_confirm_a_question(conn) -> None:
         [TODAY - timedelta(days=400)],
     )
     assert research.run(conn, "seen")["verdict"] == "supported"
+
+
+def test_time_to_confirm_counts_only_days_after_registration(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    spec = SPEC | {"min_effect": 10}
+    # A draft has no days of its own yet, however much history sits behind it.
+    draft = research.estimate(conn, spec, today=TODAY)["power"]
+    assert draft["days_to_answer"] == 0
+    assert draft["days_to_confirm"] > 0
+    old = research.estimate(conn, spec, today=TODAY, registered=TODAY - timedelta(days=400))
+    assert old["power"]["days_to_confirm"] == 0
+
+
+def test_a_retrospective_result_says_how_long_the_wait_is(conn) -> None:
+    _seed(conn, effect_pct=-10, end=date.today())
+    research.register(conn, "wait", "Does a hard day lower tomorrow's HRV?", SPEC, None, "test")
+    res = research.run(conn, "wait")
+    assert res["verdict"] == "retrospective"
+    assert f"about {res['power']['days_to_confirm']} more days" in res["summary"]

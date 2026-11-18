@@ -760,9 +760,26 @@ def _fill_zero(name: str, s: dict[date, float], span: tuple[date, date]) -> dict
     return out
 
 
-def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = None) -> dict:
+def estimate(
+    conn: duckdb.DuckDBPyConnection,
+    spec: dict,
+    today: date | None = None,
+    registered: date | None = None,
+) -> dict:
     """Run a spec on current data: B − A adjusted for covariates, with a
-    carryover-widened 95% range, a verdict, and a power estimate."""
+    carryover-widened 95% range, a verdict, and a power estimate.
+
+    Args:
+        conn: Database connection.
+        spec: The hypothesis spec.
+        today: The last date the estimate may see; defaults to the real date.
+        registered: When the question was registered. Only later days count
+            toward ``power.days_to_confirm``; a draft has none, so it defaults
+            to ``today``.
+
+    Returns:
+        Arm sizes and means, effect, range, verdict, power and a summary line.
+    """
     today = today or date.today()
     unit = spec.get("unit", "day")
     lag = int(spec.get("lag", 1))
@@ -850,7 +867,7 @@ def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = N
         verdict = "direction"
     else:
         verdict = "inconclusive"
-    power = _power(rows, math.sqrt(sigma2), m, de, today, unit)
+    power = _power(rows, math.sqrt(sigma2), m, de, today, unit, registered or today)
     out_f = feature(out_name)
     unit_label = out_f.unit if out_f else ""
     return base | {
@@ -869,23 +886,41 @@ def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = N
     }
 
 
-def _power(rows: list, sd: float, min_effect: float, de: float, today: date, unit: str) -> dict:
+def _power(
+    rows: list, sd: float, min_effect: float, de: float, today: date, unit: str, since: date
+) -> dict:
+    """Days per arm needed to see ``min_effect``, and the wait at the current pace.
+
+    ``days_to_answer`` counts every day in the arms: when they are big enough
+    to rule the effect out. ``days_to_confirm`` counts only days after
+    ``since`` (the registration date), the only ones a favourable verdict may
+    rest on.
+    """
     needed = _needed_per_arm(sd, min_effect, de)
-    have = {0: sum(1 for r in rows if r[1] == 0), 1: sum(1 for r in rows if r[1] == 1)}
-    since = today - timedelta(days=_PACE_WINDOW_DAYS)
+    recent = today - timedelta(days=_PACE_WINDOW_DAYS)
     per_day = 7 if unit == "week" else 1
-    waits = []
-    for arm in (0, 1):
-        short = needed - have[arm]
-        pace = sum(1 for r in rows if r[1] == arm and r[0] >= since) / (_PACE_WINDOW_DAYS / per_day)
-        if short <= 0:
-            waits.append(0)
-        elif pace > 0:
-            waits.append(math.ceil(short / pace) * per_day)
-        else:
-            waits.append(None)
-    wait = None if None in waits else max(waits)
-    return {"needed_per_arm": needed, "days_to_answer": wait, "outcome_sd": round(sd, 3)}
+
+    def wait(after: date | None) -> int | None:
+        waits = []
+        for arm in (0, 1):
+            have = sum(1 for r in rows if r[1] == arm and (after is None or r[0] > after))
+            pace = sum(1 for r in rows if r[1] == arm and r[0] >= recent) / (
+                _PACE_WINDOW_DAYS / per_day
+            )
+            if needed <= have:
+                waits.append(0)
+            elif pace > 0:
+                waits.append(math.ceil((needed - have) / pace) * per_day)
+            else:
+                return None
+        return max(waits)
+
+    return {
+        "needed_per_arm": needed,
+        "days_to_answer": wait(None),
+        "days_to_confirm": wait(since),
+        "outcome_sd": round(sd, 3),
+    }
 
 
 # ── Persistence: hypotheses, results, beliefs, notebook ─────────────────────
@@ -1036,7 +1071,7 @@ def register(
     )
     why = (
         f"Needs {pw['needed_per_arm']} {spec.get('unit', 'day')}s per arm; "
-        f"answer in {pw['days_to_answer'] if pw['days_to_answer'] is not None else 'no finite number of'} days."
+        f"confirm in {pw['days_to_confirm'] if pw['days_to_confirm'] is not None else 'no finite number of'} days."
         if pw
         else "Too little data to size yet."
     )
@@ -1095,6 +1130,13 @@ def refresh_belief(conn: duckdb.DuckDBPyConnection, belief_id: str) -> None:
 _FAVOURABLE = ("supported", "direction")
 
 
+def _wait_text(res: dict) -> str:
+    days = (res.get("power") or {}).get("days_to_confirm")
+    if days is None:
+        return "and one arm is gaining none at the current pace"
+    return f"about {days} more days at the current pace"
+
+
 def _confirm_on_new_days(
     conn: duckdb.DuckDBPyConnection, spec: dict, res: dict, registered: date
 ) -> dict:
@@ -1134,7 +1176,8 @@ def _confirm_on_new_days(
         "verdict": "retrospective",
         "summary": f"{head} Those {unit}s were open to exploration before the question was "
         f"written. Only {new['n_a']} A / {new['n_b']} B {unit}s since it was registered on "
-        f"{registered.isoformat()}; they have to show it on their own. → retrospective",
+        f"{registered.isoformat()}; they have to show it on their own, {_wait_text(res)}. "
+        "→ retrospective",
     }
 
 
@@ -1147,7 +1190,8 @@ def run(conn: duckdb.DuckDBPyConnection, slug: str, author: str = "runner") -> d
         raise SpecError(f"no hypothesis {slug!r}")
     hid, question, spec_json, belief_id, created_at = h
     spec = json.loads(spec_json)
-    res = _confirm_on_new_days(conn, spec, estimate(conn, spec), created_at.date())
+    registered = created_at.date()
+    res = _confirm_on_new_days(conn, spec, estimate(conn, spec, registered=registered), registered)
     conn.execute(
         "INSERT INTO research_results (id, hypothesis_id, n_a, n_b, effect, se, ci_low, ci_high, p, "
         "design_effect, verdict, summary, power, mean_a, mean_b) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1712,7 +1756,7 @@ def value_score(
             decision = 1.0 if b[1] else 0.5
             if b[2]:
                 uncertainty = min(_UNCERTAINTY_CAP, 1.96 * float(b[0]) / float(spec["min_effect"]))
-    days = (power or {}).get("days_to_answer")
+    days = (power or {}).get("days_to_confirm")
     feasibility = (
         0.05 if days is None else 1.0 if days <= MAX_DAYS_TO_ANSWER else MAX_DAYS_TO_ANSWER / days
     )
@@ -1762,10 +1806,10 @@ def _revise(
     if not spec:
         raise SpecError("revise needs revised_spec: the design you would accept")
     validate_spec(conn, spec)
-    days = (estimate(conn, spec).get("power") or {}).get("days_to_answer")
+    days = (estimate(conn, spec).get("power") or {}).get("days_to_confirm")
     if days is None or days > MAX_DAYS_TO_ANSWER:
         raise SpecError(
-            f"the revised design answers in {days if days is not None else 'no finite number of'} "
+            f"the revised design confirms in {days if days is not None else 'no finite number of'} "
             f"days; the limit is {MAX_DAYS_TO_ANSWER}. Reject instead, or revise further."
         )
     canon = json.dumps(spec, sort_keys=True)
@@ -1881,7 +1925,7 @@ def review_queue(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     for slug, question, spec_json, pw, belief_id, created in rows:
         spec = json.loads(spec_json)
         names = [spec["exposure"]["feature"], spec["outcome"], *spec.get("adjust", [])]
-        live = estimate(conn, spec).get("power")
+        live = estimate(conn, spec, registered=created.date()).get("power")
         out.append(
             {
                 "slug": slug,
@@ -1960,6 +2004,7 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
             "outcome_scale": "lnhrv_dev_pct is % change in HRV vs your 28-day baseline; 3% is the smallest change worth acting on.",
             "max_days_to_answer": MAX_DAYS_TO_ANSWER,
             "min_per_arm": _MIN_PER_ARM,
+            "confirm_rule": "The limit is judged on power.days_to_confirm, which counts only days after registration: days you explored cannot confirm the question they suggested. A lead that matters and cannot confirm in time needs a designed experiment, not a wider window.",
             "value_formula": "uncertainty × decision × feasibility × novelty × goal_weight (see value_score); computed by the server, not the proposer.",
             "goal_weights": goal_weights(conn) | {"other": _OTHER_GOAL_WEIGHT},
             "goals": _GOAL_TEXT[load_training_phase(conn)].format(
