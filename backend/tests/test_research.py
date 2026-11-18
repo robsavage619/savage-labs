@@ -535,3 +535,30 @@ def test_vo2_reads_one_estimator_at_a_time_whoop_first(conn) -> None:
     _vo2(conn, "whoop_private", "vo2_max_whoop", date(2026, 3, 3), 39.0)
     _vo2(conn, "whoop_private", "vo2_max_whoop", date(2026, 3, 10), 38.0)
     assert research.series(conn, "vo2_max") == {date(2026, 3, 3): 39.0, date(2026, 3, 10): 38.0}
+
+
+def test_supported_needs_the_range_to_clear_the_size_the_question_asks(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    # Real and in the predicted direction, but the range reaches below 10.
+    assert research.estimate(conn, SPEC | {"min_effect": 10}, today=TODAY)["verdict"] == "direction"
+    # Real, yet the whole range sits short of 30: an effect that size is ruled out.
+    assert research.estimate(conn, SPEC | {"min_effect": 30}, today=TODAY)["verdict"] == "ruled_out"
+    assert (
+        research.estimate(conn, SPEC | {"expected_sign": "+"}, today=TODAY)["verdict"] == "against"
+    )
+
+
+def test_days_seen_before_registration_cannot_confirm_a_question(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    research.register(conn, "seen", "Does a hard day lower tomorrow's HRV?", SPEC, None, "test")
+    # Every seeded day predates the registration: the effect is there, the proof is not.
+    res = research.run(conn, "seen")
+    assert res["verdict"] == "retrospective"
+    assert res["effect"] < 0
+    assert "since it was registered" in res["summary"]
+    # Registered before the data arrived: the same days now count.
+    conn.execute(
+        "UPDATE research_hypotheses SET created_at = ? WHERE slug = 'seen'",
+        [TODAY - timedelta(days=400)],
+    )
+    assert research.run(conn, "seen")["verdict"] == "supported"

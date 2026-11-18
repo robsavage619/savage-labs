@@ -1009,7 +1009,7 @@ export interface ResearchHypothesis {
   power: { needed_per_arm: number; days_to_answer: number | null; outcome_sd: number } | null;
   created_at: string;
   result: {
-    verdict: "supported" | "against" | "ruled_out" | "inconclusive" | "insufficient" | "error";
+    verdict: "supported" | "direction" | "retrospective" | "against" | "ruled_out" | "inconclusive" | "insufficient" | "error";
     /** Raw (unadjusted) outcome mean in each arm. */
     mean_a?: number | null;
     mean_b?: number | null;

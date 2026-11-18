@@ -463,14 +463,14 @@ export function BeliefLenses() {
 
 type Stage = "proposed" | "running" | "answered" | "rejected";
 const stageOf = (h: ResearchHypothesis): Stage =>
-  h.status === "proposed" ? "proposed" : h.status === "rejected" || h.status === "retired" ? "rejected" : ["supported", "against", "ruled_out"].includes(h.result?.verdict ?? "") ? "answered" : "running";
+  h.status === "proposed" ? "proposed" : h.status === "rejected" || h.status === "retired" ? "rejected" : ["supported", "direction", "against", "ruled_out"].includes(h.result?.verdict ?? "") ? "answered" : "running";
 const STAGES: { key: Stage; label: string }[] = [
   { key: "proposed", label: "Awaiting review" },
   { key: "running", label: "Running" },
   { key: "answered", label: "Answered" },
   { key: "rejected", label: "Closed" },
 ];
-const VERDICT: Record<string, string> = { supported: "supported", against: "runs the other way", ruled_out: "ruled out", inconclusive: "not clear yet", insufficient: "too few days" };
+const VERDICT: Record<string, string> = { supported: "supported", against: "runs the other way", ruled_out: "ruled out", inconclusive: "not clear yet", insufficient: "too few days", direction: "real, smaller than asked", retrospective: "waiting on new days" };
 
 function QuestionCard({ h }: { h: ResearchHypothesis }) {
   const st = stageOf(h);

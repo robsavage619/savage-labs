@@ -837,11 +837,17 @@ def estimate(conn: duckdb.DuckDBPyConnection, spec: dict, today: date | None = N
     ci = (effect - 1.96 * se, effect + 1.96 * se)
     p = 2 * (1 - _NORMAL.cdf(abs(effect) / se)) if se > 0 else 1.0
     m = float(spec["min_effect"])
-    want_pos = spec["expected_sign"] == "+"
-    if ci[0] > 0 or ci[1] < 0:
-        verdict = "supported" if (effect > 0) == want_pos else "against"
-    elif (want_pos and ci[1] < m) or (not want_pos and ci[0] > -m):
+    # Read the range in the predicted direction, so one rule serves both signs.
+    lo, hi = ci if spec["expected_sign"] == "+" else (-ci[1], -ci[0])
+    if hi < 0:
+        verdict = "against"
+    elif hi < m:
         verdict = "ruled_out"
+    elif lo >= m:
+        verdict = "supported"
+    elif lo > 0:
+        # Real and the right way round, but the question asked for at least m.
+        verdict = "direction"
     else:
         verdict = "inconclusive"
     power = _power(rows, math.sqrt(sigma2), m, de, today, unit)
@@ -1086,14 +1092,62 @@ def refresh_belief(conn: duckdb.DuckDBPyConnection, belief_id: str) -> None:
     )
 
 
+_FAVOURABLE = ("supported", "direction")
+
+
+def _confirm_on_new_days(
+    conn: duckdb.DuckDBPyConnection, spec: dict, res: dict, registered: date
+) -> dict:
+    """Hold a favourable verdict to the days that arrived after registration.
+
+    A question is proposed after its author explored the data, so the days up to
+    registration were open to selection: leads that looked good get registered.
+    The effect and range still describe every day; the verdict may only be
+    favourable when the days since registration say so on their own.
+
+    Args:
+        conn: Database connection.
+        spec: The registered spec.
+        res: The all-days estimate for that spec.
+        registered: The date the question was registered.
+
+    Returns:
+        ``res``, with its verdict and summary replaced when the favourable call
+        rests on days seen before registration.
+    """
+    if res["verdict"] not in _FAVOURABLE:
+        return res
+    first = registered + timedelta(days=1)
+    if "start_date" in spec:
+        first = max(first, date.fromisoformat(str(spec["start_date"])))
+    new = estimate(conn, spec | {"start_date": first.isoformat()})
+    unit = res["unit"]
+    head = res["summary"].rsplit(" → ", 1)[0]
+    if new["verdict"] in _FAVOURABLE:
+        return res | {
+            "verdict": new["verdict"],
+            "summary": f"{head} On the {new['n_a']} A / {new['n_b']} B {unit}s since it was "
+            f"registered: {new['effect']:+.2f} ({new['ci_low']:+.2f} to {new['ci_high']:+.2f}). "
+            f"→ {new['verdict']}",
+        }
+    return res | {
+        "verdict": "retrospective",
+        "summary": f"{head} Those {unit}s were open to exploration before the question was "
+        f"written. Only {new['n_a']} A / {new['n_b']} B {unit}s since it was registered on "
+        f"{registered.isoformat()}; they have to show it on their own. → retrospective",
+    }
+
+
 def run(conn: duckdb.DuckDBPyConnection, slug: str, author: str = "runner") -> dict:
     h = conn.execute(
-        "SELECT id, question, spec, belief_id FROM research_hypotheses WHERE slug = ?", [slug]
+        "SELECT id, question, spec, belief_id, created_at FROM research_hypotheses WHERE slug = ?",
+        [slug],
     ).fetchone()
     if h is None:
         raise SpecError(f"no hypothesis {slug!r}")
-    hid, question, spec_json, belief_id = h
-    res = estimate(conn, json.loads(spec_json))
+    hid, question, spec_json, belief_id, created_at = h
+    spec = json.loads(spec_json)
+    res = _confirm_on_new_days(conn, spec, estimate(conn, spec), created_at.date())
     conn.execute(
         "INSERT INTO research_results (id, hypothesis_id, n_a, n_b, effect, se, ci_low, ci_high, p, "
         "design_effect, verdict, summary, power, mean_a, mean_b) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
