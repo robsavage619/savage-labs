@@ -108,7 +108,7 @@ Sources are pulled on a schedule, normalized, and written idempotently, so a re-
 
 <img src="images/diagrams/daily-state.svg" width="100%" alt="Signals are banded against the subject's own baseline, combined into DailyState, and consumed by the board, planner context, plan validator and self-evaluation." />
 
-`DailyState` exists because the same metric was once computed three ways in three places and gave three slightly different answers. Readiness, HRV, sleep, load and the day's gates are computed once. The frontend reads `/api/state/today` and infers nothing client-side. The beta-blocker adjustment lives in the gates object, and components consume it instead of reading the medication list.
+`DailyState` exists because the same metric was once computed three ways in three places and gave three slightly different answers. Readiness, HRV, sleep, load and the day's gates are computed once. The frontend reads `/api/state/today` and infers nothing client-side. Personal-factor adjustments live in the gates object, and components consume them instead of reading the raw profile.
 
 ### The model proposes, the validator disposes
 
