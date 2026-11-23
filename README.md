@@ -66,7 +66,7 @@ fused every morning into one decision: train or not, how hard, and on what.
 
 **The output can hurt someone.** A bad recommendation is a torn hamstring or a missed cardiac signal. The model reasons, drafts and explains; it never has final say. Gates are deterministic code with tests, because an instruction in a prompt is a suggestion to a system that is trying to look helpful.
 
-**Consumer sensors, known confounds.** A beta-blocker taken as needed suppresses heart rate, which makes the wearable's recovery score meaningless on the days it matters most. Year-round allergies inflate skin temperature and respiratory rate. Vendor scores are never displayed as-is. Everything is recomputed from the underlying signals with the confounds modelled explicitly.
+**Consumer sensors, known confounds.** Personal factors can move heart rate, HRV, skin temperature and respiratory rate, which can make a wearable recovery score misleading on the days it matters most. Vendor scores are never displayed as-is. Everything is recomputed from the underlying signals with the confounds modelled explicitly.
 
 **A decade of training in two apps.** History was imported from one logger to another, so the same session exists twice under different names. Deduplication is part of the data model, and exercise identity is derived from behaviour (same day, same set sequence) instead of string similarity.
 
@@ -214,7 +214,7 @@ The honest state of the system. Full list in [evaluation.md](docs/evaluation.md)
 - **Readiness has no demonstrated predictive validity** at n = 54, and it still gates training. This is the weakest load-bearing assumption in the engine.
 - **The lab barely predicts a single morning.** Forecast skill is +0.1% over 177 held-out mornings. Day-level HRV is mostly noise, so weekly questions are where the research team intends to earn skill.
 - **ACWR is a monitoring frame, not an injury model.** Acute and chronic windows are uncoupled, but the evidence for ACWR thresholds predicting injury is contested ([Zouhal et al. 2021](https://doi.org/10.3389/fphys.2021.669687)), and the gates are only as good as that evidence.
-- **HRV is confounded** by an as-needed beta-blocker and still carries 0.40 of the readiness composite.
+- **HRV is confounded** by personal factors and still carries 0.40 of the readiness composite.
 - **Two e1RM sources disagree** for the same lift, cause not yet understood.
 - **The deload trigger is not personalized** and can return population defaults that look like fitted values.
 
@@ -239,7 +239,7 @@ The honest state of the system. Full list in [evaluation.md](docs/evaluation.md)
 - **Backend.** Python 3.12, FastAPI, DuckDB, APScheduler, Pydantic, NumPy. `uv`, `ruff`, `pyright`, `pytest`.
 - **Frontend.** Next.js 16, React 19, TypeScript, Tailwind 4, TanStack Query, Recharts, Motion.
 - **Reasoning.** Claude as an external planner over a served context packet. An Obsidian vault of peer-reviewed sources as the research corpus.
-- **Sources.** WHOOP (public OAuth API, plus the private API for signals the public one omits), Apple Health export, Hevy strength logs, DUPR pickleball rating and matches, a YAML clinical profile, tape measurements, and a daily check-in.
+- **Sources.** WHOOP (public OAuth API, plus the private API for signals the public one omits), Apple Health export, Hevy strength logs, DUPR pickleball rating and matches, a private YAML profile, tape measurements, and a daily check-in.
 
 **Privacy.** One DuckDB file on one machine at home, reached from other devices over a private tailnet. No cloud database, no analytics, no telemetry. `backend/data` is gitignored because this repository is public, and test fixtures are synthetic by construction.
 
