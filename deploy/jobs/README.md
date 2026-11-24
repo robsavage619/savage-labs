@@ -8,9 +8,13 @@
 `lab.md`, `lab.conf` and `../com.savage.shc-lab.plist` are copies of the files running
 on the host (checked byte for byte on 2026-11-23), with the host's home directory
 written as `__HOME__` (and the plist's user as `__USER__`). The cycle: one specialist
-a day (Mon hypertrophy, Tue recovery, Wed conditioning, Thu metabolic), a blind
-methodologist, `run-all`, then a blind devil's advocate on decisive results. The
-schedule is Mon to Thu at 13:00. Vault reading is host-specific: the agents read a
+a week (ISO week number mod 4: 0 hypertrophy, 1 recovery, 2 conditioning, 3
+metabolic), a blind methodologist, `run-all`, then a blind devil's advocate on
+decisive results. The schedule is Monday at 13:00 only, set 2026-11-24 while few
+experiments are live (plan decision D4); the run also reports the experiment block
+scorer state. To revert: restore the Weekday 1 to 4 entries in the plist and, in
+`lab.md` section 0, pick the specialist by weekday (Mon hypertrophy, Tue recovery,
+Wed conditioning, Thu metabolic); then reinstall on the host. Vault reading is host-specific: the agents read a
 read-only copy under `~/.config/shc/vault`, and the host has no literature search.
 
 When the host copy changes, copy it back here with the same substitution so the repo
