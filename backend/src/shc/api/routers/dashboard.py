@@ -594,6 +594,13 @@ _TAPE_METRICS = {
     "thigh_in": "thigh_circumference_cm",
     "chest_in": "chest_circumference_cm",
 }
+# Per-arm flexed readings for the biceps block experiment. Kept out of _TAPE_METRICS on purpose:
+# the cadence check needs all five sites there, and arm_circumference_cm stays its own series.
+_ARM_SIDE_METRICS = {
+    "arm_left_in": "arm_left_circumference_cm",
+    "arm_right_in": "arm_right_circumference_cm",
+}
+_ALL_TAPE_METRICS = {**_TAPE_METRICS, **_ARM_SIDE_METRICS}
 
 
 class TapeSubmission(BaseModel):
@@ -602,6 +609,8 @@ class TapeSubmission(BaseModel):
     arm_in: float | None = Field(default=None, gt=5, lt=40)
     thigh_in: float | None = Field(default=None, gt=5, lt=60)
     chest_in: float | None = Field(default=None, gt=10, lt=90)
+    arm_left_in: float | None = Field(default=None, gt=5, lt=40)
+    arm_right_in: float | None = Field(default=None, gt=5, lt=40)
 
 
 @router.post("/body/tape", dependencies=[Depends(require_admin_key)])
@@ -613,7 +622,7 @@ async def post_tape(body: TapeSubmission) -> dict:
     today = date.today()
     async with write_ctx() as conn:
         for field_name, inches in values.items():
-            metric = _TAPE_METRICS[field_name]
+            metric = _ALL_TAPE_METRICS[field_name]
             conn.execute(
                 "DELETE FROM measurements WHERE source = 'manual' AND metric = ? AND ts = ?",
                 [metric, today],
@@ -644,7 +653,7 @@ async def get_tape() -> dict:
         ).fetchall()
     finally:
         conn.close()
-    names = {v: k for k, v in _TAPE_METRICS.items()}
+    names = {v: k for k, v in _ALL_TAPE_METRICS.items()}
     return {
         names[r[0]]: {"date": str(r[1]), "inches": round(r[2] / 2.54, 2), "readings": r[3]}
         for r in rows
@@ -654,7 +663,7 @@ async def get_tape() -> dict:
 
 def tape_history(conn) -> dict[str, list[dict]]:
     """Every manual tape reading per site, oldest first, in inches."""
-    names = {v: k for k, v in _TAPE_METRICS.items()}
+    names = {v: k for k, v in _ALL_TAPE_METRICS.items()}
     rows = conn.execute(
         "SELECT ts::DATE, metric, value_num FROM measurements "
         "WHERE source = 'manual' AND metric LIKE '%circumference_cm' ORDER BY ts"
