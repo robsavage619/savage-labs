@@ -1131,7 +1131,8 @@ def refresh_belief(conn: duckdb.DuckDBPyConnection, belief_id: str) -> None:
     """Posterior from the prior and the latest result of every linked hypothesis.
 
     Rebuilt from scratch each time, so re-running a hypothesis never counts the
-    same days twice.
+    same days twice. A retrospective result rests on days the author explored
+    before registering, so it never moves the belief.
     """
     b = conn.execute(
         "SELECT prior_mean, prior_sd FROM research_beliefs WHERE id = ?", [belief_id]
@@ -1142,7 +1143,8 @@ def refresh_belief(conn: duckdb.DuckDBPyConnection, belief_id: str) -> None:
         """
         SELECT r.effect, r.se FROM research_results r
         JOIN research_hypotheses h ON h.id = r.hypothesis_id
-        WHERE h.belief_id = ? AND r.effect IS NOT NULL AND r.run_at = (
+        WHERE h.belief_id = ? AND r.effect IS NOT NULL AND r.verdict <> 'retrospective'
+          AND r.run_at = (
             SELECT MAX(run_at) FROM research_results WHERE hypothesis_id = h.id)
         """,
         [belief_id],
@@ -1526,15 +1528,20 @@ def _skill(pairs: list[tuple[float, float]]) -> float | None:
 
 # ponytail: treats scored points as independent; move to a Diebold-Mariano
 # variance with lags if the forecast ever beats baseline by a hair.
-def _skill_call(pairs: list[tuple[float, float]]) -> str | None:
+def _skill_call(pairs: list[tuple[float, float]], base: list[float] | None = None) -> str | None:
     """Whether the lab beats the baseline guess beyond chance: better, worse or tie.
 
     Tests the mean per-point gain in squared error (baseline minus lab) against
     its own standard error, so a skill a hair above zero reads as a tie.
+
+    Args:
+        pairs: (actual, lab prediction) per scored point.
+        base: The baseline guess per point; zero when omitted.
     """
     if len(pairs) < 10:
         return None
-    gain = [a * a - (a - p) ** 2 for a, p in pairs]
+    b = base or [0.0] * len(pairs)
+    gain = [(a - g) ** 2 - (a - p) ** 2 for (a, p), g in zip(pairs, b, strict=True)]
     m = mean(gain)
     se = math.sqrt(sum((g - m) ** 2 for g in gain) / (len(gain) - 1) / len(gain))
     if se == 0 or abs(m) <= 1.96 * se:
@@ -1542,13 +1549,58 @@ def _skill_call(pairs: list[tuple[float, float]]) -> str | None:
     return "better" if m > 0 else "worse"
 
 
+_PERSIST_FIT_DAYS = 90
+
+
+def _persistence_coef(actual: dict[date, float], origin: date, lag: int) -> float:
+    """Shrunk persistence: the through-origin slope of the value on its value `lag`
+    days earlier, fitted only on days up to `origin` and held to [0, 1]."""
+    xs, ys = [], []
+    for i in range(_PERSIST_FIT_DAYS):
+        d = origin - timedelta(days=i)
+        if d in actual and d - timedelta(days=lag) in actual:
+            xs.append(actual[d - timedelta(days=lag)])
+            ys.append(actual[d])
+    den = sum(x * x for x in xs)
+    if len(xs) < 20 or den == 0:
+        return 0.0
+    return min(1.0, max(0.0, sum(x * y for x, y in zip(xs, ys, strict=True)) / den))
+
+
+def _best_baseline(series_rows: list[dict]) -> dict:
+    """Skill against the better of the zero baseline and shrunk persistence.
+
+    Reads the scored series, so a stored backtest reports the same numbers the
+    run did. Every field is None for a series saved before persistence was kept.
+    """
+    none = {"skill_best": None, "baseline": None, "rmse_persist": None, "call_best": None}
+    if not series_rows or any("persist" not in x for x in series_rows):
+        return none
+    a = [x["actual"] for x in series_rows]
+    p = [x["predicted"] for x in series_rows]
+    q = [x["persist"] for x in series_rows]
+    mse_zero = mean(v * v for v in a)
+    mse_persist = mean((v - w) ** 2 for v, w in zip(a, q, strict=True))
+    mse_lab = mean((v - w) ** 2 for v, w in zip(a, p, strict=True))
+    use_persist = mse_persist < mse_zero
+    base_mse = mse_persist if use_persist else mse_zero
+    return {
+        "skill_best": None if base_mse == 0 else 1 - mse_lab / base_mse,
+        "baseline": "persistence" if use_persist else "zero",
+        "rmse_persist": math.sqrt(mse_persist),
+        "call_best": _skill_call(list(zip(a, p, strict=True)), q if use_persist else None),
+    }
+
+
 def backtest(
     conn: duckdb.DuckDBPyConnection, today: date | None = None, metric: str = FORECAST_METRIC
 ) -> dict:
     """Rolling-origin backtest of one forecast target, with each belief's contribution.
 
-    The baseline guess is zero (no change from the outcome's own baseline). The
-    skill is withheld, with a `reason`, when no belief predicts the target or
+    The baseline guess is zero (no change from the outcome's own baseline); the
+    `*_best` fields repeat the score against the better of zero and a shrunk
+    persistence (a fraction of the last known value, fitted before each origin).
+    The skill is withheld, with a `reason`, when no belief predicts the target or
     fewer than the target's `min_scored` points could be scored: a model with
     no terms scores exactly zero by construction, which is not a finding.
 
@@ -1565,10 +1617,13 @@ def backtest(
     target = forecast_target(metric)
     actual = series(conn, metric)
     scored: list[tuple[date, float, float, dict[str, float]]] = []
+    persist: list[float] = []
     claims: dict[str, str] = {}
     first = max(1, target.horizon_days)
+    lag = first
     for k in range(_BACKTEST_ORIGINS, 0, -1):
         origin = today - timedelta(days=k * _BACKTEST_HORIZON)
+        phi = _persistence_coef(actual, origin, lag)
         terms = _models(conn, origin, metric)
         claims |= {t.belief_id: t.claim for t in terms}
         feats = _features_for(conn, terms, (origin - timedelta(days=30), today))
@@ -1577,6 +1632,7 @@ def backtest(
             if m > today or m not in actual:
                 continue
             lab = _predict(terms, feats, m)
+            persist.append(phi * actual.get(m - timedelta(days=lag), 0.0))
             scored.append(
                 (
                     m,
@@ -1597,19 +1653,21 @@ def backtest(
     for bid in claims:
         without = _skill([(a, w.get(bid, p)) for _, a, p, w in scored])
         gains[bid] = None if skill is None or without is None else skill - without
+    rows = [
+        {"date": str(m), "actual": round(a, 2), "predicted": round(p, 2), "persist": round(q, 2)}
+        for (m, a, p, _), q in zip(scored, persist, strict=True)
+    ]
     return {
         "metric": metric,
         "label": target.label,
         "skill": skill,
+        **(_best_baseline(rows) if skill is not None else _best_baseline([])),
         "n": len(scored),
         "reason": reason,
         "rmse_lab": math.sqrt(mean((a - p) ** 2 for _, a, p, _ in scored)) if scored else None,
         "rmse_base": math.sqrt(mean(a * a for _, a, _, _ in scored)) if scored else None,
         "gains": gains,
-        "series": [
-            {"date": str(m), "actual": round(a, 2), "predicted": round(p, 2)}
-            for m, a, p, _ in scored
-        ],
+        "series": rows,
     }
 
 
@@ -1687,15 +1745,29 @@ def store_backtest(conn: duckdb.DuckDBPyConnection, bt: dict, author: str = "for
     for bid, g in bt["gains"].items():
         conn.execute("UPDATE research_beliefs SET forecast_gain = ? WHERE id = ?", [g, bid])
     if bt["skill"] is not None:
-        helps = sum(1 for g in bt["gains"].values() if g is not None and g > 0)
         what = "mornings" if bt["metric"] == FORECAST_METRIC else f"{bt['metric']} points"
-        note(
-            conn,
-            author,
-            "forecast",
-            f"Forecast skill {bt['skill']:+.3f} over {bt['n']} unseen {what}",
-            f"{helps} of {len(bt['gains'])} beliefs improve the forecast; the rest are candidates for demotion.",
+        call = bt.get("call_best") or _skill_call(
+            [(x["actual"], x["predicted"]) for x in bt["series"]]
         )
+        head = f"Forecast skill {bt['skill']:+.3f} over {bt['n']} unseen {what}"
+        if call == "tie":
+            note(
+                conn,
+                author,
+                "forecast",
+                f"{head}: a tie with the baseline",
+                "The forecast is not distinguishable from the baseline guess, so no belief "
+                "can be said to improve it.",
+            )
+        else:
+            helps = sum(1 for g in bt["gains"].values() if g is not None and g > 0)
+            note(
+                conn,
+                author,
+                "forecast",
+                f"{head}: {call or 'too few points to call'}",
+                f"{helps} of {len(bt['gains'])} beliefs improve the forecast; the rest are candidates for demotion.",
+            )
 
 
 def forecast_view(
@@ -1714,6 +1786,7 @@ def forecast_view(
         [metric, live_days],
     ).fetchall()
     scored = [(float(a), float(p)) for _, p, a, _ in live if a is not None]
+    rows = [] if row is None else json.loads(row[7])
     return {
         "backtest": None
         if row is None
@@ -1723,12 +1796,13 @@ def forecast_view(
             "skill": row[2],
             "call": None
             if row[2] is None
-            else _skill_call([(x["actual"], x["predicted"]) for x in json.loads(row[7])]),
+            else _skill_call([(x["actual"], x["predicted"]) for x in rows]),
+            **_best_baseline(rows if row[2] is not None else []),
             "n": row[3],
             "rmse_lab": row[4],
             "rmse_base": row[5],
             "gains": json.loads(row[6]),
-            "series": json.loads(row[7]),
+            "series": rows,
             "reason": row[8],
         },
         "live": [

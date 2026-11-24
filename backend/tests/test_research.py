@@ -115,6 +115,12 @@ def test_belief_posterior_sits_between_prior_and_data_and_narrows(conn) -> None:
     research.register(
         conn, "strain-hrv", "Does a hard day lower tomorrow's HRV?", SPEC, bid, "test"
     )
+    # Registered before the data arrived, so the days count; otherwise the result
+    # is retrospective and (correctly) leaves the prior alone.
+    conn.execute(
+        "UPDATE research_hypotheses SET created_at = ? WHERE slug = 'strain-hrv'",
+        [TODAY - timedelta(days=400)],
+    )
     res = research.run(conn, "strain-hrv")
     b = next(x for x in research.beliefs(conn) if x["id"] == bid)
     assert min(-3.0, res["effect"]) <= b["post_mean"] <= max(-3.0, res["effect"])
@@ -625,3 +631,77 @@ def test_a_retrospective_result_says_how_long_the_wait_is(conn) -> None:
     res = research.run(conn, "wait")
     assert res["verdict"] == "retrospective"
     assert f"about {res['power']['days_to_confirm']} more days" in res["summary"]
+
+
+def test_a_retrospective_result_does_not_move_a_belief(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    bid = research.add_belief(
+        conn, "Hard days lower tomorrow's HRV", "lnhrv_dev_pct", -3.0, 5.0, "prior", None, "test"
+    )
+    research.register(conn, "seen", "q", SPEC, bid, "test")
+    assert research.run(conn, "seen")["verdict"] == "retrospective"
+    b = next(x for x in research.beliefs(conn) if x["id"] == bid)
+    assert b["post_mean"] == pytest.approx(-3.0) and b["post_sd"] == pytest.approx(5.0)
+
+
+def _ar_series(phi: float, n: int = 200) -> list[dict]:
+    rng = random.Random(4)
+    y, prev = [], 0.0
+    for _ in range(n):
+        prev = phi * prev + rng.gauss(0, 10)
+        y.append(prev)
+    return [{"actual": y[i], "predicted": 0.0, "persist": 0.25 * y[i - 1]} for i in range(1, n)]
+
+
+def test_skill_is_also_scored_against_shrunk_persistence() -> None:
+    # A forecast that always says zero ties the zero baseline exactly, but loses to
+    # persistence when the series carries over from day to day.
+    rows = _ar_series(0.5)
+    best = research._best_baseline(rows)
+    assert best["baseline"] == "persistence"
+    assert best["skill_best"] < 0
+    # Series stored before persistence was kept report nothing rather than a guess.
+    assert research._best_baseline([{"actual": 1, "predicted": 0}])["skill_best"] is None
+
+
+def test_persistence_coefficient_is_fitted_only_before_the_origin() -> None:
+    origin = date(2026, 3, 1)
+    actual = {origin - timedelta(days=i): (i % 2) * 2.0 - 1.0 for i in range(120)}
+    before = research._persistence_coef(actual, origin, 1)
+    actual |= {origin + timedelta(days=i): 50.0 for i in range(1, 60)}
+    assert research._persistence_coef(actual, origin, 1) == before == 0.0
+
+
+def test_backtest_keeps_the_zero_baseline_fields_and_adds_persistence(conn) -> None:
+    _setup_belief(conn, effect_pct=-15)
+    bt = research.backtest(conn, today=TODAY)
+    for k in ("skill", "rmse_lab", "rmse_base", "skill_best", "baseline", "rmse_persist"):
+        assert k in bt
+    assert bt["skill_best"] <= bt["skill"] + 1e-9
+    research.store_backtest(conn, bt)
+    view = research.forecast_view(conn)["backtest"]
+    assert view["skill_best"] == pytest.approx(bt["skill_best"])
+    assert view["call"] is not None and "call_best" in view
+
+
+def test_a_tie_is_not_reported_as_beliefs_improving_the_forecast(conn) -> None:
+    rng = random.Random(2)
+    series = [
+        {"date": str(i), "actual": rng.gauss(0, 20), "predicted": rng.gauss(0, 0.5), "persist": 0.0}
+        for i in range(120)
+    ]
+    bt = {
+        "metric": research.FORECAST_METRIC,
+        "skill": 0.007,
+        "n": 120,
+        "rmse_lab": 1.0,
+        "rmse_base": 1.0,
+        "gains": {},
+        "series": series,
+    }
+    bt |= research._best_baseline(series)
+    assert bt["call_best"] == "tie"
+    research.store_backtest(conn, bt)
+    titles = [n["title"] for n in research.notebook(conn)]
+    assert any("a tie" in t for t in titles)
+    assert not any("beliefs improve the forecast" in str(n) for n in research.notebook(conn))
