@@ -63,12 +63,18 @@ def _set_counts(conn: duckdb.DuckDBPyConnection) -> dict[tuple[date, str], int]:
 
 
 def _test_set_e1rm(conn: duckdb.DuckDBPyConnection) -> dict[date, dict[str, float]]:
-    """Per day and arm, e1RM of the first non-warmup set (lowest set_idx)."""
+    """Per day and arm, e1RM of the first non-warmup set (lowest set_idx).
+
+    The RIR adjustment is used for a day only when BOTH arms' test sets carry an RPE;
+    otherwise both arms fall back to raw reps, so one arm's logged effort cannot
+    read as a gap between equal arms (invariant 13's consistent-basis rule).
+    """
     eff = effective_reps_sql("reps", "rpe")
     hand = per_hand_sql("weight_kg", "exercise", "day_d")
     rows = conn.execute(
         f"""
-        SELECT day_d, exercise, ({hand}) * (1 + ({eff}) / 30.0)
+        SELECT day_d, exercise, ({hand}) * (1 + ({eff}) / 30.0),
+               ({hand}) * (1 + reps / 30.0), rpe IS NOT NULL
         FROM (
             SELECT *, row_number() OVER (
                 PARTITION BY day_d, exercise ORDER BY started_at, set_idx) AS rn
@@ -81,9 +87,13 @@ def _test_set_e1rm(conn: duckdb.DuckDBPyConnection) -> dict[date, dict[str, floa
         [EXERCISE["left"], EXERCISE["right"], PLACEBO_WEEK, LAST_WEEK + timedelta(days=6)],
     ).fetchall()
     arm_of = {v: k for k, v in EXERCISE.items()}
+    seen: dict[date, dict[str, tuple[float, float, bool]]] = {}
+    for day, ex, adj, raw, has_rpe in rows:
+        seen.setdefault(day, {})[arm_of[ex]] = (float(adj), float(raw), bool(has_rpe))
     out: dict[date, dict[str, float]] = {}
-    for day, ex, e1rm in rows:
-        out.setdefault(day, {})[arm_of[ex]] = float(e1rm)
+    for day, arms in seen.items():
+        adjusted = len(arms) == 2 and all(a[2] for a in arms.values())
+        out[day] = {arm: a[0] if adjusted else a[1] for arm, a in arms.items()}
     return out
 
 

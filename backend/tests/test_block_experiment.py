@@ -114,3 +114,20 @@ def test_warmup_is_not_the_test_set(conn, seed) -> None:
 def test_rerun_is_identical(conn, seed) -> None:
     _build(seed, final_gap=9.5)
     assert be.score(conn, AFTER) == be.score(conn, AFTER)
+
+
+def test_effort_adjustment_is_not_applied_to_one_arm_only(conn, seed) -> None:
+    """RPE logged on one arm's test set must not read as a gap between equal arms."""
+    day = be.PLACEBO_WEEK + timedelta(days=1)
+    seed.workout(day, L, [(BASE_KG, 10)], rpe=None)
+    seed.workout(day, R, [(BASE_KG, 10)], rpe=7.0)
+    ((_, gap),) = be._gaps(be._test_set_e1rm(conn))
+    assert abs(gap) < 1e-9
+
+
+def test_effort_adjustment_still_applies_when_both_arms_logged_rpe(conn, seed) -> None:
+    day = be.PLACEBO_WEEK + timedelta(days=1)
+    seed.workout(day, L, [(BASE_KG, 10)], rpe=7.0)
+    seed.workout(day, R, [(BASE_KG * 1.05, 10)], rpe=7.0)
+    ((_, gap),) = be._gaps(be._test_set_e1rm(conn))
+    assert abs(gap - 5.0) < 1e-6
