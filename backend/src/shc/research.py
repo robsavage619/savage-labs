@@ -25,7 +25,7 @@ import duckdb
 import numpy as np
 
 from shc import places
-from shc.selflab import _design_effect, _needed_per_arm
+from shc.selflab import _needed_per_arm
 from shc.training.mesocycle import _CAPPED_E1RM, _MAX_E1RM_MEDIAN_DEVIATION
 from shc.training.volume import _RPE_GATE, _STIMULATING
 
@@ -37,6 +37,8 @@ _NORMAL = NormalDist()
 # it back for a stronger design.
 MAX_DAYS_TO_ANSWER = 120
 _MIN_PER_ARM = 10
+# The lab audit used 10 sessions; n ** (1/3) is only 5 at a hundred rows.
+_HAC_MIN_LAGS = 10
 _PACE_WINDOW_DAYS = 90
 
 
@@ -842,13 +844,7 @@ def estimate(
     dof = max(len(y) - X.shape[1], 1)
     sigma2 = float(resid @ resid) / dof
     cov = sigma2 * np.linalg.pinv(X.T @ X)
-    # Consecutive units carry over; measure it on the residuals, keyed to a
-    # daily index so a week-unit study's neighbours read as consecutive.
-    idx = [
-        (start + timedelta(days=int((r[0] - start) / step)), float(e))
-        for r, e in zip(rows, resid, strict=True)
-    ]
-    de = _design_effect(idx)
+    de = _hac_design_effect(X, resid, float(cov[1, 1]), dof)
     effect = float(beta[1])
     se = math.sqrt(float(cov[1, 1]) * de)
     ci = (effect - 1.96 * se, effect + 1.96 * se)
@@ -884,6 +880,37 @@ def estimate(
             f"{n_a} A / {n_b} B {unit}s, adjusted for {', '.join(adj) or 'nothing'}. → {verdict}"
         ),
     }
+
+
+def _hac_design_effect(X: np.ndarray, resid: np.ndarray, ols_var: float, dof: int) -> float:
+    """Variance inflation of the arm coefficient under Newey-West errors.
+
+    Rows are taken in observation order, so a regime that lasts weeks (or an
+    arm that runs in blocks) shows up as residual autocorrelation the classical
+    variance ignores. Uses a Bartlett kernel with a lag of
+    ``max(_HAC_MIN_LAGS, round(n ** (1/3)))``, capped at a quarter of the rows.
+
+    Args:
+        X: Design matrix; column 1 is the arm indicator.
+        resid: OLS residuals, one per row of ``X``.
+        ols_var: Classical OLS variance of the arm coefficient.
+        dof: Residual degrees of freedom the classical variance used.
+
+    Returns:
+        Robust variance over classical variance, never below 1.0.
+    """
+    n = len(resid)
+    if ols_var <= 0 or n < 12:
+        return 1.0
+    lags = min(max(_HAC_MIN_LAGS, round(n ** (1 / 3))), n // 4)
+    u = X * resid[:, None]
+    S = u.T @ u
+    for k in range(1, lags + 1):
+        g = u[k:].T @ u[:-k]
+        S += (1 - k / (lags + 1)) * (g + g.T)
+    bread = np.linalg.pinv(X.T @ X)
+    robust = float((bread @ S @ bread)[1, 1]) * n / dof
+    return max(robust / ols_var, 1.0)
 
 
 def _power(

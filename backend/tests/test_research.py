@@ -57,6 +57,49 @@ def test_null_effect_is_not_supported(conn) -> None:
     assert res["verdict"] in ("inconclusive", "ruled_out")
 
 
+def _seed_blocks(conn, seed: int, block: int = 21, days: int = 360, end: date = TODAY) -> None:
+    """Regimes of `block` days shift HRV; strain also runs in blocks. No true effect.
+
+    Strain is logged every third day, like sessions, so no two rows are
+    calendar-consecutive and a lag-1 daily autocorrelation has nothing to read.
+    """
+    rng = random.Random(seed)
+    start = end - timedelta(days=days)
+    regime, high = 0.0, False
+    for i in range(days + 1):
+        d = start + timedelta(days=i)
+        if i % block == 0:
+            regime = rng.gauss(0, 0.12)
+        if i % (block + 7) == 0:
+            high = rng.random() < 0.5
+        strain = rng.uniform(14, 18) if high else rng.uniform(4, 9)
+        hrv = math.exp(math.log(100) + regime + rng.gauss(0, 0.05))
+        conn.execute(
+            "INSERT INTO recovery (id, source, date, score, hrv, rhr, content_hash) VALUES (?, 'whoop', ?, 60, ?, 50, ?)",
+            [f"r{i}", d, hrv, f"h{i}"],
+        )
+        if i % 3 == 0:
+            conn.execute(
+                "INSERT INTO daily_cycle (id, date, strain, content_hash) VALUES (?, ?, ?, ?)",
+                [f"c{i}", d, strain, f"k{i}"],
+            )
+
+
+def test_blocked_errors_and_blocked_arms_do_not_fake_an_effect(conn) -> None:
+    _seed_blocks(conn, seed=62)
+    res = research.estimate(conn, SPEC, today=TODAY)
+    assert res["ci_low"] < 0 < res["ci_high"]
+    assert res["verdict"] not in ("supported", "direction")
+    assert res["design_effect"] > 1.5
+
+
+def test_independent_noise_keeps_a_real_effect_supported(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    res = research.estimate(conn, SPEC, today=TODAY)
+    assert res["verdict"] == "supported"
+    assert res["design_effect"] < 2.0
+
+
 def test_belief_posterior_sits_between_prior_and_data_and_narrows(conn) -> None:
     _seed(conn, effect_pct=-10)
     bid = research.add_belief(
