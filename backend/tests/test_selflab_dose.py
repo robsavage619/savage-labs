@@ -113,6 +113,7 @@ def test_design_must_be_declared_and_validated(conn):
 
 
 def test_observational_design_survives_preregistration(conn):
+    _sets(conn, date.today() - timedelta(days=3), 1)
     exp_id = selflab.preregister(
         conn,
         slug="dose-test",

@@ -79,6 +79,64 @@ class Experiment:
 # observational study that never states its design is mislabelled by omission.
 _DESIGNS = ("randomized_alternating", "observational")
 
+# A study that cannot answer within this many days at its live pace is refused
+# at registration. Mirrors research.MAX_DAYS_TO_ANSWER (research imports this
+# module, so the constant cannot be imported back).
+MAX_DAYS_TO_ANSWER = 120
+_RECENT_SESSION_DAYS = 60
+_ADHERENCE = 0.8
+
+
+def _check_answerable(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    outcome_metric: str,
+    min_effect: float,
+    design: str,
+) -> None:
+    """Refuse a study that can never answer (R-R5: the rule lives in code).
+
+    Raises:
+        ValueError: if the outcome exercise has no logged working set in the
+            last 60 days, or a randomized study's days-to-answer at the
+            outcome's live noise, pace and 80% adherence exceeds 120.
+    """
+    kind, _, arg = outcome_metric.partition(":")
+    if kind in ("top_set_e1rm", "e1rm_delta_2wk") and arg:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM workout_sets_dedup WHERE exercise = ? "
+            "AND is_warmup = FALSE AND day_d >= ?",
+            [arg, (date.today() - timedelta(days=_RECENT_SESSION_DAYS)).isoformat()],
+        ).fetchone()
+        if not n or n[0] == 0:
+            raise ValueError(
+                f"outcome exercise {arg!r} has 0 logged working sets in the last "
+                f"{_RECENT_SESSION_DAYS} days (exact logged name required) — a study "
+                "whose outcome is never measured can never answer"
+            )
+    # An observational arm is observed, not assigned, so its accrual pace is
+    # not the outcome's measurement rate; only randomized studies are sized here.
+    if design != "randomized_alternating":
+        return
+    series = _metric_history(conn, outcome_metric)
+    if len(series) < 10:
+        return
+    sd = pstdev(v for _, v in series)
+    needed = _needed_per_arm(sd, min_effect, _design_effect(series))
+    since = date.today() - timedelta(days=_PACE_WINDOW_DAYS)
+    rate = sum(1 for d, _ in series if d >= since) / _PACE_WINDOW_DAYS
+    per_arm_pace = rate * _ADHERENCE / 2
+    days = math.ceil(needed / per_arm_pace) if per_arm_pace > 0 else None
+    if days is None or days > MAX_DAYS_TO_ANSWER:
+        raise ValueError(
+            f"needs {needed} outcomes per arm at the outcome's live noise "
+            f"(sd {sd:.2f}, min_effect {min_effect}) — "
+            f"{'no outcomes in the last 60 days' if days is None else f'{days} days'} "
+            f"at the current pace and {_ADHERENCE:.0%} adherence; the limit is "
+            f"{MAX_DAYS_TO_ANSWER} days"
+        )
+
+
 def preregister(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -131,7 +189,8 @@ def preregister(
         ValueError: if ``min_effect`` is not strictly positive, or the
             actuation fields are partially declared / use an unrecognized
             target_kind or direction / have a non-positive magnitude or cap /
-            declare a magnitude exceeding the cap.
+            declare a magnitude exceeding the cap, or the study cannot answer
+            (see `_check_answerable`).
     """
     if design not in _DESIGNS:
         raise ValueError(f"design must be one of {_DESIGNS}, got {design!r}")
@@ -169,6 +228,9 @@ def preregister(
                 f"actuation_magnitude_pct ({actuation_magnitude_pct}) must not exceed "
                 f"actuation_cap_pct ({actuation_cap_pct})"
             )
+    _check_answerable(
+        conn, outcome_metric=outcome_metric, min_effect=min_effect, design=design
+    )
     started = started_on or date.today()
     conn.execute(
         """
@@ -1009,6 +1071,19 @@ def _emit_prior(
              metric_short, pct)
 
 
+def _metric_history(
+    conn: duckdb.DuckDBPyConnection, metric: str
+) -> list[tuple[date, float]]:
+    """The outcome metric's own last 180 days, one value per day that has one."""
+    series: list[tuple[date, float]] = []
+    for k in range(1, 181):
+        d = date.today() - timedelta(days=k)
+        v = _outcome_value(conn, metric, d)
+        if v is not None:
+            series.append((d, float(v)))
+    return series
+
+
 def power_estimate(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict | None:
     """How many days a study needs, what it can detect now, and when it can answer.
 
@@ -1023,12 +1098,7 @@ def power_estimate(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict | N
     ).fetchall()
     series = _arm_residuals([(d, arm, float(v)) for d, arm, v, _ in rows])
     if len(series) < 10:
-        series = []
-        for k in range(1, 181):
-            d = date.today() - timedelta(days=k)
-            v = _outcome_value(conn, exp.outcome_metric, d)
-            if v is not None:
-                series.append((d, float(v)))
+        series = _metric_history(conn, exp.outcome_metric)
     if len(series) < 10 or exp.min_effect <= 0:
         return None
     sd = pstdev(v for _, v in series)

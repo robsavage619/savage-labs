@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
 from shc import selflab
 
 
-def _prereg(conn, **over):
+def _recent_set(conn, exercise: str, days_ago: int = 3) -> None:
+    day = date.today() - timedelta(days=days_ago)
+    wid = f"w-{exercise}-{day}"
+    conn.execute(
+        "INSERT OR IGNORE INTO workouts (id, source, started_at, kind, content_hash) "
+        "VALUES (?, 'hevy', ?, 'strength', ?)",
+        [wid, datetime.combine(day, datetime.min.time()), f"h{wid}"],
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO workout_sets (id, workout_id, set_idx, exercise, weight_kg, "
+        "reps, rpe, is_warmup, content_hash) VALUES (?, ?, 0, ?, 60, 8, 8.0, FALSE, ?)",
+        [f"{wid}s0", wid, exercise, f"c{wid}"],
+    )
+
+
+def _prereg(conn, *, seed: bool = True, **over):
     kw = dict(
         slug="caffeine-bench",
         hypothesis="Pre-lift caffeine raises top-set bench e1RM.",
@@ -21,7 +36,17 @@ def _prereg(conn, **over):
         min_effect=2.0,
     )
     kw.update(over)
+    if seed:
+        _recent_set(conn, kw["outcome_metric"].partition(":")[2])
     return selflab.preregister(conn, **kw)
+
+
+def _log_recovery(conn, day: date, hrv: float) -> None:
+    conn.execute(
+        "INSERT INTO recovery (id, source, date, hrv, content_hash) "
+        "VALUES (?, 'whoop', ?, ?, ?)",
+        [f"r{day}", day.isoformat(), hrv, f"r{day}"],
+    )
 
 
 def _log(conn, exp_id, day, arm, outcome, adhered=True):
@@ -96,6 +121,43 @@ def test_tight_null_with_min_effect_is_refuted(conn) -> None:
     r = selflab.score(conn, exp)
     assert r["verdict"] == "REFUTED", r
     assert selflab.active_priors(conn) == []
+
+
+def test_preregister_refuses_outcome_exercise_with_no_recent_session(conn) -> None:
+    _recent_set(conn, "Shoulder Press (Dumbbell)", days_ago=90)
+    with pytest.raises(ValueError, match="0 logged working sets in the last 60 days"):
+        _prereg(
+            conn,
+            seed=False,
+            slug="stale-lift",
+            outcome_metric="top_set_e1rm:Shoulder Press (Dumbbell)",
+        )
+    # exact name: a near-match elsewhere does not satisfy the gate
+    _recent_set(conn, "Shoulder Press (Dumbbell) Seated")
+    with pytest.raises(ValueError, match="0 logged working sets"):
+        _prereg(
+            conn,
+            seed=False,
+            slug="substring-lift",
+            outcome_metric="top_set_e1rm:Shoulder Press (Dumbbell)",
+        )
+
+
+def test_preregister_refuses_study_that_cannot_answer_in_120_days(conn) -> None:
+    today = date.today()
+    for k in range(1, 61):
+        _log_recovery(conn, today - timedelta(days=k), 50.0 + (k * 7919 % 40))
+    with pytest.raises(ValueError, match="the limit is 120 days"):
+        selflab.preregister(
+            conn, slug="hopeless", hypothesis="h", manipulated="m",
+            condition_a="a", condition_b="b",
+            outcome_metric="hrv_next_morning", min_effect=0.5,
+        )
+    selflab.preregister(
+        conn, slug="feasible", hypothesis="h", manipulated="m",
+        condition_a="a", condition_b="b",
+        outcome_metric="hrv_next_morning", min_effect=40.0,
+    )
 
 
 def test_preregister_rejects_zero_min_effect(conn) -> None:

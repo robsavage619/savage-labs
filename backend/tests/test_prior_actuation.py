@@ -7,13 +7,24 @@ prescribed number — and stop changing it the moment the prior is retracted.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from shc import selflab
 from shc.training.autoregulation import weekly_prescription
 
 
 def _prereg_with_actuation(conn, **over):
+    day = date.today() - timedelta(days=3)
+    conn.execute(
+        "INSERT OR IGNORE INTO workouts (id, source, started_at, kind, content_hash) "
+        "VALUES ('wrecent', 'hevy', ?, 'strength', 'hrecent')",
+        [datetime.combine(day, datetime.min.time())],
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO workout_sets (id, workout_id, set_idx, exercise, weight_kg, reps, rpe, "
+        "is_warmup, content_hash) VALUES ('wrecents0', 'wrecent', 0, 'Bench Press (Barbell)', "
+        "60, 8, 8.0, FALSE, 'crecent')"
+    )
     kw = dict(
         slug="caffeine-chest",
         hypothesis="Pre-lift caffeine raises chest e1RM.",
