@@ -115,7 +115,7 @@ Both dead tiles were removed rather than repaired. A number nobody can compute h
 
 The piece I'm most proud of. A **pre-registered hypothesis catalog** runs against my live time-series and emits CONFIRMED / REFUTED / INCONCLUSIVE / INSUFFICIENT verdicts per question, with effect size, n, p-value, and the primary citation. The test type and threshold are fixed in advance, so I can't p-hack.
 
-The catalogue seeded with six hypotheses from the vault and has grown to 15. Two have been **confirmed** on my own data:
+The catalogue seeded with six hypotheses from the vault and grew to 15. Two were **confirmed** on my own data at the time; neither held up on later re-tests, which is part of why the catalogue was retired (below):
 
 | Finding | Effect | n | p |
 |---|---|---|---|
@@ -124,15 +124,7 @@ The catalogue seeded with six hypotheses from the vault and has grown to 15. Two
 
 Seven are **refuted**, which is the half nobody publishes and the half that actually changes behaviour: yoga does nothing measurable for my HRV (n=203), short sleep doesn't depress it the way the literature predicts (n=95), and stacking 2+ pickleball sessions in 3 days doesn't compound the hit (n=145).
 
-Wired through:
-
-```
-GET  /api/lab/questions    → catalogue
-GET  /api/lab/findings     → latest verdict per question, answered and open
-POST /api/lab/run          → run due hypotheses, re-verify answers, rotate stable questions
-```
-
-The frontend `LabPanel` renders one verdict-coded card per question with the hypothesis text, summary, effect size, n, p-value, test type, and vault citation, grouped into **Answered** and **Under test**. New hypotheses go into `lab_questions` as a one-row INSERT plus a runner function in `shc/lab.py`, that's the entire surface area for adding new questions.
+Until its retirement it was served through `/api/lab/questions`, `/api/lab/findings` and `/api/lab/run`, rendered as one verdict-coded card per question, and each new question needed a row in `lab_questions` plus a runner function in `shc/lab.py`. The research team replaced that with declarative specs that need no new code.
 
 **The lifecycle.** After each run, `rotate_if_stable()` retires any question that has produced 3 consecutive identical confirmed/refuted verdicts with n ≥ 1.5 × min_n, and promotes the next queued question. Retirement means *answered*, not *deleted*: a retired question is re-run every 30 days, and if the re-check disagrees with the verdict it retired on, `reverify_retired()` puts it back under test where it must earn retirement again.
 
