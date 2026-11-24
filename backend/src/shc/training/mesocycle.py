@@ -114,16 +114,24 @@ def _iso_week_start(d: date) -> date:
 _MAINTENANCE_LOOKBACK_WEEKS = 4
 
 
+# A glutes set trained through hip abduction reaches the gluteus medius, which squats,
+# hinges and thrusts do not (schoenfeld-2021-ch8-program-design.md) and which does not
+# stand in for gluteus maximus work (invariant 26). It stays PRIMARY credit, so menus,
+# ceilings and the "trained at all" check are unchanged; it just is not a DIRECT set
+# toward a floor or budget. `region` is the exercise_muscle head tag.
+DIRECT_SET_SQL = "em.role = 'primary' AND em.region IS DISTINCT FROM 'gluteus_medius'"
+
+
 def direct_sets_by_week(
     conn: duckdb.DuckDBPyConnection, start: date
 ) -> dict[tuple[str, date], float]:
     """DIRECT (primary-role) working sets per (muscle, ISO week start) since ``start``."""
     rows = conn.execute(
-        """
+        f"""
         SELECT em.muscle, date_trunc('week', ws.started_at::DATE) AS wk, COUNT(*)::DOUBLE
         FROM workout_sets_dedup ws
         JOIN exercise_muscle em
-          ON em.exercise_name = ws.exercise AND em.role = 'primary'
+          ON em.exercise_name = ws.exercise AND {DIRECT_SET_SQL}
         WHERE ws.started_at::DATE >= ?
           AND NOT ws.is_warmup AND ws.weight_kg > 0
         GROUP BY 1, 2
@@ -157,11 +165,11 @@ def weekly_budget_block(conn: duckdb.DuckDBPyConnection, week_start: date) -> li
     """Context lines showing the direct-set budget against this week's logged sets."""
     done = dict(
         conn.execute(
-            """
+            f"""
             SELECT em.muscle, COUNT(*)
             FROM workout_sets_dedup ws
             JOIN exercise_muscle em
-              ON em.exercise_name = ws.exercise AND em.role = 'primary'
+              ON em.exercise_name = ws.exercise AND {DIRECT_SET_SQL}
             WHERE ws.started_at::DATE >= ? AND NOT ws.is_warmup
             GROUP BY 1
             """,

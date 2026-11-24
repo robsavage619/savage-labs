@@ -39,6 +39,7 @@ import duckdb
 
 from shc.training.mesocycle import (
     _MAINTENANCE_LOOKBACK_WEEKS,
+    DIRECT_SET_SQL,
     MesocycleState,
     VolumeTarget,
     _iso_week_start,
@@ -2787,11 +2788,11 @@ def weekly_prescription(
     try:
         direct_now = dict(
             conn.execute(
-                """
+                f"""
                 SELECT em.muscle, COUNT(*)::DOUBLE
                 FROM workout_sets_dedup ws
                 JOIN exercise_muscle em
-                  ON em.exercise_name = ws.exercise AND em.role = 'primary'
+                  ON em.exercise_name = ws.exercise AND {DIRECT_SET_SQL}
                 WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
                   AND NOT ws.is_warmup AND ws.weight_kg > 0
                 GROUP BY em.muscle
