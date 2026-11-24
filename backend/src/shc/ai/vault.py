@@ -952,6 +952,20 @@ def invalidate() -> None:
         _index = None
 
 
+VAULT_UNAVAILABLE_NOTICE = (
+    "## VAULT UNAVAILABLE\n"
+    "The research vault has no readable notes on this host, so nothing below is "
+    "grounded in it and citations are not validated. Cite no vault note, and say "
+    "so in the plan notes rather than implying the research was applied."
+)
+
+
+def vault_note_count() -> int:
+    """Number of notes the live index can read; 0 when the vault is missing or empty."""
+    idx = _get_index()
+    return len(idx.all_notes()) if idx is not None else 0
+
+
 def valid_citation_filenames() -> set[str]:
     """Every real vault note filename — the allow-list for citation validation.
 
@@ -1163,8 +1177,8 @@ def vault_context(
     question (true question-scoped retrieval) rather than lexical hints alone.
     """
     idx = _get_index()
-    if idx is None:
-        return ""
+    if idx is None or not idx.all_notes():
+        return VAULT_UNAVAILABLE_NOTICE
 
     signals = state_signals(state, extra_signals)
     top_notes = idx.query(

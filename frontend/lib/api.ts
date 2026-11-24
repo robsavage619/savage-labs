@@ -1158,7 +1158,7 @@ export const api = {
     return r.json() as Promise<{ doubles: number | null }>;
   },
   freshness: () =>
-    get<{ key: string; label: string; last_at: string | null; age_h: number | null; stale_after_h: number; state: "ok" | "stale" | "never" }[]>(
+    get<{ key: string; label: string; last_at: string | null; age_h: number | null; stale_after_h: number; state: "ok" | "stale" | "never" | "missing" }[]>(
       "/api/freshness",
     ),
   recordView: (path: string) =>

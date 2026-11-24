@@ -43,3 +43,14 @@ def test_apple_health_is_judged_by_arrival_not_by_its_day_start_stamp(
 
     conn.execute("UPDATE measurements SET ingested_at = ?", [NOW - timedelta(hours=40)])
     assert {s["key"]: s["state"] for s in freshness(conn, NOW)}["apple"] == "stale"
+
+
+def test_a_missing_vault_is_reported_and_reaches_the_planner_context(
+    conn: duckdb.DuckDBPyConnection, monkeypatch
+) -> None:
+    from shc.ai import vault
+
+    monkeypatch.setattr(vault, "_get_index", lambda: None)
+    row = next(s for s in freshness(conn, NOW) if s["key"] == "vault")
+    assert row["state"] == "missing" and row["notes"] == 0
+    assert vault.vault_context() == vault.VAULT_UNAVAILABLE_NOTICE

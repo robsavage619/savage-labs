@@ -6,6 +6,7 @@ from typing import Any
 import duckdb
 from fastapi import APIRouter
 
+from shc.ai.vault import vault_note_count
 from shc.db.schema import get_read_conn
 
 router = APIRouter(tags=["freshness"])
@@ -52,6 +53,18 @@ def freshness(conn: duckdb.DuckDBPyConnection, now: datetime | None = None) -> l
                 "state": state,
             }
         )
+    notes = vault_note_count()
+    out.append(
+        {
+            "key": "vault",
+            "label": "Vault",
+            "last_at": None,
+            "age_h": None,
+            "stale_after_h": 0,
+            "state": "ok" if notes else "missing",
+            "notes": notes,
+        }
+    )
     return out
 
 

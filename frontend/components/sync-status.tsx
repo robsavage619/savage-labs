@@ -107,7 +107,7 @@ const ago = (h: number) => (h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)
  */
 export function Freshness() {
   const { data } = useQuery({ queryKey: ["freshness"], queryFn: api.freshness, refetchInterval: 5 * 60_000 });
-  const late = (data ?? []).filter((s) => s.state === "stale");
+  const late = (data ?? []).filter((s) => s.state === "stale" || s.state === "missing");
   if (!late.length) return null;
   return (
     <>
@@ -120,7 +120,13 @@ export function Freshness() {
         <span className="sync-pop-k">Overdue data</span>
         <b>{late.map((s) => s.label).join(", ")}</b>
         <p>
-          {late.map((s) => `${s.label}: nothing for ${s.age_h != null ? ago(s.age_h) : "a long while"} (expected every ${ago(s.stale_after_h)})`).join(". ")}.
+          {late
+            .map((s) =>
+              s.state === "missing"
+                ? `${s.label}: no readable notes, so plans are not grounded in it`
+                : `${s.label}: nothing for ${s.age_h != null ? ago(s.age_h) : "a long while"} (expected every ${ago(s.stale_after_h)})`,
+            )
+            .join(". ")}.
         </p>
       </div>
     </>
