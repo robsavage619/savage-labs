@@ -30,6 +30,8 @@ echo "run-job.sh: installed"
 
 if [ "$force_jobs" -eq 1 ]; then jobs_flags=(-a); else jobs_flags=(-a --ignore-existing); fi
 rsync "${jobs_flags[@]}" --itemize-changes --exclude README.md deploy/jobs/ "${host}:.config/shc/jobs/"
+# The committed job files carry __HOME__ in place of the host's home directory.
+ssh "$host" 'cd ~/.config/shc/jobs && for f in *.md *.conf; do grep -q __HOME__ "$f" && sed "s#__HOME__#$HOME#g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done; true'
 echo "jobs: installed (force=$force_jobs; existing host files kept unless --force-jobs)"
 
 copy() {  # copy <env value> <label> <remote dir>

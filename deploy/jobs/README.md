@@ -3,27 +3,25 @@
 `jobs/<job>.md` is the run prompt and `jobs/<job>.conf` sets `TOOLS` and `TURNS` for
 `run-job.sh <job>`. On the host they live in `~/.config/shc/jobs/`.
 
-## `lab` is a reconstruction
+## `lab`
 
-The real `lab.md`, `lab.conf` and the `com.savage.shc-lab` plist existed only on the
-host. These files were drafted from `.claude/agents/research-*.md` and the cycle the
-README describes (specialists, methodologist, run-all, devil's advocate). They are
-not copies. **Diff them against the host files before overwriting anything.**
+`lab.md`, `lab.conf` and `../com.savage.shc-lab.plist` are copies of the files running
+on the host (checked byte for byte on 2026-11-23), with the host's home directory
+written as `__HOME__` (and the plist's user as `__USER__`). The cycle: one specialist
+a day (Mon hypertrophy, Tue recovery, Wed conditioning, Thu metabolic), a blind
+methodologist, `run-all`, then a blind devil's advocate on decisive results. The
+schedule is Mon to Thu at 13:00. Vault reading is host-specific: the agents read a
+read-only copy under `~/.config/shc/vault`, and the host has no literature search.
 
-Guessed, not known:
-
-- The whole prompt wording, the specialist order, and the "already challenged" test.
-- `TOOLS` (`Task,Bash,Read,Grep,Glob`) and `TURNS=200`.
-- The schedule: weekdays 13:00, inferred from specialist notebook entries around
-  13:00 on 11-16, 17, 18, 19 and 23. A placeholder until it is checked against the host plist.
-- Vault retrieval and the discovery-queue path are omitted: the agents say "the run
-  prompt gives the path", and that path is host-specific. Add them from the host prompt.
+When the host copy changes, copy it back here with the same substitution so the repo
+stays the source of truth.
 
 ## Install
 
 `sync-claude-copies.sh` copies `jobs/` to the host only for files that are absent
-there; `--force-jobs` overwrites. `imac.sh` does not install the lab plist (its loop
-names labels explicitly), so adding it to the host schedule stays a deliberate step.
+there, then fills in `__HOME__`; `--force-jobs` overwrites the host's files. `imac.sh`
+does not install the lab plist (its loop names labels explicitly), so changing the
+host schedule stays a deliberate step.
 
 ## Heartbeat
 
