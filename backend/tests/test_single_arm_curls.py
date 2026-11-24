@@ -72,3 +72,11 @@ def test_arms_keep_separate_canon_exercise(conn, seed) -> None:
         ).fetchall()
     }
     assert len(canon) == 2
+
+
+def test_feature_store_muscle_sets_count_a_single_arm_set_as_half(conn, seed) -> None:
+    from shc.research import _muscle_sets
+
+    _arms(seed, 8, 14)
+    got = _muscle_sets(conn, "biceps")
+    assert sum(got.values()) == 11.0

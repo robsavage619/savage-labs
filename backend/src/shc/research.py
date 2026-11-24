@@ -26,6 +26,7 @@ import numpy as np
 
 from shc import places
 from shc.selflab import _ADHERENCE, _ALPHA, _design_effect, _needed_per_arm
+from shc.training.load_mechanics import set_weight_sql
 from shc.training.mesocycle import _CAPPED_E1RM, _MAX_E1RM_MEDIAN_DEVIATION
 from shc.training.volume import _RPE_GATE, _STIMULATING
 
@@ -459,7 +460,7 @@ def _muscle_sets(conn: duckdb.DuckDBPyConnection, muscle: str) -> dict[date, flo
     """
     return _rows(
         conn,
-        "SELECT ws.day_d, COUNT(*) FROM workout_sets_dedup ws "
+        f"SELECT ws.day_d, SUM({set_weight_sql('ws.exercise')}) FROM workout_sets_dedup ws "
         "JOIN exercise_muscle m ON m.exercise_name = ws.exercise "
         f"WHERE m.muscle = ? AND NOT COALESCE(ws.is_warmup, FALSE) AND ws.weight_kg > 0 "
         f"AND {_STIMULATING} AND {_RPE_GATE} GROUP BY ws.day_d",
