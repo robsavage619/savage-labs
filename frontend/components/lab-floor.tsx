@@ -107,14 +107,8 @@ const gauss = (x: number, m: number, s: number) => Math.exp(-0.5 * ((x - m) / s)
 
 // ── Forecast desk ───────────────────────────────────────────────────────────
 
-const HRV = "lnhrv_dev_pct";
-const STRENGTH = "strength_emphasis_pct14";
+export const HRV = "lnhrv_dev_pct";
 
-/** Lead with the subject's goal: strength once it has a scored forecast, HRV until then. */
-export function useDefaultTarget(): string {
-  const s = useQuery({ queryKey: ["research-forecast", STRENGTH], queryFn: () => api.researchForecast(STRENGTH), staleTime: STALE });
-  return s.data?.backtest?.skill != null ? STRENGTH : HRV;
-}
 /** Copy and axis floors per forecast target; the server owns which targets exist. */
 const DESK: Record<string, { tab: string; points: string; subject: string; bet: string; tag: string; sub: string; floor: number; ext: number; base: string; foot: string }> = {
   [HRV]: {
@@ -128,18 +122,6 @@ const DESK: Record<string, { tab: string; points: string; subject: string; bet: 
     ext: 50,
     base: "baseline",
     foot: "Logged for real at 04:50, before the reading exists, then scored when it lands.",
-  },
-  strength_emphasis_pct14: {
-    tab: "Strength",
-    points: "weeks",
-    subject: "your biceps and glutes strength",
-    bet: "Next week's bet",
-    tag: "next week",
-    sub: "Biceps and glutes e1RM, last 14 days vs the 14 before",
-    floor: 6,
-    ext: 15,
-    base: "no change",
-    foot: "A week-ahead bet, scored once that week is over. Only beliefs that act a week or more ahead can move it.",
   },
 };
 const deskOf = (metric: string, label?: string) => DESK[metric] ?? { ...DESK[HRV], tab: label ?? metric, subject: label ?? metric, sub: label ?? metric, tag: "next" };
@@ -227,9 +209,7 @@ function Ribbon({ series, bet, miss, height, floor, tag }: { series: { date: str
 }
 
 export function ForecastDesk() {
-  const fallback = useDefaultTarget();
-  const [picked, setMetric] = useState<string | null>(null);
-  const metric = picked ?? fallback;
+  const [metric, setMetric] = useState(HRV);
   const arg = metric === HRV ? undefined : metric;
   const f = useQuery({ queryKey: ["research-forecast", metric], queryFn: () => api.researchForecast(arg), staleTime: STALE });
   const p = useQuery({ queryKey: ["research-preview", metric], queryFn: () => api.researchPreview(arg), staleTime: STALE });
@@ -612,8 +592,7 @@ export function Threads() {
 // ── Where the lab is wrong ──────────────────────────────────────────────────
 
 export function Misses() {
-  const metric = useDefaultTarget();
-  const q = useQuery({ queryKey: ["research-misses", metric], queryFn: () => api.researchMisses(metric === HRV ? undefined : metric), staleTime: STALE });
+  const q = useQuery({ queryKey: ["research-misses", HRV], queryFn: () => api.researchMisses(), staleTime: STALE });
   if (!q.data) return <Skel h={300} />;
   const wd = q.data.by_weekday ?? [];
   const worst = (q.data.worst_mornings ?? []).slice(0, 6);

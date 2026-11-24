@@ -6,7 +6,7 @@ import { motion } from "framer-motion";
 import { api } from "@/lib/api";
 import { teamApi } from "@/lib/team-api";
 import { useGuides } from "@/components/kit";
-import { useDefaultTarget } from "@/components/lab-floor";
+import { HRV } from "@/components/lab-floor";
 
 /**
  * Explainers for the research floor: each block can open a three-layer read.
@@ -276,10 +276,8 @@ export function NotebookExplain() {
 // ── Misses ──────────────────────────────────────────────────────────────────
 
 export function MissesExplain() {
-  const metric = useDefaultTarget();
-  const hrv = metric === "lnhrv_dev_pct";
-  const what = hrv ? "your HRV" : "your strength change";
-  const q = useQuery({ queryKey: ["research-misses", metric], queryFn: () => api.researchMisses(hrv ? undefined : metric), staleTime: STALE });
+  const what = "your HRV";
+  const q = useQuery({ queryKey: ["research-misses", HRV], queryFn: () => api.researchMisses(), staleTime: STALE });
   const wd = [...(q.data?.by_weekday ?? [])].sort((a, b) => Math.abs(b.mean_residual) - Math.abs(a.mean_residual))[0];
   const worst = q.data?.worst_mornings?.[0];
   return (

@@ -387,77 +387,12 @@ def test_beliefs_carry_their_outcome_unit_and_a_symmetric_scale(conn) -> None:
         assert b["scale"] >= abs(b["prior_mean"]) + 2 * b["prior_sd"]
 
 
-def _plant_strength(monkeypatch, conn, effect: float, seed: int = 5) -> None:
-    """A strength outcome that rises `effect` points a week after a hard day."""
-    rng = random.Random(seed)
-    strain = research.series(conn, "strain")
-    out = {
-        d + timedelta(days=7): (effect if s >= 14 else 0.0) + rng.gauss(0, 1.0)
-        for d, s in strain.items()
-    }
-    monkeypatch.setitem(research._DERIVED, research.STRENGTH_METRIC, lambda _c: out)
-
-
-STRENGTH_SPEC = SPEC | {
-    "outcome": research.STRENGTH_METRIC,
-    "lag": 7,
-    "expected_sign": "+",
-    "min_effect": 1,
-}
-
-
-def _strength_belief(conn, slug: str = "strain-strength", spec: dict = STRENGTH_SPEC) -> str:
-    bid = research.add_belief(
-        conn,
-        "Hard days build strength",
-        research.STRENGTH_METRIC,
-        1.0,
-        3.0,
-        "test prior",
-        None,
-        "t",
-    )
-    research.register(conn, slug, "q", spec, bid, "test")
-    research.review(conn, slug, "approve", "sized and adjusted", "methodologist")
-    return bid
-
-
-def test_forecaster_predicts_a_second_target_weekly(conn, monkeypatch) -> None:
-    _seed(conn, effect_pct=0, days=420)
-    _plant_strength(monkeypatch, conn, effect=4.0)
-    bid = _strength_belief(conn)
-    # A lag shorter than the week-ahead horizon can't be known when the bet is made.
-    _strength_belief(conn, "too-short", STRENGTH_SPEC | {"lag": 3})
-    bt = research.backtest(conn, today=TODAY, metric=research.STRENGTH_METRIC)
-    assert bt["reason"] is None and bt["n"] >= 12
-    # Scored once a week, not daily.
-    assert bt["n"] <= 6 * 5
-    assert bt["skill"] > 0.3
-    assert set(bt["gains"]) == {bid} and bt["gains"][bid] > 0
-    research.store_backtest(conn, bt)
-    view = research.forecast_view(conn, metric=research.STRENGTH_METRIC)
-    assert view["backtest"]["skill"] == pytest.approx(bt["skill"])
-    assert view["target"]["horizon_days"] == 7
-    assert {t["metric"] for t in view["targets"]} == set(research.FORECAST_TARGETS)
-    # The HRV view is untouched by the strength run.
-    assert research.forecast_view(conn)["backtest"] is None
-    p = research.forecast_preview(conn, today=TODAY, metric=research.STRENGTH_METRIC)
-    assert p["target_date"] == str(TODAY + timedelta(days=7))
-    made = research.forecast_today(conn, today=TODAY, metric=research.STRENGTH_METRIC)
-    assert made is not None and made["target_date"] == str(TODAY + timedelta(days=7))
-
-
-def test_forecaster_refuses_to_score_without_beliefs_or_history(conn, monkeypatch) -> None:
+def test_forecaster_refuses_to_score_without_beliefs(conn) -> None:
     _seed(conn, effect_pct=0, days=75)
-    _plant_strength(monkeypatch, conn, effect=4.0)
-    none = research.backtest(conn, today=TODAY, metric=research.STRENGTH_METRIC)
+    none = research.backtest(conn, today=TODAY)
     assert none["skill"] is None and "No active belief" in none["reason"]
-    _strength_belief(conn)
-    thin = research.backtest(conn, today=TODAY, metric=research.STRENGTH_METRIC)
-    assert thin["skill"] is None and thin["n"] < 12 and "need 12" in thin["reason"]
-    assert all(g is None for g in thin["gains"].values())
-    research.store_backtest(conn, thin)
-    assert research.forecast_view(conn, metric=research.STRENGTH_METRIC)["backtest"]["reason"]
+    research.store_backtest(conn, none)
+    assert research.forecast_view(conn)["backtest"]["reason"]
     with pytest.raises(research.SpecError, match="forecast target"):
         research.backtest(conn, today=TODAY, metric="made_up")
 

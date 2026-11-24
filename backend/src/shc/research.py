@@ -25,8 +25,7 @@ import duckdb
 import numpy as np
 
 from shc import places
-from shc.lab import _ALPHA
-from shc.selflab import _ADHERENCE, _design_effect, _needed_per_arm
+from shc.selflab import _ADHERENCE, _ALPHA, _design_effect, _needed_per_arm
 from shc.training.mesocycle import _CAPPED_E1RM, _MAX_E1RM_MEDIAN_DEVIATION
 from shc.training.volume import _RPE_GATE, _STIMULATING
 
@@ -1502,7 +1501,6 @@ def notebook(conn: duckdb.DuckDBPyConnection, limit: int = 50) -> list[dict]:
 # ── Forecaster ──────────────────────────────────────────────────────────────
 
 FORECAST_METRIC = "lnhrv_dev_pct"
-STRENGTH_METRIC = "strength_emphasis_pct14"
 # Monthly cut-offs refit on data up to each one, then scored on the next 30
 # days: every scored point is one the model never saw.
 _BACKTEST_ORIGINS = 6
@@ -1513,20 +1511,13 @@ _BACKTEST_HORIZON = 30
 class ForecastTarget:
     metric: str
     label: str
-    # 0: the morning not yet read. >0: the value that many days ahead, so only
-    # beliefs whose lag reaches that far can be known when the bet is made.
-    horizon_days: int
-    # Score one point per step: a 14-day rolling outcome scored daily would
-    # count the same fortnight fourteen times.
-    step_days: int
     min_scored: int
 
 
 FORECAST_TARGETS: dict[str, ForecastTarget] = {
     t.metric: t
     for t in [
-        ForecastTarget(FORECAST_METRIC, "Next-morning HRV vs baseline", 0, 1, 30),
-        ForecastTarget(STRENGTH_METRIC, "Emphasis-muscle strength, 14 days vs prior 14", 7, 7, 12),
+        ForecastTarget(FORECAST_METRIC, "Next-morning HRV vs baseline", 30),
     ]
 }
 
@@ -1557,7 +1548,6 @@ def _models(
 ) -> list[_Term]:
     """Each belief's day-unit hypothesis on `metric`, refit on data up to
     `origin` and shrunk toward its literature prior."""
-    horizon = forecast_target(metric).horizon_days
     rows = conn.execute(
         "SELECT b.id, b.claim, b.prior_mean, b.prior_sd, h.spec FROM research_beliefs b "
         "JOIN research_hypotheses h ON h.belief_id = b.id WHERE h.status = 'active' ORDER BY h.created_at"
@@ -1569,7 +1559,6 @@ def _models(
             any(t.belief_id == bid for t in terms)
             or spec.get("unit", "day") != "day"
             or spec["outcome"] != metric
-            or int(spec.get("lag", 1)) < horizon
         ):
             continue
         res = estimate(conn, spec, today=origin)
@@ -1710,20 +1699,18 @@ def backtest(
     scored: list[tuple[date, float, float, dict[str, float]]] = []
     persist: list[float] = []
     claims: dict[str, str] = {}
-    first = max(1, target.horizon_days)
-    lag = first
     for k in range(_BACKTEST_ORIGINS, 0, -1):
         origin = today - timedelta(days=k * _BACKTEST_HORIZON)
-        phi = _persistence_coef(actual, origin, lag)
+        phi = _persistence_coef(actual, origin, 1)
         terms = _models(conn, origin, metric)
         claims |= {t.belief_id: t.claim for t in terms}
         feats = _features_for(conn, terms, (origin - timedelta(days=30), today))
-        for i in range(first, _BACKTEST_HORIZON + 1, target.step_days):
+        for i in range(1, _BACKTEST_HORIZON + 1):
             m = origin + timedelta(days=i)
             if m > today or m not in actual:
                 continue
             lab = _predict(terms, feats, m)
-            persist.append(phi * actual.get(m - timedelta(days=lag), 0.0))
+            persist.append(phi * actual.get(m - timedelta(days=1), 0.0))
             scored.append(
                 (
                     m,
@@ -1762,9 +1749,7 @@ def backtest(
     }
 
 
-def _bet_date(target: ForecastTarget, today: date, actual: dict[date, float]) -> date:
-    if target.horizon_days:
-        return today + timedelta(days=target.horizon_days)
+def _bet_date(today: date, actual: dict[date, float]) -> date:
     return today + timedelta(days=1) if today in actual else today
 
 
@@ -1773,31 +1758,30 @@ def forecast_today(
 ) -> dict | None:
     """Score past live forecasts, then log today's bet before its value exists.
 
-    A morning target is bet on for this morning; a day target for `horizon_days`
-    ahead, and scored only once that day is over.
+    The bet is for this morning, or tomorrow's once this morning's value is in.
 
     Returns:
         The new forecast, or None when the target's value is already in (a
         forecast made after the fact would score itself) or one is logged.
     """
     today = today or date.today()
-    target = forecast_target(metric)
+    forecast_target(metric)
     actual = series(conn, metric)
     for (d,) in conn.execute(
         "SELECT target_date FROM research_forecasts WHERE metric = ? AND actual IS NULL",
         [metric],
     ).fetchall():
-        if d in actual and (target.horizon_days == 0 or d < today):
+        if d in actual:
             conn.execute(
                 "UPDATE research_forecasts SET actual = ? WHERE target_date = ? AND metric = ?",
                 [actual[d], d, metric],
             )
-    when = today + timedelta(days=target.horizon_days)
+    when = today
     exists = conn.execute(
         "SELECT 1 FROM research_forecasts WHERE target_date = ? AND metric = ?",
         [when, metric],
     ).fetchone()
-    if (target.horizon_days == 0 and today in actual) or exists:
+    if today in actual or exists:
         return None
     terms = _models(conn, today, metric)
     feats = _features_for(conn, terms, (today - timedelta(days=30), when))
@@ -1836,11 +1820,10 @@ def store_backtest(conn: duckdb.DuckDBPyConnection, bt: dict, author: str = "for
     for bid, g in bt["gains"].items():
         conn.execute("UPDATE research_beliefs SET forecast_gain = ? WHERE id = ?", [g, bid])
     if bt["skill"] is not None:
-        what = "mornings" if bt["metric"] == FORECAST_METRIC else f"{bt['metric']} points"
         call = bt.get("call_best") or _skill_call(
             [(x["actual"], x["predicted"]) for x in bt["series"]]
         )
-        head = f"Forecast skill {bt['skill']:+.3f} over {bt['n']} unseen {what}"
+        head = f"Forecast skill {bt['skill']:+.3f} over {bt['n']} unseen mornings"
         if call == "tie":
             note(
                 conn,
@@ -1910,7 +1893,6 @@ def forecast_view(
         "target": {
             "metric": target.metric,
             "label": target.label,
-            "horizon_days": target.horizon_days,
             "unit": _unit_of(target.metric),
         },
         "targets": [{"metric": t.metric, "label": t.label} for t in FORECAST_TARGETS.values()],
@@ -2332,8 +2314,8 @@ def forecast_preview(
     Not stored: the logged forecast is still the one written at 04:50.
     """
     today = today or date.today()
-    tgt = forecast_target(metric)
-    target = _bet_date(tgt, today, series(conn, metric))
+    forecast_target(metric)
+    target = _bet_date(today, series(conn, metric))
     terms = _models(conn, today, metric)
     feats = _features_for(conn, terms, (today - timedelta(days=30), target))
     parts = [
