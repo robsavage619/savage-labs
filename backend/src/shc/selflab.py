@@ -77,7 +77,8 @@ class Experiment:
 # precisely because overwriting assigned arms with observed ones destroys the
 # randomisation silently, and the column defaults to randomized, so an
 # observational study that never states its design is mislabelled by omission.
-_DESIGNS = ("randomized_alternating", "observational")
+_DESIGNS = ("randomized_alternating", "randomized_per_session", "observational")
+_RANDOMIZED = ("randomized_alternating", "randomized_per_session")
 
 # A study that cannot answer within this many days at its live pace is refused
 # at registration. Mirrors research.MAX_DAYS_TO_ANSWER (research imports this
@@ -116,7 +117,7 @@ def _check_answerable(
             )
     # An observational arm is observed, not assigned, so its accrual pace is
     # not the outcome's measurement rate; only randomized studies are sized here.
-    if design != "randomized_alternating":
+    if design not in _RANDOMIZED:
         return
     series = _metric_history(conn, outcome_metric)
     if len(series) < 10:
@@ -228,6 +229,12 @@ def preregister(
                 f"actuation_magnitude_pct ({actuation_magnitude_pct}) must not exceed "
                 f"actuation_cap_pct ({actuation_cap_pct})"
             )
+    if design == "randomized_per_session" and _outcome_exercise(outcome_metric) is None:
+        raise ValueError(
+            "randomized_per_session needs an exercise outcome (top_set_e1rm:<lift> or "
+            f"e1rm_delta_2wk:<lift>), got {outcome_metric!r}: arms are assigned per "
+            "session of that lift"
+        )
     _check_answerable(
         conn, outcome_metric=outcome_metric, min_effect=min_effect, design=design
     )
@@ -248,7 +255,7 @@ def preregister(
             actuation_target_kind, actuation_target_key, actuation_direction,
             actuation_magnitude_pct, actuation_cap_pct,
             # A new randomized study's assignment is in the plan from day one.
-            started.isoformat() if design == "randomized_alternating" else None,
+            started.isoformat() if design in _RANDOMIZED else None,
         ],
     )
     row = conn.execute("SELECT id FROM experiments WHERE slug = ?", [slug]).fetchone()
@@ -300,6 +307,52 @@ def arm_for_day(slug: str, started_on: date, day: date) -> str:
     return "B" if pos == coin else "A"
 
 
+def arm_for_session(slug: str, n: int) -> str:
+    """Assign 'A' or 'B' to the n-th (0-based) session of the outcome lift.
+
+    Same block-of-two balance as `arm_for_day`, but the unit is the session, not
+    the calendar day, so a lift programmed twice a week still gets one A and one B
+    per pair. A pure function of (slug, n): fixed at registration, unguessable
+    from outcomes.
+    """
+    if n < 0:
+        raise ValueError("session index must be >= 0")
+    block, pos = divmod(n, 2)
+    coin = int(hashlib.sha256(f"{slug}:session:{block}".encode()).hexdigest(), 16) % 2
+    return "B" if pos == coin else "A"
+
+
+def _outcome_exercise(metric: str) -> str | None:
+    kind, _, arg = metric.partition(":")
+    return arg if kind in ("top_set_e1rm", "e1rm_delta_2wk") and arg else None
+
+
+def _session_days(conn: duckdb.DuckDBPyConnection, exercise: str, since: date) -> list[date]:
+    """Distinct days with a working set of `exercise` since `since`, oldest first."""
+    rows = conn.execute(
+        "SELECT DISTINCT day_d FROM workout_sets_dedup WHERE exercise = ? "
+        "AND NOT COALESCE(is_warmup, FALSE) AND day_d >= ? ORDER BY day_d",
+        [exercise, since.isoformat()],
+    ).fetchall()
+    return [r[0] if isinstance(r[0], date) else date.fromisoformat(str(r[0])) for r in rows]
+
+
+def session_assignment(conn: duckdb.DuckDBPyConnection, slug: str, on_day: date) -> str:
+    """Arm for the outcome lift's occurrence that falls on `on_day`.
+
+    The index is the count of the lift's sessions logged since registration and
+    before `on_day`, so it is the arm of the next occurrence if none is logged
+    yet and of that day's own session if one is.
+    """
+    exp = load(conn, slug)
+    if exp is None or exp.design != "randomized_per_session":
+        raise ValueError(f"{slug!r} is not a per-session study")
+    exercise = _outcome_exercise(exp.outcome_metric)
+    assert exercise is not None
+    n = sum(1 for d in _session_days(conn, exercise, exp.started_on) if d < on_day)
+    return arm_for_session(exp.slug, n)
+
+
 def log_day(
     conn: duckdb.DuckDBPyConnection,
     exp_id: str,
@@ -312,7 +365,10 @@ def log_day(
     exp = load(conn, exp_id)
     if exp is None:
         raise ValueError(f"no experiment {exp_id!r}")
-    arm = arm_for_day(exp.slug, exp.started_on, day)
+    if exp.design == "randomized_per_session":
+        arm = session_assignment(conn, exp.slug, day)
+    else:
+        arm = arm_for_day(exp.slug, exp.started_on, day)
     conn.execute(
         """
         INSERT INTO experiment_log (experiment_id, day, assigned_arm, adhered, note)
@@ -341,11 +397,15 @@ def autolog_randomized(conn: duckdb.DuckDBPyConnection, exp_id: str, today: date
         How many days were added.
     """
     row = conn.execute(
-        "SELECT slug, started_on, autolog_from FROM experiments WHERE id = ?", [exp_id]
+        "SELECT slug, started_on, autolog_from, design, outcome_metric "
+        "FROM experiments WHERE id = ?",
+        [exp_id],
     ).fetchone()
     if row is None or row[2] is None:
         return 0
     slug = row[0]
+    if row[3] == "randomized_per_session":
+        return _autolog_sessions(conn, exp_id, slug, row[1], row[2], row[4], today)
     started = row[1] if isinstance(row[1], date) else date.fromisoformat(str(row[1]))
     day = row[2] if isinstance(row[2], date) else date.fromisoformat(str(row[2]))
     today = today or date.today()
@@ -366,25 +426,69 @@ def autolog_randomized(conn: duckdb.DuckDBPyConnection, exp_id: str, today: date
     return added
 
 
+def _autolog_sessions(
+    conn: duckdb.DuckDBPyConnection,
+    exp_id: str,
+    slug: str,
+    started: date | str,
+    autolog_from: date | str,
+    metric: str,
+    today: date | None,
+) -> int:
+    """One log row per logged session of the outcome lift, at its assigned arm.
+
+    Adherence is not assumed: the row is written unknown (NULL), which the scorer
+    excludes, until something records whether the assignment was followed.
+    """
+    started = started if isinstance(started, date) else date.fromisoformat(str(started))
+    frm = autolog_from if isinstance(autolog_from, date) else date.fromisoformat(str(autolog_from))
+    today = today or date.today()
+    exercise = _outcome_exercise(metric)
+    assert exercise is not None
+    have = {
+        r[0] if isinstance(r[0], date) else date.fromisoformat(str(r[0]))
+        for r in conn.execute(
+            "SELECT day FROM experiment_log WHERE experiment_id = ?", [exp_id]
+        ).fetchall()
+    }
+    added = 0
+    for n, day in enumerate(_session_days(conn, exercise, started)):
+        if day < frm or day > today or day in have:
+            continue
+        conn.execute(
+            "INSERT INTO experiment_log (experiment_id, day, assigned_arm, adhered, note) "
+            "VALUES (?, ?, ?, NULL, 'auto: session logged, adherence unknown')",
+            [exp_id, day.isoformat(), arm_for_session(slug, n)],
+        )
+        added += 1
+    return added
+
+
 def todays_assignments(conn: duckdb.DuckDBPyConnection, day: date | None = None) -> list[dict]:
-    """Each active randomized study's condition for `day`, for the plan to carry."""
+    """Each active randomized study's condition for `day`, for the plan to carry.
+
+    Per-session studies carry the arm of the outcome lift's next occurrence
+    (`design`, `exercise` let the planner apply it only when that lift is programmed).
+    """
     day = day or date.today()
     out = []
-    for exp_id, slug, hyp, cond_a, cond_b, started in conn.execute(
-        "SELECT id, slug, hypothesis, condition_a, condition_b, started_on FROM experiments "
-        "WHERE status = 'active' AND design = 'randomized_alternating'"
+    for exp_id, slug, hyp, cond_a, cond_b, started, design in conn.execute(
+        "SELECT id, slug, hypothesis, condition_a, condition_b, started_on, design "
+        "FROM experiments WHERE status = 'active' "
+        "AND design IN ('randomized_alternating', 'randomized_per_session')"
     ).fetchall():
         start = started if isinstance(started, date) else date.fromisoformat(str(started))
-        arm = arm_for_day(slug, start, day)
-        out.append(
-            {
-                "id": str(exp_id),
-                "slug": slug,
-                "hypothesis": hyp,
-                "arm": arm,
-                "condition": cond_b if arm == "B" else cond_a,
-            }
-        )
+        entry: dict = {"id": str(exp_id), "slug": slug, "hypothesis": hyp, "design": design}
+        if design == "randomized_per_session":
+            arm = session_assignment(conn, slug, day)
+            row = conn.execute(
+                "SELECT outcome_metric FROM experiments WHERE id = ?", [exp_id]
+            ).fetchone()
+            entry["exercise"] = _outcome_exercise(row[0]) if row else None
+        else:
+            arm = arm_for_day(slug, start, day)
+        entry |= {"arm": arm, "condition": cond_b if arm == "B" else cond_a}
+        out.append(entry)
     return out
 
 # ── Outcome extraction from the live data stream ─────────────────────────────
