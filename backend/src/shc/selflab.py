@@ -21,6 +21,7 @@ the same gate-and-audit discipline as the fitted ACWR/volume bands.
 import hashlib
 import logging
 import math
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from statistics import NormalDist, mean, pstdev
@@ -65,6 +66,8 @@ class Experiment:
     actuation_direction: str | None = None
     actuation_magnitude_pct: float | None = None
     actuation_cap_pct: float | None = None
+    adherence_tag_a: str | None = None
+    adherence_tag_b: str | None = None
 
 
 # ── Pre-registration ─────────────────────────────────────────────────────────
@@ -160,6 +163,8 @@ def preregister(
     actuation_direction: str | None = None,
     actuation_magnitude_pct: float | None = None,
     actuation_cap_pct: float | None = None,
+    adherence_tag_a: str | None = None,
+    adherence_tag_b: str | None = None,
 ) -> str:
     """Register a study before any data is collected. Returns the experiment id.
 
@@ -229,6 +234,15 @@ def preregister(
                 f"actuation_magnitude_pct ({actuation_magnitude_pct}) must not exceed "
                 f"actuation_cap_pct ({actuation_cap_pct})"
             )
+    tag_a, tag_b = _norm_tag(adherence_tag_a), _norm_tag(adherence_tag_b)
+    if design == "randomized_per_session":
+        if not (tag_a and tag_b):
+            raise ValueError(
+                "randomized_per_session needs adherence_tag_a and adherence_tag_b: the "
+                "words written in the Hevy session note to record which arm was followed"
+            )
+        if tag_a == tag_b:
+            raise ValueError("adherence_tag_a and adherence_tag_b must be distinct")
     if design == "randomized_per_session" and _outcome_exercise(outcome_metric) is None:
         raise ValueError(
             "randomized_per_session needs an exercise outcome (top_set_e1rm:<lift> or "
@@ -245,8 +259,9 @@ def preregister(
             (slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
              outcome_direction, design, min_per_arm, min_effect, washout_hours, started_on,
              planned_end, notes, actuation_target_kind, actuation_target_key,
-             actuation_direction, actuation_magnitude_pct, actuation_cap_pct, autolog_from)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             actuation_direction, actuation_magnitude_pct, actuation_cap_pct, autolog_from,
+             adherence_tag_a, adherence_tag_b)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
@@ -256,6 +271,7 @@ def preregister(
             actuation_magnitude_pct, actuation_cap_pct,
             # A new randomized study's assignment is in the plan from day one.
             started.isoformat() if design in _RANDOMIZED else None,
+            tag_a, tag_b,
         ],
     )
     row = conn.execute("SELECT id FROM experiments WHERE slug = ?", [slug]).fetchone()
@@ -268,7 +284,7 @@ def load(conn: duckdb.DuckDBPyConnection, exp_id: str) -> Experiment | None:
         "SELECT id, slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric, "
         "outcome_direction, design, min_per_arm, min_effect, washout_hours, started_on, status, "
         "actuation_target_kind, actuation_target_key, actuation_direction, "
-        "actuation_magnitude_pct, actuation_cap_pct "
+        "actuation_magnitude_pct, actuation_cap_pct, adherence_tag_a, adherence_tag_b "
         "FROM experiments WHERE id = ? OR slug = ?",
         [exp_id, exp_id],
     ).fetchone()
@@ -284,6 +300,7 @@ def load(conn: duckdb.DuckDBPyConnection, exp_id: str) -> Experiment | None:
         actuation_direction=row[16],
         actuation_magnitude_pct=float(row[17]) if row[17] is not None else None,
         actuation_cap_pct=float(row[18]) if row[18] is not None else None,
+        adherence_tag_a=row[19], adherence_tag_b=row[20],
     )
 
 
@@ -426,6 +443,44 @@ def autolog_randomized(conn: duckdb.DuckDBPyConnection, exp_id: str, today: date
     return added
 
 
+_UNKNOWN_NOTE = "auto: session logged, adherence unknown (no tag in the Hevy note)"
+
+
+def _norm_tag(tag: str | None) -> str | None:
+    t = (tag or "").strip().lower()
+    if t and not re.fullmatch(r"[a-z0-9_]+", t):
+        raise ValueError(f"adherence tag {tag!r} must be one word of letters, digits or _")
+    return t or None
+
+
+def hevy_session_text(conn: duckdb.DuckDBPyConnection, exercise: str, day: date) -> str:
+    """The Hevy workout description plus the outcome exercise's own note for `day`.
+
+    Hevy's workout description lands in ``workouts.notes`` and each exercise's note
+    in ``workout_sets.exercise_notes`` (ingest/hevy.py); either can carry the tag.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT w.notes, ws.exercise_notes FROM workout_sets ws "
+        "JOIN workouts w ON w.id = ws.workout_id "
+        "WHERE w.source = 'hevy' AND ws.exercise = ? AND w.started_at::DATE = ?",
+        [exercise, day.isoformat()],
+    ).fetchall()
+    return " ".join(t for r in rows for t in r if t)
+
+
+def session_adherence(text: str, assigned: str, tag_a: str, tag_b: str) -> bool | None:
+    """Did the session follow its assignment, per the tag in its note?
+
+    None when no tag (or both) is present, False when the tag names the other arm.
+    Tags match whole words, case-insensitively, so ``caf`` never matches ``nocaf``.
+    """
+    words = set(re.findall(r"[a-z0-9_]+", text.lower()))
+    has_a, has_b = tag_a in words, tag_b in words
+    if has_a == has_b:
+        return None
+    return (assigned == "A") == has_a
+
+
 def _autolog_sessions(
     conn: duckdb.DuckDBPyConnection,
     exp_id: str,
@@ -437,30 +492,50 @@ def _autolog_sessions(
 ) -> int:
     """One log row per logged session of the outcome lift, at its assigned arm.
 
-    Adherence is not assumed: the row is written unknown (NULL), which the scorer
-    excludes, until something records whether the assignment was followed.
+    Adherence is read from the session's Hevy note tag, never assumed: no tag
+    leaves it unknown (NULL), which the scorer excludes and reports. Rows still
+    unknown from an earlier run are re-read, so a tag added later counts; a row
+    set by hand (``log_day``) is never touched.
     """
     started = started if isinstance(started, date) else date.fromisoformat(str(started))
     frm = autolog_from if isinstance(autolog_from, date) else date.fromisoformat(str(autolog_from))
     today = today or date.today()
     exercise = _outcome_exercise(metric)
     assert exercise is not None
+    tags = conn.execute(
+        "SELECT adherence_tag_a, adherence_tag_b FROM experiments WHERE id = ?", [exp_id]
+    ).fetchone()
+    tag_a, tag_b = (tags or (None, None))
     have = {
-        r[0] if isinstance(r[0], date) else date.fromisoformat(str(r[0]))
+        r[0] if isinstance(r[0], date) else date.fromisoformat(str(r[0])): (r[1], r[2])
         for r in conn.execute(
-            "SELECT day FROM experiment_log WHERE experiment_id = ?", [exp_id]
+            "SELECT day, adhered, note FROM experiment_log WHERE experiment_id = ?", [exp_id]
         ).fetchall()
     }
     added = 0
     for n, day in enumerate(_session_days(conn, exercise, started)):
-        if day < frm or day > today or day in have:
+        if day < frm or day > today:
             continue
-        conn.execute(
-            "INSERT INTO experiment_log (experiment_id, day, assigned_arm, adhered, note) "
-            "VALUES (?, ?, ?, NULL, 'auto: session logged, adherence unknown')",
-            [exp_id, day.isoformat(), arm_for_session(slug, n)],
+        arm = arm_for_session(slug, n)
+        adhered = (
+            session_adherence(hevy_session_text(conn, exercise, day), arm, tag_a, tag_b)
+            if tag_a and tag_b
+            else None
         )
-        added += 1
+        note = "auto: adherence from Hevy session tag" if adhered is not None else _UNKNOWN_NOTE
+        if day not in have:
+            conn.execute(
+                "INSERT INTO experiment_log (experiment_id, day, assigned_arm, adhered, note) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [exp_id, day.isoformat(), arm, adhered, note],
+            )
+            added += 1
+        elif str(have[day][1] or "").startswith("auto:") and have[day][0] != adhered:
+            conn.execute(
+                "UPDATE experiment_log SET adhered = ?, note = ? "
+                "WHERE experiment_id = ? AND day = ?",
+                [adhered, note, exp_id, day.isoformat()],
+            )
     return added
 
 
@@ -897,6 +972,23 @@ def _needed_per_arm(sd: float, min_effect: float, design_effect: float) -> int:
 
 
 def _score_raw(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
+    """`_score_core` plus the count of measured sessions excluded for unknown adherence."""
+    result = _score_core(conn, exp)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM experiment_log WHERE experiment_id = ? "
+        "AND adhered IS NULL AND outcome_value IS NOT NULL",
+        [exp.id],
+    ).fetchone()
+    unknown = int(row[0]) if row else 0
+    result["n_adherence_unknown"] = unknown
+    if unknown and exp.design == "randomized_per_session" and result.get("summary"):
+        result["summary"] += (
+            f" ({unknown} sessions with unknown adherence excluded: no tag in the Hevy note)"
+        )
+    return result
+
+
+def _score_core(conn: duckdb.DuckDBPyConnection, exp: Experiment) -> dict:
     """Compute an experiment's verdict + effect + bootstrap CI WITHOUT
     persisting or emitting a prior — the pure-compute core shared by `score()`
     (single experiment, no cross-experiment correction) and `score_all()`

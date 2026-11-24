@@ -38,6 +38,8 @@ def _reg(conn, started: date, slug: str = "caf-curl") -> str:
         min_effect=2.0,
         design="randomized_per_session",
         started_on=started,
+        adherence_tag_a="nocaf",
+        adherence_tag_b="caf",
     )
 
 
@@ -96,4 +98,6 @@ def test_per_session_needs_an_exercise_outcome(conn) -> None:
             outcome_metric="hrv_next_morning",
             min_effect=1.0,
             design="randomized_per_session",
+            adherence_tag_a="nocaf",
+            adherence_tag_b="caf",
         )
