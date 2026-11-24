@@ -12,6 +12,7 @@ from shc.api.middleware import HostOriginMiddleware
 from shc.api.routers import (
     apple,
     auth,
+    block_experiments,
     dashboard,
     events,
     freshness,
@@ -70,6 +71,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth")
 app.include_router(apple.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(block_experiments.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(freshness.router, prefix="/api")
 app.include_router(hevy.router, prefix="/api")
