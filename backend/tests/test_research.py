@@ -481,6 +481,19 @@ def test_live_questions_that_cannot_answer_retire_themselves(conn) -> None:
     assert research.run_all(conn) == []
 
 
+def test_retrospective_questions_that_cannot_confirm_in_time_retire(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    limit = research._RETIRE_AFTER_DAYS
+
+    def retro(days: int | None) -> dict:
+        return {"verdict": "retrospective", "power": {"days_to_confirm": days}}
+
+    assert "3319 more days" in research._dead_reason(conn, SPEC, retro(3319), today=TODAY)
+    assert "cannot confirm" in research._dead_reason(conn, SPEC, retro(None), today=TODAY)
+    assert research._dead_reason(conn, SPEC, retro(limit), today=TODAY) is None
+    assert research._dead_reason(conn, SPEC, retro(30), today=TODAY) is None
+
+
 def test_an_untested_belief_ranks_the_same_whatever_prior_its_proposer_wrote(conn) -> None:
     fast = {"needed_per_arm": 50, "days_to_confirm": 30, "outcome_sd": 10}
     ids = [

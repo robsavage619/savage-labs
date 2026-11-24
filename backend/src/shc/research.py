@@ -1344,7 +1344,22 @@ def _dead_reason(
         last = max(s) if s else None
         if last is None or (today - last).days > _QUIET_DAYS:
             return f"{name} has had no data since {last or 'ever'}, so no new days can arrive."
-    if res.get("verdict") not in ("inconclusive", "insufficient") or not res.get("power"):
+    verdict = res.get("verdict")
+    if verdict not in ("inconclusive", "insufficient", "retrospective") or not res.get("power"):
+        return None
+    if verdict == "retrospective":
+        # Favourable on all days but unconfirmed: only post-registration days can settle it.
+        days = res["power"].get("days_to_confirm")
+        if days is None:
+            return (
+                f"One arm gained no {res.get('unit', 'day')}s since registration in "
+                f"{_PACE_WINDOW_DAYS} days, so it cannot confirm."
+            )
+        if days > _RETIRE_AFTER_DAYS:
+            return (
+                f"Needs {days} more days after registration to confirm at the current pace; "
+                f"the limit is {MAX_DAYS_TO_ANSWER}."
+            )
         return None
     days = res["power"]["days_to_answer"]
     if days is None:
