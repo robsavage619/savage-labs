@@ -251,6 +251,151 @@ def check_no_contradictory_length_bias(conn: duckdb.DuckDBPyConnection) -> Findi
     return Finding("length_bias consistent across variants", not bad, f"{len(bad)} split", bad)
 
 
+LAB_STRENGTH_FEATURE = "custom:session_e1rm_vs28d"
+
+
+def _main_select_at(sql: str) -> int | None:
+    """Index of the top-level SELECT that follows a WITH chain, or None."""
+    import re
+
+    depth, i, quoted = 0, 0, False
+    while i < len(sql):
+        ch = sql[i]
+        if quoted:
+            quoted = ch != "'"
+        elif ch == "'":
+            quoted = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif (
+            depth == 0
+            and i > 0
+            and re.match(r"(?i)\bSELECT\b", sql[i:])
+            and not sql[i - 1].isalnum()
+        ):
+            return i
+        i += 1
+    return None
+
+
+def check_lab_strength_outcome_matches_engine_e1rm(
+    conn: duckdb.DuckDBPyConnection, today: date | None = None, days: int = 120
+) -> Finding:
+    """The lab's stored strength outcome must use the engine's e1RM (audit F12).
+
+    ``custom:session_e1rm_vs28d`` is SQL stored in ``research_custom_features``,
+    a hand re-implementation of RIR-adjusted Epley with per-hand halving that no
+    repo test can execute. This runs the stored text against this DB and compares
+    it with a recompute from raw ``workout_sets_dedup`` rows built on the engine's
+    own expressions (``effective_reps_sql``, ``per_hand_sql``), with the 28-day
+    baseline, 35% artifact cap and 2-lift minimum done in Python. Two layers: the
+    stored SQL's inner per-lift-day best e1RM (its ``d`` CTE), when separable, and
+    its final daily series. Nothing from the research module is imported.
+
+    Args:
+        conn: Any DB carrying ``research_custom_features`` and workout rows.
+        today: Last day of the comparison window; defaults to today.
+        days: Window length in days.
+
+    Returns:
+        A Finding; a missing or unapproved feature is a FAIL, never a pass.
+    """
+    from datetime import timedelta
+
+    from shc.training.load_mechanics import effective_reps_sql, per_hand_sql
+
+    name = "lab strength outcome vs engine e1RM"
+    row = conn.execute(
+        "SELECT sql, status FROM research_custom_features WHERE name = ?", [LAB_STRENGTH_FEATURE]
+    ).fetchone()
+    if not row:
+        return Finding(name, False, f"{LAB_STRENGTH_FEATURE} missing from research_custom_features")
+    stored, status = row
+    if status != "approved":
+        return Finding(name, False, f"{LAB_STRENGTH_FEATURE} is {status!r}, not approved")
+
+    end = today or date.today()
+    start = end - timedelta(days=days)
+    tol_kg, tol_pct = 0.01, 0.01
+
+    raw = conn.execute(
+        f"""
+        SELECT ws.canon_exercise, ws.day_d,
+               MAX(({per_hand_sql("ws.weight_kg", "ws.exercise", "ws.day_d")})
+                   * (1 + {effective_reps_sql("ws.reps", "ws.rpe")} / 30.0))
+        FROM workout_sets_dedup ws
+        WHERE ws.source = 'hevy' AND ws.weight_kg > 0 AND ws.reps > 0
+          AND NOT COALESCE(ws.is_warmup, FALSE)
+          AND ws.day_d BETWEEN ? AND ?
+        GROUP BY 1, 2
+        """,
+        [start - timedelta(days=28), end],
+    ).fetchall()
+    best: dict[tuple[str, date], float] = {(ex, d): float(e) for ex, d, e in raw}
+    by_lift: dict[str, list[tuple[date, float]]] = {}
+    for (ex, d), e in best.items():
+        by_lift.setdefault(ex, []).append((d, e))
+
+    per_day: dict[date, list[float]] = {}
+    for series in by_lift.values():
+        for d, e in series:
+            if d < start:
+                continue
+            prior = [v for pd, v in series if d - timedelta(days=28) <= pd < d]
+            if not prior:
+                continue
+            ratio = e / (sum(prior) / len(prior)) - 1
+            if abs(ratio) <= 0.35:
+                per_day.setdefault(d, []).append(100 * ratio)
+    expected = {d: sum(v) / len(v) for d, v in per_day.items() if len(v) >= 2}
+
+    lift_bad: list[str] = []
+    day_bad: list[str] = []
+    layers: list[str] = []
+    cut = _main_select_at(stored)
+    inner: list[tuple] | None = None
+    if cut is not None:
+        try:
+            inner = conn.execute(stored[:cut] + "SELECT ex, day, e FROM d").fetchall()
+        except duckdb.Error:
+            inner = None
+    if inner is None:
+        layers.append("final series only (inner e1RM not separable)")
+    else:
+        layers.append("per-lift-day e1RM + final series")
+        lab_best = {(ex, d): float(e) for ex, d, e in inner if start <= d <= end}
+        want = {k: v for k, v in best.items() if k[1] >= start}
+        for k in sorted(set(lab_best) | set(want), key=lambda k: (k[1], k[0])):
+            a, b = lab_best.get(k), want.get(k)
+            if a is None or b is None or abs(a - b) > tol_kg:
+                a_s = "absent" if a is None else f"{a:.2f}kg"
+                b_s = "absent" if b is None else f"{b:.2f}kg"
+                lift_bad.append(f"{k[1]} {k[0]}: lab e1RM {a_s}, engine {b_s}")
+
+    lab_series = {
+        d: float(v)
+        for d, v in conn.execute(
+            f"SELECT * FROM ({stored}) WHERE day BETWEEN ? AND ?", [start, end]
+        ).fetchall()
+        if v is not None
+    }
+    for d in sorted(set(lab_series) | set(expected)):
+        a, b = lab_series.get(d), expected.get(d)
+        if a is None or b is None or abs(a - b) > tol_pct:
+            a_s = "absent" if a is None else f"{a:+.2f}%"
+            b_s = "absent" if b is None else f"{b:+.2f}%"
+            day_bad.append(f"{d} session value: lab {a_s}, engine {b_s}")
+
+    detail = (
+        f"{len(day_bad)} session day(s) and {len(lift_bad)} lift-day(s) disagree over "
+        f"{days}d to {end} ({layers[0]}; {len(expected)} expected session days)"
+    )
+    ok = not day_bad and not lift_bad
+    return Finding(name, ok, detail, day_bad[:4] + lift_bad[:4])
+
+
 ALL_CHECKS = (
     check_prescription_against_recent_reality,
     check_e1rm_paths_agree,
@@ -258,6 +403,7 @@ ALL_CHECKS = (
     check_every_muscle_has_landmarks,
     check_citations_resolve,
     check_no_contradictory_length_bias,
+    check_lab_strength_outcome_matches_engine_e1rm,
 )
 
 
