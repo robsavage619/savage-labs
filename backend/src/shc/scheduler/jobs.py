@@ -89,6 +89,37 @@ async def _run_research() -> None:
     )
 
 
+async def _reconcile_check() -> None:
+    """Nightly job: run the reconciliation checks and alert the phone if any fails.
+
+    The checks recompute engine numbers from raw rows, but they only ran when
+    someone opened /api/training/reconcile, so a drift could sit unseen. The
+    alert names the failing checks and nothing else.
+    """
+    from shc.db.schema import get_read_conn
+    from shc.notify import send_phone_alert
+    from shc.training.reconcile import run_all
+
+    def _run() -> list:
+        conn = get_read_conn()
+        try:
+            return run_all(conn)
+        finally:
+            conn.close()
+
+    findings = await asyncio.to_thread(_run)
+    failed = [f.check for f in findings if not f.ok]
+    if not failed:
+        log.info("nightly reconcile: %d of %d checks clean", len(findings), len(findings))
+        return
+    log.warning("nightly reconcile: %d of %d checks failed: %s", len(failed), len(findings), failed)
+    await send_phone_alert(
+        title="SHC reconcile failed",
+        message=f"{len(failed)} of {len(findings)} checks failed: {', '.join(failed)}. "
+        "Details: /api/training/reconcile",
+    )
+
+
 async def _backup_db() -> None:
     """Nightly job: keep a week of verified database copies."""
     from shc.config import settings
@@ -401,6 +432,17 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         hour=4,
         minute=50,
         id="research_run",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    # After the research run, before the morning: recompute the engine's numbers
+    # from raw rows and push a phone alert if any check fails.
+    scheduler.add_job(
+        _reconcile_check,
+        "cron",
+        hour=5,
+        minute=0,
+        id="reconcile_check",
         replace_existing=True,
         misfire_grace_time=3600,
     )
