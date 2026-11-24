@@ -4,12 +4,17 @@ Why things are the way they are. Each entry records the problem, what was
 considered, what was chosen, and what it cost. Split by month; this page is the
 index.
 
-51 decisions recorded, 2026-04 to 2026-11.
+56 decisions recorded, 2026-04 to 2026-11.
 
 ---
 
 ## November 2026
 
+- **2026-11-23** [The lab cannot answer what it asks, so registration now refuses such studies](docs/decisions/2026-11.md#2026-11-23-the-lab-cannot-answer-what-it-asks-so-registration-now-refuses-such-studies)
+- **2026-11-23** [The planner prompt shows only confirmed, refuted and error lab verdicts](docs/decisions/2026-11.md#2026-11-23-the-planner-prompt-shows-only-confirmed-refuted-and-error-lab-verdicts)
+- **2026-11-23** [A missing vault is reported, not skipped](docs/decisions/2026-11.md#2026-11-23-a-missing-vault-is-reported-not-skipped)
+- **2026-11-23** [Standard errors use Newey-West because the lag-1 correction reads 1.0 on sparse rows](docs/decisions/2026-11.md#2026-11-23-standard-errors-use-newey-west-because-the-lag-1-correction-reads-10-on-sparse-rows)
+- **2026-11-23** [The lab job definition lives in deploy/](docs/decisions/2026-11.md#2026-11-23-the-lab-job-definition-lives-in-deploy)
 - **2026-11-14** [Progress photos removed](docs/decisions/2026-11.md#2026-11-14-progress-photos-removed)
 - **2026-11-13** [Photo analysis runs on OpenCV and rembg, no MediaPipe package](docs/decisions/2026-11.md#2026-11-13-photo-analysis-runs-on-opencv-and-rembg-no-mediapipe-package)
 - **2026-11-13** [Below fever range, skin temp is a note, not an illness cap](docs/decisions/2026-11.md#2026-11-13-below-fever-range-skin-temp-is-a-note-not-an-illness-cap)

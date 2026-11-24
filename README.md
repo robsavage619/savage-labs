@@ -43,7 +43,7 @@ fused every morning into one decision: train or not, how hard, and on what.
 <tr>
 <td width="50%" valign="top">
 
-**A research team with a blind reviewer.** Four agents run the lab: an analyst proposes studies as specs, a methodologist approves or rejects them without seeing the analyst's reasoning, a runner re-tests them nightly, and a forecaster is scored against persistence.
+**A research team with a blind reviewer.** Four specialists each keep their own agenda and propose studies as specs, a methodologist approves or rejects them without seeing the proposer's reasoning, a runner re-tests them nightly, and a forecaster is scored against a no-change baseline.
 
 </td>
 <td width="50%" valign="top">
@@ -74,21 +74,23 @@ fused every morning into one decision: train or not, how hard, and on what.
 
 ### A research team that studies one person
 
-The Lab is four agents with separate jobs, and the separation carries the rigour.
+The Lab is a handful of roles with separate jobs, and the separation carries the rigour.
 
 | Role | Sees | Does |
 |---|---|---|
-| **Analyst** | A brief rebuilt from the database each run: current beliefs, every past question, the forecasts that missed worst | Proposes questions as declarative specs, so a new study needs no new code |
-| **Methodologist** | The spec, its power estimate and the data. Never the analyst's reasoning | Approves or rejects, in writing, with a design it would accept |
+| **Specialists** (hypertrophy, recovery, conditioning, metabolic) | A brief rebuilt from the database each run: current beliefs, every past question, the forecasts that missed worst | Each explores its own field freely, keeps an agenda, and proposes questions as declarative specs, so a new study needs no new code |
+| **Methodologist** | The spec, its power estimate and the data. Never the proposer's reasoning | Approves or rejects, in writing, with a design it would accept |
 | **Runner** | Approved specs | Re-tests each one nightly and rebuilds its posterior from scratch, so no day is counted twice |
-| **Forecaster** | Only data available before each monthly cut-off | Predicts the next month of mornings and is scored against "same as baseline" |
+| **Forecaster** | Only data available before each monthly cut-off | Predicts the next month of mornings and is scored against a zero baseline: no change from the outcome's own baseline |
 
 - **Beliefs start wide and narrow on evidence.** Each prior is taken from the research vault, cited, and deliberately loose. The subject's own results tighten it.
 - **Studies are sized before they run.** Power comes from the outcome's own spread and day-to-day carryover. A server-computed value score (uncertainty, decision relevance, feasibility, novelty) orders the queue, so no agent can argue its own question to the top.
 - **Beliefs are ablated.** Each one is removed and the forecast re-scored. A belief that makes the forecast worse is marked for demotion, however good its p-value looked.
-- **The notebook is append-only.** Proposals, reviews, results and belief changes are never edited, and the analyst reads it first.
+- **The notebook is append-only.** Proposals, reviews, results and belief changes are never edited, and the specialists read it first.
 
-In its first real cycle the analyst proposed three studies and the methodologist rejected all three: a circular exposure, an outcome measured in the same recording as its cause, and an unadjusted confounder. Each rejection came with a design it would approve. The same cycle found two bugs in the feature store.
+In its first real cycle, run by the single analyst the specialists later replaced, the lab proposed three studies and the methodologist rejected all three: a circular exposure, an outcome measured in the same recording as its cause, and an unadjusted confounder. Each rejection came with a design it would approve. The same cycle found two bugs in the feature store.
+
+A devil's advocate role exists to challenge a decisive result before it is believed, with its objections committed to the notebook before it sees the result. It is defined but has not yet been exercised on a real result.
 
 ### Experiments that cannot move the engine by accident
 

@@ -8,59 +8,37 @@
 
 ## The Obsidian Vault
 
-The third input into every AI call, alongside live biometrics and clinical context, is a personal knowledge base of **405 research notes** I've built in Obsidian. Every workout plan Claude generates is grounded in this vault, not in whatever the model learned during pretraining.
+The third input into every AI call, alongside live biometrics and clinical context, is a personal knowledge base of research notes I've built in Obsidian. Every workout plan Claude generates is grounded in this vault, not in whatever the model learned during pretraining.
 
 The difference matters. Claude knows exercise science in aggregate from its training data. My vault encodes *my* specific protocol decisions, which periodization model I follow, which meta-analyses I trust on rest intervals, what the research actually says about training frequency for hypertrophy vs what gets repeated on the internet. When Claude writes me a plan, it's applying my evidence base, not a generic one.
 
 ### What's In It
 
-~416 notes across 8 domains, all ingested from primary sources (textbooks, meta-analyses, RCTs), structured with YAML frontmatter tags, and condensed to actionable prescription sections.
+The vault is multi-domain and larger than the planner needs: the wiki folder holds about 1,500 notes, and only the roughly 500 that classify into the planner's five domains (training, nutrition, sleep, HRV, health) are ever candidates. The rest (LLM engineering, career, sports business and so on) never reach a plan. Notes are ingested from primary sources (textbooks, meta-analyses, RCTs), carry YAML frontmatter tags, and are condensed to their actionable sections before use.
 
-| Domain | Notes | Primary sources |
-|---|---|---|
-| Strength & Hypertrophy | 147 | Schoenfeld, Israetel, Helms, Bompa/Zatsiorsky, volume landmarks, SRA curves, periodization, DUP |
-| Sleep Science | 76 | Walker, Winter, stage targets, SpO2 thresholds, circadian anchoring, sleep × athletic performance |
-| LLM Engineering & RAG | 67 | Self-RAG, ReAct, Reflexion, Constitutional AI, informs how the retrieval system is designed |
-| Nutrition | 55 | Israetel, Helms, Attia, priority hierarchy, protein targets, recomposition conditions, supplement tiers |
-| Longevity & Healthspan | 35 | Attia. VO₂max, centenarian decathlon, Zone 2, ApoB vs LDL-C, compression of morbidity |
-| HRV & Biometric Research | 15 | Task Force 1996, Kiviniemi, Plews, Tanaka, Dial, the papers behind every HRV and zone design decision |
-| Concurrent Training & Sports Science | 11 | Wilson, Coffey & Hawley, Schumann, Suchomel, Seiler, interference theory, AMPK/mTOR, sport compatibility |
-| N-of-1 Methodology | 5 | Schork, Daza, Piccininni, single-subject experimental design as rigorous science, not just self-tracking |
+The domain comes from frontmatter tags and filename keywords, so a note can silently fall out of scope if its tags change. At index build the server logs the in-scope count and warns when it falls below a floor.
+
+| In-scope domain | Primary sources |
+|---|---|
+| Training | Schoenfeld, Israetel, Helms, Bompa/Zatsiorsky, volume landmarks, SRA curves, periodization, concurrent training |
+| Sleep | Walker, Winter, stage targets, SpO2 thresholds, circadian anchoring, sleep × athletic performance |
+| Nutrition | Israetel, Helms, Attia, priority hierarchy, protein targets, recomposition conditions, supplement tiers |
+| HRV | Task Force 1996, Kiviniemi, Plews, Tanaka, Dial, the papers behind every HRV and zone design decision |
+| Health | Attia on VO₂max, Zone 2, ApoB vs LDL-C and compression of morbidity; clinical references |
 
 ---
 
 ### How the Vault Gets Used
 
-On every workout generation or briefing call, `load_vault_research()` selects the 4 most relevant notes based on what's going on with me today:
+On every workout generation or briefing call, `load_vault_research()` asks `VaultIndex.query` for the top 20 notes (the clinical-findings panel in the briefing asks for 6, scoped to its own domains and ranked against an explicit question). Retrieval has three parts:
 
-```python
-signals = {
-    "hrv_anomaly",         # HRV σ-deviation < -1.0
-    "high_acwr",           # ACWR > 1.3
-    "deload",              # gates.deload_required = True
-    "illness",             # checkin.illness_flag = True OR rr_delta ≥ 1.0
-    "poor_sleep",          # last night < 6h
-    "push_pull_imbalance", # 28d ratio > 1.2 or < 0.8
-    "volume_spike",        # 4-week volume Δ > 40%
-    "recomposition",       # always active
-    "exercise_selection",  # always active
-    "pickleball_focus",    # pickleball_min_7d ≥ 60
-    "concurrent_training", # pickleball_min_7d ≥ 150 — triggers concurrent-training vault notes
-}
-```
+**1. Signals from today's state.** `state_signals()` derives a set from DailyState, for example `hrv_anomaly`, `high_acwr`, `deload`, `illness`, `poor_sleep`, `push_pull_imbalance`, `volume_spike`, `pickleball_focus` and `concurrent_training`, plus always-on `recomposition` and `exercise_selection`. Callers add keyword hints from the day's plan context.
 
-Each note has YAML frontmatter tags. The retriever scores tags against active signals (`+2` per match, `+1` for default) and returns the top 4. On a high-ACWR/low-HRV day, overtraining and deload notes automatically beat out rest-interval notes.
+**2. A blended score per note.** Lexical points: `+2` for each frontmatter tag that maps to an active signal (`+1` for the default signal), `+1` for a signal word in the filename, `+3` for a hint in the title or filename, `+1` for a hint in the body excerpt, `+0.5` per hint in a heading. Semantic points: cosine similarity between an embedded query (signals, hints and any explicit question) and each note, from a small static embedding model (`potion-base-8M`), weighted by 4. A note with zero lexical score is still eligible if its similarity clears 0.45, which recovers notes whose wording differs from the signal vocabulary. If the model cannot load, scoring falls back to lexical only.
 
-**Example: ACWR = 1.42, HRV σ = −1.8**
+**3. Pinned foundations, capped.** Seventeen foundation notes (exercise selection and order, hypertrophy mechanisms, rest intervals, volume landmarks, SRA, periodization, load selection) are pinned, but pins may take at most 40% of the result, 8 of 20, in a fixed priority order. The rest of the slots go to the state-ranked notes, so a high-ACWR, low-HRV day surfaces overtraining and deload notes ahead of generic ones.
 
-| Note | Score |
-|---|---|
-| `overtraining-and-deload.md` | **+6** (deload+2, hrv_anomaly+2, high_acwr+2) |
-| `fitness-fatigue-theory.md` | **+4** (deload+2, hrv_anomaly+2) |
-| `supercompensation-theory.md` | **+3** (volume_spike+2, default+1) |
-| `rest-interval-hypertrophy.md` | **+1** (default+1) |
-
-Six notes also load unconditionally on every plan call, exercise selection, exercise order, Schoenfeld's hypertrophy mechanisms, rest intervals for strength and hypertrophy. These are the foundation that every plan builds on regardless of the day's signals.
+The prompt also carries a compact catalog of every in-scope note, titles and filenames only, which is the citation inventory the model is told to cite from.
 
 Raw notes get stripped down to just the actionable sections before being sent to Claude:
 
@@ -74,4 +52,12 @@ Raw notes get stripped down to just the actionable sections before being sent to
 A 3,000-word hypertrophy paper becomes a 400-word prescription. Every plan Claude generates has to cite which vault notes it applied, there's a `vault_insights` field that's validated server-side, so the model can't silently ignore the research I handed it.
 
 ---
+
+### When the Vault Is Missing
+
+The vault lives on the host's disk, outside the repo, so a host without it used to plan with no grounding and say nothing. Since 39178f6 that is reported at every layer:
+
+- `vault_context()` returns a `## VAULT UNAVAILABLE` notice instead of an empty string, telling the model its output is not grounded in the vault and to cite no note. The planner and the briefing both carry it.
+- `/api/freshness` has a Vault row: state `ok` with a note count, or `missing` when the index reads no notes. The sync chip lists a missing vault under its own wording.
+- Citation validation has nothing to check against when the allow-list is empty, so it skips rather than rejecting every plan. That is the one silent path left, and the notice above is what makes it visible.
 
