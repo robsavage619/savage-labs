@@ -148,7 +148,7 @@ export function ForecastExplain() {
 export function BeliefsExplain() {
   const b = useQuery({ queryKey: ["research-beliefs"], queryFn: api.researchBeliefs, staleTime: STALE });
   const h = useQuery({ queryKey: ["research-hypotheses"], queryFn: api.researchHypotheses, staleTime: STALE });
-  const top = [...(b.data ?? [])].filter((x) => x.n_results > 0).sort((x, y) => (y.learned ?? 0) - (x.learned ?? 0))[0];
+  const top = [...(b.data ?? [])].filter((x) => x.n_results > 0).sort((x, y) => y.n_results - x.n_results || (y.post_sd ? Math.abs(y.post_mean) / y.post_sd : 0) - (x.post_sd ? Math.abs(x.post_mean) / x.post_sd : 0))[0];
   const q = top && (h.data ?? []).find((x) => x.belief_id === top.id && x.result?.mean_a != null);
   const u = top?.unit === "%" ? "%" : top?.unit ? ` ${top.unit}` : "";
   return (
@@ -171,8 +171,7 @@ export function BeliefsExplain() {
                 Your data compared <b>{q.result.n_b}</b> days of one kind with <b>{q.result.n_a}</b> of the other: they averaged <b>{sg(q.result.mean_b)}{u}</b> and <b>{sg(q.result.mean_a)}{u}</b>.
               </>
             )}{" "}
-            Combining the two, the team now believes <b>{sg(top.post_mean)}{u}</b>, give or take {(1.96 * top.post_sd).toFixed(1)}{u}. That&apos;s {Math.round((top.learned ?? 0) * 100)}% less uncertainty
-            than it started with.
+            Combining the two, the team now believes <b>{sg(top.post_mean)}{u}</b>, give or take {(1.96 * top.post_sd).toFixed(1)}{u}.
           </p>
         ) : (
           <p>No belief has a result yet, so every curve is still where the literature put it.</p>
@@ -181,7 +180,7 @@ export function BeliefsExplain() {
       science={
         <p>
           Each belief is a normal prior updated by a normal likelihood: the posterior mean is a precision-weighted average of the literature&apos;s estimate and yours, so strong data pulls hard and thin data
-          barely moves it (Bayesian shrinkage; Gelman et al., <em>Bayesian Data Analysis</em>). &quot;Learned&quot; is 1 − (posterior SD ÷ prior SD)², the share of the starting uncertainty your data has removed.
+          barely moves it (Bayesian shrinkage; Gelman et al., <em>Bayesian Data Analysis</em>).
         </p>
       }
     />

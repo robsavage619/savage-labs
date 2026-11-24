@@ -401,15 +401,6 @@ function Lens({ b, ext }: { b: ResearchBelief; ext: number }) {
             90%: {inUnit(lo, b.unit, ext)} to {inUnit(hi, b.unit, ext)}
           </span>
         </div>
-        <div className={`lf-learned${clear ? "" : " open"}`} title="How far your data has narrowed the starting range. Whether the answer is clear is the 90% range, not this ring.">
-          <svg width="34" height="34" viewBox="0 0 34 34">
-            <circle cx="17" cy="17" r="14" className="lf-ring-bg" />
-            <motion.circle cx="17" cy="17" r="14" className="lf-ring" initial={{ pathLength: 0 }} animate={{ pathLength: Math.max(0, b.learned ?? 0) }} transition={{ duration: 1.1, ease }} transform="rotate(-90 17 17)" />
-          </svg>
-          <span>
-            {Math.round(Math.max(0, b.learned ?? 0) * 100)}%<small>{clear ? "narrowed · clear" : "narrowed"}</small>
-          </span>
-        </div>
       </footer>
       <p className="lf-src" title={b.prior_source}>
         Started from {b.prior_source.split(";")[0].split("(")[0].trim()} · {b.n_results} result{b.n_results === 1 ? "" : "s"}
@@ -421,7 +412,9 @@ function Lens({ b, ext }: { b: ResearchBelief; ext: number }) {
 export function BeliefLenses() {
   const q = useBeliefs();
   if (!q.data) return <Skel h={260} />;
-  const rows = [...q.data].sort((a, b) => (b.learned ?? 0) - (a.learned ?? 0));
+  // Most evidence first, then the clearest belief (posterior mean furthest from zero in SDs).
+  const clarity = (b: { post_mean: number; post_sd: number }) => (b.post_sd ? Math.abs(b.post_mean) / b.post_sd : 0);
+  const rows = [...q.data].sort((a, b) => b.n_results - a.n_results || clarity(b) - clarity(a));
   // Beliefs in the same unit share the widest of their scales, so their curves compare at a glance.
   const ext = new Map<string, number>();
   for (const b of rows) ext.set(b.unit ?? "", Math.max(ext.get(b.unit ?? "") ?? 0, b.scale));

@@ -1401,8 +1401,6 @@ def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         d["goal"] = goal_of(d["outcome"], conn)
         d["scale"] = _scale(d)
         d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else None
-        # How much the data has narrowed the prior: 0 = untouched, → 1 = data dominates.
-        d["learned"] = round(1 - (d["post_sd"] / d["prior_sd"]) ** 2, 3) if d["prior_sd"] else None
         out.append(d)
     return out
 
