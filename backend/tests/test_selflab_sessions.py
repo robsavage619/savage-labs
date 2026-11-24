@@ -8,7 +8,7 @@ import pytest
 
 from shc import selflab
 
-LIFT = "Seated Dumbbell Curl"
+LIFT = "Preacher Curl (Dumbbell)"
 
 
 def _session(conn, day: date, exercise: str = LIFT) -> None:

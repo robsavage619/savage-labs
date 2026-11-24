@@ -9,7 +9,7 @@ import pytest
 
 from shc import selflab
 
-LIFT = "Seated Dumbbell Curl"
+LIFT = "Preacher Curl (Dumbbell)"
 
 
 def _history(conn, *, noise: float, per_week: int = 2, weeks: int = 25, seed: int = 1) -> None:

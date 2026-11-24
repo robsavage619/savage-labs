@@ -675,12 +675,20 @@ def todays_assignments(conn: duckdb.DuckDBPyConnection, day: date | None = None)
 
 
 def _top_set_e1rm(conn: duckdb.DuckDBPyConnection, exercise: str, day: date) -> float | None:
-    """Best working-set Epley e1RM for an exercise on a day (reps capped at 12)."""
+    """Best working-set Epley e1RM for an exercise on a day, the engine's way.
+
+    Per-hand load and RIR-adjusted reps come from `load_mechanics`, the same
+    expressions every other e1RM path uses (invariants 13 and 19): a raw
+    weight here read a logging-convention change as a 47% strength drop.
+    """
+    from shc.training.load_mechanics import effective_reps_sql, per_hand_sql
+
     row = conn.execute(
-        """
-        SELECT MAX(weight_kg * (1 + LEAST(reps, 12) / 30.0))
+        f"""
+        SELECT MAX(({per_hand_sql("weight_kg", "exercise", "day_d")})
+                   * (1 + {effective_reps_sql("reps", "rpe")} / 30.0))
         FROM workout_sets_dedup
-        WHERE exercise = ? AND day_d = ? AND is_warmup = FALSE
+        WHERE exercise = ? AND day_d = ? AND NOT COALESCE(is_warmup, FALSE)
           AND weight_kg > 0 AND reps > 0
         """,
         [exercise, day.isoformat()],
