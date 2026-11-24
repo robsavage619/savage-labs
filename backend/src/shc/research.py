@@ -769,6 +769,7 @@ def estimate(
     registered: date | None = None,
     z: float = 1.96,
     cap_per_arm: int | None = None,
+    planned_per_arm: int | None = None,
 ) -> dict:
     """Run a spec on current data: B − A adjusted for covariates, with a
     carryover-widened range (95% unless `z` says otherwise), a verdict, and a
@@ -785,6 +786,8 @@ def estimate(
             passes a stricter bound.
         cap_per_arm: Keep only the first this-many days of each arm, so a look
             at a planned size reads the same days however late it is run.
+        planned_per_arm: The planned size fixed at registration; the looks and
+            ``days_to_confirm`` use it instead of today's ``needed_per_arm``.
 
     Returns:
         Arm sizes and means, effect, range, verdict, power and a summary line.
@@ -878,7 +881,9 @@ def estimate(
         verdict = "direction"
     else:
         verdict = "inconclusive"
-    power = _power(rows, math.sqrt(sigma2), m, de, today, unit, registered or today)
+    power = _power(
+        rows, math.sqrt(sigma2), m, de, today, unit, registered or today, planned_per_arm
+    )
     out_f = feature(out_name)
     unit_label = out_f.unit if out_f else ""
     return base | {
@@ -949,16 +954,27 @@ def _looks(needed: int) -> list[tuple[int, float]]:
 
 
 def _power(
-    rows: list, sd: float, min_effect: float, de: float, today: date, unit: str, since: date
+    rows: list,
+    sd: float,
+    min_effect: float,
+    de: float,
+    today: date,
+    unit: str,
+    since: date,
+    planned: int | None = None,
 ) -> dict:
     """Days per arm needed to see ``min_effect``, and the wait at the current pace.
 
     ``days_to_answer`` counts every day in the arms: when they are big enough
     to rule the effect out. ``days_to_confirm`` counts only days after
-    ``since`` (the registration date), the only ones a favourable verdict may
+    ``since`` (the registration date), the only ones a decisive verdict may
     rest on, and ``days_to_next_look`` is the wait to the next planned look.
+    The looks sit at ``planned`` (fixed at registration) when given, so they
+    do not drift as the outcome's noise estimate moves; otherwise at today's
+    ``needed_per_arm``.
     """
     needed = _needed_per_arm(sd, min_effect, de)
+    plan = planned or needed
     recent = today - timedelta(days=_PACE_WINDOW_DAYS)
     per_day = 7 if unit == "week" else 1
 
@@ -979,17 +995,19 @@ def _power(
                 return None
         return max(waits)
 
-    looks = _looks(needed)
+    looks = _looks(plan)
     seen = min(have(0, since), have(1, since))
     nxt = next((n for n, _ in looks if n > seen), None)
     return {
         "needed_per_arm": needed,
+        "planned_per_arm": plan,
+        "planned_at_registration": planned is not None,
         "needed_for": _NEEDED_FOR,
         "looks": [{"per_arm": n, "z": z} for n, z in looks],
         "next_look_per_arm": nxt,
         "days_to_next_look": None if nxt is None else wait(since, nxt),
         "days_to_answer": wait(None, needed),
-        "days_to_confirm": wait(since, needed),
+        "days_to_confirm": wait(since, plan),
         "outcome_sd": round(sd, 3),
     }
 
@@ -1175,8 +1193,11 @@ def refresh_belief(conn: duckdb.DuckDBPyConnection, belief_id: str) -> None:
     """Posterior from the prior and the latest result of every linked hypothesis.
 
     Rebuilt from scratch each time, so re-running a hypothesis never counts the
-    same days twice. A retrospective result rests on days the author explored
-    before registering, so it never moves the belief.
+    same days twice. Only a result read at a planned look on post-registration
+    days moves the belief, and it moves it by that look's effect and standard
+    error. The all-days effect rests partly on days the author explored before
+    registering, so a result without such a read (retrospective, or an
+    all-days inconclusive call) leaves the prior untouched.
     """
     b = conn.execute(
         "SELECT prior_mean, prior_sd FROM research_beliefs WHERE id = ?", [belief_id]
@@ -1185,22 +1206,27 @@ def refresh_belief(conn: duckdb.DuckDBPyConnection, belief_id: str) -> None:
         return
     latest = conn.execute(
         """
-        SELECT r.effect, r.se FROM research_results r
+        SELECT r.power FROM research_results r
         JOIN research_hypotheses h ON h.id = r.hypothesis_id
-        WHERE h.belief_id = ? AND r.effect IS NOT NULL AND r.verdict <> 'retrospective'
-          AND r.run_at = (
+        WHERE h.belief_id = ? AND r.run_at = (
             SELECT MAX(run_at) FROM research_results WHERE hypothesis_id = h.id)
         """,
         [belief_id],
     ).fetchall()
-    post_mean, post_sd = _combine(b[0], b[1], [(e, s) for e, s in latest])
+    reads = []
+    for (power_json,) in latest:
+        look = (json.loads(power_json) if power_json else {}).get("look") or {}
+        if look.get("effect") is not None and look.get("se"):
+            reads.append((float(look["effect"]), float(look["se"])))
+    post_mean, post_sd = _combine(b[0], b[1], reads)
     conn.execute(
         "UPDATE research_beliefs SET post_mean = ?, post_sd = ?, n_results = ?, updated_at = now() WHERE id = ?",
-        [post_mean, post_sd, len(latest), belief_id],
+        [post_mean, post_sd, len(reads), belief_id],
     )
 
 
 _FAVOURABLE = ("supported", "direction")
+_DECISIVE = (*_FAVOURABLE, "against", "ruled_out")
 
 
 def _wait_text(res: dict) -> str:
@@ -1223,18 +1249,22 @@ def _wait_text(res: dict) -> str:
 def _confirm_on_new_days(
     conn: duckdb.DuckDBPyConnection, spec: dict, res: dict, registered: date
 ) -> dict:
-    """Hold a favourable verdict to the days that arrived after registration.
+    """Hold a decisive verdict to the days that arrived after registration.
 
     A question is proposed after its author explored the data, so the days up to
-    registration were open to selection: leads that looked good get registered.
-    The effect and range still describe every day; the verdict may only be
-    favourable when the days since registration say so on their own.
+    registration were open to selection: leads that looked good (or bad) get
+    registered. The effect and range still describe every day; the verdict may
+    only be decisive (``supported``, ``direction``, ``against``, ``ruled_out``)
+    when the days since registration say so on their own.
 
     Those days are read only at the planned looks (half and the full planned
     size per arm, the half look held to a stricter bound), each on exactly the
-    first n days of each arm. The nightly re-run therefore cannot keep
-    re-testing growing data until it crosses 1.96; between looks the verdict
-    stays retrospective.
+    first n days of each arm. The planned size is ``power.planned_per_arm``,
+    fixed at registration, so the boundary does not move as the noise estimate
+    does. The nightly re-run therefore cannot keep re-testing growing data
+    until it crosses a bound; between looks the verdict stays retrospective,
+    and once every look has been read without a decisive call it is a final
+    ``inconclusive``.
 
     Args:
         conn: Database connection.
@@ -1243,31 +1273,69 @@ def _confirm_on_new_days(
         registered: The date the question was registered.
 
     Returns:
-        ``res``, with its verdict and summary replaced when the favourable call
-        rests on days seen before registration or on no planned look.
+        ``res``, with its verdict and summary replaced when the decisive call
+        rests on days seen before registration or on no planned look. A
+        verdict read at a look carries that read under ``look``; a final
+        inconclusive one also carries ``looks_done``.
     """
-    if res["verdict"] not in _FAVOURABLE:
+    if res["verdict"] not in _DECISIVE:
         return res
     first = registered + timedelta(days=1)
     if "start_date" in spec:
         first = max(first, date.fromisoformat(str(spec["start_date"])))
     since = spec | {"start_date": first.isoformat()}
-    planned = (res.get("power") or {}).get("needed_per_arm") or _MIN_PER_ARM
+    pw = res.get("power") or {}
+    planned = pw.get("planned_per_arm") or pw.get("needed_per_arm") or _MIN_PER_ARM
     unit = res["unit"]
     head = res["summary"].rsplit(" → ", 1)[0]
+    if not pw.get("planned_at_registration", True):
+        head += (
+            " No planned size was stored at registration, so the looks use today's "
+            f"estimate ({planned} per arm)."
+        )
     new = estimate(conn, since)
     have = min(new["n_a"], new["n_b"])
-    for n_k, z in reversed(_looks(planned)):
+    looks = _looks(planned)
+    full_read = None
+    for n_k, z in reversed(looks):
         if have < n_k:
             continue
         look = estimate(conn, since, z=z, cap_per_arm=n_k)
-        if look["verdict"] in _FAVOURABLE:
+        read = {
+            "per_arm": n_k,
+            "z": z,
+            "verdict": look["verdict"],
+            "effect": look["effect"],
+            "se": look.get("se"),
+            "ci_low": look["ci_low"],
+            "ci_high": look["ci_high"],
+        }
+        if look["verdict"] in _DECISIVE:
             return res | {
                 "verdict": look["verdict"],
+                "look": read,
                 "summary": f"{head} On the first {n_k} A / {n_k} B {unit}s since it was "
                 f"registered (a planned look, bound ±{z:g} se): {look['effect']:+.2f} "
                 f"({look['ci_low']:+.2f} to {look['ci_high']:+.2f}). → {look['verdict']}",
             }
+        if n_k == looks[-1][0]:
+            full_read = read
+    if full_read is not None:
+        rng = (
+            f": {full_read['effect']:+.2f} ({full_read['ci_low']:+.2f} to "
+            f"{full_read['ci_high']:+.2f})"
+            if full_read["effect"] is not None
+            else ""
+        )
+        return res | {
+            "verdict": "inconclusive",
+            "look": full_read,
+            "looks_done": True,
+            "summary": f"{head} Every planned look at the {unit}s since it was registered "
+            f"has been read, the last on the first {full_read['per_arm']} A / "
+            f"{full_read['per_arm']} B{rng}, and none confirmed it. More nights cannot "
+            "change a look already read. → inconclusive",
+        }
     return res | {
         "verdict": "retrospective",
         "summary": f"{head} Those {unit}s were open to exploration before the question was "
@@ -1279,15 +1347,24 @@ def _confirm_on_new_days(
 
 def run(conn: duckdb.DuckDBPyConnection, slug: str, author: str = "runner") -> dict:
     h = conn.execute(
-        "SELECT id, question, spec, belief_id, created_at FROM research_hypotheses WHERE slug = ?",
+        "SELECT id, question, spec, belief_id, created_at, power FROM research_hypotheses WHERE slug = ?",
         [slug],
     ).fetchone()
     if h is None:
         raise SpecError(f"no hypothesis {slug!r}")
-    hid, question, spec_json, belief_id, created_at = h
+    hid, question, spec_json, belief_id, created_at, stored_json = h
     spec = json.loads(spec_json)
     registered = created_at.date()
-    res = _confirm_on_new_days(conn, spec, estimate(conn, spec, registered=registered), registered)
+    planned = (json.loads(stored_json) if stored_json else {}).get("needed_per_arm")
+    res = _confirm_on_new_days(
+        conn,
+        spec,
+        estimate(conn, spec, registered=registered, planned_per_arm=planned),
+        registered,
+    )
+    power = (
+        res["power"] | ({"look": res["look"]} if "look" in res else {}) if res["power"] else None
+    )
     conn.execute(
         "INSERT INTO research_results (id, hypothesis_id, n_a, n_b, effect, se, ci_low, ci_high, p, "
         "design_effect, verdict, summary, power, mean_a, mean_b) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1304,7 +1381,7 @@ def run(conn: duckdb.DuckDBPyConnection, slug: str, author: str = "runner") -> d
             res["design_effect"],
             res["verdict"],
             res["summary"],
-            json.dumps(res["power"]) if res["power"] else None,
+            json.dumps(power) if power else None,
             res["mean_a"],
             res["mean_b"],
         ],
@@ -1333,10 +1410,16 @@ def _dead_reason(
 ) -> str | None:
     """Why a live question can never answer, or None while it still can.
 
-    Applies the review's own rules to a question already running: its exposure
-    or outcome has gone quiet, or it has no answer yet and cannot reach one.
+    Applies the review's own rules to a question already running: every planned
+    look has been read without a decisive call, its exposure or outcome has gone
+    quiet, or it has no answer yet and cannot reach one.
     """
     today = today or date.today()
+    if res.get("looks_done"):
+        return (
+            "Every planned look at the days since registration has been read and none "
+            "confirmed it; the answer is inconclusive."
+        )
     for name in (spec["exposure"]["feature"], spec["outcome"]):
         if name in _CALENDAR or name in _ZERO_FILL or name.startswith(_ZERO_FILL_KINDS):
             continue  # absence is a real zero or a calendar fact, not a dead feed
@@ -1497,10 +1580,26 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     return out
 
 
-def notebook(conn: duckdb.DuckDBPyConnection, limit: int = 50) -> list[dict]:
+def notebook(
+    conn: duckdb.DuckDBPyConnection, limit: int = 50, exclude_authors: tuple[str, ...] = ()
+) -> list[dict]:
+    """The latest notebook entries, newest first.
+
+    Args:
+        conn: Database connection.
+        limit: How many entries to return.
+        exclude_authors: Authors to leave out before the limit applies.
+
+    Returns:
+        One dict per entry: id, written_at, author, kind, ref, title, body.
+    """
+    skip = (
+        f"WHERE author NOT IN ({', '.join('?' * len(exclude_authors))}) " if exclude_authors else ""
+    )
     rows = conn.execute(
-        "SELECT id, written_at, author, kind, ref, title, body FROM research_notebook ORDER BY written_at DESC LIMIT ?",
-        [limit],
+        f"SELECT id, written_at, author, kind, ref, title, body FROM research_notebook {skip}"
+        "ORDER BY written_at DESC LIMIT ?",
+        [*exclude_authors, limit],
     ).fetchall()
     return [
         {
@@ -1516,7 +1615,6 @@ def notebook(conn: duckdb.DuckDBPyConnection, limit: int = 50) -> list[dict]:
     ]
 
 
-_DECISIVE = (*_FAVOURABLE, "against", "ruled_out")
 _STANDING = ("stands", "qualified")
 
 
@@ -1525,16 +1623,16 @@ def governed_results(conn: duckdb.DuckDBPyConnection) -> list[dict]:
 
     A question qualifies when it is active or retired, its latest verdict is
     decisive on post-registration days (never ``retrospective``), and its
-    latest devil's-advocate challenge at that verdict is not ``doubtful``.
-    A favourable verdict also needs one that ``stands`` or is ``qualified``;
-    a dry-run challenge counts as none.
+    latest devil's-advocate challenge at that verdict ``stands`` or is
+    ``qualified``. That holds for every decisive verdict, unfavourable ones
+    included; a dry-run challenge counts as none.
 
     Args:
         conn: Database connection.
 
     Returns:
         One dict per qualifying question: slug, question, verdict, effect,
-        ci_low, ci_high, unit and severity (None when unchallenged).
+        ci_low, ci_high, unit and severity.
     """
     latest = conn.execute(
         "SELECT h.slug, h.question, h.spec, arg_max(struct_pack(verdict := r.verdict, "
@@ -1562,7 +1660,7 @@ def governed_results(conn: duckdb.DuckDBPyConnection) -> list[dict]:
             ),
             None,
         )
-        if severity == "doubtful" or (verdict in _FAVOURABLE and severity not in _STANDING):
+        if severity not in _STANDING:
             continue
         out.append(
             {
@@ -1593,7 +1691,7 @@ def lab_results_section(conn: duckdb.DuckDBPyConnection) -> str:
         lines.append(
             f"- {g['question']} → {g['verdict'].replace('_', ' ')}: {g['effect']:+.2f}{unit} "
             f"(95% CI {g['ci_low']:+.2f} to {g['ci_high']:+.2f}); "
-            f"challenge: {g['severity'] or 'none (not required for this verdict)'}"
+            f"challenge: {g['severity']}"
         )
     return "\n".join(lines)
 
@@ -2401,7 +2499,8 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
         "misses": _misses(conn),
         "beliefs": beliefs(conn),
         "hypotheses": hypotheses(conn),
-        "notebook": notebook(conn, 80),
+        # The job runner's heartbeats (~8 a day) would crowd research out of the window.
+        "notebook": notebook(conn, 80, exclude_authors=("job-runner",)),
         "features": dictionary(conn),
     }
 

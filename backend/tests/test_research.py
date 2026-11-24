@@ -517,6 +517,11 @@ def test_only_decisive_challenged_results_reach_the_planner(conn) -> None:
     _decided(conn, "kept", "supported", status="retired")
     _challenge(conn, "kept", "supported", "qualified")
     _decided(conn, "against-ok", "against")
+    _challenge(conn, "against-ok", "against", "stands")
+    # An unfavourable call needs a standing challenge too, not just a favourable one.
+    _decided(conn, "against-bare", "against")
+    _decided(conn, "ruled-dry", "ruled_out")
+    _challenge(conn, "ruled-dry", "ruled_out", "stands", body="DRY RUN. nothing tested")
     _decided(conn, "retro", "retrospective")
     _challenge(conn, "retro", "retrospective", "stands")
     _decided(conn, "unchallenged", "supported")
@@ -532,7 +537,15 @@ def test_only_decisive_challenged_results_reach_the_planner(conn) -> None:
     assert "not over it" in text
     assert "Does kept hold? → supported: -6.00" in text and "95% CI -9.00 to -3.00" in text
     assert "challenge: qualified" in text
-    for slug in ("retro", "unchallenged", "doubted", "dry", "proposed"):
+    for slug in (
+        "retro",
+        "unchallenged",
+        "doubted",
+        "dry",
+        "proposed",
+        "against-bare",
+        "ruled-dry",
+    ):
         assert f"Does {slug} hold?" not in text
 
 
@@ -817,3 +830,92 @@ def test_research_read_routes_run_off_the_event_loop() -> None:
         if "GET" in getattr(r, "methods", set()) and inspect.iscoroutinefunction(r.endpoint)
     ]
     assert blocking == []
+
+
+def test_every_planned_look_read_without_a_call_is_final_and_retires(monkeypatch) -> None:
+    rng = random.Random(11)
+    arm = [rng.gauss(0, 1) for _ in range(120)]
+    # Identical arms: no look can be decisive, however many nights it is re-run.
+    monkeypatch.setattr(research, "estimate", _fake_estimator(arm, list(arm), [120]))
+    res = {
+        "verdict": "direction",
+        "unit": "day",
+        "summary": "x → direction",
+        "power": {"needed_per_arm": 100, "next_look_per_arm": None, "days_to_confirm": 0},
+    }
+    out = research._confirm_on_new_days(None, {"unit": "day"}, res, date(2026, 1, 1))  # pyright: ignore[reportArgumentType]
+    assert out["verdict"] == "inconclusive"
+    assert "Every planned look" in out["summary"] and "none confirmed it" in out["summary"]
+    assert out["look"]["per_arm"] == 100
+    reason = research._dead_reason(None, SPEC, out, today=TODAY)  # pyright: ignore[reportArgumentType]
+    assert reason and "none confirmed it" in reason
+
+
+def test_noise_after_registration_does_not_move_the_looks(conn) -> None:
+    _seed(conn, effect_pct=-15)
+    spec = SPEC | {"min_effect": 5}
+    reg = research.register(conn, "fixed", "Does a hard day lower tomorrow's HRV?", spec, None, "t")
+    planned = reg["power"]["needed_per_arm"]
+    conn.execute(
+        "UPDATE research_hypotheses SET created_at = ? WHERE slug = 'fixed'",
+        [TODAY - timedelta(days=400)],
+    )
+    before = research.run(conn, "fixed")
+    rng = random.Random(5)
+    for rid, hrv in conn.execute("SELECT id, hrv FROM recovery").fetchall():
+        conn.execute(
+            "UPDATE recovery SET hrv = ? WHERE id = ?", [hrv * math.exp(rng.gauss(0, 0.1)), rid]
+        )
+    after = research.run(conn, "fixed")
+    assert after["power"]["needed_per_arm"] != planned  # the live size did move
+    assert after["power"]["looks"] == before["power"]["looks"]
+    assert after["power"]["looks"][-1]["per_arm"] == max(planned, research._MIN_PER_ARM)
+    assert after["look"]["per_arm"] == before["look"]["per_arm"]
+
+
+def test_no_stored_size_falls_back_to_live_and_says_so(conn) -> None:
+    _seed(conn, effect_pct=-15)
+    spec = SPEC | {"min_effect": 5}
+    research.register(conn, "nosize", "q", spec, None, "t")
+    conn.execute(
+        "UPDATE research_hypotheses SET created_at = ?, power = NULL WHERE slug = 'nosize'",
+        [TODAY - timedelta(days=400)],
+    )
+    res = research.run(conn, "nosize")
+    assert res["power"]["planned_at_registration"] is False
+    assert "No planned size was stored at registration" in res["summary"]
+
+
+def test_an_unfavourable_call_on_explored_days_is_held_to_the_looks(conn) -> None:
+    _seed(conn, effect_pct=-15)
+    spec = SPEC | {"min_effect": 5, "expected_sign": "+"}
+    assert research.estimate(conn, spec, today=TODAY)["verdict"] == "against"
+    research.register(conn, "wrong-way", "Does a hard day raise tomorrow's HRV?", spec, None, "t")
+    assert research.run(conn, "wrong-way")["verdict"] == "retrospective"
+    conn.execute(
+        "UPDATE research_hypotheses SET created_at = ? WHERE slug = 'wrong-way'",
+        [TODAY - timedelta(days=400)],
+    )
+    res = research.run(conn, "wrong-way")
+    assert res["verdict"] == "against" and "a planned look" in res["summary"]
+
+
+def test_an_all_days_inconclusive_result_does_not_move_a_belief(conn) -> None:
+    _seed(conn, effect_pct=0)
+    bid = research.add_belief(
+        conn, "Hard days lower tomorrow's HRV", "lnhrv_dev_pct", -3.0, 5.0, "prior", None, "test"
+    )
+    research.register(conn, "null", "q", SPEC, bid, "test")
+    assert research.run(conn, "null")["verdict"] in ("inconclusive", "retrospective")
+    b = next(x for x in research.beliefs(conn) if x["id"] == bid)
+    assert b["post_mean"] == pytest.approx(-3.0) and b["post_sd"] == pytest.approx(5.0)
+    assert b["n_results"] == 0
+
+
+def test_brief_leaves_job_runner_heartbeats_out_of_the_notebook(conn) -> None:
+    research.note(conn, "analyst", "note", "A research note", "")
+    for i in range(3):
+        research.note(conn, "job-runner", "note", f"heartbeat {i}", "")
+    assert {n["author"] for n in research.brief(conn)["notebook"]} == {"analyst"}
+    assert len(research.notebook(conn)) == 4
+    assert len(research.notebook(conn, 2, exclude_authors=("job-runner",))) == 1
