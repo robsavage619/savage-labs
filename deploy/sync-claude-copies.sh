@@ -10,6 +10,8 @@
 #   SHC_SKILL_DIR   the shc-workout skill       -> ~/.config/shc/shc-workout
 #                   (default: ~/.claude/skills/shc-workout)
 #   SHC_VAULT_WIKI  vault wiki notes            -> ~/.config/shc/vault/wiki (read-only on the host)
+#                   (default: ~/Vault/savage_vault/wiki, the path config.vault_path reads;
+#                   unset, the host copy froze and fell behind)
 # The research agents and the job runner always come from this repo.
 # deploy/imac.sh runs this on every deploy, so the copies cannot drift for long.
 set -euo pipefail
@@ -21,6 +23,8 @@ cd "${0:A:h}/.."
 : "${SHC_SKILL_DIR:=$HOME/.claude/skills/shc-workout}"
 [ -d "$SHC_MEMORY_DIR" ] || SHC_MEMORY_DIR=
 [ -d "$SHC_SKILL_DIR" ] || SHC_SKILL_DIR=
+: "${SHC_VAULT_WIKI:=$HOME/Vault/savage_vault/wiki}"
+[ -d "$SHC_VAULT_WIKI" ] || SHC_VAULT_WIKI=
 ssh "$host" 'mkdir -p ~/.config/shc/agents ~/.config/shc/memory ~/.config/shc/shc-workout ~/.config/shc/vault/wiki ~/.config/shc/jobs'
 
 rsync -a --delete .claude/agents/ "${host}:.config/shc/agents/"
