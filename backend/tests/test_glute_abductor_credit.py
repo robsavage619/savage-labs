@@ -54,6 +54,10 @@ def _direct_glutes(conn) -> float:
     return direct_sets_by_week(conn, MONDAY).get(("glutes", MONDAY), 0.0)
 
 
+def _glutes_line(conn) -> str:
+    return next(x for x in weekly_budget_block(conn, MONDAY) if x.startswith("- glutes:"))
+
+
 def test_migration_tags_abductors_and_changes_nothing_else(conn) -> None:
     _seed_rows(conn)
     before = conn.execute(
@@ -79,7 +83,7 @@ def test_abduction_only_week_owes_glute_max_work(conn) -> None:
     _seed_rows(conn)
     _log(conn, "Machine Hip Abductor", 8, "wa")
     assert _direct_glutes(conn) == 0.0
-    assert "- glutes: 0/6 done, 6 left" in weekly_budget_block(conn, MONDAY)
+    assert _glutes_line(conn).startswith("- glutes: 0/6 done, 6 left")
     # Still primary credit: the muscle is trained at all (invariants 10/23).
     assert weekly_muscle_volume(conn, MONDAY)["glutes"] == 8.0
 
@@ -89,4 +93,36 @@ def test_week_with_hip_thrust_meets_the_budget(conn) -> None:
     _log(conn, "Machine Hip Abductor", 8, "wa")
     _log(conn, "Test Hip Thrust", 6, "wt")
     assert _direct_glutes(conn) == 6.0
-    assert "- glutes: 6/6 done, 0 left" in weekly_budget_block(conn, MONDAY)
+    assert _glutes_line(conn).startswith("- glutes: 6/6 done, 0 left")
+
+
+def test_budget_line_tells_the_planner_abduction_is_not_glute_max(conn) -> None:
+    _seed_rows(conn)
+    block = weekly_budget_block(conn, MONDAY)
+    assert "hip abduction trains glute medius and does not count toward this budget" in (
+        _glutes_line(conn)
+    )
+    assert sum("hip abduction" in line for line in block) == 1
+
+
+def test_abduction_only_week_still_owes_direct_glute_sets(conn, seed) -> None:
+    """The direct floor in weekly_prescription reads abduction as zero direct work."""
+    from datetime import timedelta
+
+    from shc.training.autoregulation import weekly_prescription
+    from shc.training.mesocycle import _iso_week_start
+
+    assert conn.execute(
+        "SELECT region FROM exercise_muscle WHERE exercise_name = 'Hip Abduction (Machine)' "
+        "AND muscle = 'glutes' AND role = 'primary'"
+    ).fetchone() == ("gluteus_medius",)
+    this_week = _iso_week_start(date.today())
+    seed.workout(this_week - timedelta(days=5), "Hip Abduction (Machine)", [(60.0, 12)] * 12)
+    seed.workout(this_week, "Hip Abduction (Machine)", [(60.0, 12)] * 12)
+
+    rx = weekly_prescription(conn)
+
+    glutes = next(m for m in rx.muscles if m.muscle == "glutes")
+    assert glutes.current_sets >= 12, "abduction keeps its primary credit"
+    assert "glutes" in rx.direct_short, glutes.reason
+    assert glutes.direct_owed > 0

@@ -4,12 +4,13 @@ Why things are the way they are. Each entry records the problem, what was
 considered, what was chosen, and what it cost. Split by month; this page is the
 index.
 
-57 decisions recorded, 2026-04 to 2026-11.
+58 decisions recorded, 2026-04 to 2026-11.
 
 ---
 
 ## November 2026
 
+- **2026-11-24** [One meaning for a direct glute set, and the planner is told](docs/decisions/2026-11.md#2026-11-24-one-meaning-for-a-direct-glute-set-and-the-planner-is-told)
 - **2026-11-24** [Abduction no longer counts as direct glute-max work](docs/decisions/2026-11.md#2026-11-24-abduction-no-longer-counts-as-direct-glute-max-work)
 - **2026-11-23** [The lab cannot answer what it asks, so registration now refuses such studies](docs/decisions/2026-11.md#2026-11-23-the-lab-cannot-answer-what-it-asks-so-registration-now-refuses-such-studies)
 - **2026-11-23** [The planner prompt shows only confirmed, refuted and error lab verdicts](docs/decisions/2026-11.md#2026-11-23-the-planner-prompt-shows-only-confirmed-refuted-and-error-lab-verdicts)

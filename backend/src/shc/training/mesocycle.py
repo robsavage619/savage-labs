@@ -186,8 +186,15 @@ def weekly_budget_block(conn: duckdb.DuckDBPyConnection, week_start: date) -> li
     ]
     for muscle, budget in WEEKLY_DIRECT_SET_BUDGET.items():
         logged = int(done.get(muscle, 0))
-        lines.append(f"- {muscle}: {logged}/{budget} done, {max(budget - logged, 0)} left")
+        note = GLUTE_DIRECT_NOTE if muscle == "glutes" else ""
+        lines.append(f"- {muscle}: {logged}/{budget} done, {max(budget - logged, 0)} left{note}")
     return lines
+
+
+GLUTE_DIRECT_NOTE = (
+    " (hip abduction trains glute medius and does not count toward this budget; "
+    "spend these on hip thrust, RDL, squat or lunge)"
+)
 
 
 def _maintenance_delivery_block(
