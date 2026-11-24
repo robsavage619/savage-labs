@@ -705,3 +705,20 @@ def test_a_tie_is_not_reported_as_beliefs_improving_the_forecast(conn) -> None:
     titles = [n["title"] for n in research.notebook(conn)]
     assert any("a tie" in t for t in titles)
     assert not any("beliefs improve the forecast" in str(n) for n in research.notebook(conn))
+
+
+def test_brief_says_how_small_an_effect_120_days_can_detect(conn) -> None:
+    _seed(conn, effect_pct=0)
+    det = research.detectable_in_120d(conn, today=TODAY)
+    h = det["lnhrv_dev_pct"]
+    assert h["reason"] is None and h["units_per_arm"] == 60
+    # The reported effect is exactly the point where the lab's own sizing formula says n is enough.
+    n, sd, de = h["units_per_arm"], h["outcome_sd"], h["design_effect"]
+    assert research._needed_per_arm(sd, h["detectable_effect"] * 1.02, de) <= n
+    assert research._needed_per_arm(sd, h["detectable_effect"] * 0.95, de) > n
+    assert h["detectable_at_80pct_adherence"] > h["detectable_effect"]
+    # No number is guessed where none can be computed.
+    assert det["strength_emphasis_pct14"]["detectable_effect"] is None
+    assert "readings" in det["strength_emphasis_pct14"]["reason"]
+    assert det["top_set_e1rm"]["detectable_effect"] is None and det["top_set_e1rm"]["reason"]
+    assert "detectable_in_120d" in research.brief(conn)["rules"]

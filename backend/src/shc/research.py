@@ -19,13 +19,14 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
-from statistics import NormalDist, mean
+from statistics import NormalDist, mean, pstdev
 
 import duckdb
 import numpy as np
 
 from shc import places
-from shc.selflab import _needed_per_arm
+from shc.lab import _ALPHA
+from shc.selflab import _ADHERENCE, _design_effect, _needed_per_arm
 from shc.training.mesocycle import _CAPPED_E1RM, _MAX_E1RM_MEDIAN_DEVIATION
 from shc.training.volume import _RPE_GATE, _STIMULATING
 
@@ -2094,6 +2095,91 @@ def _misses(conn: duckdb.DuckDBPyConnection, metric: str = FORECAST_METRIC) -> d
     }
 
 
+_DETECT_HISTORY_DAYS = 180
+_MIN_DETECT_POINTS = 30
+
+
+def _smallest_effect(sd: float, de: float, n: int) -> float:
+    """The smallest effect `_needed_per_arm` says n per arm can detect (bisection on its formula)."""
+    lo, hi = sd * 1e-6, sd * 1e3
+    for _ in range(80):
+        mid = math.sqrt(lo * hi)
+        if _needed_per_arm(sd, mid, de) <= n:
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
+def detectable_in_120d(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> dict:
+    """Per outcome, the smallest B − A effect a question could detect in 120 days.
+
+    Uses the lab's own alpha and 80% power (`selflab._needed_per_arm`) on the
+    outcome's live noise over the last 180 days and its pace over the last 90,
+    with the arms filling at half the pace each. The design effect is the
+    lag-1 one the trials use, so it understates carryover in a regime that
+    lasts weeks. Observational questions fill the arms at the same pace, so the
+    first figure also bounds them; the second assumes 80% of days adhered to.
+
+    Args:
+        conn: Open DuckDB connection.
+        today: Last day that may be read; defaults to today.
+
+    Returns:
+        Outcome name to a dict with ``detectable_effect`` and
+        ``detectable_at_80pct_adherence`` (outcome units), or ``None`` for
+        both with a ``reason`` when the number cannot be computed.
+    """
+    today = today or date.today()
+    names = ["lnhrv_dev_pct", "strength_emphasis_pct14"]
+    names += [f"e1rm_pct14:{m}" for m in _emphasis_muscles(conn)]
+    out: dict[str, dict] = {}
+    for name in names:
+        f = feature(name)
+        base = {"unit": f.unit if f else None, "alpha": _ALPHA, "power": 0.8}
+        pts = sorted(
+            (d, v)
+            for d, v in series(conn, name).items()
+            if today - timedelta(days=_DETECT_HISTORY_DAYS) < d <= today
+        )
+        recent = sum(1 for d, _ in pts if d > today - timedelta(days=_PACE_WINDOW_DAYS))
+        if len(pts) < _MIN_DETECT_POINTS:
+            out[name] = base | {
+                "detectable_effect": None,
+                "detectable_at_80pct_adherence": None,
+                "reason": f"only {len(pts)} readings in the last {_DETECT_HISTORY_DAYS} days; "
+                f"need {_MIN_DETECT_POINTS} to measure the noise",
+            }
+            continue
+        sd = pstdev(v for _, v in pts)
+        de = _design_effect(pts)
+        n = int(MAX_DAYS_TO_ANSWER * recent / _PACE_WINDOW_DAYS / 2)
+        n_adh = int(n * _ADHERENCE)
+        if sd == 0 or n_adh < 2:
+            out[name] = base | {
+                "detectable_effect": None,
+                "detectable_at_80pct_adherence": None,
+                "reason": f"{n} readings per arm fit in {MAX_DAYS_TO_ANSWER} days at the "
+                f"last {_PACE_WINDOW_DAYS} days' pace; too few to size an effect",
+            }
+            continue
+        out[name] = base | {
+            "units_per_arm": n,
+            "outcome_sd": round(sd, 3),
+            "design_effect": round(de, 2),
+            "detectable_effect": round(_smallest_effect(sd, de, n), 2),
+            "detectable_at_80pct_adherence": round(_smallest_effect(sd, de, n_adh), 2),
+            "reason": None,
+        }
+    out["top_set_e1rm"] = {
+        "detectable_effect": None,
+        "detectable_at_80pct_adherence": None,
+        "reason": "a lift's top-set e1RM needs a named exercise and a randomized trial "
+        "(selflab); research outcomes are per muscle (e1rm_pct14:<muscle>)",
+    }
+    return out
+
+
 def brief(conn: duckdb.DuckDBPyConnection) -> dict:
     """Everything the analyst reads before proposing, rebuilt from the database on
     every call so no agent works from memory of a previous conversation."""
@@ -2104,6 +2190,7 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
         "rules": {
             "outcome_scale": "lnhrv_dev_pct is % change in HRV vs your 28-day baseline; 3% is the smallest change worth acting on.",
             "max_days_to_answer": MAX_DAYS_TO_ANSWER,
+            "detectable_in_120d": detectable_in_120d(conn),
             "min_per_arm": _MIN_PER_ARM,
             "confirm_rule": "The limit is judged on power.days_to_confirm, which counts only days after registration: days you explored cannot confirm the question they suggested. A lead that matters and cannot confirm in time needs a designed experiment, not a wider window.",
             "value_formula": "uncertainty × decision × feasibility × novelty × goal_weight (see value_score); computed by the server, not the proposer.",
