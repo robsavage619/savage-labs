@@ -4,6 +4,7 @@ from __future__ import annotations
 hypotheses, runs, and the append-only notebook. Agents write through the
 admin-keyed routes; the Lab page reads the rest."""
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -56,10 +57,24 @@ def _read(fn, *args):
         conn.close()
 
 
+# ponytail: one in-process copy for _FEATURES_TTL_S, because building the dictionary
+# runs every feature's series (about 9.5 s on the host); a newly approved custom
+# measure appears within that window. Cache inside research.dictionary if brief()
+# or review_queue() ever need it faster too.
+_FEATURES_TTL_S = 600.0
+_features_cache: tuple[float, list[dict]] | None = None
+
+
 @router.get("/research/features")
 def features() -> list[dict]:
     """What the team can study: every feature, its coverage, and whether it's gone quiet."""
-    return _read(research.dictionary)
+    global _features_cache
+    now = time.monotonic()
+    if _features_cache is not None and now - _features_cache[0] < _FEATURES_TTL_S:
+        return _features_cache[1]
+    out = _read(research.dictionary)
+    _features_cache = (now, out)
+    return out
 
 
 @router.get("/research/beliefs")
