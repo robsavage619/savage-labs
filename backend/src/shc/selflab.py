@@ -105,7 +105,7 @@ def _check_answerable(
     if kind in ("top_set_e1rm", "e1rm_delta_2wk") and arg:
         n = conn.execute(
             "SELECT COUNT(*) FROM workout_sets_dedup WHERE exercise = ? "
-            "AND is_warmup = FALSE AND day_d >= ?",
+            "AND NOT COALESCE(is_warmup, FALSE) AND day_d >= ?",
             [arg, (date.today() - timedelta(days=_RECENT_SESSION_DAYS)).isoformat()],
         ).fetchone()
         if not n or n[0] == 0:

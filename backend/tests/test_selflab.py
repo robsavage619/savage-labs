@@ -143,6 +143,17 @@ def test_preregister_refuses_outcome_exercise_with_no_recent_session(conn) -> No
         )
 
 
+def test_preregister_counts_a_set_whose_warmup_flag_is_null(conn) -> None:
+    _recent_set(conn, "Incline Press (Dumbbell)")
+    conn.execute(
+        "UPDATE workout_sets SET is_warmup = NULL WHERE exercise = 'Incline Press (Dumbbell)'"
+    )
+    exp = _prereg(
+        conn, seed=False, slug="null-warmup", outcome_metric="top_set_e1rm:Incline Press (Dumbbell)"
+    )
+    assert exp is not None
+
+
 def test_preregister_refuses_study_that_cannot_answer_in_120_days(conn) -> None:
     today = date.today()
     for k in range(1, 61):
