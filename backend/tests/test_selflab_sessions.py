@@ -25,7 +25,14 @@ def _session(conn, day: date, exercise: str = LIFT) -> None:
     )
 
 
+def _history(conn, n: int = 10) -> None:
+    """Enough constant-load history (older than any test study) for the gate to size."""
+    for k in range(n):
+        _session(conn, date.today() - timedelta(days=70 + 7 * k))
+
+
 def _reg(conn, started: date, slug: str = "caf-curl") -> str:
+    _history(conn)
     _session(conn, date.today() - timedelta(days=2))
     return selflab.preregister(
         conn,
@@ -84,6 +91,24 @@ def test_todays_assignments_includes_per_session_and_autolog_is_unknown(conn) ->
     ).fetchall()
     assert [r[0] for r in rows] == [selflab.arm_for_session("caf-curl", i) for i in range(2)]
     assert all(r[1] is None for r in rows)
+
+
+def test_per_session_with_too_little_history_is_refused(conn) -> None:
+    _session(conn, date.today() - timedelta(days=2))
+    with pytest.raises(ValueError, match="fewer than 10 sessions"):
+        selflab.preregister(
+            conn,
+            slug="thin",
+            hypothesis="h",
+            manipulated="m",
+            condition_a="a",
+            condition_b="b",
+            outcome_metric=f"top_set_e1rm:{LIFT}",
+            min_effect=2.0,
+            design="randomized_per_session",
+            adherence_tag_a="x",
+            adherence_tag_b="y",
+        )
 
 
 def test_per_session_needs_an_exercise_outcome(conn) -> None:

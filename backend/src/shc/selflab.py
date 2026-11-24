@@ -97,6 +97,7 @@ def _check_answerable(
     outcome_metric: str,
     min_effect: float,
     design: str,
+    slug: str = "",
 ) -> None:
     """Refuse a study that can never answer (R-R5: the rule lives in code).
 
@@ -122,23 +123,127 @@ def _check_answerable(
     # not the outcome's measurement rate; only randomized studies are sized here.
     if design not in _RANDOMIZED:
         return
-    series = _metric_history(conn, outcome_metric)
-    if len(series) < 10:
+    exercise = _outcome_exercise(outcome_metric)
+    if exercise is not None:
+        clash = conn.execute(
+            "SELECT slug FROM experiments WHERE status = 'active' AND slug != ? "
+            "AND design IN ('randomized_alternating', 'randomized_per_session') "
+            "AND (outcome_metric = ? OR outcome_metric = ?)",
+            [slug, f"top_set_e1rm:{exercise}", f"e1rm_delta_2wk:{exercise}"],
+        ).fetchone()
+        if clash:
+            raise ValueError(
+                f"{exercise!r} already has an active study ({clash[0]}): two interventions "
+                "on one lift confound each other. Finish or abandon it first"
+            )
+    gate = placebo_gate(
+        conn, slug=slug, outcome_metric=outcome_metric, min_effect=min_effect, design=design
+    )
+    if gate is None:
+        if design == "randomized_per_session":
+            raise ValueError(
+                f"{exercise or outcome_metric!r} has fewer than 10 sessions in the last 180 "
+                "days: its noise and pace cannot be sized, so the study cannot be vetted"
+            )
         return
+    if gate["false_fire_rate"] > 2 * _ALPHA:
+        raise ValueError(
+            f"design is miscalibrated: replayed on the outcome's own history with no "
+            f"intervention it fired {gate['false_fire_rate']:.0%} of the time at alpha "
+            f"{_ALPHA:.0%} ({gate['draws']} random assignments)"
+        )
+    days = gate["days_to_answer"]
+    if days is None or days > MAX_DAYS_TO_ANSWER:
+        raise ValueError(
+            f"needs {gate['needed_per_arm']} outcomes per arm at the outcome's live noise "
+            f"(sd {gate['sd']:.2f}, min_effect {min_effect}) — "
+            f"{'no outcomes in the last 60 days' if days is None else f'{days} days'} "
+            f"at {gate['sessions_per_week']:.1f} sessions a week and {_ADHERENCE:.0%} "
+            f"adherence; the limit is {MAX_DAYS_TO_ANSWER} days. The smallest detectable "
+            f"effect at 80% power in {MAX_DAYS_TO_ANSWER} days is "
+            f"{gate['detectable_120d'] if gate['detectable_120d'] is not None else 'undefined'}"
+            f" against min_effect {min_effect}"
+        )
+
+
+# Random assignments replayed per gate, and permutations per scored replay.
+_REPLAY_DRAWS = 300
+_REPLAY_PERMS = 300
+
+
+def _detectable_effect(sd: float, n_per_arm: float, design_effect: float) -> float:
+    """Smallest effect detectable at the lab's alpha and 80% power: the exact inverse
+    of `_needed_per_arm` (same constants, solved for the effect)."""
+    return _POWER_Z * sd * math.sqrt(2 * design_effect / n_per_arm)
+
+
+def placebo_gate(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    slug: str,
+    outcome_metric: str,
+    min_effect: float,
+    design: str,
+) -> dict | None:
+    """Run a proposed design on the outcome's own history with no intervention.
+
+    Draws many random assignments (seeded by the slug), scores each with the
+    study's own scorer (permutation p inflated by the carryover design effect), and
+    sizes the study at the outcome's empirical noise and real accrual pace.
+
+    Returns:
+        None with fewer than 10 historical outcomes, else a dict with
+        ``false_fire_rate`` (should sit near alpha), ``detectable_120d`` (smallest
+        effect at 80% power if the study runs the maximum days), ``needed_per_arm``,
+        ``days_to_answer``, ``sd``, ``sessions_per_week`` and ``draws``.
+    """
+    series = sorted(_metric_history(conn, outcome_metric))
+    if len(series) < 10:
+        return None
     sd = pstdev(v for _, v in series)
-    needed = _needed_per_arm(sd, min_effect, _design_effect(series))
+    de = _design_effect(series)
+    needed = _needed_per_arm(sd, min_effect, de)
     since = date.today() - timedelta(days=_PACE_WINDOW_DAYS)
     rate = sum(1 for d, _ in series if d >= since) / _PACE_WINDOW_DAYS
     per_arm_pace = rate * _ADHERENCE / 2
-    days = math.ceil(needed / per_arm_pace) if per_arm_pace > 0 else None
-    if days is None or days > MAX_DAYS_TO_ANSWER:
-        raise ValueError(
-            f"needs {needed} outcomes per arm at the outcome's live noise "
-            f"(sd {sd:.2f}, min_effect {min_effect}) — "
-            f"{'no outcomes in the last 60 days' if days is None else f'{days} days'} "
-            f"at the current pace and {_ADHERENCE:.0%} adherence; the limit is "
-            f"{MAX_DAYS_TO_ANSWER} days"
+    fires = scored = 0
+    for r in range(_REPLAY_DRAWS):
+        seed = f"{slug}:replay:{r}"
+        rows = [
+            (
+                d,
+                arm_for_session(seed, i)
+                if design == "randomized_per_session"
+                else arm_for_day(seed, series[0][0], d),
+                v,
+            )
+            for i, (d, v) in enumerate(series)
+        ]
+        a = [v for _, arm, v in rows if arm == "A"]
+        b = [v for _, arm, v in rows if arm == "B"]
+        if len(a) < 2 or len(b) < 2:
+            continue
+        p = _inflate_p(
+            _permutation_p(a, b, seed, n_iter=_REPLAY_PERMS),
+            _design_effect(_arm_residuals(rows)),
         )
+        scored += 1
+        fires += p < _ALPHA
+    return {
+        "false_fire_rate": fires / scored if scored else 0.0,
+        "draws": scored,
+        "sd": sd,
+        "design_effect": de,
+        "sessions_per_week": rate * 7,
+        "needed_per_arm": needed,
+        "days_to_answer": math.ceil(needed / per_arm_pace) if per_arm_pace > 0 else None,
+        "detectable_120d": (
+            round(_detectable_effect(sd, per_arm_pace * MAX_DAYS_TO_ANSWER, de), 2)
+            if per_arm_pace > 0
+            else None
+        ),
+        "n_history": len(series),
+    }
 
 
 def preregister(
@@ -250,7 +355,7 @@ def preregister(
             "session of that lift"
         )
     _check_answerable(
-        conn, outcome_metric=outcome_metric, min_effect=min_effect, design=design
+        conn, outcome_metric=outcome_metric, min_effect=min_effect, design=design, slug=slug
     )
     started = started_on or date.today()
     conn.execute(
@@ -857,7 +962,7 @@ def backfill_observational(
 # ── Scoring ──────────────────────────────────────────────────────────────────
 
 
-def _permutation_p(a: list[float], b: list[float], slug: str) -> float:
+def _permutation_p(a: list[float], b: list[float], slug: str, n_iter: int = 5000) -> float:
     """Two-sided permutation (randomization) test on mean(B) − mean(A).
 
     The correct significance test for n-of-1: it makes no normality assumption and
@@ -887,7 +992,7 @@ def _permutation_p(a: list[float], b: list[float], slug: str) -> float:
     # Monte Carlo (add-one smoothing so p is bounded away from 0).
     seed = int(hashlib.sha256(slug.encode()).hexdigest(), 16) % (2**32)
     rng = random.Random(seed)
-    n_iter, ge = 5000, 0
+    ge = 0
     for _ in range(n_iter):
         perm = pooled[:]
         rng.shuffle(perm)

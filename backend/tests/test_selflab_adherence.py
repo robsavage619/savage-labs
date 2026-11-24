@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from test_selflab_sessions import LIFT, _session
+from test_selflab_sessions import LIFT, _history, _session
 
 from shc import selflab
 
@@ -16,6 +16,7 @@ def _note(conn, day: date, *, workout: str | None = None, exercise: str | None =
 
 
 def _reg(conn, started: date) -> str:
+    _history(conn)
     _session(conn, date.today() - timedelta(days=1))
     return selflab.preregister(
         conn,
