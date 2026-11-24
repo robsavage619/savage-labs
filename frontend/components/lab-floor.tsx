@@ -55,13 +55,15 @@ export function Masthead() {
   const hyps = useHyps();
   const beliefs = useBeliefs();
   const last = (authors: readonly string[]) => notes.data?.find((n) => authors.includes(n.author.toLowerCase()))?.written_at;
-  const h = hyps.data ?? [];
+  // Until the questions load, a count is unknown, not zero: "0 questions live" read as an empty lab.
+  const h = hyps.data;
+  const count = (keep: (x: NonNullable<typeof h>[number]) => boolean) => (h ? h.filter(keep).length : "–");
   const stats = [
     { v: beliefs.data?.length ?? "–", l: "beliefs held" },
-    { v: h.filter((x) => x.status === "active").length, l: "questions live" },
-    { v: h.filter((x) => x.status === "proposed").length, l: "awaiting review" },
-    { v: h.filter((x) => x.result?.verdict === "supported").length, l: "supported" },
-    { v: h.filter((x) => x.status === "rejected").length, l: "rejected blind" },
+    { v: count((x) => x.status === "active"), l: "questions live" },
+    { v: count((x) => x.status === "proposed"), l: "awaiting review" },
+    { v: count((x) => x.result?.verdict === "supported"), l: "supported" },
+    { v: count((x) => x.status === "rejected"), l: "rejected blind" },
   ];
   return (
     <header className="lf-mast">
@@ -92,7 +94,7 @@ export function Masthead() {
               </div>
               <small>
                 <i className={at ? (late ? "late" : "on") : ""} />
-                {at ? `last ${when(at)}` : "not yet run"}
+                {at ? `last ${when(at)}` : notes.data ? "not yet run" : "loading"}
                 <em className={late ? "late" : ""}>{late ? `Overdue · ${r.cadence}` : r.cadence}</em>
               </small>
             </motion.li>

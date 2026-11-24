@@ -789,3 +789,17 @@ def test_hypotheses_report_power_on_current_data_not_the_proposal_copy(conn) -> 
     assert h["power_at_proposal"] == {"needed_per_arm": 1}
     assert h["power"]["needed_per_arm"] > 1 and not h["power_stale"]
     assert "min_effect" in h["power"]["needed_for"]
+
+
+def test_hypotheses_read_the_last_run_power_without_rescoring(conn, monkeypatch) -> None:
+    _seed(conn, effect_pct=-10)
+    research.register(conn, "p", "q", SPEC, None, "test")
+    conn.execute("UPDATE research_hypotheses SET status = 'active' WHERE slug = 'p'")
+    research.run(conn, "p")
+
+    def _no_rescore(*_a, **_k):
+        raise AssertionError("hypotheses() rescored a question that already has a run")
+
+    monkeypatch.setattr(research, "estimate", _no_rescore)
+    h = next(x for x in research.hypotheses(conn) if x["slug"] == "p")
+    assert h["power"]["needed_per_arm"] > 1 and not h["power_stale"]

@@ -1432,14 +1432,17 @@ def _live_power(conn: duckdb.DuckDBPyConnection, spec: dict, registered: date, s
 def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     """Every question with its latest result.
 
-    ``power`` is rescored on current data for questions still open (the numbers
-    stored at proposal go stale as the series grow) and ``power_at_proposal``
-    keeps the stored copy; a question that is closed keeps its stored figure.
+    ``power`` for an open question is the figure its latest run stored (the
+    nightly run rescores every active question), or, before any run, a rescore
+    on current data; ``power_at_proposal`` keeps the copy stored at proposal.
+    Rescoring every question on each request took seconds and left the Lab
+    page showing zeros while it waited. A closed question keeps its stored
+    figure.
     """
     rows = conn.execute(
         """
         SELECT h.id, h.slug, h.question, h.spec, h.belief_id, h.author, h.status, h.power, h.created_at,
-               h.value_score, h.value_parts, r.mean_a, r.mean_b, r.verdict, r.effect, r.ci_low, r.ci_high, r.p, r.n_a, r.n_b, r.design_effect, r.summary, r.run_at
+               h.value_score, h.value_parts, r.mean_a, r.mean_b, r.verdict, r.effect, r.ci_low, r.ci_high, r.p, r.n_a, r.n_b, r.design_effect, r.summary, r.run_at, r.power
         FROM research_hypotheses h
         LEFT JOIN research_results r ON r.hypothesis_id = h.id
             AND r.run_at = (SELECT MAX(run_at) FROM research_results WHERE hypothesis_id = h.id)
@@ -1451,11 +1454,13 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
         hid, r = row[0], row[1:]
         res = r[12:]
         stored = json.loads(r[6]) if r[6] else None
-        power, stale = (
-            _live_power(conn, json.loads(r[2]), r[7].date(), stored)
-            if r[5] in ("proposed", "active")
-            else (stored, False)
-        )
+        last_run_power = json.loads(res[10]) if res[10] else None
+        if r[5] not in ("proposed", "active"):
+            power, stale = stored, False
+        elif last_run_power is not None:
+            power, stale = last_run_power, False
+        else:
+            power, stale = _live_power(conn, json.loads(r[2]), r[7].date(), stored)
         out.append(
             {
                 "id": hid,
