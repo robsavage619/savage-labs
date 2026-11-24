@@ -46,10 +46,20 @@ for i in {1..18}; do
   sleep 10
 done
 
+# Heartbeat: a Lab notebook entry at start and end, so a missed run is visible on the
+# Lab screen. Best effort: a failed POST never changes the job or its exit code.
+beat() {
+  curl -s -m 10 -o /dev/null -X POST -H 'Content-Type: application/json' \
+    -d "{\"author\":\"job-runner\",\"kind\":\"note\",\"title\":\"$1\"}" \
+    http://127.0.0.1:8000/api/research/notebook || say "heartbeat: post failed"
+}
+beat "$job job started"
+
 source "$cfg/jobs/$job.conf"
 cd "$HOME/Projects/savage-health-center" || { alert "repo missing"; exit 1; }
 claude -p "$(cat "$cfg/jobs/$job.md")" --allowedTools "$TOOLS" --max-turns "$TURNS" < /dev/null >> "$log" 2>&1
 rc=$?
 say "=== exit $rc"
+beat "$job job finished exit $rc"
 [ "$rc" -eq 0 ] || alert "run failed (exit $rc), see ~/Library/Logs/shc-$job.log"
 exit $rc
