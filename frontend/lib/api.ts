@@ -1,4 +1,4 @@
-export type TapeField = "waist_in" | "hip_in" | "arm_in" | "thigh_in" | "chest_in";
+export type TapeField = "waist_in" | "hip_in" | "arm_in" | "thigh_in" | "chest_in" | "arm_left_in" | "arm_right_in";
 
 export interface AccuracyBaseline {
   logged: number;

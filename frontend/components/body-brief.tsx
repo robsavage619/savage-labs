@@ -467,6 +467,8 @@ const TAPE: { key: TapeField; label: string }[] = [
   { key: "arm_in", label: "Arm, flexed" },
   { key: "thigh_in", label: "Mid-thigh" },
   { key: "chest_in", label: "Chest" },
+  { key: "arm_left_in", label: "Left arm, flexed" },
+  { key: "arm_right_in", label: "Right arm, flexed" },
 ];
 
 /** Today's weigh-in and tape in one form; the weight goes through the check-in and its typo guard. */
@@ -512,7 +514,7 @@ export function LogReading() {
     <div className="bo-log" id="log">
       <div className="bo-log-head">
         <span className="td-label">Log today&apos;s reading</span>
-        <b>Weigh in first thing, fasted. Tape the waist at the navel, relaxed.</b>
+        <b>Weigh in first thing, fasted. Tape the waist at the navel, relaxed. For the biceps experiment, tape left and right arm flexed in the same posture every time.</b>
       </div>
       <div className="bo-fields">
         {field("w", "Weight", "lb", lbs, setLbs, lastW ? `last ${lastW.lbs.toFixed(1)} · ${short(lastW.date)}` : "none yet")}
@@ -545,7 +547,10 @@ const PROGRESS: { key: TapeField; label: string }[] = [
   { key: "hip_in", label: "Hips" },
   { key: "thigh_in", label: "Mid-thigh" },
   { key: "chest_in", label: "Chest" },
+  { key: "arm_left_in", label: "Left arm, flexed" },
+  { key: "arm_right_in", label: "Right arm, flexed" },
 ];
+const ARM_SIDES: TapeField[] = ["arm_left_in", "arm_right_in"];
 
 /** One panel per tape site on a shared time axis and a shared inch span, so slopes compare across panels. */
 export function TapeProgress() {
@@ -560,16 +565,18 @@ export function TapeProgress() {
     );
   const today = st.data.as_of;
   const data = q.data;
-  const all = PROGRESS.flatMap(({ key }) => data[key] ?? []);
+  // The per-arm panels only appear once a side has been taped; the five core sites always show.
+  const panels = PROGRESS.filter(({ key }) => !ARM_SIDES.includes(key) || (data[key]?.length ?? 0) > 0);
+  const all = panels.flatMap(({ key }) => data[key] ?? []);
   const first = all.length ? all.reduce((a, b) => (a.date < b.date ? a : b)).date : today;
   // At least eight weeks of axis, so a first reading sits at the left with room to grow.
   const t0 = Math.min(t(first), t(today) - 56 * DAY);
   const t1 = t(today);
-  const span = Math.max(2, ...PROGRESS.map(({ key }) => {
+  const span = Math.max(2, ...panels.map(({ key }) => {
     const v = (data[key] ?? []).map((p) => p.inches);
     return v.length ? Math.max(...v) - Math.min(...v) : 0;
   })) * 1.3;
-  const cols = Math.max(1, Math.min(PROGRESS.length, Math.floor(W / 150)));
+  const cols = Math.max(1, Math.min(panels.length, Math.floor(W / 150)));
   const pw = (W - (cols - 1) * 16) / cols;
   const P = { l: 34, r: 10, t: 10, b: 22 };
   const H = 130;
@@ -577,7 +584,7 @@ export function TapeProgress() {
   return (
     <div className="bo-chart" ref={ref}>
       <div className="bo-tape-grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
-        {PROGRESS.map(({ key, label }) => {
+        {panels.map(({ key, label }) => {
           const pts = data[key] ?? [];
           const last = pts[pts.length - 1];
           const mid = pts.length ? (Math.max(...pts.map((p) => p.inches)) + Math.min(...pts.map((p) => p.inches))) / 2 : 0;
