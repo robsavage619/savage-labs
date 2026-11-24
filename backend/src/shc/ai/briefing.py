@@ -20,7 +20,6 @@ import logging
 from datetime import date
 
 from shc.ai._personal_context import load_personal_context
-from shc.ai.lab_findings import lab_findings_section
 from shc.ai.workout_planner import load_vault_research
 from shc.db.schema import write_ctx
 from shc.metrics import compute_daily_state
@@ -614,10 +613,6 @@ def build_daily_context(conn) -> str:
         lines.append("\n## DATA GAPS")
         for g in fresh["gaps"]:
             lines.append(f"- {g}")
-
-    lab = lab_findings_section(conn)
-    if lab:
-        lines.append("\n" + lab)
 
     # Retrieval needs hints + extra signals or all hint-based scoring is dead
     # and the briefing is grounded in a near-constant pinned set regardless of

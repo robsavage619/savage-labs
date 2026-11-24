@@ -38,7 +38,6 @@ log = logging.getLogger(__name__)
 # ── Vault research ────────────────────────────────────────────────────────────
 # Delegated to shc.ai.vault — see that module for the full retrieval design.
 
-from shc.ai.lab_findings import lab_findings_section
 from shc.ai.vault import retrieve_for_question as _retrieve_for_question
 from shc.ai.vault import vault_context as _vault_context
 from shc.training.load_mechanics import (
@@ -1204,10 +1203,6 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
             hints.extend(k for k, v in sore_map.items() if (v or 0) >= 2)
     except Exception:
         pass
-
-    lab = lab_findings_section(conn)
-    if lab:
-        lines.append("\n" + lab)
 
     # Restate the hard gates immediately before the (large) vault block so the
     # binding constraints sit adjacent to where the plan is reasoned, not buried

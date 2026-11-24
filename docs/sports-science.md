@@ -142,7 +142,7 @@ That last part earns its keep immediately. The pickleball finding was retired CO
 
 **Multiplicity, honestly.** Confirmations must survive a Benjamini, Hochberg correction whose family is the **whole catalogue**, not whatever happened to run that cycle, a run-scoped denominator shrinks as questions retire (mine had reached m=3), which makes the correction quietly looser over time and lets an unchanged p-value flip verdict because an unrelated question resolved. What BH here does *not* cover: the catalogue is re-run daily against accumulating data, so these p-values are uncorrected for repeated looks. A confirmation is strong evidence, not proof, and the README should say so rather than the dashboard implying otherwise.
 
-**Verdicts feed the AI.** Every call to `build_daily_context()` or `build_training_context()` injects the current `## YOUR PERSONAL LAB FINDINGS` block. Claude sees which effects have been statistically confirmed or refuted on my data before writing a word. Only confirmed, refuted and errored checks are shown, weighed alongside population evidence rather than over it.
+**Retired.** This fixed catalogue (`shc/lab.py`, `/api/lab/*`, the planner and briefing findings block) was retired on 2026-11-24: no confirmation held up, and its verdicts no longer feed the AI. Its tables stay in the database as history.
 
 The philosophical backbone is in the vault. Schork 2015/2022 and Daza 2018 on N-of-1 trials as rigorous science.
 

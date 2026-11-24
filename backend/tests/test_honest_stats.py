@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from datetime import date, timedelta
 
-from shc import lab, selflab
+from shc import selflab
 
 
 def _ar1(n: int, rho: float, seed: int) -> list[tuple[date, float]]:
@@ -34,27 +34,3 @@ def test_inflated_p_and_ci_get_wider_never_narrower() -> None:
 def test_days_needed_per_arm_matches_the_textbook_formula() -> None:
     # 2 * ((1.645 + 0.842) * 25 / 5)^2 * 1.5 ≈ 464
     assert 455 <= selflab._needed_per_arm(sd=25.0, min_effect=5.0, design_effect=1.5) <= 470
-
-
-def _finding(effect: float | None, p: float | None) -> lab.LabFinding:
-    return lab.LabFinding("q", 100, effect, "ms", p, "refuted", "s", [])
-
-
-def test_wrong_sign_estimate_with_a_wide_range_is_not_refuted() -> None:
-    q = {"threshold": 5.0, "direction": "positive"}
-    f = _finding(-0.8, 0.89)
-    lab._gate_refuted(f, q)
-    assert f.verdict == "inconclusive"
-
-
-def test_range_that_excludes_the_hypothesised_effect_stays_refuted() -> None:
-    q = {"threshold": 5.0, "direction": "positive"}
-    f = _finding(-10.0, 0.001)
-    lab._gate_refuted(f, q)
-    assert f.verdict == "refuted"
-
-
-def test_refuted_without_a_p_value_cannot_rule_anything_out() -> None:
-    f = _finding(0.14, None)
-    lab._gate_refuted(f, {"threshold": 0.3, "direction": "positive"})
-    assert f.verdict == "inconclusive"

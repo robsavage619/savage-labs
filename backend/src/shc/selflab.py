@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-"""n-of-1 self-experiment engine — the EXPERIMENTAL counterpart to lab.py.
+"""n-of-1 self-experiment engine — the designed single-subject trials.
 
-lab.py mines associations from data Rob passively generates (observational →
-correlational). This runs DESIGNED single-subject experiments: Rob deliberately
+This runs DESIGNED single-subject experiments: Rob deliberately
 manipulates one variable under a controlled, pre-registered design, so a
 confirmed result is causal. The public loop:
 
@@ -14,7 +13,7 @@ confirmed result is causal. The public loop:
     score(conn, id)             → N-gated verdict + effect + bootstrap CI
                                   → a CONFIRMED result emits a governed prior
 
-Every statistic is deterministic (no LLM) and reuses lab.py's tested machinery.
+Every statistic is deterministic (no LLM).
 A CONFIRMED experiment writes an ``experiment_prior`` the engine may act on under
 the same gate-and-audit discipline as the fitted ACWR/volume bands.
 """
@@ -28,9 +27,10 @@ from statistics import NormalDist, mean, pstdev
 
 import duckdb
 
-from shc.lab import _ALPHA
-
 log = logging.getLogger(__name__)
+
+# Significance level for a confirmed finding and the FDR rate across a family.
+_ALPHA = 0.10
 
 # Bootstrap resamples for the effect CI. Deterministic (seeded from the slug) so
 # a re-score of the same data returns the identical interval.
@@ -914,7 +914,7 @@ def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
 
 def _apply_fdr(results: list[dict], alpha: float = _ALPHA) -> None:
     """Benjamini–Hochberg correction across concurrently-scored experiments, in
-    place on `results`. Mirrors `lab._apply_fdr`.
+    place on `results`.
 
     Running N experiments through the same scoring pass without correction
     risks a false CONFIRMED verdict by chance alone as N grows — the audit
@@ -1224,129 +1224,6 @@ def overview(conn: duckdb.DuckDBPyConnection) -> list[dict]:
             }
         )
     return out
-
-
-# Curated map: lab question_id → candidate n-of-1 experiment spec.
-# Only questions whose exposure is a *controllable behavior* are included.
-# Non-manipulable questions (skin_temp, strain, energy correlations, etc.)
-# are deliberately absent — you can't randomize an arm on them.
-_EXPERIMENT_CANDIDATES: dict[str, dict] = {
-    "sleep_short_hrv_drop": {
-        "slug": "suggest-sleep-timing-hrv",
-        "hypothesis": "Getting ≥8h sleep (vs <6.5h) improves next-morning HRV by ≥5ms.",
-        "manipulated": "sleep_hours",
-        "condition_a": "<6.5h sleep",
-        "condition_b": "≥8h sleep",
-        "outcome_metric": "hrv_next_morning",
-        "outcome_direction": "higher_better",
-        "min_per_arm": 8,
-        "min_effect": 5.0,
-        "vault_ref": "Walker 2017 — Why We Sleep, ch.7",
-    },
-    "long_sleep_hrv_lift": {
-        "slug": "suggest-sleep-timing-hrv",
-        "hypothesis": "Getting ≥8h sleep (vs <6.5h) improves next-morning HRV by ≥5ms.",
-        "manipulated": "sleep_hours",
-        "condition_a": "<6.5h sleep",
-        "condition_b": "≥8h sleep",
-        "outcome_metric": "hrv_next_morning",
-        "outcome_direction": "higher_better",
-        "min_per_arm": 8,
-        "min_effect": 5.0,
-        "vault_ref": "Walker 2017 — Why We Sleep, ch.7",
-    },
-    "consecutive_training_recovery_drop": {
-        "slug": "suggest-rest-day-spacing",
-        "hypothesis": "Inserting a rest day between strength sessions improves next-day recovery score by ≥5pts.",
-        "manipulated": "training_spacing",
-        "condition_a": "consecutive strength days",
-        "condition_b": "rest day between sessions",
-        "outcome_metric": "recovery_score_next_day",
-        "outcome_direction": "higher_better",
-        "min_per_arm": 8,
-        "min_effect": 5.0,
-        "vault_ref": "Israetel 2020 — Ch3 Fatigue Management",
-    },
-    "rest_day_hrv_rebound": {
-        "slug": "suggest-full-rest-day-hrv",
-        "hypothesis": "A full rest day (no gym, no cardio) improves next-morning HRV vs any training day.",
-        "manipulated": "rest_vs_training",
-        "condition_a": "any training session",
-        "condition_b": "full rest (no gym, no cardio)",
-        "outcome_metric": "hrv_next_morning",
-        "outcome_direction": "higher_better",
-        "min_per_arm": 10,
-        "min_effect": 3.0,
-        "vault_ref": "Plews & Laursen 2014 — HRV-guided training",
-    },
-    "two_pb_3d_hrv_drop": {
-        "slug": "suggest-pickleball-density-hrv",
-        "hypothesis": "Playing pickleball twice in 3 days depresses next-morning HRV vs once in 3 days.",
-        "manipulated": "pickleball_sessions_3d",
-        "condition_a": "1 pickleball session in 3 days",
-        "condition_b": "2 pickleball sessions in 3 days",
-        "outcome_metric": "hrv_next_morning",
-        "outcome_direction": "lower_better",
-        "min_per_arm": 8,
-        "min_effect": 3.0,
-        "vault_ref": "Bourdillon 2017 — exercise-HRV recovery",
-    },
-}
-
-
-def suggest_experiments(conn: duckdb.DuckDBPyConnection) -> list[dict]:
-    """Return candidate n-of-1 experiment specs derived from unresolved lab findings.
-
-    Only findings with verdict 'inconclusive' or 'insufficient' are eligible.
-    Only question IDs with a *controllable behavior* exposure are mapped (see
-    _EXPERIMENT_CANDIDATES). Candidates are suppressed when a study with the
-    same slug is already registered in experiments.
-    """
-    # Latest finding per question
-    rows = conn.execute(
-        """
-        SELECT DISTINCT ON (question_id)
-               question_id, verdict
-        FROM lab_findings
-        WHERE verdict IN ('inconclusive', 'insufficient')
-        ORDER BY question_id, run_at DESC
-        """
-    ).fetchall()
-    if not rows:
-        return []
-
-    registered_slugs: set[str] = {
-        r[0]
-        for r in conn.execute("SELECT slug FROM experiments").fetchall()
-    }
-
-    seen_suggestion_slugs: set[str] = set()
-    candidates: list[dict] = []
-    for qid, verdict in rows:
-        spec = _EXPERIMENT_CANDIDATES.get(qid)
-        if spec is None:
-            continue
-        # Never propose a study the scorer cannot score. Four of the five
-        # studies active on 2026-09-04 asked for `hrv_next_morning` or
-        # `recovery_score_next_day`, which _outcome_value() raised on, so they
-        # sat "active" for seven weeks with no possible path to a verdict.
-        # Suggesting is where this has to be caught: once a study is registered
-        # the only signal is silence.
-        if spec["outcome_metric"].partition(":")[0] not in SUPPORTED_OUTCOME_METRICS:
-            log.warning(
-                "skipping candidate %s: outcome metric %r has no extractor",
-                spec["slug"],
-                spec["outcome_metric"],
-            )
-            continue
-        slug = spec["slug"]
-        if slug in registered_slugs or slug in seen_suggestion_slugs:
-            continue
-        seen_suggestion_slugs.add(slug)
-        # Attach the vault_ref and verdict context
-        candidates.append({**spec, "from_question_id": qid, "lab_verdict": verdict})
-
-    return candidates
 
 
 def active_priors(conn: duckdb.DuckDBPyConnection) -> list[dict]:

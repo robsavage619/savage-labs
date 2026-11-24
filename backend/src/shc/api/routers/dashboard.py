@@ -28,7 +28,7 @@ from shc.api.deps import require_admin_key
 from shc.db.schema import get_read_conn, get_write_conn, write_ctx
 from shc.ingest.clinical_profile import subject_dob
 from shc.stats import classify_change, swc
-from shc.lab import _welch_t as _lab_welch
+from shc.stats.welch import welch_t as _lab_welch
 from shc.metrics import (
     MUSCLE_TO_GROUP,
     WHOOP_VO2_METRIC,
@@ -1150,7 +1150,7 @@ async def insights() -> list[dict]:
     # (Welch's t, p < 0.10). Framed as a correlation, not causation: long-sleep
     # nights tend to FOLLOW hard-training days, so depressed next-day HRV is
     # likely driven by the prior load, not the extra sleep. The rigorous,
-    # pre-registered version of this test lives in the lab engine (lab.py).
+    # pre-registered version of this test lives in the research engine.
     _ls = (
         _lab_welch(long_sleep_next_hrv, short_sleep_next_hrv)
         if (len(long_sleep_next_hrv) >= 5 and len(short_sleep_next_hrv) >= 5)
@@ -3277,105 +3277,6 @@ async def fueling_trend(days: int = Query(14, gt=0, le=90)) -> list[dict]:
             }
         )
     return out
-
-
-@router.get("/lab/questions")
-async def lab_questions() -> list[dict]:
-    conn = get_read_conn()
-    try:
-        rows = conn.execute(
-            "SELECT id, title, hypothesis, test_type, window_days, vault_ref, enabled "
-            "FROM lab_questions ORDER BY id"
-        ).fetchall()
-    finally:
-        conn.close()
-    return [
-        {
-            "id": r[0],
-            "title": r[1],
-            "hypothesis": r[2],
-            "test_type": r[3],
-            "window_days": r[4],
-            "vault_ref": r[5],
-            "enabled": bool(r[6]),
-        }
-        for r in rows
-    ]
-
-
-@router.get("/lab/findings")
-async def lab_findings_latest() -> list[dict]:
-    """Latest finding per question — answered questions INCLUDED.
-
-    This filtered on ``q.enabled = TRUE``, and `lab.rotate_if_stable` disables a
-    question at exactly the moment it reaches a stable definitive verdict. So the
-    endpoint could only ever return questions the lab had NOT answered: nine
-    resolved hypotheses — including both CONFIRMED findings (≥8h sleep → +14.0ms
-    next-morning HRV, n=62; pickleball → −12.3ms, n=152) — were invisible, and
-    the research panel was structurally incapable of showing a conclusion.
-    """
-    conn = get_read_conn()
-    try:
-        rows = conn.execute(
-            """
-            WITH latest AS (
-                SELECT question_id, MAX(run_at) AS run_at
-                FROM lab_findings GROUP BY question_id
-            )
-            SELECT q.id, q.title, q.hypothesis, q.vault_ref, q.test_type,
-                   f.run_at, f.n, f.effect_size, f.effect_unit, f.p_value, f.verdict,
-                   f.summary, q.retired_at, q.min_n
-            FROM lab_questions q
-            LEFT JOIN latest l ON l.question_id = q.id
-            LEFT JOIN lab_findings f ON f.question_id = q.id AND f.run_at = l.run_at
-            WHERE q.enabled = TRUE OR q.retired_at IS NOT NULL
-            ORDER BY q.id
-            """
-        ).fetchall()
-    finally:
-        conn.close()
-    return [
-        {
-            "id": r[0],
-            "title": r[1],
-            "hypothesis": r[2],
-            "vault_ref": r[3],
-            "test_type": r[4],
-            "run_at": r[5].isoformat() if r[5] else None,
-            "n": r[6],
-            "effect_size": r[7],
-            "effect_unit": r[8],
-            "p_value": r[9],
-            "verdict": r[10],
-            "summary": r[11],
-            # answered = retired on a stable definitive verdict; open = still under test
-            "status": "answered" if r[12] is not None else "open",
-            "answered_at": r[12].isoformat() if r[12] else None,
-            "min_n": r[13],
-        }
-        for r in rows
-    ]
-
-
-@router.post("/lab/run", dependencies=[Depends(require_admin_key)])
-async def lab_run() -> dict:
-    """Execute every enabled hypothesis and persist findings."""
-    from shc import lab as _lab
-
-    async with write_ctx() as conn:
-        findings = _lab.run_all(conn)
-        _lab.persist(conn, findings)
-        # Re-open before rotate: a re-verified question that changed its answer
-        # goes back under test, and must re-earn retirement from scratch.
-        reopened = _lab.reverify_retired(conn, findings)
-        retired = _lab.rotate_if_stable(conn)
-    return {
-        "ran": len(findings),
-        "verdicts": {f.question_id: f.verdict for f in findings},
-        "retired": retired,
-        "reopened": reopened,
-        "completed_at": date.today().isoformat(),
-    }
 
 
 # ── Clinical research signals ───────────────────────────────────────────────

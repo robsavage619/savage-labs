@@ -12,7 +12,7 @@ import duckdb
 import pytest
 import yaml
 
-from shc import lab, selflab
+from shc import selflab
 from shc.ai.workout_planner import (
     GateViolation,
     _retrospective_lines,
@@ -147,30 +147,6 @@ def test_malformed_clinical_yaml_leaves_existing_labs_intact(conn, tmp_path, mon
 
     assert before > 0
     assert conn.execute("SELECT COUNT(*) FROM labs").fetchone()[0] == before
-
-
-def _rhr_question() -> dict:
-    return {"id": "rhr_trend_hrv_drop", "window_days": 200, "min_n": 3, "threshold": 0.4}
-
-
-def test_rhr_hit_rate_equal_to_other_days_is_not_confirmed(conn):
-    start = date.today() - timedelta(days=120)
-    for i in range(120):
-        conn.execute(
-            "INSERT INTO recovery (id, source, date, hrv, rhr, content_hash) VALUES (?, 'test', ?, ?, ?, ?)",
-            # HRV dips every few days regardless of RHR, as it does in real data.
-            [
-                f"r{i}",
-                (start + timedelta(days=i)).isoformat(),
-                60.0 - (i % 3) * 5,
-                50 + (i // 14) % 2 * 6,
-                f"h{i}",
-            ],
-        )
-    finding = lab._run_rhr_trend_hrv_drop(conn, _rhr_question())
-    assert finding.effect_size is not None and finding.effect_size >= 0.4
-    assert finding.verdict == "inconclusive"
-    assert "other days" in finding.summary
 
 
 def test_backup_is_openable_and_prunes_old_copies(tmp_path):
