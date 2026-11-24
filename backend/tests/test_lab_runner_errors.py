@@ -122,3 +122,15 @@ def test_every_runner_survives_an_empty_database(conn, qid: str) -> None:
     }
     finding = lab._RUNNERS[qid](conn, q)
     assert finding.verdict in {"confirmed", "refuted", "inconclusive", "insufficient"}
+
+
+def test_inconclusive_and_insufficient_never_reach_the_prompt(conn) -> None:
+    _question(conn, "weak_q")
+    conn.execute(
+        "INSERT INTO lab_findings (id, question_id, verdict, n, summary) "
+        "VALUES ('f1', 'weak_q', 'inconclusive', 40, 'not clear')"
+    )
+    section = lab_findings_section(conn)
+    assert "Exploding hypothesis" not in section
+    assert "override" not in section.lower()
+    assert section == ""

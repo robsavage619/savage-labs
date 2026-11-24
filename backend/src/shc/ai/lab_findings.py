@@ -21,6 +21,11 @@ _VERDICT_TAG = {
 }
 
 
+# Only verdicts that say something, or that a human must see: a crashed runner is
+# shown so it cannot hide; inconclusive and insufficient read as noise in a prompt.
+_SHOWN = {"confirmed", "refuted", "error"}
+
+
 def lab_findings_section(conn) -> str:
     """Return a context block with the latest verdict for each enabled question.
 
@@ -63,22 +68,20 @@ def lab_findings_section(conn) -> str:
         log.debug("lab_findings_section skipped: %s", exc)
         return ""
 
+    rows = [r for r in rows if r[2] in _SHOWN]
     if not rows:
         return ""
 
     lines = [
         "## YOUR PERSONAL LAB FINDINGS",
-        "Pre-registered hypotheses tested against your own data. "
-        "These override population assumptions — a REFUTED finding means "
-        "the effect doesn't hold for you personally. An ERROR entry is a "
-        "broken runner, not a result: draw no conclusion from it.",
+        "Descriptive checks on your own data, weighed alongside population evidence, "
+        "not over it. Inconclusive and insufficient checks are left out: they carry "
+        "no signal. An ERROR entry is a broken runner, not a result: draw no "
+        "conclusion from it.",
     ]
 
     for title, hypothesis, verdict, effect, unit, pval, n, summary in rows:
-        if verdict is None:
-            tag = "NOT YET RUN"
-            detail = hypothesis
-        elif verdict == "error":
+        if verdict == "error":
             # No stats suffix: the runner crashed, so n/p/effect describe
             # nothing. "(n=0)" here would read as a test that found no data.
             tag = _VERDICT_TAG["error"]
