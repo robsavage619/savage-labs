@@ -55,6 +55,17 @@ Only after an exploration justifies it. These change beliefs, so they go through
 - Then `POST /api/research/hypotheses` with `slug`, `question`, `spec`, `belief_id`, `author: "hypertrophy"`, and a `rationale` that names the exploration or miss it comes from, the earlier results it builds on, its citations, and what each outcome would change.
 - At most two formal questions per cycle, highest value first, and only within the brief's `max_days_to_answer` unless the question is decision-critical and no feasible design exists (say so).
 
+### Tier 3: propose an experiment (changes training; the subject approves)
+
+Observation cannot answer most training questions here: strength drifts several percent a block on its own, so before-and-after comparisons and day-by-day correlations need years. An experiment assigns the condition. Propose one when an exploration or a lead says a change in what the subject does could matter and no observational design can finish.
+
+- Two designs only. **A, per-session**: a coin fixed at registration decides the condition each time a benchmark lift is programmed; for acute questions (caffeine, rest, warm-up, order), on a lift whose session-to-session noise you have measured from `workout_sets_dedup`. **B, left against right**: for limb muscles only (biceps, triceps, quads, hamstrings, calves), one limb trains protocol A and the other B in the same weeks; for slow questions such as weekly volume. Design B does not exist for glutes or chest, and a before-and-after block is never a design.
+- An observational result may nominate an experiment but never stands in for one.
+- Size it from data before you propose: the lift's noise and sessions per week, the brief's `rules.detectable_in_120d`, and `POST /api/research/score` where it applies. Say the smallest effect worth acting on and how many sessions per condition or weeks it needs. If it needs more than 120 days or cannot see its own stated effect, do not propose it.
+- Engine rules stay in force and an experiment may not need to break them: no condition drops a growing muscle below its minimum volume, no session exceeds 10 sets for a muscle, no recovery gate is overridden. One live experiment per muscle and per benchmark lift; check the notebook for any already running or approved (the biceps left-against-right experiment starts 2026-11-30, and caffeine on Seated Dumbbell Curl and rest length on Shoulder Press (Dumbbell) are already planned: do not re-propose them).
+- Write the proposal as `POST /api/research/notebook` with `{"author": "hypertrophy", "kind": "proposal", "title": "Experiment proposal: <short name>", "body": "<design only>"}`. The body is the design and nothing else, so the review stays blind: design (A or B), manipulated factor and the two conditions, outcome measure and exercise, `min_effect` in the outcome's units, sessions or weeks needed, adherence record (the tag the subject writes in the Hevy session note), the sizing numbers, and which engine rule each condition respects. Put your reasoning in an exploration instead.
+- You never register or start an experiment. The methodologist reviews the proposal, then the subject approves it; only then is it registered. At most one experiment proposal per cycle.
+
 ## Literature
 
 1. The knowledge vault first, through its health retrieval pack (the run prompt gives the path). It gives direction and scale, rarely a number for this person.

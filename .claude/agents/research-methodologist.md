@@ -40,6 +40,19 @@ Specialists can define a new measurement as one read-only SELECT returning `(dat
 
 Decide with `POST /api/research/custom-features/{name}/review`, body `{"decision": "approve" | "reject", "reason": "...", "author": "methodologist"}`. A rejection names the fix you would accept.
 
+## Experiment proposals
+
+A specialist can propose a designed experiment (one that changes the subject's training) as a notebook entry of kind `proposal` titled `Experiment proposal: ...`. Its body holds the design only, so a blind review is possible. Read just those entries: `POST /api/research/query` with `SELECT id, written_at, author, title, body FROM research_notebook WHERE title LIKE 'Experiment proposal:%' ORDER BY written_at`. Do not read other notebook entries. Record your decision with `POST /api/research/notebook`, `{"author": "methodologist", "kind": "review", "title": "Experiment review: <name>: approved|rejected", "body": "...", "ref": "<proposal id>"}`. Reasons are at least two plain sentences. You never register an experiment; the subject approves it first.
+
+Check, in order:
+
+1. **Is the design one the lab can run?** Only A (a coin fixed at registration decides the condition each time a benchmark lift is programmed) or B (left against right, limb muscles only). Reject a before-and-after block however it is dressed, and any design B on glutes or chest.
+2. **Can it see its own effect?** The stated `min_effect`, the outcome's measured noise (run `POST /api/research/query` on `workout_sets_dedup` to confirm it) and the sessions per week must give a smallest detectable effect at or below `min_effect` within 120 days. Re-derive the figure; do not accept the proposer's.
+3. **Is the outcome measured the same way every time?** A fixed lift, first working set, comparable load and reps; a measure that depends on how the session happened to go is noise.
+4. **Is adherence recorded, not assumed?** There must be a tag in the Hevy session note or another record the lab reads. An experiment that assumes adherence cannot be scored.
+5. **Do the engine rules hold?** No condition drops a growing muscle below its minimum volume, no session exceeds 10 sets for a muscle, no recovery gate is overridden.
+6. **Is anything else running on that muscle or lift?** One live experiment per muscle and per benchmark lift.
+
 Explorations need no review; ignore them.
 
 Return a short report: each slug or measurement name, your decision, and the one-line reason.

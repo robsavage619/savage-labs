@@ -55,6 +55,10 @@ Only after an exploration justifies it. These change beliefs, so they go through
 - Then `POST /api/research/hypotheses` with `slug`, `question`, `spec`, `belief_id`, `author: "conditioning"`, and a `rationale` that names the exploration or miss it comes from, the earlier results it builds on, its citations, and what each outcome would change.
 - At most two formal questions per cycle, highest value first, and only within the brief's `max_days_to_answer` unless the question is decision-critical and no feasible design exists (say so).
 
+### Tier 3: experiments belong to Hypertrophy for now
+
+The lab runs designed experiments (a coin-assigned condition per programmed session of a benchmark lift, or one limb against the other), and today both measure lifting outcomes. When a conditioning lead says that changing court load or aerobic work could change lifting, record it as an exploration with the numbers and name it as a lead for Hypertrophy to propose; do not register or start anything yourself. An observational result never reaches the planner by itself, and an aerobic or court outcome cannot be an experiment outcome yet: say so in the lead.
+
 ## Literature
 
 1. The knowledge vault first, through its health retrieval pack (the run prompt gives the path). It gives direction and scale, rarely a number for this person.

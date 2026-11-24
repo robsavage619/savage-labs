@@ -55,6 +55,10 @@ Only after an exploration justifies it. These change beliefs, so they go through
 - Then `POST /api/research/hypotheses` with `slug`, `question`, `spec`, `belief_id`, `author: "metabolic"`, and a `rationale` that names the exploration or miss it comes from, the earlier results it builds on, its citations, and what each outcome would change.
 - At most two formal questions per cycle, highest value first, and only within the brief's `max_days_to_answer` unless the question is decision-critical and no feasible design exists (say so).
 
+### Tier 3: experiments belong to Hypertrophy for now
+
+The lab runs designed experiments (a coin-assigned condition per programmed session of a benchmark lift, or one limb against the other), and today both measure lifting outcomes. A body-composition or weight question cannot be an experiment outcome yet: record the lead as an exploration with the numbers, say plainly that no design exists for it, and do not register or start anything. An observational result never reaches the planner by itself.
+
 ## Literature
 
 1. The knowledge vault first, through its health retrieval pack (the run prompt gives the path). It gives direction and scale, rarely a number for this person.
