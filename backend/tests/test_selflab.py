@@ -374,3 +374,75 @@ def test_nightly_rescore_job_is_registered_after_the_4am_jobs() -> None:
     assert job is not None
     fields = {f.name: str(f) for f in job.trigger.fields}
     assert (fields["hour"], fields["minute"]) == ("4", "45")
+
+
+# ── Abandon: stop a study, retract its prior, keep the reason ────────────────
+
+_REASON = "cannot answer for years at the live pace"
+
+
+def test_abandon_drops_study_from_assignments_and_scoring(conn) -> None:
+    exp = _prereg(conn)
+    assert [a["id"] for a in selflab.todays_assignments(conn)] == [exp]
+    selflab.abandon(conn, "caffeine-bench", _REASON)
+    status, notes = conn.execute(
+        "SELECT status, notes FROM experiments WHERE id = ?", [exp]
+    ).fetchone()
+    assert status == "abandoned"
+    assert _REASON in notes
+    assert selflab.todays_assignments(conn) == []
+    assert selflab.score_all(conn) == []
+    assert selflab.refresh_and_score_all(conn) == []
+
+
+def test_abandon_retracts_the_prior(conn) -> None:
+    exp = _prereg(conn)
+    _fill(conn, exp, [100, 101, 99, 100, 102, 98], [110, 111, 109, 112, 108, 110])
+    assert selflab.score(conn, exp)["verdict"] == "CONFIRMED"
+    assert len(selflab.active_priors(conn)) == 1
+    selflab.abandon(conn, "caffeine-bench", _REASON)
+    assert conn.execute(
+        "SELECT count(*) FROM experiment_prior WHERE experiment_id = ?", [exp]
+    ).fetchone() == (0,)
+
+
+def test_abandon_refuses_twice_unknown_and_short_reason(conn) -> None:
+    _prereg(conn)
+    with pytest.raises(ValueError, match="at least"):
+        selflab.abandon(conn, "caffeine-bench", "too short")
+    selflab.abandon(conn, "caffeine-bench", _REASON)
+    with pytest.raises(ValueError, match="not active"):
+        selflab.abandon(conn, "caffeine-bench", _REASON)
+    with pytest.raises(LookupError):
+        selflab.abandon(conn, "no-such-study", _REASON)
+
+
+def test_abandon_route_maps_errors_and_is_admin_gated(conn, monkeypatch) -> None:
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from fastapi import HTTPException
+    from fastapi.routing import APIRoute
+
+    from shc.api.deps import require_admin_key
+    from shc.api.routers import experiments as routes
+
+    @asynccontextmanager
+    async def _write_ctx():
+        yield conn
+
+    monkeypatch.setattr(routes, "write_ctx", _write_ctx)
+    _prereg(conn)
+    body = routes.AbandonIn(reason=_REASON)
+    out = asyncio.run(routes.abandon_experiment("caffeine-bench", body))
+    assert out == {"slug": "caffeine-bench", "status": "abandoned"}
+    for slug, code in (("caffeine-bench", 409), ("no-such-study", 404)):
+        with pytest.raises(HTTPException) as err:
+            asyncio.run(routes.abandon_experiment(slug, body))
+        assert err.value.status_code == code
+    route = next(
+        r
+        for r in routes.router.routes
+        if isinstance(r, APIRoute) and r.path == "/experiments/{slug}/abandon"
+    )
+    assert any(d.call is require_admin_key for d in route.dependant.dependencies)

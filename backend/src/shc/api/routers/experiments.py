@@ -53,6 +53,10 @@ class LogDayIn(BaseModel):
     note: str | None = None
 
 
+class AbandonIn(BaseModel):
+    reason: str = Field(min_length=10)
+
+
 @router.get("/experiments")
 async def list_experiments() -> list[dict]:
     """Every study with its config, latest result, prior, and adherence counts."""
@@ -116,6 +120,19 @@ async def log_experiment_day(slug: str, body: LogDayIn) -> dict:
             raise HTTPException(status_code=404, detail=f"no experiment {slug!r}")
         arm = selflab.log_day(conn, exp.id, day, adhered=body.adhered, note=body.note)
     return {"slug": slug, "day": day.isoformat(), "assigned_arm": arm, "adhered": body.adhered}
+
+
+@router.post("/experiments/{slug}/abandon", dependencies=[Depends(require_admin_key)])
+async def abandon_experiment(slug: str, body: AbandonIn) -> dict:
+    """Stop an active study and retract its prior; the reason is kept in its notes."""
+    async with write_ctx() as conn:
+        try:
+            exp = selflab.abandon(conn, slug, body.reason)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"slug": exp.slug, "status": exp.status}
 
 
 @router.post("/experiments/{slug}/score", dependencies=[Depends(require_admin_key)])

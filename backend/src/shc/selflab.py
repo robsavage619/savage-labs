@@ -912,6 +912,41 @@ def score(conn: duckdb.DuckDBPyConnection, exp_id: str) -> dict:
     return _finalize_score(conn, exp, result)
 
 
+_MIN_ABANDON_REASON = 10
+
+
+def abandon(conn: duckdb.DuckDBPyConnection, slug: str, reason: str) -> Experiment:
+    """Stop an active study: status -> 'abandoned', prior retracted, reason kept.
+
+    The reason is appended to ``experiments.notes`` with the date, so the
+    record of why a pre-registered study was dropped lives with the study.
+
+    Raises:
+        LookupError: no study with that slug or id.
+        ValueError: the study is not active, or the reason is too short.
+    """
+    reason = reason.strip()
+    if len(reason) < _MIN_ABANDON_REASON:
+        raise ValueError(f"reason must be at least {_MIN_ABANDON_REASON} characters")
+    exp = load(conn, slug)
+    if exp is None:
+        raise LookupError(f"no experiment {slug!r}")
+    if exp.status != "active":
+        raise ValueError(f"experiment {exp.slug!r} is {exp.status!r}, not active")
+    note = f"abandoned {date.today().isoformat()}: {reason}"
+    conn.execute(
+        "UPDATE experiments SET status = 'abandoned', "
+        "notes = CASE WHEN notes IS NULL OR notes = '' THEN ? ELSE notes || chr(10) || ? END "
+        "WHERE id = ?",
+        [note, note, exp.id],
+    )
+    # Same retraction _finalize_score applies to a non-confirmed study.
+    conn.execute("DELETE FROM experiment_prior WHERE experiment_id = ?", [exp.id])
+    log.info("selflab: abandoned %s: %s", exp.slug, reason)
+    exp.status = "abandoned"
+    return exp
+
+
 def _apply_fdr(results: list[dict], alpha: float = _ALPHA) -> None:
     """Benjamini–Hochberg correction across concurrently-scored experiments, in
     place on `results`.
