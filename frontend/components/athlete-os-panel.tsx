@@ -117,26 +117,6 @@ function activeExperiment(experiments: Experiment[] | undefined): { label: strin
   };
 }
 
-function findingSignal(
-  findings: Awaited<ReturnType<typeof api.labFindings>> | undefined,
-): { label: string; detail: string; tone: VerdictTone } {
-  const confirmed = findings?.find((f) => f.verdict === "confirmed");
-  const suggestive = findings?.find((f) => f.verdict === "inconclusive" && (f.n ?? 0) >= 50);
-  const f = confirmed ?? suggestive;
-  if (!f) {
-    return {
-      label: "Evidence still accumulating",
-      detail: "Personal hypotheses are being tracked, but none are decisive today.",
-      tone: "neutral",
-    };
-  }
-  return {
-    label: confirmed ? "Personal effect confirmed" : "Signal worth watching",
-    detail: shorten(f.summary ?? f.hypothesis, 150),
-    tone: confirmed ? "positive" : "neutral",
-  };
-}
-
 function freshnessLabel(days: number | null | undefined): string {
   if (days == null) return "missing";
   if (days === 0) return "fresh";
@@ -244,13 +224,11 @@ function GateStrip({ gates }: { gates: DailyStateGates }) {
 export function AthleteOSPanel() {
   const state = useQuery({ queryKey: ["daily-state"], queryFn: api.dailyState, staleTime: 5 * 60_000 });
   const plan = useQuery({ queryKey: ["workout-next"], queryFn: () => api.workoutNext(false), staleTime: 5 * 60_000 });
-  const findings = useQuery({ queryKey: ["lab-findings"], queryFn: api.labFindings, staleTime: 60_000 });
   const experiments = useQuery({ queryKey: ["experiments"], queryFn: api.experiments, staleTime: 60_000 });
 
   const command = readinessCommand(state.data, plan.data);
   const pressure = goalPressure(state.data);
   const experiment = activeExperiment(experiments.data);
-  const finding = findingSignal(findings.data);
   const freshness = state.data?.freshness;
 
   return (
@@ -275,17 +253,14 @@ export function AthleteOSPanel() {
 
       {state.data && <GateStrip gates={state.data.gates} />}
 
-      {/* The command spans the row on phones; the three context cards pair up
-          beneath it. Four equal full-width cards put the session ~1,100px down. */}
-      <div className="mt-3 grid grid-cols-2 xl:grid-cols-4 gap-3">
+      {/* The command spans the row on phones; the two context cards pair up
+          beneath it. Three equal full-width cards put the session ~1,100px down. */}
+      <div className="mt-3 grid grid-cols-2 xl:grid-cols-3 gap-3">
         <div className="col-span-2 xl:col-span-1">
           <DecisionCard eyebrow="today's command" {...command} />
         </div>
         <DecisionCard eyebrow="goal pressure" {...pressure} />
         <DecisionCard eyebrow="intervention loop" {...experiment} />
-        <div className="col-span-2 xl:col-span-1">
-          <DecisionCard eyebrow="personal evidence" {...finding} />
-        </div>
       </div>
     </section>
   );

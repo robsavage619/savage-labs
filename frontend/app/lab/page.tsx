@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 import { ClinicalResearchPanel } from "@/components/clinical-research-panel";
 import { EngineReportCard } from "@/components/engine-report-card";
 import { EngineStatusPanel } from "@/components/engine-status-panel";
@@ -10,21 +9,15 @@ import { GuideProvider, Panel, Section } from "@/components/kit";
 import { BeliefLenses, Coverage, ForecastDesk, Masthead, Misses, Pipeline, Threads } from "@/components/lab-floor";
 import { EffectForest, HrvDrivers, PriorsShelf, ScorecardBullets, TrialProgress } from "@/components/lab-charts";
 import { LabExperiments } from "@/components/lab-experiments";
-import { LabPanel } from "@/components/lab-panel";
 import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
 import { SubjectDossier } from "@/components/subject-dossier";
-import { SuggestedExperiments } from "@/components/suggested-experiments";
 import { SurfaceShell } from "@/components/surface-shell";
 import { TeamRoom } from "@/components/team-board";
 import { BeliefsExplain, CoverageExplain, ExplainButton, ForecastExplain, MissesExplain, NotebookExplain, PipelineExplain, TeamExplain, useExplain } from "@/components/lab-explain";
-import { api } from "@/lib/api";
-
-const LAB_RUN_THROTTLE_KEY = "lab_last_run_ms";
-const LAB_RUN_THROTTLE_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 // Sections that live on the Trials & instruments tab: a deep link to any of
 // them (from the command palette) opens that tab.
-const INSTRUMENT_IDS = new Set(["instruments", "trial-progress", "effects", "priors", "engine-bullets", "hrv-drivers", "trials", "suggested", "findings", "signals", "autonomic", "engine", "subject"]);
+const INSTRUMENT_IDS = new Set(["instruments", "trial-progress", "effects", "priors", "engine-bullets", "hrv-drivers", "trials", "signals", "autonomic", "engine", "subject"]);
 
 const subscribeHash = (cb: () => void) => {
   window.addEventListener("hashchange", cb);
@@ -42,36 +35,6 @@ const readHash = () => window.location.hash.slice(1);
  * the engine detail sit on the Trials & instruments tab.
  */
 export default function LabPage() {
-  const qc = useQueryClient();
-  const ranRef = useRef(false);
-
-  // Refresh the standing research program at most every 6 hours, in the
-  // background; the page renders the last persisted findings meanwhile.
-  useEffect(() => {
-    if (ranRef.current) return;
-    ranRef.current = true;
-    try {
-      const last = parseInt(localStorage.getItem(LAB_RUN_THROTTLE_KEY) ?? "0", 10);
-      if (Date.now() - last < LAB_RUN_THROTTLE_MS) return;
-    } catch {
-      // localStorage unavailable: proceed
-    }
-    api
-      .labRun()
-      .then(() => {
-        try {
-          localStorage.setItem(LAB_RUN_THROTTLE_KEY, String(Date.now()));
-        } catch {
-          // ok
-        }
-        qc.invalidateQueries({ queryKey: ["lab-findings"] });
-        qc.invalidateQueries({ queryKey: ["experiments"] });
-      })
-      .catch(() => {
-        // 401 when the key is unset, network errors: the page still renders
-      });
-  }, [qc]);
-
   const hash = useSyncExternalStore(subscribeHash, readHash, () => "");
   const tab = INSTRUMENT_IDS.has(hash) ? "instruments" : "floor";
 
@@ -199,15 +162,9 @@ export default function LabPage() {
               <Panel id="trials" span={4} title="Active trials" question="Log today's condition, score a trial, or score them all." bare>
                 <LabExperiments />
               </Panel>
-              <Panel id="suggested" span={4} title="Suggested studies" question="Findings worth turning into a real trial." bare>
-                <SuggestedExperiments />
-              </Panel>
             </Section>
 
             <Section n="05" title="Research and the engine">
-              <Panel id="findings" span={4} title="Standing research program" question="The pre-registered questions the lab re-tests on your data." bare>
-                <LabPanel />
-              </Panel>
               <Panel id="signals" span={4} title="Clinical research signals" question="Published markers computed on your own numbers." bare>
                 <ClinicalResearchPanel />
               </Panel>

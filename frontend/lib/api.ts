@@ -857,21 +857,6 @@ export interface SubjectProfile {
   muscle_coverage: { personalized: number; total: number };
 }
 
-export interface ExperimentSuggestion {
-  slug: string;
-  hypothesis: string;
-  manipulated: string;
-  condition_a: string;
-  condition_b: string;
-  outcome_metric: string;
-  outcome_direction: string;
-  min_per_arm: number;
-  min_effect: number;
-  vault_ref: string | null;
-  from_question_id: string;
-  lab_verdict: string;
-}
-
 /** One day in the −7 … +3 window around a tournament. `offset` 0 is the event day. */
 export interface PickleballEventDay {
   date: string;
@@ -1477,36 +1462,6 @@ export const api = {
         peer_reviewed: boolean;
       };
     }>("/api/clinical-research/insights"),
-  labFindings: () =>
-    get<{
-      id: string;
-      title: string;
-      hypothesis: string;
-      vault_ref: string | null;
-      test_type: string;
-      run_at: string | null;
-      n: number | null;
-      effect_size: number | null;
-      effect_unit: string | null;
-      p_value: number | null;
-      verdict: "confirmed" | "refuted" | "insufficient" | "inconclusive" | null;
-      summary: string | null;
-      /** "answered" = retired on a stable definitive verdict; "open" = under test. */
-      status: "answered" | "open";
-      answered_at: string | null;
-      min_n: number | null;
-    }[]>("/api/lab/findings"),
-  labRun: async () => {
-    const r = await fetch(`${BASE}/api/lab/run`, { method: "POST", headers: mutHeaders() });
-    if (!r.ok) throw new Error(`labRun ${r.status}`);
-    return r.json() as Promise<{
-      ran: number;
-      verdicts: Record<string, string>;
-      retired: string[];
-      reopened: string[];
-      completed_at: string;
-    }>;
-  },
   experiments: () => get<Experiment[]>("/api/experiments"),
   researchBeliefs: () => get<ResearchBelief[]>("/api/research/beliefs"),
   researchHypotheses: () => get<ResearchHypothesis[]>("/api/research/hypotheses"),
@@ -1747,7 +1702,6 @@ export const api = {
   dailyReport: () => get<{ report: DailyReport | null }>("/api/daily/report"),
   dailyReportPrompt: () => get<{ prompt: string }>("/api/daily/report/prompt"),
   subjectProfile: () => get<SubjectProfile>("/api/subject/profile"),
-  experimentSuggestions: () => get<ExperimentSuggestion[]>("/api/experiments/suggestions"),
 };
 
 export interface DailyReport {
