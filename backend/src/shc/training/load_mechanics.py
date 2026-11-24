@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import re
 
 """Exercise load mechanics — how a logged weight maps to per-limb load.
 
@@ -104,6 +105,31 @@ _LOGGED_AS_COMBINED: dict[str, _dt.date] = {
     "romanian deadlift (dumbbell)": COMBINED_LOGGING_ENDED,
     "seated dumbbell curl": SEATED_CURL_COMBINED_LOGGING_ENDED,
 }
+
+UNILATERAL_SET_WEIGHT = 0.5
+"""A side-tagged set trains one limb of a bilateral pair, so it counts half."""
+
+_SIDE_SUFFIX_PATTERN = r"\((left|right)\)\s*$"
+_SIDE_SUFFIX_RE = re.compile(_SIDE_SUFFIX_PATTERN, re.IGNORECASE)
+
+
+def set_weight(name: str) -> float:
+    """Volume weight of one set: 0.5 for a ``(Left)``/``(Right)`` exercise, else 1.0.
+
+    Rob logs a left-arm and a right-arm curl as two custom exercises. Each set
+    works one arm, so for a weekly muscle count it is half a bilateral set;
+    counting both arms in full would double the biceps volume.
+    """
+    return UNILATERAL_SET_WEIGHT if _SIDE_SUFFIX_RE.search(name or "") else 1.0
+
+
+def set_weight_sql(exercise_col: str = "ws.exercise") -> str:
+    """SQL expression form of :func:`set_weight`; multiply or SUM it per set."""
+    return (
+        f"(CASE WHEN regexp_matches(lower(trim({exercise_col})), '{_SIDE_SUFFIX_PATTERN}') "
+        f"THEN {UNILATERAL_SET_WEIGHT} ELSE 1.0 END)"
+    )
+
 
 _SINGLE_ARM_KEYS = (
     "single arm",

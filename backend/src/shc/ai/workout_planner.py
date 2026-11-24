@@ -1889,6 +1889,7 @@ def _planned_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]
     :func:`_planned_primary_sets_by_muscle`; the two diverged when secondary
     credit moved to the vault's 1:1 (`volume.SECONDARY_CREDIT`).
     """
+    from shc.training.load_mechanics import set_weight
     from shc.training.volume import ARM_SECONDARY_CREDIT, SECONDARY_CREDIT
 
     planned: dict[str, float] = {}
@@ -1910,6 +1911,7 @@ def _planned_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str, float]
             if not row:
                 continue
             primary, secondaries = row[0], row[1] or []
+            sets = float(sets) * set_weight(name)
             planned[primary] = planned.get(primary, 0.0) + float(sets)
             for sec in secondaries:
                 credit = (
@@ -1936,6 +1938,8 @@ def _planned_primary_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str
     "was this muscle trained at all" (the emphasis absence check) and an
     MRV-style ceiling. No MRV ceiling is enforced here today.
     """
+    from shc.training.load_mechanics import set_weight
+
     planned: dict[str, float] = {}
     for block in plan.get("blocks", []):
         for ex in block.get("exercises", []):
@@ -1959,7 +1963,7 @@ def _planned_primary_sets_by_muscle(conn: Any, plan: dict[str, Any]) -> dict[str
                 continue
             if row:
                 primary = row[0]
-                planned[primary] = planned.get(primary, 0.0) + float(sets)
+                planned[primary] = planned.get(primary, 0.0) + float(sets) * set_weight(name)
     return planned
 
 

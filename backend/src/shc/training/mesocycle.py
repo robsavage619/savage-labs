@@ -22,7 +22,7 @@ from datetime import date, timedelta
 import duckdb
 
 from shc.training.exercise_classifier import backfill_exercise_map
-from shc.training.load_mechanics import effective_reps_sql, per_hand_sql
+from shc.training.load_mechanics import effective_reps_sql, per_hand_sql, set_weight_sql
 from shc.training.self_learning import fit_all
 
 log = logging.getLogger(__name__)
@@ -128,7 +128,8 @@ def direct_sets_by_week(
     """DIRECT (primary-role) working sets per (muscle, ISO week start) since ``start``."""
     rows = conn.execute(
         f"""
-        SELECT em.muscle, date_trunc('week', ws.started_at::DATE) AS wk, COUNT(*)::DOUBLE
+        SELECT em.muscle, date_trunc('week', ws.started_at::DATE) AS wk,
+               SUM({set_weight_sql("ws.exercise")})::DOUBLE
         FROM workout_sets_dedup ws
         JOIN exercise_muscle em
           ON em.exercise_name = ws.exercise AND {DIRECT_SET_SQL}
@@ -166,7 +167,7 @@ def weekly_budget_block(conn: duckdb.DuckDBPyConnection, week_start: date) -> li
     done = dict(
         conn.execute(
             f"""
-            SELECT em.muscle, COUNT(*)
+            SELECT em.muscle, SUM({set_weight_sql("ws.exercise")})
             FROM workout_sets_dedup ws
             JOIN exercise_muscle em
               ON em.exercise_name = ws.exercise AND {DIRECT_SET_SQL}
@@ -185,9 +186,11 @@ def weekly_budget_block(conn: duckdb.DuckDBPyConnection, week_start: date) -> li
         "and those targets act as upper limits.",
     ]
     for muscle, budget in WEEKLY_DIRECT_SET_BUDGET.items():
-        logged = int(done.get(muscle, 0))
+        logged = float(done.get(muscle, 0))
         note = GLUTE_DIRECT_NOTE if muscle == "glutes" else ""
-        lines.append(f"- {muscle}: {logged}/{budget} done, {max(budget - logged, 0)} left{note}")
+        lines.append(
+            f"- {muscle}: {logged:g}/{budget} done, {max(budget - logged, 0):g} left{note}"
+        )
     return lines
 
 

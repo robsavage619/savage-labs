@@ -146,6 +146,7 @@ def check_e1rm_paths_agree(conn: duckdb.DuckDBPyConnection) -> Finding:
 
 def check_volume_credit_sums(conn: duckdb.DuckDBPyConnection) -> Finding:
     """Per-muscle weekly volume must equal a hand-rolled sum over the raw sets."""
+    from shc.training.load_mechanics import set_weight_sql
     from shc.training.volume import weekly_muscle_volume
     from shc.training.mesocycle import _iso_week_start
 
@@ -154,8 +155,8 @@ def check_volume_credit_sums(conn: duckdb.DuckDBPyConnection) -> Finding:
     raw = {
         m: round(float(v), 2)
         for m, v in conn.execute(
-            """
-            SELECT em.muscle, SUM(em.credit)
+            f"""
+            SELECT em.muscle, SUM(em.credit * {set_weight_sql()})
             FROM workout_sets_dedup ws
             JOIN exercise_muscle em ON em.exercise_name = ws.exercise
             WHERE ws.is_warmup = FALSE AND ws.weight_kg > 0 AND ws.reps BETWEEN 5 AND 30

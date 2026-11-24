@@ -37,6 +37,7 @@ from datetime import date, timedelta
 
 import duckdb
 
+from shc.training.load_mechanics import set_weight_sql
 from shc.training.mesocycle import (
     _MAINTENANCE_LOOKBACK_WEEKS,
     DIRECT_SET_SQL,
@@ -2789,7 +2790,7 @@ def weekly_prescription(
         direct_now = dict(
             conn.execute(
                 f"""
-                SELECT em.muscle, COUNT(*)::DOUBLE
+                SELECT em.muscle, SUM({set_weight_sql("ws.exercise")})::DOUBLE
                 FROM workout_sets_dedup ws
                 JOIN exercise_muscle em
                   ON em.exercise_name = ws.exercise AND {DIRECT_SET_SQL}

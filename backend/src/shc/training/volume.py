@@ -24,6 +24,8 @@ from datetime import date, timedelta
 
 import duckdb
 
+from shc.training.load_mechanics import set_weight_sql
+
 log = logging.getLogger(__name__)
 
 # Indirect (secondary) volume credit per set. 1.0 is the VAULT's ratio, adopted
@@ -122,7 +124,7 @@ def weekly_muscle_volume(
 
     primary = conn.execute(
         f"""
-        SELECT m.primary_muscle, COUNT(*)::DOUBLE AS sets
+        SELECT m.primary_muscle, SUM({set_weight_sql("ws.exercise")})::DOUBLE AS sets
         FROM workout_sets_dedup ws
         JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
         WHERE ws.started_at::DATE >= ? AND ws.started_at::DATE < ?
@@ -136,7 +138,7 @@ def weekly_muscle_volume(
     secondary = conn.execute(
         f"""
         SELECT u.sec AS muscle,
-               SUM(CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
+               SUM({set_weight_sql("ws.exercise")} * CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
                         THEN {ARM_SECONDARY_CREDIT} ELSE {SECONDARY_CREDIT} END) AS credit
         FROM workout_sets_dedup ws
         JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
@@ -176,7 +178,7 @@ def weekly_muscle_volume_by_week(
           AND {_RPE_GATE}"""
     primary = conn.execute(
         f"""
-        SELECT date_trunc('week', ws.started_at::DATE)::DATE, m.primary_muscle, COUNT(*)::DOUBLE
+        SELECT date_trunc('week', ws.started_at::DATE)::DATE, m.primary_muscle, SUM({set_weight_sql("ws.exercise")})::DOUBLE
         FROM workout_sets_dedup ws
         JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
         WHERE {where}
@@ -187,7 +189,7 @@ def weekly_muscle_volume_by_week(
     secondary = conn.execute(
         f"""
         SELECT date_trunc('week', ws.started_at::DATE)::DATE, u.sec,
-               SUM(CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
+               SUM({set_weight_sql("ws.exercise")} * CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
                         THEN {ARM_SECONDARY_CREDIT} ELSE {SECONDARY_CREDIT} END)
         FROM workout_sets_dedup ws
         JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
@@ -257,7 +259,7 @@ def weekly_region_volume(
     end = week_end or week_start + timedelta(days=7)
     rows = conn.execute(
         f"""
-        SELECT s.muscle, s.region, COUNT(*)::DOUBLE AS sets
+        SELECT s.muscle, s.region, SUM({set_weight_sql("ws.exercise")})::DOUBLE AS sets
         FROM workout_sets_dedup ws
         LEFT JOIN exercise_alias a ON a.logged_name = ws.exercise
         JOIN exercise_science s ON s.exercise_name = COALESCE(a.canonical_name, ws.exercise)
@@ -408,7 +410,7 @@ def muscle_weekly_volume_series(
         WITH credited AS (
             SELECT
                 date_trunc('week', ws.started_at)::DATE AS week_start,
-                1.0 AS credit
+                {set_weight_sql("ws.exercise")} AS credit
             FROM workout_sets_dedup ws
             JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name
             WHERE m.primary_muscle = ?
@@ -418,7 +420,7 @@ def muscle_weekly_volume_series(
             UNION ALL
             SELECT
                 date_trunc('week', ws.started_at)::DATE AS week_start,
-                CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
+                {set_weight_sql("ws.exercise")} * CASE WHEN u.sec IN ('biceps', 'triceps', 'forearms')
                      THEN {ARM_SECONDARY_CREDIT} ELSE {SECONDARY_CREDIT} END AS credit
             FROM workout_sets_dedup ws
             JOIN exercise_muscle_map m ON ws.exercise = m.exercise_name

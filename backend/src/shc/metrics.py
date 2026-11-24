@@ -1239,9 +1239,11 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
     # multiple primary rows for one exercise down to a single MAX() pick.
     # Filters mirror weekly_muscle_volume's credited-set definition so dose
     # counts and volume credits agree on what constitutes a "real" set.
+    from shc.training.load_mechanics import set_weight_sql
+
     muscle_day_rows = conn.execute(
-        """
-        SELECT day_d AS day, em.muscle, COUNT(*) AS n_sets, AVG(ws.rpe) AS avg_rpe
+        f"""
+        SELECT day_d AS day, em.muscle, SUM({set_weight_sql()}) AS n_sets, AVG(ws.rpe) AS avg_rpe
         FROM workout_sets_dedup ws
         JOIN exercise_muscle em ON em.exercise_name = ws.exercise AND em.role = 'primary'
         WHERE ws.is_warmup = FALSE
@@ -1253,7 +1255,7 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         """,
         {"since": (today - timedelta(days=28)).isoformat()},
     ).fetchall()
-    best_dose_day: dict[str, tuple[date, int, float | None]] = {}
+    best_dose_day: dict[str, tuple[date, float, float | None]] = {}
     # Last day the muscle was touched AT ALL (>= 1 primary-credited set),
     # independent of the dose bar. Reported alongside the dose clock purely so
     # a consumer can never read "chest: 21" as "chest untrained for 21 days"
@@ -1269,7 +1271,7 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
         if prior is None or day > prior[0]:
             best_dose_day[muscle] = (
                 day,
-                int(n_sets),
+                float(n_sets),
                 float(avg_rpe) if avg_rpe is not None else None,
             )
     for muscle, (day, n_sets, avg_rpe) in best_dose_day.items():
@@ -1279,7 +1281,7 @@ def _training_load(conn, today: date) -> TrainingLoadMetrics:
             "days_since_any_primary_set": (today - touch).days,
             "dose_threshold_sets": MEANINGFUL_DOSE_SETS,
             "last_rpe": round(avg_rpe, 1) if avg_rpe is not None else None,
-            "last_dose_sets": n_sets,
+            "last_dose_sets": round(n_sets, 1),
         }
 
     m.push_sets_28d = bal["push"]
