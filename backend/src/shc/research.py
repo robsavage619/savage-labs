@@ -768,9 +768,12 @@ def estimate(
     spec: dict,
     today: date | None = None,
     registered: date | None = None,
+    z: float = 1.96,
+    cap_per_arm: int | None = None,
 ) -> dict:
     """Run a spec on current data: B − A adjusted for covariates, with a
-    carryover-widened 95% range, a verdict, and a power estimate.
+    carryover-widened range (95% unless `z` says otherwise), a verdict, and a
+    power estimate.
 
     Args:
         conn: Database connection.
@@ -779,6 +782,10 @@ def estimate(
         registered: When the question was registered. Only later days count
             toward ``power.days_to_confirm``; a draft has none, so it defaults
             to ``today``.
+        z: Half-width of the range in standard errors; a sequential look
+            passes a stricter bound.
+        cap_per_arm: Keep only the first this-many days of each arm, so a look
+            at a planned size reads the same days however late it is run.
 
     Returns:
         Arm sizes and means, effect, range, verdict, power and a summary line.
@@ -813,6 +820,14 @@ def estimate(
             continue
         rows.append((d, arm, y, [float(c) for c in covs if c is not None]))
     rows.sort()
+    if cap_per_arm is not None:
+        taken = [0, 0]
+        kept = []
+        for r in rows:
+            if taken[r[1]] < cap_per_arm:
+                kept.append(r)
+                taken[r[1]] += 1
+        rows = kept
     n_a = sum(1 for r in rows if r[1] == 0)
     n_b = len(rows) - n_a
     ya = [r[2] for r in rows if r[1] == 0]
@@ -848,7 +863,7 @@ def estimate(
     de = _hac_design_effect(X, resid, float(cov[1, 1]), dof)
     effect = float(beta[1])
     se = math.sqrt(float(cov[1, 1]) * de)
-    ci = (effect - 1.96 * se, effect + 1.96 * se)
+    ci = (effect - z * se, effect + z * se)
     p = 2 * (1 - _NORMAL.cdf(abs(effect) / se)) if se > 0 else 1.0
     m = float(spec["min_effect"])
     # Read the range in the predicted direction, so one rule serves both signs.
@@ -877,7 +892,7 @@ def estimate(
         "design_effect": round(de, 2),
         "power": power,
         "summary": (
-            f"B − A = {effect:+.2f} {unit_label} (95% {ci[0]:+.2f} to {ci[1]:+.2f}), "
+            f"B − A = {effect:+.2f} {unit_label} ({'95%' if z == 1.96 else f'±{z:g} se'} {ci[0]:+.2f} to {ci[1]:+.2f}), "
             f"{n_a} A / {n_b} B {unit}s, adjusted for {', '.join(adj) or 'nothing'}. → {verdict}"
         ),
     }
@@ -914,6 +929,26 @@ def _hac_design_effect(X: np.ndarray, resid: np.ndarray, ols_var: float, dof: in
     return max(robust / ols_var, 1.0)
 
 
+# Two planned looks at the days since registration, each arm at half and at the
+# full planned size, with O'Brien-Fleming bounds so the pair keeps a two-sided
+# 5% error however many nights the question is re-run.
+_LOOK_Z = (2.797, 1.977)
+_NEEDED_FOR = (
+    "n per arm to detect an effect of min_effect against zero at the lab's alpha and 80% power, "
+    "enough for a 'direction' call; a 'supported' call needs the whole 95% range above "
+    "min_effect, which takes an effect larger than min_effect"
+)
+
+
+def _looks(needed: int) -> list[tuple[int, float]]:
+    """The planned (days per arm, bound in standard errors) looks for a question."""
+    full = max(needed, _MIN_PER_ARM)
+    half = max(math.ceil(needed / 2), _MIN_PER_ARM)
+    if half >= full:
+        return [(full, 1.96)]
+    return [(half, _LOOK_Z[0]), (full, _LOOK_Z[1])]
+
+
 def _power(
     rows: list, sd: float, min_effect: float, de: float, today: date, unit: str, since: date
 ) -> dict:
@@ -922,31 +957,40 @@ def _power(
     ``days_to_answer`` counts every day in the arms: when they are big enough
     to rule the effect out. ``days_to_confirm`` counts only days after
     ``since`` (the registration date), the only ones a favourable verdict may
-    rest on.
+    rest on, and ``days_to_next_look`` is the wait to the next planned look.
     """
     needed = _needed_per_arm(sd, min_effect, de)
     recent = today - timedelta(days=_PACE_WINDOW_DAYS)
     per_day = 7 if unit == "week" else 1
 
-    def wait(after: date | None) -> int | None:
+    def have(arm: int, after: date | None) -> int:
+        return sum(1 for r in rows if r[1] == arm and (after is None or r[0] > after))
+
+    def wait(after: date | None, need: int) -> int | None:
         waits = []
         for arm in (0, 1):
-            have = sum(1 for r in rows if r[1] == arm and (after is None or r[0] > after))
             pace = sum(1 for r in rows if r[1] == arm and r[0] >= recent) / (
                 _PACE_WINDOW_DAYS / per_day
             )
-            if needed <= have:
+            if need <= have(arm, after):
                 waits.append(0)
             elif pace > 0:
-                waits.append(math.ceil((needed - have) / pace) * per_day)
+                waits.append(math.ceil((need - have(arm, after)) / pace) * per_day)
             else:
                 return None
         return max(waits)
 
+    looks = _looks(needed)
+    seen = min(have(0, since), have(1, since))
+    nxt = next((n for n, _ in looks if n > seen), None)
     return {
         "needed_per_arm": needed,
-        "days_to_answer": wait(None),
-        "days_to_confirm": wait(since),
+        "needed_for": _NEEDED_FOR,
+        "looks": [{"per_arm": n, "z": z} for n, z in looks],
+        "next_look_per_arm": nxt,
+        "days_to_next_look": None if nxt is None else wait(since, nxt),
+        "days_to_answer": wait(None, needed),
+        "days_to_confirm": wait(since, needed),
         "outcome_sd": round(sd, 3),
     }
 
@@ -1161,10 +1205,20 @@ _FAVOURABLE = ("supported", "direction")
 
 
 def _wait_text(res: dict) -> str:
-    days = (res.get("power") or {}).get("days_to_confirm")
-    if days is None:
+    pw = res.get("power") or {}
+    nxt, to_next, to_all = (
+        pw.get("next_look_per_arm"),
+        pw.get("days_to_next_look"),
+        pw.get("days_to_confirm"),
+    )
+    if nxt is None:
+        return "and the planned number of days per arm has been reached without confirming it"
+    if to_next is None:
         return "and one arm is gaining none at the current pace"
-    return f"about {days} more days at the current pace"
+    text = f"the next look is at {nxt} per arm, about {to_next} more days at the current pace"
+    if to_all is not None and to_all != to_next:
+        text += f" (the full planned size: about {to_all} more days)"
+    return text
 
 
 def _confirm_on_new_days(
@@ -1177,6 +1231,12 @@ def _confirm_on_new_days(
     The effect and range still describe every day; the verdict may only be
     favourable when the days since registration say so on their own.
 
+    Those days are read only at the planned looks (half and the full planned
+    size per arm, the half look held to a stricter bound), each on exactly the
+    first n days of each arm. The nightly re-run therefore cannot keep
+    re-testing growing data until it crosses 1.96; between looks the verdict
+    stays retrospective.
+
     Args:
         conn: Database connection.
         spec: The registered spec.
@@ -1185,23 +1245,30 @@ def _confirm_on_new_days(
 
     Returns:
         ``res``, with its verdict and summary replaced when the favourable call
-        rests on days seen before registration.
+        rests on days seen before registration or on no planned look.
     """
     if res["verdict"] not in _FAVOURABLE:
         return res
     first = registered + timedelta(days=1)
     if "start_date" in spec:
         first = max(first, date.fromisoformat(str(spec["start_date"])))
-    new = estimate(conn, spec | {"start_date": first.isoformat()})
+    since = spec | {"start_date": first.isoformat()}
+    planned = (res.get("power") or {}).get("needed_per_arm") or _MIN_PER_ARM
     unit = res["unit"]
     head = res["summary"].rsplit(" → ", 1)[0]
-    if new["verdict"] in _FAVOURABLE:
-        return res | {
-            "verdict": new["verdict"],
-            "summary": f"{head} On the {new['n_a']} A / {new['n_b']} B {unit}s since it was "
-            f"registered: {new['effect']:+.2f} ({new['ci_low']:+.2f} to {new['ci_high']:+.2f}). "
-            f"→ {new['verdict']}",
-        }
+    new = estimate(conn, since)
+    have = min(new["n_a"], new["n_b"])
+    for n_k, z in reversed(_looks(planned)):
+        if have < n_k:
+            continue
+        look = estimate(conn, since, z=z, cap_per_arm=n_k)
+        if look["verdict"] in _FAVOURABLE:
+            return res | {
+                "verdict": look["verdict"],
+                "summary": f"{head} On the first {n_k} A / {n_k} B {unit}s since it was "
+                f"registered (a planned look, bound ±{z:g} se): {look['effect']:+.2f} "
+                f"({look['ci_low']:+.2f} to {look['ci_high']:+.2f}). → {look['verdict']}",
+            }
     return res | {
         "verdict": "retrospective",
         "summary": f"{head} Those {unit}s were open to exploration before the question was "
@@ -1341,7 +1408,22 @@ def beliefs(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     return out
 
 
+def _live_power(conn: duckdb.DuckDBPyConnection, spec: dict, registered: date, stored: dict | None):
+    """Power on today's data, or the stored figure flagged stale when the spec can't run."""
+    try:
+        return estimate(conn, spec, registered=registered).get("power"), False
+    except (SpecError, KeyError, ValueError):
+        log.warning("power recompute failed for spec %s", spec.get("outcome"), exc_info=True)
+        return stored, True
+
+
 def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Every question with its latest result.
+
+    ``power`` is rescored on current data for questions still open (the numbers
+    stored at proposal go stale as the series grow) and ``power_at_proposal``
+    keeps the stored copy; a question that is closed keeps its stored figure.
+    """
     rows = conn.execute(
         """
         SELECT h.id, h.slug, h.question, h.spec, h.belief_id, h.author, h.status, h.power, h.created_at,
@@ -1356,6 +1438,12 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
     for row in rows:
         hid, r = row[0], row[1:]
         res = r[12:]
+        stored = json.loads(r[6]) if r[6] else None
+        power, stale = (
+            _live_power(conn, json.loads(r[2]), r[7].date(), stored)
+            if r[5] in ("proposed", "active")
+            else (stored, False)
+        )
         out.append(
             {
                 "id": hid,
@@ -1365,7 +1453,9 @@ def hypotheses(conn: duckdb.DuckDBPyConnection) -> list[dict]:
                 "belief_id": r[3],
                 "author": r[4],
                 "status": r[5],
-                "power": json.loads(r[6]) if r[6] else None,
+                "power": power,
+                "power_at_proposal": stored,
+                "power_stale": stale,
                 "created_at": r[7].isoformat(),
                 "value_score": r[8],
                 "value_parts": json.loads(r[9]) if r[9] else None,

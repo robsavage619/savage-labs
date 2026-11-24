@@ -113,7 +113,13 @@ def test_belief_posterior_sits_between_prior_and_data_and_narrows(conn) -> None:
         "test",
     )
     research.register(
-        conn, "strain-hrv", "Does a hard day lower tomorrow's HRV?", SPEC, bid, "test"
+        conn,
+        "strain-hrv",
+        "Does a hard day lower tomorrow's HRV?",
+        # Sized so the planned look fits in the seeded history.
+        SPEC | {"min_effect": 5},
+        bid,
+        "test",
     )
     # Registered before the data arrived, so the days count; otherwise the result
     # is retrospective and (correctly) leaves the prior alone.
@@ -599,8 +605,10 @@ def test_supported_needs_the_range_to_clear_the_size_the_question_asks(conn) -> 
 
 
 def test_days_seen_before_registration_cannot_confirm_a_question(conn) -> None:
-    _seed(conn, effect_pct=-10)
-    research.register(conn, "seen", "Does a hard day lower tomorrow's HRV?", SPEC, None, "test")
+    _seed(conn, effect_pct=-15)
+    # min_effect 5 plans a look (about 160 per arm) the seeded history can reach.
+    spec = SPEC | {"min_effect": 5}
+    research.register(conn, "seen", "Does a hard day lower tomorrow's HRV?", spec, None, "test")
     # Every seeded day predates the registration: the effect is there, the proof is not.
     res = research.run(conn, "seen")
     assert res["verdict"] == "retrospective"
@@ -722,3 +730,72 @@ def test_brief_says_how_small_an_effect_120_days_can_detect(conn) -> None:
     assert "readings" in det["strength_emphasis_pct14"]["reason"]
     assert det["top_set_e1rm"]["detectable_effect"] is None and det["top_set_e1rm"]["reason"]
     assert "detectable_in_120d" in research.brief(conn)["rules"]
+
+
+def _fake_estimator(a: list[float], b: list[float], visible: list[int]):
+    """A stand-in for `estimate` over in-memory arms, honouring `z` and `cap_per_arm`."""
+
+    def fake(conn, spec, today=None, registered=None, z=1.96, cap_per_arm=None):
+        n = visible[0] if cap_per_arm is None else min(visible[0], cap_per_arm)
+        xa, xb = a[:n], b[:n]
+        eff = sum(xb) / n - sum(xa) / n
+        va = sum((v - sum(xa) / n) ** 2 for v in xa) / (n - 1)
+        vb = sum((v - sum(xb) / n) ** 2 for v in xb) / (n - 1)
+        se = math.sqrt((va + vb) / n)
+        lo, hi = eff - z * se, eff + z * se
+        verdict = "direction" if lo > 0 else "against" if hi < 0 else "inconclusive"
+        return {
+            "n_a": n,
+            "n_b": n,
+            "verdict": verdict,
+            "effect": eff,
+            "ci_low": lo,
+            "ci_high": hi,
+            "unit": "day",
+            "summary": "x → " + verdict,
+        }
+
+    return fake
+
+
+def test_nightly_peeking_at_a_null_effect_stays_near_the_nominal_error(monkeypatch) -> None:
+    """A question re-tested every night for 120 days per arm, true effect zero.
+
+    The all-days verdict is taken as favourable every night (the worst case: a
+    lead selected because it looked good). Looking at the new days nightly with
+    a fixed 1.96 reaches "direction" in about one run in six; two planned looks
+    keep it near the nominal 2.5%.
+    """
+    rng = random.Random(7)
+    visible = [0]
+    false_calls, runs = 0, 400
+    power = {"needed_per_arm": 100, "days_to_confirm": 1, "days_to_next_look": 1}
+    for _ in range(runs):
+        a = [rng.gauss(0, 1) for _ in range(120)]
+        b = [rng.gauss(0, 1) for _ in range(120)]
+        monkeypatch.setattr(research, "estimate", _fake_estimator(a, b, visible))
+        hit = False
+        for n in range(10, 121):
+            visible[0] = n
+            res = {
+                "verdict": "direction",
+                "unit": "day",
+                "summary": "x → direction",
+                "power": power,
+            }
+            out = research._confirm_on_new_days(None, {"unit": "day"}, res, date(2026, 1, 1))
+            hit = hit or out["verdict"] in research._FAVOURABLE
+        false_calls += hit
+    assert false_calls / runs < 0.06
+
+
+def test_hypotheses_report_power_on_current_data_not_the_proposal_copy(conn) -> None:
+    _seed(conn, effect_pct=-10)
+    research.register(conn, "p", "q", SPEC, None, "test")
+    conn.execute(
+        "UPDATE research_hypotheses SET power = '{\"needed_per_arm\": 1}', status = 'active' WHERE slug = 'p'"
+    )
+    h = next(x for x in research.hypotheses(conn) if x["slug"] == "p")
+    assert h["power_at_proposal"] == {"needed_per_arm": 1}
+    assert h["power"]["needed_per_arm"] > 1 and not h["power_stale"]
+    assert "min_effect" in h["power"]["needed_for"]
