@@ -145,7 +145,14 @@ def check_e1rm_paths_agree(conn: duckdb.DuckDBPyConnection) -> Finding:
 
 
 def check_volume_credit_sums(conn: duckdb.DuckDBPyConnection) -> Finding:
-    """Per-muscle weekly volume must equal a hand-rolled sum over the raw sets."""
+    """Per-muscle weekly volume must equal a hand-rolled sum over the raw sets.
+
+    The raw side credits a primary AND a secondary muscle 1.0 a set: the vault's 1:1
+    synergist ratio (volume-landmarks note), written here as a literal so the check
+    does not import the constant it verifies (invariant 18). It deliberately ignores
+    the stored ``exercise_muscle.credit`` column, which still holds the retired 0.5/0.3
+    and made this check fail on any week with secondary volume since 2026-08-21.
+    """
     from shc.training.load_mechanics import set_weight_sql
     from shc.training.volume import weekly_muscle_volume
     from shc.training.mesocycle import _iso_week_start
@@ -156,10 +163,11 @@ def check_volume_credit_sums(conn: duckdb.DuckDBPyConnection) -> Finding:
         m: round(float(v), 2)
         for m, v in conn.execute(
             f"""
-            SELECT em.muscle, SUM(em.credit * {set_weight_sql()})
+            SELECT em.muscle, SUM(1.0 * {set_weight_sql()})
             FROM workout_sets_dedup ws
             JOIN exercise_muscle em ON em.exercise_name = ws.exercise
-            WHERE ws.is_warmup = FALSE AND ws.weight_kg > 0 AND ws.reps BETWEEN 5 AND 30
+            WHERE em.role IN ('primary', 'secondary')
+              AND ws.is_warmup = FALSE AND ws.weight_kg > 0 AND ws.reps BETWEEN 5 AND 30
               AND (ws.rpe IS NULL OR ws.rpe >= 6.0)
               AND ws.started_at::DATE >= ? AND ws.started_at::DATE < ? + 7
             GROUP BY em.muscle
