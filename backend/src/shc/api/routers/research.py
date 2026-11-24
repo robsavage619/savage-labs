@@ -45,6 +45,9 @@ class NoteIn(BaseModel):
     ref: str | None = None
 
 
+# Read routes are plain `def` so FastAPI runs them in its threadpool: as `async def`
+# they did synchronous DuckDB work on the event loop, and one slow /features call
+# (about 9 s) held every other Lab request behind it.
 def _read(fn, *args):
     conn = get_read_conn()
     try:
@@ -54,23 +57,23 @@ def _read(fn, *args):
 
 
 @router.get("/research/features")
-async def features() -> list[dict]:
+def features() -> list[dict]:
     """What the team can study: every feature, its coverage, and whether it's gone quiet."""
     return _read(research.dictionary)
 
 
 @router.get("/research/beliefs")
-async def list_beliefs() -> list[dict]:
+def list_beliefs() -> list[dict]:
     return _read(research.beliefs)
 
 
 @router.get("/research/hypotheses")
-async def list_hypotheses() -> list[dict]:
+def list_hypotheses() -> list[dict]:
     return _read(research.hypotheses)
 
 
 @router.get("/research/notebook")
-async def list_notebook(limit: int = Query(50, ge=1, le=500)) -> list[dict]:
+def list_notebook(limit: int = Query(50, ge=1, le=500)) -> list[dict]:
     return _read(research.notebook, limit)
 
 
@@ -146,7 +149,7 @@ def _target(metric: str) -> str:
 
 
 @router.get("/research/forecast")
-async def forecast(metric: str = _METRIC) -> dict:
+def forecast(metric: str = _METRIC) -> dict:
     """The lab's skill at predicting a target (next-morning HRV by default), backtest and live."""
     m = _target(metric)
     return _read(lambda c: research.forecast_view(c, metric=m))
@@ -185,13 +188,13 @@ class ScoreIn(BaseModel):
 
 
 @router.get("/research/brief")
-async def research_brief() -> dict:
+def research_brief() -> dict:
     """The analyst's starting point: beliefs, questions, notebook, forecast misses, data."""
     return _read(research.brief)
 
 
 @router.get("/research/review-queue")
-async def review_queue() -> list[dict]:
+def review_queue() -> list[dict]:
     """Proposed questions for the methodologist, without the analyst's reasoning."""
     return _read(research.review_queue)
 
@@ -234,14 +237,14 @@ async def review(slug: str, body: ReviewIn) -> dict:
 
 
 @router.get("/research/forecast/preview")
-async def forecast_preview(metric: str = _METRIC) -> dict:
+def forecast_preview(metric: str = _METRIC) -> dict:
     """The next bet on a target and the beliefs behind it (computed, not logged)."""
     m = _target(metric)
     return _read(lambda c: research.forecast_preview(c, metric=m))
 
 
 @router.get("/research/misses")
-async def misses(metric: str = Query(research.FORECAST_METRIC)) -> dict:
+def misses(metric: str = Query(research.FORECAST_METRIC)) -> dict:
     """Where the latest backtest of a target went most wrong: the analysts' agenda."""
     conn = get_read_conn()
     try:

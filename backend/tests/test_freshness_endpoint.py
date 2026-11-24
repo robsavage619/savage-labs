@@ -46,11 +46,32 @@ def test_apple_health_is_judged_by_arrival_not_by_its_day_start_stamp(
 
 
 def test_a_missing_vault_is_reported_and_reaches_the_planner_context(
-    conn: duckdb.DuckDBPyConnection, monkeypatch
+    conn: duckdb.DuckDBPyConnection, monkeypatch, tmp_path
 ) -> None:
     from shc.ai import vault
+    from shc.config import settings
 
+    monkeypatch.setattr(settings, "vault_path", tmp_path / "no-vault")
     monkeypatch.setattr(vault, "_get_index", lambda: None)
     row = next(s for s in freshness(conn, NOW) if s["key"] == "vault")
     assert row["state"] == "missing" and row["notes"] == 0
     assert vault.vault_context() == vault.VAULT_UNAVAILABLE_NOTICE
+
+
+def test_the_vault_row_counts_notes_without_building_the_index(
+    conn: duckdb.DuckDBPyConnection, monkeypatch, tmp_path
+) -> None:
+    from shc.ai import vault
+    from shc.config import settings
+
+    (tmp_path / "wiki").mkdir()
+    for name in ("a.md", "b.md"):
+        (tmp_path / "wiki" / name).write_text("# note\n")
+    monkeypatch.setattr(settings, "vault_path", tmp_path)
+
+    def _no_build():
+        raise AssertionError("the freshness row built the vault index")
+
+    monkeypatch.setattr(vault, "_get_index", _no_build)
+    row = next(s for s in freshness(conn, NOW) if s["key"] == "vault")
+    assert row["state"] == "ok" and row["notes"] == 2

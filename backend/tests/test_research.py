@@ -803,3 +803,17 @@ def test_hypotheses_read_the_last_run_power_without_rescoring(conn, monkeypatch)
     monkeypatch.setattr(research, "estimate", _no_rescore)
     h = next(x for x in research.hypotheses(conn) if x["slug"] == "p")
     assert h["power"]["needed_per_arm"] > 1 and not h["power_stale"]
+
+
+def test_research_read_routes_run_off_the_event_loop() -> None:
+    """An `async def` GET doing sync DuckDB work blocks every other request behind it."""
+    import inspect
+
+    from shc.api.routers.research import router
+
+    blocking = [
+        r.path
+        for r in router.routes
+        if "GET" in getattr(r, "methods", set()) and inspect.iscoroutinefunction(r.endpoint)
+    ]
+    assert blocking == []

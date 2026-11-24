@@ -961,9 +961,14 @@ VAULT_UNAVAILABLE_NOTICE = (
 
 
 def vault_note_count() -> int:
-    """Number of notes the live index can read; 0 when the vault is missing or empty."""
-    idx = _get_index()
-    return len(idx.all_notes()) if idx is not None else 0
+    """Number of note files in the vault wiki; 0 when the vault is missing or empty.
+
+    Counts files instead of building the index: /api/freshness polls this from
+    every page, and building the index (embeddings included) took 78 s on the
+    host after a restart and stalled the API while it ran.
+    """
+    wiki = settings.vault_path / "wiki"
+    return sum(1 for _ in wiki.glob("*.md")) if wiki.is_dir() else 0
 
 
 def valid_citation_filenames() -> set[str]:
