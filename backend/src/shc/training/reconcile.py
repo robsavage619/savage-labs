@@ -280,6 +280,25 @@ def _main_select_at(sql: str) -> int | None:
     return None
 
 
+def _guarded_rows(conn: duckdb.DuckDBPyConnection, sql: str) -> tuple[list[tuple], str | None]:
+    """Run stored lab SQL under the lab's own read-only guard, or say why it was refused.
+
+    Stored text is data, not trusted code: this is the same path the lab uses for
+    every custom measurement (parser and table allowlist, a rolled-back
+    transaction, a row cap and a timeout). The guard is not the code under check,
+    so importing it keeps the check independent.
+    """
+    from shc.research_team import FEATURE_ROW_CAP, QUERY_TIMEOUT_S, TeamError, _execute
+
+    try:
+        _cols, rows, truncated = _execute(conn, sql, FEATURE_ROW_CAP, QUERY_TIMEOUT_S)
+    except TeamError as exc:
+        return [], str(exc)
+    if truncated:
+        return [], f"returns more than {FEATURE_ROW_CAP} rows"
+    return rows, None
+
+
 def check_lab_strength_outcome_matches_engine_e1rm(
     conn: duckdb.DuckDBPyConnection, today: date | None = None, days: int = 120
 ) -> Finding:
@@ -357,10 +376,8 @@ def check_lab_strength_outcome_matches_engine_e1rm(
     cut = _main_select_at(stored)
     inner: list[tuple] | None = None
     if cut is not None:
-        try:
-            inner = conn.execute(stored[:cut] + "SELECT ex, day, e FROM d").fetchall()
-        except duckdb.Error:
-            inner = None
+        got, err = _guarded_rows(conn, stored[:cut] + "SELECT ex, day, e FROM d")
+        inner = None if err else got
     if inner is None:
         layers.append("final series only (inner e1RM not separable)")
     else:
@@ -374,13 +391,14 @@ def check_lab_strength_outcome_matches_engine_e1rm(
                 b_s = "absent" if b is None else f"{b:.2f}kg"
                 lift_bad.append(f"{k[1]} {k[0]}: lab e1RM {a_s}, engine {b_s}")
 
-    lab_series = {
-        d: float(v)
-        for d, v in conn.execute(
-            f"SELECT * FROM ({stored}) WHERE day BETWEEN ? AND ?", [start, end]
-        ).fetchall()
-        if v is not None
-    }
+    final, err = _guarded_rows(
+        conn,
+        f"SELECT * FROM ({stored}) WHERE day BETWEEN DATE '{start.isoformat()}' "
+        f"AND DATE '{end.isoformat()}'",
+    )
+    if err:
+        return Finding(name, False, f"stored SQL refused by the lab's read-only guard: {err}")
+    lab_series = {d: float(v) for d, v in final if v is not None}
     for d in sorted(set(lab_series) | set(expected)):
         a, b = lab_series.get(d), expected.get(d)
         if a is None or b is None or abs(a - b) > tol_pct:

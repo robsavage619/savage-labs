@@ -90,6 +90,14 @@ def test_unapproved_feature_is_reported_not_passed(conn, history) -> None:
     assert not f.ok and "not approved" in f.detail
 
 
+def test_stored_sql_runs_under_the_read_only_guard(conn, history) -> None:
+    before = conn.execute("SELECT count(*) FROM workout_sets_dedup").fetchone()
+    _store(conn, "DELETE FROM workout_sets_dedup")
+    f = check_lab_strength_outcome_matches_engine_e1rm(conn, today=TODAY)
+    assert not f.ok and "read-only guard" in f.detail
+    assert conn.execute("SELECT count(*) FROM workout_sets_dedup").fetchone() == before
+
+
 def test_registered_and_independent_of_the_research_module(conn) -> None:
     import inspect
 
