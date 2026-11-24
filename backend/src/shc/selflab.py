@@ -577,9 +577,10 @@ def session_adherence(text: str, assigned: str, tag_a: str, tag_b: str) -> bool 
     """Did the session follow its assignment, per the tag in its note?
 
     None when no tag (or both) is present, False when the tag names the other arm.
-    Tags match whole words, case-insensitively, so ``caf`` never matches ``nocaf``.
+    Tags match whole words, case-insensitively, so ``caf`` never matches ``nocaf``,
+    ``no-caf`` or ``café`` (a hyphen or a non-ASCII letter belongs to the word).
     """
-    words = set(re.findall(r"[a-z0-9_]+", text.lower()))
+    words = set(re.findall(r"[\w-]+", text.casefold()))
     has_a, has_b = tag_a in words, tag_b in words
     if has_a == has_b:
         return None

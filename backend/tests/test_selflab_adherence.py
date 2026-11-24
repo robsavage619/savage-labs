@@ -122,3 +122,12 @@ def test_per_session_requires_two_distinct_tags(conn) -> None:
         selflab.preregister(conn, **kw)
     with pytest.raises(ValueError, match="distinct"):
         selflab.preregister(conn, **kw, adherence_tag_a="caf", adherence_tag_b="CAF")
+
+
+def test_tag_never_matches_inside_a_longer_or_non_ascii_word() -> None:
+    f = selflab.session_adherence
+    # "café" must not read as the tag "caf"; "no-caf" is not the tag "caf".
+    assert f("had a café first", "A", "nocaf", "caf") is None
+    assert f("no-caf day", "A", "nocaf", "caf") is None
+    assert f("Caf, felt great.", "B", "nocaf", "caf") is True
+    assert f("NOCAF", "B", "nocaf", "caf") is False
