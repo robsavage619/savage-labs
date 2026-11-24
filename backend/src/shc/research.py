@@ -1511,6 +1511,88 @@ def notebook(conn: duckdb.DuckDBPyConnection, limit: int = 50) -> list[dict]:
     ]
 
 
+_DECISIVE = (*_FAVOURABLE, "against", "ruled_out")
+_STANDING = ("stands", "qualified")
+
+
+def governed_results(conn: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Lab results allowed to reach the planner and the briefing.
+
+    A question qualifies when it is active or retired, its latest verdict is
+    decisive on post-registration days (never ``retrospective``), and its
+    latest devil's-advocate challenge at that verdict is not ``doubtful``.
+    A favourable verdict also needs one that ``stands`` or is ``qualified``;
+    a dry-run challenge counts as none.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        One dict per qualifying question: slug, question, verdict, effect,
+        ci_low, ci_high, unit and severity (None when unchallenged).
+    """
+    latest = conn.execute(
+        "SELECT h.slug, h.question, h.spec, arg_max(struct_pack(verdict := r.verdict, "
+        "effect := r.effect, ci_low := r.ci_low, ci_high := r.ci_high), r.run_at) "
+        "FROM research_hypotheses h JOIN research_results r ON r.hypothesis_id = h.id "
+        "WHERE h.status IN ('active', 'retired') GROUP BY h.slug, h.question, h.spec, h.created_at "
+        "ORDER BY h.created_at"
+    ).fetchall()
+    challenges = conn.execute(
+        "SELECT title, body FROM research_notebook WHERE author = 'devils-advocate' "
+        "ORDER BY written_at DESC"
+    ).fetchall()
+    out = []
+    for slug, question, spec_json, r in latest:
+        verdict = r["verdict"]
+        if verdict not in _DECISIVE:
+            continue
+        severity = next(
+            (
+                title.split(":", 1)[0]
+                for title, body in challenges
+                if title.endswith(f": {slug} at {verdict}")
+                and title.split(":", 1)[0] in (*_STANDING, "doubtful")
+                and not (body or "").startswith("DRY RUN.")
+            ),
+            None,
+        )
+        if severity == "doubtful" or (verdict in _FAVOURABLE and severity not in _STANDING):
+            continue
+        out.append(
+            {
+                "slug": slug,
+                "question": question,
+                "verdict": verdict,
+                "effect": r["effect"],
+                "ci_low": r["ci_low"],
+                "ci_high": r["ci_high"],
+                "unit": _unit_of(json.loads(spec_json)["outcome"]),
+                "severity": severity,
+            }
+        )
+    return out
+
+
+def lab_results_section(conn: duckdb.DuckDBPyConnection) -> str:
+    """The governed lab results as a context block, or "" when none qualify."""
+    rows = governed_results(conn)
+    if not rows:
+        return ""
+    lines = [
+        "## LAB RESULTS (pre-registered, challenged)",
+        "Personal observational results: weigh them alongside population evidence, not over it.",
+    ]
+    for g in rows:
+        unit = f" {g['unit']}" if g["unit"] else ""
+        lines.append(
+            f"- {g['question']} → {g['verdict'].replace('_', ' ')}: {g['effect']:+.2f}{unit} "
+            f"(95% CI {g['ci_low']:+.2f} to {g['ci_high']:+.2f}); "
+            f"challenge: {g['severity'] or 'none (not required for this verdict)'}"
+        )
+    return "\n".join(lines)
+
+
 # ── Forecaster ──────────────────────────────────────────────────────────────
 
 FORECAST_METRIC = "lnhrv_dev_pct"

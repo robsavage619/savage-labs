@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import random
 from datetime import date, timedelta
@@ -492,6 +493,47 @@ def test_retrospective_questions_that_cannot_confirm_in_time_retire(conn) -> Non
     assert "cannot confirm" in research._dead_reason(conn, SPEC, retro(None), today=TODAY)
     assert research._dead_reason(conn, SPEC, retro(limit), today=TODAY) is None
     assert research._dead_reason(conn, SPEC, retro(30), today=TODAY) is None
+
+
+def _decided(conn, slug: str, verdict: str, status: str = "active") -> None:
+    conn.execute(
+        "INSERT INTO research_hypotheses (id, slug, question, spec, spec_hash, author, status) "
+        "VALUES (?, ?, ?, ?, ?, 'test', ?)",
+        [f"h-{slug}", slug, f"Does {slug} hold?", json.dumps(SPEC), slug, status],
+    )
+    conn.execute(
+        "INSERT INTO research_results (id, hypothesis_id, effect, ci_low, ci_high, verdict) "
+        "VALUES (?, ?, -6.0, -9.0, -3.0, ?)",
+        [f"r-{slug}", f"h-{slug}", verdict],
+    )
+
+
+def _challenge(conn, slug: str, verdict: str, severity: str, body: str = "tested") -> None:
+    research.note(conn, "devils-advocate", "review", f"{severity}: {slug} at {verdict}", body)
+
+
+def test_only_decisive_challenged_results_reach_the_planner(conn) -> None:
+    assert research.lab_results_section(conn) == ""
+    _decided(conn, "kept", "supported", status="retired")
+    _challenge(conn, "kept", "supported", "qualified")
+    _decided(conn, "against-ok", "against")
+    _decided(conn, "retro", "retrospective")
+    _challenge(conn, "retro", "retrospective", "stands")
+    _decided(conn, "unchallenged", "supported")
+    _decided(conn, "doubted", "direction")
+    _challenge(conn, "doubted", "direction", "doubtful")
+    _decided(conn, "dry", "supported")
+    _challenge(conn, "dry", "supported", "stands", body="DRY RUN. nothing tested")
+    _decided(conn, "proposed", "supported", status="proposed")
+    _challenge(conn, "proposed", "supported", "stands")
+    assert [g["slug"] for g in research.governed_results(conn)] == ["kept", "against-ok"]
+    text = research.lab_results_section(conn)
+    assert text.startswith("## LAB RESULTS (pre-registered, challenged)")
+    assert "not over it" in text
+    assert "Does kept hold? → supported: -6.00" in text and "95% CI -9.00 to -3.00" in text
+    assert "challenge: qualified" in text
+    for slug in ("retro", "unchallenged", "doubted", "dry", "proposed"):
+        assert f"Does {slug} hold?" not in text
 
 
 def test_an_untested_belief_ranks_the_same_whatever_prior_its_proposer_wrote(conn) -> None:
