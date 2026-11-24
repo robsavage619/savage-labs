@@ -28,11 +28,29 @@ echo "agents: synced"
 rsync -a --chmod=u+rwx,go+rx deploy/run-job.sh "${host}:.config/shc/run-job.sh"
 echo "run-job.sh: installed"
 
-if [ "$force_jobs" -eq 1 ]; then jobs_flags=(-a); else jobs_flags=(-a --ignore-existing); fi
-rsync "${jobs_flags[@]}" --itemize-changes --exclude README.md deploy/jobs/ "${host}:.config/shc/jobs/"
-# The committed job files carry __HOME__ in place of the host's home directory.
-ssh "$host" 'cd ~/.config/shc/jobs && for f in *.md *.conf; do grep -q __HOME__ "$f" && sed "s#__HOME__#$HOME#g" "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done; true'
-echo "jobs: installed (force=$force_jobs; existing host files kept unless --force-jobs)"
+# The committed job files carry __HOME__ in place of the host's home directory; fill it
+# in here so the copy and the host can be compared byte for byte.
+remote_home=$(ssh "$host" 'printf %s "$HOME"')
+jobs_src=$(mktemp -d "${TMPDIR:-/tmp}/shc-jobs.XXXXXX") || { echo "jobs: could not make a temp dir, nothing installed" >&2; exit 1; }
+[ -d "$jobs_src" ] || { echo "jobs: temp dir missing, nothing installed" >&2; exit 1; }
+trap 'rm -rf "$jobs_src"' EXIT
+for f in deploy/jobs/*; do
+  [ "${f:t}" = README.md ] && continue
+  sed "s#__HOME__#${remote_home}#g" "$f" > "$jobs_src/${f:t}"
+done
+# Host files that exist and differ from the repo: drift someone must resolve, never silence.
+drift=$(rsync -anc --existing --out-format='%n' "$jobs_src/" "${host}:.config/shc/jobs/" | grep -v '/$' || true)
+if [ "$force_jobs" -eq 1 ]; then
+  rsync -ac "$jobs_src/" "${host}:.config/shc/jobs/"
+  echo "jobs: installed, host copies overwritten (--force-jobs)${drift:+: ${drift//$'\n'/, }}"
+else
+  rsync -a --ignore-existing "$jobs_src/" "${host}:.config/shc/jobs/"
+  if [ -n "$drift" ]; then
+    echo "jobs: WARNING host differs from the repo for ${drift//$'\n'/, }; kept the host copy. Diff it, then copy it back into deploy/jobs or rerun with --force-jobs"
+  else
+    echo "jobs: in sync with the repo"
+  fi
+fi
 
 copy() {  # copy <env value> <label> <remote dir>
   if [ -z "${1:-}" ]; then echo "$2: skipped (variable not set)"; return; fi
