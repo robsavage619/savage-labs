@@ -126,3 +126,17 @@ def test_per_session_needs_an_exercise_outcome(conn) -> None:
             adherence_tag_a="nocaf",
             adherence_tag_b="caf",
         )
+
+
+def test_planner_words_per_session_arm_as_conditional_on_the_lift() -> None:
+    from shc.ai.workout_planner import trial_assignment_lines
+
+    per_session = {
+        "design": "randomized_per_session", "hypothesis": "H1.", "exercise": LIFT,
+        "arm": "B", "condition": "cond-b",
+    }
+    daily = {"design": "randomized_alternating", "hypothesis": "H2.", "arm": "A", "condition": "c-a"}
+    text = "\n".join(trial_assignment_lines([per_session, daily]))
+    assert f"ONLY IF you program **{LIFT}**" in text and "arm B" in text
+    assert "H2. Today is arm A" in text
+    assert trial_assignment_lines([]) == []

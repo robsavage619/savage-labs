@@ -261,6 +261,29 @@ def _cut_tracking_lines(conn: Any, today: date) -> list[str]:
     return lines
 
 
+def trial_assignment_lines(assignments: list[dict]) -> list[str]:
+    """Context lines for today's randomized assignments.
+
+    A per-session study's arm belongs to its lift's next occurrence, so it is
+    worded as conditional: it applies only if that lift is programmed today, and
+    must not be stated (or force the lift into the plan) otherwise.
+    """
+    if not assignments:
+        return []
+    out = ["\n## TODAY'S TRIAL ASSIGNMENTS (randomized n-of-1 — state these in the plan notes)"]
+    for a in assignments:
+        if a.get("design") == "randomized_per_session":
+            out.append(
+                f"- {a['hypothesis']} ONLY IF you program **{a['exercise']}** today: "
+                f"arm {a['arm']}, **{a['condition']}** — state it in that lift's notes. "
+                "If it is not programmed today, say nothing about this study and do not "
+                "add the lift to satisfy it."
+            )
+        else:
+            out.append(f"- {a['hypothesis']} Today is arm {a['arm']}: **{a['condition']}**.")
+    return out
+
+
 def build_training_context(conn, planning_date: date | None = None) -> tuple[str, date]:
     """Build the per-request dynamic context string for plan generation.
 
@@ -551,12 +574,7 @@ def build_training_context(conn, planning_date: date | None = None) -> tuple[str
     except Exception as _exc:  # noqa: BLE001 — assignments are optional guidance
         log.debug("trial assignments unavailable: %s", _exc)
         _assign = []
-    if _assign:
-        lines.append(
-            "\n## TODAY'S TRIAL ASSIGNMENTS (randomized n-of-1 — state these in the plan notes)"
-        )
-        for _a in _assign:
-            lines.append(f"- {_a['hypothesis']} Today is arm {_a['arm']}: **{_a['condition']}**.")
+    lines.extend(trial_assignment_lines(_assign))
 
     # Confirmed n-of-1 experiment priors — CAUSAL, self-tested effects the plan may
     # lean on. Read-only guidance (effect + CI shown so the model can weigh it), and
