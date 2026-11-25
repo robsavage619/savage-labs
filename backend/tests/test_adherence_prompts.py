@@ -7,6 +7,7 @@ import json
 from datetime import date, timedelta
 
 import pytest
+from conftest import seed_outcome_history
 
 from shc import adherence_prompts as ap
 from shc import notify, selflab
@@ -14,6 +15,7 @@ from shc.config import settings
 
 
 def _reg(conn, started: date) -> str:
+    seed_outcome_history(conn, "hrv_next_morning")
     return selflab.preregister(
         conn,
         slug="bed-time",
