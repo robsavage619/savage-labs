@@ -114,6 +114,8 @@ async def preregister_experiment(body: PreregisterIn) -> dict:
 async def log_experiment_day(slug: str, body: LogDayIn) -> dict:
     """Record adherence for a day; the assigned arm is computed, not chosen."""
     day = body.day or date.today()
+    if day > date.today():
+        raise HTTPException(status_code=422, detail="cannot log adherence for a future day")
     async with write_ctx() as conn:
         exp = selflab.load(conn, slug)
         if exp is None:
