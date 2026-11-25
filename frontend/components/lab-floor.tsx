@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { api, type FeatureInfo, type NotebookEntry, type ResearchBelief, type ResearchHypothesis } from "@/lib/api";
+import { api, type LabLane, type FeatureInfo, type NotebookEntry, type ResearchBelief, type ResearchHypothesis } from "@/lib/api";
 import { Fill, useWidth } from "@/components/kit";
 
 /**
@@ -696,5 +696,118 @@ export function Coverage() {
       ))}
       <p className="lf-foot">Every stream the team can study, from the first reading to the latest. Copper streams have gone quiet; questions on them can&apos;t run until they resume.</p>
     </div>
+  );
+}
+
+// ── Lanes: what is running at each cadence ──────────────────────────────────
+
+const LANE_TITLE = { daily: "Daily", weekly: "Weekly", monthly: "Monthly" } as const;
+const STATE_LABEL: Record<string, string> = { running: "Running", queued: "Queued", idle: "Idle", not_started: "Not started", closed: "Window closed" };
+const count = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+function LaneBody({ lane }: { lane: LabLane }) {
+  const r = lane.running;
+  if (lane.block) {
+    const b = lane.block;
+    const plan = Object.entries(b.week_plan).filter(([k]) => k === "left" || k === "right");
+    return (
+      <>
+        <p className="lf-lane-h">Biceps volume, left against right</p>
+        <p className="lf-lane-p">
+          {b.state === "not_started"
+            ? `Not started. Begins ${short(b.starts_on)} (${count(b.days_to_start, "day")}).`
+            : b.state === "running"
+              ? `Running. The single look is ${short(b.look_date)} (${count(b.days_to_look, "day")}).`
+              : `Window closed ${short(b.look_date)}.`}
+        </p>
+        <p className="lf-lane-p">
+          Week of {short(b.week_plan.week)}: {b.week_plan.note}.{" "}
+          {plan.map(([arm, v]) => `${arm} ${v}`).join(" · ")}
+        </p>
+        <p className="lf-lane-p lf-lane-dim">
+          Verdict: <b>{b.verdict.replace("_", " ")}</b>. {b.reason}.
+        </p>
+        {b.state !== "not_started" && (
+          <table className="lf-lane-tab">
+            <thead><tr><th>Week</th><th>Phase</th><th>Left sets</th><th>Right sets</th></tr></thead>
+            <tbody>
+              {b.weekly.map((w) => (
+                <tr key={w.week}><td>{short(w.week)}</td><td>{w.phase}</td><td>{w.left_sets}</td><td>{w.right_sets}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      {r ? (
+        <>
+          <p className="lf-lane-h">{r.title ?? r.slug}</p>
+          <p className="lf-lane-p">{r.hypothesis}</p>
+          <p className="lf-lane-p">
+            Today: {r.today ? <b>arm {r.today.arm}, {r.today.condition}</b> : "no assignment (its lift is not up today, or none is due)"}
+          </p>
+          <p className="lf-lane-p">
+            Adherence: {r.adherence.followed} followed, {r.adherence.not_followed} not,{" "}
+            {r.adherence.unanswered} unanswered, of {count(r.adherence.logged, "day")} logged. Unanswered days are left out of the score.
+          </p>
+          <p className="lf-lane-p">
+            {r.needed_per_arm != null && r.have
+              ? `Followed so far: A ${r.have.A}, B ${r.have.B} of ${r.needed_per_arm} needed per arm. `
+              : "Not enough history to size this study yet. "}
+            {r.days_to_look != null && r.look_date
+              ? `Look in about ${count(r.days_to_look, "day")} (${short(r.look_date)}).`
+              : r.days_to_look === null && r.needed_per_arm != null
+                ? "Look date cannot be estimated: no recent followed days."
+                : ""}
+          </p>
+        </>
+      ) : (
+        <p className="lf-lane-p lf-lane-dim">
+          {lane.state === "queued" ? `Lane free. The next approved study starts on the next boundary (${lane.boundary}).` : "Nothing running and nothing approved."}
+        </p>
+      )}
+      {lane.queue.length > 0 && (
+        <div className="lf-lane-q">
+          <span className="lf-label">Approved, waiting</span>
+          <ol>
+            {lane.queue.map((q) => (
+              <li key={q.slug}><b>{q.slug}</b> <span>{q.hypothesis}</span></li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** The three cadences, each with its one running study and the approved queue. */
+export function LaneBoard() {
+  const q = useQuery({ queryKey: ["lab-lanes"], queryFn: api.labLanes, staleTime: STALE });
+  if (q.isError) return <p className="lf-quiet-outcomes" role="alert"><b>Lane view failed to load:</b> {String(q.error)}</p>;
+  if (!q.data) return <Skel h={220} />;
+  return (
+    <>
+      <div className="lf-lanes">
+        {q.data.lanes.map((lane) => {
+          const state = lane.block ? lane.block.state : lane.state;
+          return (
+            <article key={lane.lane} className={`lf-lane lf-lane-${state}`}>
+              <header>
+                <span className="lf-kicker">{LANE_TITLE[lane.lane]}</span>
+                <em>{STATE_LABEL[state] ?? state}</em>
+              </header>
+              <span className="lf-label">Unit: {lane.unit}</span>
+              <LaneBody lane={lane} />
+            </article>
+          );
+        })}
+      </div>
+      {q.data.notes.map((n) => (
+        <p key={n} className="lf-quiet-outcomes" role="status">{n}</p>
+      ))}
+    </>
   );
 }

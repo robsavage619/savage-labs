@@ -63,11 +63,17 @@ async def _score_experiments() -> None:
     Scoring had no scheduled caller, so results sat unscored from 2026-09-04
     until a manual rescore on 2026-11-09 while their arms kept filling.
     """
-    from shc import selflab
+    from shc import lab_queue, selflab
     from shc.db.schema import write_ctx
 
     async with write_ctx() as conn:
+        promoted = lab_queue.promote_queue(conn)
         results = selflab.refresh_and_score_all(conn)
+        idle = lab_queue.idle_notes(conn)
+    for p in promoted:
+        log.info("lab queue: %s", p)
+    for note in idle:
+        log.info("lab queue: %s", note)
     verdicts = [f"{r['experiment_id']}={r['verdict']}" for r in results if "verdict" in r]
     log.info("nightly experiment rescore: %s", ", ".join(verdicts) or "no active studies")
 

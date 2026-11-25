@@ -45,6 +45,8 @@ class PreregisterIn(BaseModel):
     actuation_direction: str | None = None
     actuation_magnitude_pct: float | None = None
     actuation_cap_pct: float | None = None
+    # Approved but not started: waits for its lane (see shc.lab_queue).
+    queued: bool = False
 
 
 class LogDayIn(BaseModel):
@@ -104,6 +106,7 @@ async def preregister_experiment(body: PreregisterIn) -> dict:
                 actuation_direction=body.actuation_direction,
                 actuation_magnitude_pct=body.actuation_magnitude_pct,
                 actuation_cap_pct=body.actuation_cap_pct,
+                queued=body.queued,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

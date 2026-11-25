@@ -775,6 +775,50 @@ export interface WorkoutPlan {
   vault_insights: string[];
 }
 
+export interface LabLaneStudy {
+  slug: string;
+  title: string | null;
+  hypothesis: string;
+  outcome_metric: string;
+  started_on: string;
+  today: { arm: string; condition: string } | null;
+  adherence: { logged: number; followed: number; not_followed: number; unanswered: number };
+  needed_per_arm: number | null;
+  have: { A: number; B: number } | null;
+  days_to_look: number | null;
+  look_date: string | null;
+}
+
+export interface LabLaneBlock {
+  state: "not_started" | "running" | "closed";
+  slug: string;
+  starts_on: string;
+  look_date: string;
+  days_to_look: number;
+  days_to_start: number;
+  verdict: string;
+  reason: string;
+  week_plan: { week: string; phase: string; note: string } & Record<string, string>;
+  weekly: { week: string; phase: string; left_sets: number; right_sets: number; sessions_with_both_arms: number }[];
+  delivery: { high_arm: string };
+}
+
+export interface LabLane {
+  lane: "daily" | "weekly" | "monthly";
+  unit: string;
+  state: "running" | "queued" | "idle" | "monthly";
+  boundary?: string;
+  running?: LabLaneStudy | null;
+  block?: LabLaneBlock;
+  queue: { slug: string; hypothesis: string; outcome_metric: string }[];
+}
+
+export interface LabLanes {
+  today: string;
+  lanes: LabLane[];
+  notes: string[];
+}
+
 export interface ExperimentArm {
   days: number;
   adhered: number;
@@ -1481,6 +1525,7 @@ export const api = {
     }>("/api/clinical-research/insights"),
   experiments: () => get<Experiment[]>("/api/experiments"),
   robModel: () => get<RobModel>("/api/model"),
+  labLanes: () => get<LabLanes>("/api/lab/lanes"),
   researchBeliefs: () => get<ResearchBelief[]>("/api/research/beliefs"),
   researchHypotheses: () => get<ResearchHypothesis[]>("/api/research/hypotheses"),
   researchForecast: (metric?: string) =>

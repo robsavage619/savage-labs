@@ -269,8 +269,13 @@ def preregister(
     actuation_cap_pct: float | None = None,
     adherence_tag_a: str | None = None,
     adherence_tag_b: str | None = None,
+    queued: bool = False,
 ) -> str:
     """Register a study before any data is collected. Returns the experiment id.
+
+    ``queued=True`` stores it as ``approved``: it waits for its lane (see
+    `shc.lab_queue`) and starts, with its own start date, when the lane is free.
+    A study registered active into a lane that already has one is refused.
 
     ``min_effect`` is the smallest effect worth acting on (in outcome units) and
     is REQUIRED, not optional: it is what makes a REFUTED verdict possible at
@@ -356,6 +361,15 @@ def preregister(
     _check_answerable(
         conn, outcome_metric=outcome_metric, min_effect=min_effect, design=design, slug=slug
     )
+    if design in _RANDOMIZED and not queued:
+        busy = conn.execute(
+            "SELECT slug FROM experiments WHERE status = 'active' AND design = ?", [design]
+        ).fetchone()
+        if busy:
+            raise ValueError(
+                f"the {design} lane already runs {busy[0]!r}: one active study per lane. "
+                "Register this one with queued=True to start when the lane frees"
+            )
     started = started_on or date.today()
     conn.execute(
         """
@@ -364,8 +378,8 @@ def preregister(
              outcome_direction, design, min_per_arm, min_effect, washout_hours, started_on,
              planned_end, notes, actuation_target_kind, actuation_target_key,
              actuation_direction, actuation_magnitude_pct, actuation_cap_pct, autolog_from,
-             adherence_tag_a, adherence_tag_b)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             adherence_tag_a, adherence_tag_b, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             slug, hypothesis, manipulated, condition_a, condition_b, outcome_metric,
@@ -374,8 +388,8 @@ def preregister(
             actuation_target_kind, actuation_target_key, actuation_direction,
             actuation_magnitude_pct, actuation_cap_pct,
             # A new randomized study's assignment is in the plan from day one.
-            started.isoformat() if design in _RANDOMIZED else None,
-            tag_a, tag_b,
+            started.isoformat() if design in _RANDOMIZED and not queued else None,
+            tag_a, tag_b, "approved" if queued else "active",
         ],
     )
     row = conn.execute("SELECT id FROM experiments WHERE slug = ?", [slug]).fetchone()
