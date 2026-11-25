@@ -120,6 +120,34 @@ async def _reconcile_check() -> None:
     )
 
 
+async def _retest_reminder() -> None:
+    """Weekly job: one phone alert naming the markers due a re-test.
+
+    Due means stale, drifting or out of range. The alert carries marker names
+    only, never a value or a target.
+    """
+    from shc.db.schema import get_read_conn
+    from shc.health_markers import names_due
+    from shc.notify import send_phone_alert
+
+    def _run() -> list[str]:
+        conn = get_read_conn()
+        try:
+            return names_due(conn)
+        finally:
+            conn.close()
+
+    due = await asyncio.to_thread(_run)
+    if not due:
+        log.info("weekly retest reminder: nothing due")
+        return
+    log.info("weekly retest reminder: %d markers due", len(due))
+    await send_phone_alert(
+        title="SHC re-test reminder",
+        message=f"{len(due)} to re-check: {', '.join(due)}. Details: /api/healthspan",
+    )
+
+
 async def _backup_db() -> None:
     """Nightly job: keep a week of verified database copies."""
     from shc.config import settings
@@ -443,6 +471,17 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         hour=5,
         minute=0,
         id="reconcile_check",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    # Weekly, after the reconcile check: names of markers due a re-test.
+    scheduler.add_job(
+        _retest_reminder,
+        "cron",
+        day_of_week="mon",
+        hour=8,
+        minute=0,
+        id="retest_reminder",
         replace_existing=True,
         misfire_grace_time=3600,
     )
