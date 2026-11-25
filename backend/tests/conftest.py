@@ -133,3 +133,31 @@ def seed(conn: duckdb.DuckDBPyConnection):
 @pytest.fixture
 def today() -> date:
     return date(2026, 5, 20)
+
+
+def seed_outcome_history(conn: duckdb.DuckDBPyConnection, metric: str, days: int = 40) -> None:
+    """Give a randomized study's outcome a short synthetic history (gate needs 10 days)."""
+    from datetime import timedelta
+
+    kind, _, arg = metric.partition(":")
+    for k in range(2, 2 + days):
+        day = date.today() - timedelta(days=k)
+        if kind == "top_set_e1rm":
+            wid = f"hist-{arg}-{k}"
+            conn.execute(
+                "INSERT OR IGNORE INTO workouts (id, source, started_at, kind, content_hash) "
+                "VALUES (?, 'hevy', ?, 'strength', ?)",
+                [wid, datetime.combine(day, datetime.min.time()), wid],
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO workout_sets (id, workout_id, set_idx, exercise, "
+                "weight_kg, reps, rpe, is_warmup, content_hash) "
+                "VALUES (?, ?, 0, ?, ?, 8, 8.0, FALSE, ?)",
+                [f"{wid}s", wid, arg, 60 + (k * 7) % 5, wid],
+            )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO recovery (id, source, date, hrv, score, content_hash) "
+                "VALUES (?, 'whoop', ?, ?, ?, ?)",
+                [f"hist-{k}", day.isoformat(), 60.0 + k % 3, 60.0 + k % 4, f"hist-{k}"],
+            )

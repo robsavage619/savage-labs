@@ -140,12 +140,11 @@ def _check_answerable(
         conn, slug=slug, outcome_metric=outcome_metric, min_effect=min_effect, design=design
     )
     if gate is None:
-        if design == "randomized_per_session":
-            raise ValueError(
-                f"{exercise or outcome_metric!r} has fewer than 10 sessions in the last 180 "
-                "days: its noise and pace cannot be sized, so the study cannot be vetted"
-            )
-        return
+        unit = "sessions" if design == "randomized_per_session" else "days with an outcome"
+        raise ValueError(
+            f"{exercise or outcome_metric!r} has fewer than 10 {unit} in the last 180 "
+            "days: its noise and pace cannot be sized, so the study cannot be vetted"
+        )
     if gate["false_fire_rate"] > 2 * _ALPHA:
         raise ValueError(
             f"design is miscalibrated: replayed on the outcome's own history with no "
@@ -719,8 +718,43 @@ def _next_morning(
 # structurally incapable of ever producing a result — they accumulated for
 # seven weeks and could never have scored no matter how faithfully logged.
 SUPPORTED_OUTCOME_METRICS = frozenset(
-    {"hrv_next_morning", "recovery_score_next_day", "top_set_e1rm"}
+    {
+        "hrv_next_morning",
+        "recovery_score_next_day",
+        "top_set_e1rm",
+        "deep_sleep_min",
+        "sleep_efficiency_pct",
+        "rhr_next_morning",
+    }
 )
+
+# Daily sleep outcomes: the same sleep columns the research feature store reads,
+# keyed by the morning the night ends on (`night_date`).
+_SLEEP_COLUMNS = {"deep_sleep_min": "sws_min", "sleep_efficiency_pct": "sleep_efficiency_pct"}
+
+
+def _sleep_after(
+    conn: duckdb.DuckDBPyConnection, column: str, day: date
+) -> float | None:
+    """A main-sleep column for the night that follows behaviour day `day`.
+
+    `night_date` is the morning you woke, so behaviour day D is night_date D+1.
+    """
+    row = conn.execute(
+        f"SELECT MAX({column}) FROM sleep WHERE night_date = ? "  # noqa: S608
+        "AND NOT COALESCE(is_nap, FALSE)",
+        [(day + timedelta(days=1)).isoformat()],
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
+def _rhr_after(conn: duckdb.DuckDBPyConnection, day: date) -> float | None:
+    """Resting HR the morning after `day`, as the feature store reads it (rhr > 0)."""
+    row = conn.execute(
+        "SELECT AVG(rhr) FROM recovery WHERE date = ? AND rhr > 0",
+        [(day + timedelta(days=1)).isoformat()],
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
 
 
 def _e1rm_delta_2wk(
@@ -760,6 +794,10 @@ def _outcome_value(conn: duckdb.DuckDBPyConnection, metric: str, day: date) -> f
         return _next_morning(conn, "score", day)
     if kind == "e1rm_delta_2wk" and arg:
         return _e1rm_delta_2wk(conn, arg, day)
+    if kind in _SLEEP_COLUMNS:
+        return _sleep_after(conn, _SLEEP_COLUMNS[kind], day)
+    if kind == "rhr_next_morning":
+        return _rhr_after(conn, day)
     raise ValueError(f"unsupported outcome metric {metric!r}")
 
 

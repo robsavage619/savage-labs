@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+from conftest import seed_outcome_history
+
 from shc import selflab
 from shc.training.autoregulation import weekly_prescription
 
@@ -41,6 +43,7 @@ def _prereg_with_actuation(conn, **over):
         actuation_cap_pct=10.0,
     )
     kw.update(over)
+    seed_outcome_history(conn, kw["outcome_metric"])
     return selflab.preregister(conn, **kw)
 
 
