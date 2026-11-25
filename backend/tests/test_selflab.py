@@ -25,7 +25,9 @@ def _recent_set(conn, exercise: str, days_ago: int = 3) -> None:
     )
 
 
-def _prereg(conn, *, seed: bool = True, **over):
+def _prereg(conn, *, seed: bool = True, portfolio: bool = False, **over):
+    """``portfolio=True`` activates the study even when its lane is busy (scoring tests
+    need several live studies; real registration enforces one per lane)."""
     kw = dict(
         slug="caffeine-bench",
         hypothesis="Pre-lift caffeine raises top-set bench e1RM.",
@@ -41,7 +43,14 @@ def _prereg(conn, *, seed: bool = True, **over):
         _recent_set(conn, kw["outcome_metric"].partition(":")[2])
     if seed:
         seed_outcome_history(conn, kw["outcome_metric"])
-    return selflab.preregister(conn, **kw)
+    if not portfolio:
+        return selflab.preregister(conn, **kw)
+    exp_id = selflab.preregister(conn, queued=True, **kw)
+    conn.execute(
+        "UPDATE experiments SET status = 'active', autolog_from = started_on WHERE id = ?",
+        [exp_id],
+    )
+    return exp_id
 
 
 def _log_recovery(conn, day: date, hrv: float) -> None:
@@ -313,18 +322,18 @@ def test_score_all_applies_correction_before_persisting(conn) -> None:
     persisted verdicts reflect the same BH downgrade the unit test proves —
     padding the batch changes what gets left CONFIRMED in the DB."""
     strong = _prereg(
-        conn, slug="strong-effect", min_effect=2.0, outcome_metric="top_set_e1rm:Squat (Barbell)"
+        conn, portfolio=True, slug="strong-effect", min_effect=2.0, outcome_metric="top_set_e1rm:Squat (Barbell)"
     )
     _fill(conn, strong, [100, 99, 101, 100, 98, 100], [130, 129, 131, 130, 128, 131])
 
     weak = _prereg(
-        conn, slug="weak-effect", min_effect=2.0,
+        conn, portfolio=True, slug="weak-effect", min_effect=2.0,
         outcome_metric="top_set_e1rm:Deadlift (Barbell)",
     )
     _fill(conn, weak, [100, 96, 104, 98, 102, 99], [107, 103, 111, 104, 108, 106])
 
     null = _prereg(
-        conn, slug="null-effect", min_effect=2.0, outcome_metric="top_set_e1rm:Row (Barbell)"
+        conn, portfolio=True, slug="null-effect", min_effect=2.0, outcome_metric="top_set_e1rm:Row (Barbell)"
     )
     _fill(conn, null, [100, 104, 96, 101, 99, 103], [101, 97, 105, 100, 102, 98])
 
@@ -354,9 +363,9 @@ def test_score_all_applies_correction_before_persisting(conn) -> None:
 def test_refresh_and_score_all_scores_and_surfaces_failed_refresh(conn, monkeypatch) -> None:
     """The shared route/nightly path scores every active study, and a study whose
     refresh fails is still listed under `unprocessable` instead of vanishing."""
-    good = _prereg(conn, slug="good-study", outcome_metric="top_set_e1rm:Squat (Barbell)")
+    good = _prereg(conn, portfolio=True, slug="good-study", outcome_metric="top_set_e1rm:Squat (Barbell)")
     _fill(conn, good, [100, 99, 101, 100, 98, 100], [130, 129, 131, 130, 128, 131])
-    _prereg(conn, slug="broken-study", outcome_metric="top_set_e1rm:Row (Barbell)")
+    _prereg(conn, portfolio=True, slug="broken-study", outcome_metric="top_set_e1rm:Row (Barbell)")
     broken_id = selflab.load(conn, "broken-study").id
     real_refresh = selflab.refresh_outcomes
 
