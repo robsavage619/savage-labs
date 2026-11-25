@@ -6,7 +6,7 @@ import { EngineReportCard } from "@/components/engine-report-card";
 import { EngineStatusPanel } from "@/components/engine-status-panel";
 import { ScreenViews } from "@/components/insight-cards";
 import { GuideProvider, Panel, Section } from "@/components/kit";
-import { BeliefLenses, Coverage, ForecastDesk, Masthead, Misses, Pipeline, Threads } from "@/components/lab-floor";
+import { BeliefLenses, Coverage, LaneBoard, ForecastDesk, Masthead, Misses, Pipeline, Threads } from "@/components/lab-floor";
 import { EffectForest, HrvDrivers, PriorsShelf, ScorecardBullets, TrialProgress } from "@/components/lab-charts";
 import { LabExperiments } from "@/components/lab-experiments";
 import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
@@ -53,6 +53,9 @@ export default function LabPage() {
           {tab === "floor" ? (
             <>
               <Masthead />
+              <Block id="lanes" n="00" kicker="Studies on you" title="What is running, at every cadence" lede="One live study per lane: a day, a lift session, a month. Approved studies wait for their lane.">
+                <LaneBoard />
+              </Block>
               <Block id="team" explain={<TeamExplain />} n="01" kicker="The researchers" title="Who is studying you, and what they're chasing" lede="Four specialists with their own interests, each keeping an agenda of open leads it updates every week.">
                 <TeamRoom />
               </Block>
