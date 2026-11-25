@@ -8,6 +8,7 @@ import { ScreenViews } from "@/components/insight-cards";
 import { GuideProvider, Panel, Section } from "@/components/kit";
 import { BeliefLenses, Coverage, ForecastDesk, Masthead, Misses, Pipeline, Threads } from "@/components/lab-floor";
 import { EffectForest, HrvDrivers, PriorsShelf, ScorecardBullets, TrialProgress } from "@/components/lab-charts";
+import { LabProfile } from "@/components/lab-profile";
 import { LabExperiments } from "@/components/lab-experiments";
 import { BehaviorImpactPanel, StressPanel } from "@/components/stress-panel";
 import { SubjectDossier } from "@/components/subject-dossier";
@@ -36,7 +37,7 @@ const readHash = () => window.location.hash.slice(1);
  */
 export default function LabPage() {
   const hash = useSyncExternalStore(subscribeHash, readHash, () => "");
-  const tab = INSTRUMENT_IDS.has(hash) ? "instruments" : "floor";
+  const tab = hash === "profile" ? "profile" : INSTRUMENT_IDS.has(hash) ? "instruments" : "floor";
 
   return (
     <SurfaceShell>
@@ -48,6 +49,9 @@ export default function LabPage() {
             </a>
             <a href="#instruments" className={tab === "instruments" ? "on" : ""} aria-current={tab === "instruments" ? "page" : undefined}>
               Trials &amp; instruments
+            </a>
+            <a href="#profile" className={tab === "profile" ? "on" : ""} aria-current={tab === "profile" ? "page" : undefined}>
+              What the lab knows
             </a>
           </nav>
           {tab === "floor" ? (
@@ -78,6 +82,8 @@ export default function LabPage() {
                 <ScreenViews />
               </Block>
             </>
+          ) : tab === "profile" ? (
+            <LabProfile />
           ) : (
             <div className="k-page">
             <Section n="01" title="The trials">
