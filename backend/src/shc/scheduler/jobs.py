@@ -148,6 +148,24 @@ async def _retest_reminder() -> None:
     )
 
 
+async def _adherence_prompts(kind: str) -> None:
+    """Evening: send tomorrow's assignment. Morning: ask yesterday's one-tap question."""
+    from datetime import date
+
+    from shc import adherence_prompts
+    from shc.db.schema import write_ctx
+    from shc.notify import send_phone_alert
+
+    build = (
+        adherence_prompts.evening_prompts if kind == "evening" else adherence_prompts.morning_prompts
+    )
+    async with write_ctx() as conn:
+        prompts = await asyncio.to_thread(build, conn, date.today())
+    for p in prompts:
+        if not await send_phone_alert(p.title, p.message, p.actions or None):
+            log.warning("adherence %s prompt not delivered: %s", kind, p.title)
+
+
 async def _backup_db() -> None:
     """Nightly job: keep a week of verified database copies."""
     from shc.config import settings
@@ -518,6 +536,17 @@ def register_jobs(scheduler: AsyncIOScheduler) -> None:
         misfire_grace_time=900,
         next_run_time=datetime.now(),
     )
+    for kind, hour in (("evening", 20), ("morning", 8)):
+        scheduler.add_job(
+            _adherence_prompts,
+            "cron",
+            args=[kind],
+            hour=hour,
+            minute=0,
+            id=f"adherence_prompt_{kind}",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
     log.info("registered APScheduler jobs")
 
 

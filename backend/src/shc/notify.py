@@ -75,11 +75,14 @@ async def send_desktop_alert(title: str, subtitle: str, message: str) -> bool:
     return True
 
 
-async def send_phone_alert(title: str, message: str) -> bool:
+async def send_phone_alert(
+    title: str, message: str, actions: list[dict] | None = None
+) -> bool:
     """Post a phone notification to the host's ntfy topic. Returns whether it was delivered.
 
     Never raises. Without a topic file there is no phone channel, and the call
-    logs that and returns False. Callers must not pass health data.
+    logs that and returns False. Callers must not pass health data. `actions` are
+    ntfy action buttons; they travel through ntfy.sh, so never put a secret in them.
     """
     try:
         topic = NTFY_TOPIC_FILE.read_text().strip()
@@ -91,9 +94,15 @@ async def send_phone_alert(title: str, message: str) -> bool:
         return False
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
-            resp = await client.post(
-                f"https://ntfy.sh/{topic}", content=message.encode(), headers={"Title": title}
-            )
+            if actions:
+                resp = await client.post(
+                    "https://ntfy.sh/",
+                    json={"topic": topic, "title": title, "message": message, "actions": actions},
+                )
+            else:
+                resp = await client.post(
+                    f"https://ntfy.sh/{topic}", content=message.encode(), headers={"Title": title}
+                )
         resp.raise_for_status()
     except httpx.HTTPError:
         log.exception("phone alert failed: %s", title)
