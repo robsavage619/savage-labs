@@ -2399,6 +2399,7 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
     if primary_ex is None:
         return None
     from shc.training.load_mechanics import effective_reps_sql, per_hand_sql
+    from shc.training.session_notes import unflagged_sql
 
     ph = per_hand_sql("ws.weight_kg", "ws.exercise", "day_d")
     eff = effective_reps_sql("ws.reps", "ws.rpe")
@@ -2423,6 +2424,7 @@ def _e1rm_regression(conn, today: date) -> tuple[float, str] | None:
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL
           AND ws.exercise = $ex AND day_d >= $s
           AND (ws.rpe IS NULL OR ws.rpe >= 7)
+          AND {unflagged_sql("ws")}
           AND day_d NOT IN (
               SELECT date FROM workout_plans
               WHERE json_extract_string(plan_json, '$.deload_prescribed') = 'true'
@@ -2473,14 +2475,17 @@ def _regression_cause(conn, lift: str, today: date, window_days: int = 56) -> tu
     excluded) so the exposure term describes the exact series that produced the
     number — a set the detector ignored cannot count as training here.
     """
+    from shc.training.session_notes import unflagged_sql
+
     since = (today - timedelta(days=window_days)).isoformat()
     rows = conn.execute(
-        """
+        f"""
         SELECT day_d AS day, COUNT(*) AS n_sets
         FROM workout_sets_dedup ws
         WHERE ws.is_warmup = FALSE AND ws.weight_kg IS NOT NULL
           AND ws.exercise = $ex AND day_d >= $s
           AND (ws.rpe IS NULL OR ws.rpe >= 7)
+          AND {unflagged_sql("ws")}
           AND day_d NOT IN (
               SELECT date FROM workout_plans
               WHERE json_extract_string(plan_json, '$.deload_prescribed') = 'true'

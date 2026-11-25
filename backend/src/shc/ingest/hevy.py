@@ -14,6 +14,7 @@ from shc.auth.keychain import load_token
 from shc.config import settings
 from shc.db.schema import get_read_conn, write_ctx
 from shc.training.load_mechanics import MAX_PER_HAND_LB, exceeds_per_hand_max, per_hand_kg
+from shc.training.session_notes import refresh_flags
 
 log = logging.getLogger(__name__)
 
@@ -298,6 +299,7 @@ async def _upsert_workout(conn: Any, workout_row: dict, set_rows: list[dict]) ->
     else:
         conn.execute("DELETE FROM workout_sets WHERE workout_id = ?", [workout_row["id"]])
 
+    refresh_flags(conn, workout_row["id"])
     return True
 
 
@@ -435,6 +437,7 @@ async def _sync_workouts() -> dict[str, int]:
     # Update working weights and cursor
     async with write_ctx() as conn:
         await _update_working_weights_from_hevy(conn)
+        refresh_flags(conn)
         conn.execute(
             """
             INSERT INTO oauth_state (source, last_sync_at, cursor, needs_reauth)

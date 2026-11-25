@@ -51,6 +51,7 @@ def _e1rm_from_raw(conn: duckdb.DuckDBPyConnection, exercise: str, days: int = 9
     would make this check a tautology.
     """
     from shc.training.load_mechanics import per_hand_sql
+    from shc.training.session_notes import unflagged_sql
 
     row = conn.execute(
         f"""
@@ -63,6 +64,7 @@ def _e1rm_from_raw(conn: duckdb.DuckDBPyConnection, exercise: str, days: int = 9
         WHERE exercise = ? AND source = 'hevy' AND is_warmup = FALSE
           AND weight_kg > 0 AND reps > 0
           AND started_at::DATE >= CURRENT_DATE - ?
+          AND {unflagged_sql()}
         """,
         [exercise, days],
     ).fetchone()

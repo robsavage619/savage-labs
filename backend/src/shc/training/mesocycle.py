@@ -23,6 +23,7 @@ import duckdb
 
 from shc.training.exercise_classifier import backfill_exercise_map
 from shc.training.load_mechanics import effective_reps_sql, per_hand_sql, set_weight_sql
+from shc.training.session_notes import unflagged_sql
 from shc.training.self_learning import fit_all
 
 log = logging.getLogger(__name__)
@@ -874,6 +875,7 @@ def backfill_weekly_e1rm(conn: duckdb.DuckDBPyConnection) -> None:
         FROM workout_sets_dedup
         WHERE weight_kg > 0 AND reps > 0
           AND source = 'hevy' AND is_warmup = FALSE
+          AND {unflagged_sql()}
         GROUP BY exercise, date_trunc('week', started_at)::DATE
         ON CONFLICT (exercise, week_start) DO UPDATE SET
             e1rm_kg          = excluded.e1rm_kg,
@@ -926,6 +928,7 @@ def compute_all_scores(conn: duckdb.DuckDBPyConnection) -> None:
               AND started_at::DATE >= ? AND started_at::DATE < ?
               AND weight_kg > 0 AND reps > 0
               AND source = 'hevy' AND is_warmup = FALSE
+              AND {unflagged_sql()}
             """,
             [ex, this_week, this_week + timedelta(days=7)],
         ).fetchone()
