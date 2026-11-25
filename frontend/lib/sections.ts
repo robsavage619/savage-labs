@@ -12,7 +12,7 @@
  * Adding a section means adding a row here. There is no second place.
  */
 
-export type SurfaceId = "today" | "training" | "recovery" | "body" | "lab";
+export type SurfaceId = "today" | "training" | "recovery" | "body" | "healthspan" | "lab";
 
 export interface Surface {
   id: SurfaceId;
@@ -27,6 +27,7 @@ export const SURFACES: readonly Surface[] = [
   { id: "training", route: "/training", label: "Training", purpose: "Am I growing, muscle by muscle" },
   { id: "recovery", route: "/recovery", label: "Recovery", purpose: "Am I absorbing the work" },
   { id: "body", route: "/body", label: "Body", purpose: "Composition, energy out, slow signals, clinical record" },
+  { id: "healthspan", route: "/healthspan", label: "Healthspan", purpose: "Markers, cited targets, next re-test" },
   { id: "lab", route: "/lab", label: "Lab", purpose: "Trials, findings, what the engine has learned" },
 ] as const;
 
@@ -85,6 +86,9 @@ export const SECTIONS: readonly Section[] = [
   { id: "tape", label: "Tape progress", surface: "body", keywords: ["arms", "biceps", "hips", "waist", "thigh", "legs", "chest", "girth", "measurements", "progress"] },
   { id: "slow-signals", label: "Six months of slow signals", surface: "body", keywords: ["vo2", "steps", "rhr", "resting", "spo2", "oxygen", "breathing", "apnea", "neat"] },
   { id: "clinical", label: "Clinical record", surface: "body", keywords: ["labs", "meds", "conditions", "bloodwork", "risk"] },
+
+  // ── Healthspan ───────────────────────────────────────────────────────────
+  { id: "markers", label: "Health markers", surface: "healthspan", keywords: ["labs", "apob", "alt", "re-test", "retest", "target", "longevity", "blood pressure", "vo2"] },
 
   // ── Lab ──────────────────────────────────────────────────────────────────
   { id: "team", label: "The researchers", surface: "lab", keywords: ["team", "specialists", "agenda", "leads", "researchers"] },

@@ -1702,6 +1702,7 @@ export const api = {
   dailyReport: () => get<{ report: DailyReport | null }>("/api/daily/report"),
   dailyReportPrompt: () => get<{ prompt: string }>("/api/daily/report/prompt"),
   subjectProfile: () => get<SubjectProfile>("/api/subject/profile"),
+  healthspan: () => get<HealthMarker[]>("/api/healthspan"),
 };
 
 export interface DailyReport {
@@ -1744,3 +1745,19 @@ export type WhoopImpactItem = {
 };
 
 export type WhoopBehaviorImpact = { as_of: string | null; items: WhoopImpactItem[] };
+
+export type HealthMarkerStatus = "on target" | "drifting" | "out of range" | "stale" | "no target set" | "no data";
+
+export type HealthMarker = {
+  marker: string;
+  label: string;
+  domain: string;
+  unit: string;
+  retest_days: number;
+  target: { low: number | null; high: number | null; direction: "higher_better" | "lower_better" | "in_range"; source: string };
+  value: number | null;
+  date: string | null;
+  age_days: number | null;
+  trend: { n: number; slope_per_30d: number | null; note?: string; unit: string } | null;
+  status: HealthMarkerStatus;
+};

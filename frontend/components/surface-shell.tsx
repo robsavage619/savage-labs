@@ -32,6 +32,7 @@ const TAB_ICON: Record<string, string> = {
   training: "M3 12h18M6 7v10M18 7v10M3.5 9.5v5M20.5 9.5v5",
   recovery: "M3 12h4l2-5 4 10 2-5h6",
   body: "M12 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4ZM6 10h12M12 10v5M12 15l-3 6M12 15l3 6",
+  healthspan: "M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z",
   lab: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 18l-5-9V3M7.5 15h9",
 };
 

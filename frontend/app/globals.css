@@ -1503,7 +1503,7 @@ button.nf-row:hover { background: oklch(1 0 0 / 0.035); }
   .sl-shell { overflow-x: clip; }
   .sl-shell-nav { display: none; }
   .sl-tabbar {
-    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
     padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
     background: color-mix(in oklch, var(--bg) 84%, transparent);
