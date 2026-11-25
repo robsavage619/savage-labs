@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import duckdb
 import pytest
 import yaml
+from conftest import seed_outcome_history
 
 from shc import selflab
 from shc.ai.workout_planner import (
@@ -32,6 +33,7 @@ from shc.training.self_learning import accuracy_baseline
 
 
 def _study(conn, direction: str, design: str = "randomized_alternating") -> str:
+    seed_outcome_history(conn, "hrv_next_morning")
     return selflab.preregister(
         conn,
         slug=f"s-{direction}-{design}",

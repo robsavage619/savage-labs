@@ -6,6 +6,7 @@ import random
 from datetime import date, timedelta
 
 import pytest
+from conftest import seed_outcome_history
 
 from shc import research
 
@@ -290,6 +291,7 @@ def test_randomized_trials_log_themselves_from_autolog_date(conn) -> None:
     from shc import selflab
 
     start = date(2026, 5, 1)
+    seed_outcome_history(conn, "hrv_next_morning")
     exp_id = selflab.preregister(
         conn,
         slug="auto-trial",

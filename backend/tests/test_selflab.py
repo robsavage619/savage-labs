@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 import pytest
+from conftest import seed_outcome_history
 
 from shc import selflab
 
@@ -38,6 +39,8 @@ def _prereg(conn, *, seed: bool = True, **over):
     kw.update(over)
     if seed:
         _recent_set(conn, kw["outcome_metric"].partition(":")[2])
+    if seed:
+        seed_outcome_history(conn, kw["outcome_metric"])
     return selflab.preregister(conn, **kw)
 
 
@@ -144,9 +147,10 @@ def test_preregister_refuses_outcome_exercise_with_no_recent_session(conn) -> No
 
 
 def test_preregister_counts_a_set_whose_warmup_flag_is_null(conn) -> None:
-    _recent_set(conn, "Incline Press (Dumbbell)")
+    seed_outcome_history(conn, "top_set_e1rm:Incline Press (Dumbbell)")
     conn.execute(
-        "UPDATE workout_sets SET is_warmup = NULL WHERE exercise = 'Incline Press (Dumbbell)'"
+        "UPDATE workout_sets SET is_warmup = NULL WHERE exercise = 'Incline Press (Dumbbell)' "
+        "AND id = (SELECT MIN(id) FROM workout_sets WHERE exercise = 'Incline Press (Dumbbell)')"
     )
     exp = _prereg(
         conn, seed=False, slug="null-warmup", outcome_metric="top_set_e1rm:Incline Press (Dumbbell)"
