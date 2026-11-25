@@ -685,6 +685,19 @@ def todays_assignments(conn: duckdb.DuckDBPyConnection, day: date | None = None)
         out.append(entry)
     return out
 
+def held_benchmark_lifts(conn: duckdb.DuckDBPyConnection) -> set[str]:
+    """Outcome lifts of active per-session (weekly-lane) studies.
+
+    While one runs, its lift must stay in place twice a week: rotating or
+    swapping it out mid-study would change the unit being measured.
+    """
+    rows = conn.execute(
+        "SELECT outcome_metric FROM experiments "
+        "WHERE status = 'active' AND design = 'randomized_per_session'"
+    ).fetchall()
+    return {ex for r in rows if (ex := _outcome_exercise(r[0]))}
+
+
 # ── Outcome extraction from the live data stream ─────────────────────────────
 
 
