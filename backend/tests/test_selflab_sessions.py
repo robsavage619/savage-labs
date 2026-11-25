@@ -126,3 +126,34 @@ def test_per_session_needs_an_exercise_outcome(conn) -> None:
             adherence_tag_a="nocaf",
             adherence_tag_b="caf",
         )
+
+
+def test_planner_words_per_session_arm_as_conditional_on_the_lift() -> None:
+    from shc.ai.workout_planner import trial_assignment_lines
+
+    per_session = {
+        "design": "randomized_per_session", "hypothesis": "H1.", "exercise": LIFT,
+        "arm": "B", "condition": "cond-b",
+    }
+    daily = {"design": "randomized_alternating", "hypothesis": "H2.", "arm": "A", "condition": "c-a"}
+    text = "\n".join(trial_assignment_lines([per_session, daily]))
+    assert f"ONLY IF you program **{LIFT}**" in text and "arm B" in text
+    assert "H2. Today is arm A" in text
+    assert trial_assignment_lines([]) == []
+
+
+def test_weekly_study_lift_is_held_out_of_rotation(conn) -> None:
+    from shc.ai.workout_planner import benchmark_hold_lines
+    from shc.training.autoregulation import _apply_benchmark_hold
+
+    ranks = {LIFT: 2, "Other": 2}  # both plateaued, long tenure: swap-eligible
+    tenure = {LIFT: 9, "Other": 9}
+    _apply_benchmark_hold(conn, {LIFT, "Other"}, {}, ranks, tenure)
+    assert (ranks[LIFT], tenure[LIFT]) == (2, 9), "no study: nothing is held"
+
+    _reg(conn, date.today() - timedelta(days=20))
+    assert selflab.held_benchmark_lifts(conn) == {LIFT}
+    _apply_benchmark_hold(conn, {LIFT, "Other"}, {}, ranks, tenure)
+    assert (ranks[LIFT], tenure[LIFT]) == (0, 0)
+    assert (ranks["Other"], tenure["Other"]) == (2, 9)
+    assert LIFT in "\n".join(benchmark_hold_lines([LIFT])) and benchmark_hold_lines([]) == []

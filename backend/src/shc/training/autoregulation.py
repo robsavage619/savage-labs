@@ -1243,6 +1243,30 @@ def _rotation_tenure(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     return {r[0]: int(r[1] or 0) for r in rows if r[2] is not None and r[2] >= live_after}
 
 
+def _apply_benchmark_hold(
+    conn: duckdb.DuckDBPyConnection,
+    names: set[str],
+    aliases: Mapping[str, str],
+    ranks: dict[str, int],
+    tenure: dict[str, int],
+) -> None:
+    """Pin a weekly-lane study's lift as progressing with zero tenure, in place.
+
+    That makes it neither plateau- nor tenure-swap-eligible, so selection keeps it
+    while the study runs. Optional: any failure degrades to normal rotation.
+    """
+    try:
+        from shc.selflab import held_benchmark_lifts
+
+        held = held_benchmark_lifts(conn)
+    except Exception as exc:  # noqa: BLE001 — hold optional
+        log.debug("benchmark hold unavailable: %s", exc)
+        return
+    for n in names:
+        if n in held or aliases.get(n) in held:
+            ranks[n], tenure[n] = 0, 0
+
+
 def _progress_info(
     conn: duckdb.DuckDBPyConnection,
     names: set[str],
@@ -1651,6 +1675,7 @@ def evidence_menu(
     # history, which is what used to be passed here and meant a lift last trained
     # in 2019 read as a six-week incumbent. Drives the 4–6 week rotation trigger.
     tenure = {n: int(v.get("tenure") or 0) for n, v in info.items()}
+    _apply_benchmark_hold(conn, all_names, aliases, ranks, tenure)
     # Whether Rob has logged the movement recently enough to prove the equipment
     # exists and the name is loggable. Gates what may LEAD a head, not what may
     # appear on the menu.
