@@ -145,3 +145,72 @@ def test_route_groups_by_domain_and_get_does_not_write(
     assert {"training", "sleep", "recovery"} <= set(body["domains"])
     p = body["domains"]["training"][0]
     assert {"label", "literature", "rob", "how_sure", "evidence", "changes"} <= set(p)
+
+
+def _param(conn: duckdb.DuckDBPyConnection, sd: float | None = 1.0) -> None:
+    conn.execute(
+        "INSERT INTO rob_parameters (key, domain, label, prior_mean, prior_sd, prior_source, "
+        "post_mean, post_sd, evidence_kind, n_evidence, status) "
+        "VALUES ('p', 'training', 'synthetic', 10.0, ?, 'acute-chronic-workload-ratio.md', "
+        "10.0, ?, 'experiment', 0, 'prior only')",
+        [sd, sd],
+    )
+
+
+def _post(conn: duckdb.DuckDBPyConnection) -> tuple:
+    return conn.execute(
+        "SELECT post_mean, post_sd, n_evidence, status, evidence_kind FROM rob_parameters"
+    ).fetchone()
+
+
+def test_weak_evidence_stays_near_prior_strong_moves(conn) -> None:
+    _param(conn)
+    weak = rob_model.Evidence("experiment", 20.0, 30.0, planned_look=True)
+    mean, _ = rob_model.update_parameter(conn, "p", [weak])
+    assert abs(mean - 10.0) < 0.1
+    strong = rob_model.Evidence("experiment", 20.0, 0.2, planned_look=True)
+    mean, sd = rob_model.update_parameter(conn, "p", [strong])
+    assert mean > 19.0 and sd < 0.25
+
+
+def test_update_is_rebuilt_not_accumulated(conn) -> None:
+    _param(conn)
+    e = [rob_model.Evidence("experiment", 12.0, 1.0, planned_look=True)]
+    first = rob_model.update_parameter(conn, "p", e)
+    assert rob_model.update_parameter(conn, "p", e) == first
+    assert rob_model.update_parameter(conn, "p", []) == (10.0, 1.0)
+    assert _post(conn)[3] == "prior only"
+
+
+@pytest.mark.parametrize(
+    "ev",
+    [
+        rob_model.Evidence("observed", 20.0, 0.1),
+        rob_model.Evidence("experiment", 20.0, 0.1),
+        rob_model.Evidence("fitted", 20.0, 0.1),
+        rob_model.Evidence("experiment", 20.0, 0.0, planned_look=True),
+    ],
+)
+def test_refused_evidence_writes_nothing(conn, ev) -> None:
+    _param(conn)
+    with pytest.raises(rob_model.EvidenceRefused):
+        rob_model.update_parameter(conn, "p", [ev])
+    assert _post(conn) == (10.0, 1.0, 0, "prior only", "experiment")
+
+
+def test_fitted_that_beat_default_may_move(conn) -> None:
+    _param(conn)
+    ev = rob_model.Evidence("fitted", 14.0, 0.5, beat_default_held_out=True)
+    mean, _ = rob_model.update_parameter(conn, "p", [ev])
+    assert 13.0 < mean < 14.0
+    assert _post(conn)[4] == "fitted"
+
+
+def test_no_prior_cannot_be_shrunk(conn) -> None:
+    _param(conn, sd=None)
+    with pytest.raises(rob_model.EvidenceRefused):
+        rob_model.update_parameter(
+            conn, "p", [rob_model.Evidence("experiment", 1.0, 0.1, planned_look=True)]
+        )
+    with pytest.raises(KeyError):
+        rob_model.update_parameter(conn, "missing", [])

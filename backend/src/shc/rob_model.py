@@ -9,8 +9,9 @@ noise floors, per-lift session noise, the belief ledger) and mirrors it into
 Status rule (one rule for every parameter): ``prior only`` when there is no
 evidence (n = 0), ``learning`` while n is below the engine's own sample gate for
 that parameter, ``established`` once n reaches it, which is the point the engine
-starts acting on the value. Updating a parameter from experiment evidence is
-WP 1.2 and not here.
+starts acting on the value.
+
+:func:`update_parameter` is the one function that moves a parameter off its prior.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from typing import Any
 import duckdb
 
 from shc.ai.vault import valid_citation_filenames
+from shc.research import _combine
 from shc.training.load_mechanics import effective_reps_sql, per_hand_sql
 
 log = logging.getLogger(__name__)
@@ -97,6 +99,101 @@ def validate_citation(source: str, prior_mean: float | None, prior_sd: float | N
     allowed = valid_citation_filenames()
     if allowed and source not in allowed:
         raise ValueError(f"prior_source {source!r} is not a vault note filename")
+
+
+class EvidenceRefused(ValueError):
+    """Evidence that may not move a parameter."""
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """One piece of evidence offered to :func:`update_parameter`.
+
+    Attributes:
+        kind: ``experiment``, ``fitted`` or ``observed``; only the first two may move anything.
+        effect: The estimate, in the parameter's unit.
+        se: Its standard error, in the same unit.
+        planned_look: For ``experiment``: the verdict was read at a planned look.
+        beat_default_held_out: For ``fitted``: the fit beat its population default on held-out weeks.
+    """
+
+    kind: str
+    effect: float
+    se: float
+    planned_look: bool = False
+    beat_default_held_out: bool = False
+
+
+def _check_evidence(e: Evidence) -> None:
+    if e.kind == "experiment":
+        if not e.planned_look:
+            raise EvidenceRefused(
+                "an experiment moves a parameter only when read at a planned look"
+            )
+    elif e.kind == "fitted":
+        if not e.beat_default_held_out:
+            raise EvidenceRefused(
+                "a fitted value moves a parameter only if it beat its default on held-out weeks"
+            )
+    elif e.kind == "observed":
+        raise EvidenceRefused(
+            "observational results never move a parameter; nominate an experiment instead"
+        )
+    else:
+        raise EvidenceRefused(f"unknown evidence kind {e.kind!r}")
+    if not e.se > 0:
+        raise EvidenceRefused("evidence needs a positive standard error")
+
+
+def update_parameter(
+    conn: duckdb.DuckDBPyConnection,
+    key: str,
+    results: list[Evidence],
+    *,
+    min_n: int = _BELIEF_MIN_RESULTS,
+) -> tuple[float, float]:
+    """Move a parameter's posterior by precision-weighted shrinkage from its prior.
+
+    Rebuilt from the prior on every call, so pass every result for the parameter
+    and re-running never counts the same evidence twice. Weak evidence (large
+    standard error) leaves the posterior near the prior; strong evidence moves it.
+
+    Args:
+        conn: A write connection.
+        key: The parameter key.
+        results: Every piece of evidence for this parameter; an empty list resets to the prior.
+        min_n: Evidence count at which the parameter counts as established.
+
+    Returns:
+        The new ``(post_mean, post_sd)``.
+
+    Raises:
+        KeyError: If the key is not in the registry.
+        EvidenceRefused: If any result may not move a parameter, or the parameter has
+            no published prior to shrink from. Nothing is written in that case.
+    """
+    row = conn.execute(
+        "SELECT prior_mean, prior_sd FROM rob_parameters WHERE key = ?", [key]
+    ).fetchone()
+    if row is None:
+        raise KeyError(key)
+    for e in results:
+        _check_evidence(e)
+    prior_mean, prior_sd = row
+    if results and (prior_mean is None or not prior_sd or prior_sd <= 0):
+        raise EvidenceRefused(f"{key} has no published prior with a spread to shrink from")
+    if results:
+        post_mean, post_sd = _combine(prior_mean, prior_sd, [(e.effect, e.se) for e in results])
+        kinds = {e.kind for e in results}
+        kind = "experiment" if "experiment" in kinds else "fitted"
+    else:
+        post_mean, post_sd, kind = prior_mean, prior_sd, "experiment"
+    conn.execute(
+        "UPDATE rob_parameters SET post_mean = ?, post_sd = ?, evidence_kind = ?, "
+        "n_evidence = ?, status = ?, updated_at = now() WHERE key = ?",
+        [post_mean, post_sd, kind, len(results), status_for(len(results), min_n), key],
+    )
+    return post_mean, post_sd
 
 
 def _slug(text: str) -> str:
