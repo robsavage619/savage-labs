@@ -928,6 +928,23 @@ export interface AirwayTrend {
   };
 }
 
+export interface ModelParameter {
+  key: string;
+  label: string;
+  unit: string | null;
+  literature: { mean: number | null; sd: number | null; source: string };
+  rob: { mean: number | null; sd: number | null };
+  how_sure: "prior only" | "learning" | "established";
+  evidence: { kind: string; n: number };
+  changes: string | null;
+  updated_at: string | null;
+}
+export type ModelDomain = ModelParameter[];
+export interface RobModel {
+  count: number;
+  domains: Record<string, ModelDomain>;
+}
+
 export interface ResearchBelief {
   id: string;
   claim: string;
@@ -1463,6 +1480,7 @@ export const api = {
       };
     }>("/api/clinical-research/insights"),
   experiments: () => get<Experiment[]>("/api/experiments"),
+  robModel: () => get<RobModel>("/api/model"),
   researchBeliefs: () => get<ResearchBelief[]>("/api/research/beliefs"),
   researchHypotheses: () => get<ResearchHypothesis[]>("/api/research/hypotheses"),
   researchForecast: (metric?: string) =>
