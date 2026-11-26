@@ -36,6 +36,8 @@ class HypothesisIn(BaseModel):
     belief_id: str | None = None
     author: str = "analyst"
     rationale: str = ""
+    follows: str = ""
+    what_changed: str = ""
 
 
 class NoteIn(BaseModel):
@@ -125,6 +127,8 @@ async def register(body: HypothesisIn) -> dict:
                 body.belief_id,
                 body.author,
                 body.rationale,
+                body.follows,
+                body.what_changed,
             )
         except research.SpecError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -148,6 +152,10 @@ async def run_all() -> list[dict]:
 @router.post("/research/notebook", dependencies=[Depends(require_admin_key)])
 async def add_note(body: NoteIn) -> dict:
     async with write_ctx() as conn:
+        try:
+            research.check_proposal(conn, body.title, body.body)
+        except research.SpecError as exc:
+            raise HTTPException(422, str(exc)) from exc
         return {"id": research.note(conn, body.author, body.kind, body.title, body.body, body.ref)}
 
 

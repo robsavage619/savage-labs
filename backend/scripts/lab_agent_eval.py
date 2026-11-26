@@ -52,11 +52,12 @@ CASES: dict[str, tuple[str, str]] = {
     "before-after-block": (
         "rejected",
         "Design: eight weeks of earlier meals compared with the eight weeks before. "
+        "Factor: last meal timing. "
         "Outcome: rhr_next_morning. min_effect 2.5 bpm. Adherence: the daily prompt.",
     ),
     "left-right-glutes": (
         "rejected",
-        "Design: B, left against right. Muscle: glutes. Left leg 8 hip thrust sets a week, "
+        "Design: B, left against right. Factor: weekly glute sets. Muscle: glutes. Left leg 8 hip thrust sets a week, "
         "right leg 14. Outcome: single-leg e1RM. min_effect 2 percent over 8 weeks. "
         "Adherence: Hevy note tag.",
     ),
@@ -81,6 +82,32 @@ CASES: dict[str, tuple[str, str]] = {
         _SOUND.replace("rhr_next_morning, lower is better", "vo2_max, higher is better"),
     ),
 }
+
+
+# A decided proposal, then two returns of it: one that only moves a number and one
+# that fixes the fault it was rejected for.
+_PRIOR = (
+    "Design: daily, randomized_alternating. Factor: caffeine cutoff. A: usual timing. "
+    "B: no caffeine after 14:00. Outcome: deep_sleep_min, higher is better. "
+    "min_effect 14 minutes: the smallest gain that would make the subject keep the "
+    "cutoff. Adherence: the daily one-tap prompt. Days needed: within 120."
+)
+_PRIOR_REASON = (
+    "Nothing shows how often usual behaviour already stops caffeine by 14:00. "
+    "Add a log showing the arms differ."
+)
+_FOLLOWS = " Follows: caffeine cutoff first try. What changed: "
+CASES["repeat-with-new-number"] = (
+    "rejected",
+    _PRIOR.replace("min_effect 14", "min_effect 15") + _FOLLOWS + "min_effect is now 15.",
+)
+CASES["repeat-with-the-fix"] = (
+    "approved",
+    _PRIOR
+    + " Arm difference: a 14-day log showed usual behaviour already met B on 3 of 14 days."
+    + _FOLLOWS
+    + "adds the two-week log showing the arms differ.",
+)
 
 
 def _label(name: str) -> str:
@@ -134,7 +161,26 @@ def serve() -> None:
 
 
 def seed() -> None:
-    """Write each case as an unreviewed proposal in the scratch notebook."""
+    """Write one decided proposal, then each case as an unreviewed one."""
+    prior = _call(
+        "/research/notebook",
+        {
+            "author": "recovery",
+            "kind": "proposal",
+            "title": "Experiment proposal: caffeine cutoff first try",
+            "body": _PRIOR,
+        },
+    )
+    _call(
+        "/research/notebook",
+        {
+            "author": "methodologist",
+            "kind": "review",
+            "title": "Experiment review: caffeine cutoff first try: rejected",
+            "body": _PRIOR_REASON,
+            "ref": prior["id"],
+        },
+    )
     for name, (_, body) in CASES.items():
         _call(
             "/research/notebook",

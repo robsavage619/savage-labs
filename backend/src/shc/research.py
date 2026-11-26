@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1112,6 +1113,83 @@ def _scale(b: dict) -> float:
     return next(round(n * mag, 9) for n in _NICE if n * mag >= need)
 
 
+_MIN_WHAT_CHANGED = 40
+
+
+def _family(spec: dict) -> tuple:
+    """What makes two specs the same question, whatever their thresholds or lag."""
+    return (spec["exposure"]["feature"], spec["outcome"], spec.get("unit", "day"))
+
+
+def _check_repeat(
+    conn: duckdb.DuckDBPyConnection, spec: dict, follows: str, what_changed: str
+) -> None:
+    """Refuse a question already asked, rejected ones included, unless it says so."""
+    earlier = [
+        slug
+        for slug, other in conn.execute("SELECT slug, spec FROM research_hypotheses").fetchall()
+        if _family(json.loads(other)) == _family(spec)
+    ]
+    if not earlier:
+        return
+    if follows not in earlier or len(what_changed.strip()) < _MIN_WHAT_CHANGED:
+        raise SpecError(
+            f"already asked as {', '.join(sorted(earlier))}: set follows to one of them and "
+            f"what_changed to what is materially different ({_MIN_WHAT_CHANGED}+ characters)"
+        )
+
+
+_PROPOSAL = "Experiment proposal:"
+
+
+def _proposal_key(body: str) -> tuple[str, str] | None:
+    found = [
+        re.search(pattern, body, re.IGNORECASE)
+        for pattern in (r"Factor:\s*([^\n.]+)", r"Outcome:\s*([^\n.,]+)")
+    ]
+    if not all(found):
+        return None
+    factor, outcome = (" ".join(re.findall(r"[a-z0-9_]+", m[1].lower())) for m in found if m)
+    return factor, outcome
+
+
+def check_proposal(conn: duckdb.DuckDBPyConnection, title: str, body: str) -> None:
+    """Refuse an experiment proposal that quietly repeats a decided one.
+
+    The match is on the words of Factor and Outcome, so a reworded factor gets
+    past; the methodologist's history check is the second line.
+
+    Args:
+        conn: Database connection.
+        title: Notebook title; only ``Experiment proposal:`` entries are checked.
+        body: The design.
+
+    Raises:
+        SpecError: When Factor or Outcome is missing, or a reviewed proposal has the
+            same pair and the body lacks ``Follows:`` or ``What changed:``.
+    """
+    if not title.startswith(_PROPOSAL):
+        return
+    key = _proposal_key(body)
+    if key is None:
+        raise SpecError("an experiment proposal needs 'Factor:' and 'Outcome:' in its body")
+    decided = [
+        old_title.removeprefix(_PROPOSAL).strip()
+        for old_title, old_body in conn.execute(
+            "SELECT p.title, p.body FROM research_notebook p "
+            "JOIN research_notebook r ON r.ref = p.id AND r.kind = 'review' "
+            "WHERE p.title LIKE 'Experiment proposal:%'"
+        ).fetchall()
+        if _proposal_key(old_body or "") == key
+    ]
+    if decided and not all(
+        re.search(rf"{label}:\s*\S", body, re.IGNORECASE) for label in ("Follows", "What changed")
+    ):
+        raise SpecError(
+            f"already decided as {', '.join(decided)}: add 'Follows:' and 'What changed:'"
+        )
+
+
 def register(
     conn: duckdb.DuckDBPyConnection,
     slug: str,
@@ -1120,6 +1198,9 @@ def register(
     belief_id: str | None,
     author: str,
     rationale: str = "",
+    follows: str = "",
+    what_changed: str = "",
+    revision: bool = False,
 ) -> dict:
     """Pre-register a hypothesis. The spec is frozen by hash; power decides its status."""
     validate_spec(conn, spec)
@@ -1138,6 +1219,11 @@ def register(
     value = value_score(conn, spec, belief_id, power=pw)
     if value["novelty"] == 0:
         raise SpecError("an identical spec is already registered")
+    # A methodologist's revision replaces the question it rejects, so it is exempt.
+    if not revision:
+        _check_repeat(conn, spec, follows, what_changed)
+    if what_changed.strip():
+        rationale = f"{rationale}\nFollows {follows}. What changed: {what_changed}".strip()
     # Every new question waits for the methodologist; it runs only once approved.
     status = "proposed"
     canon = json.dumps(spec, sort_keys=True)
@@ -2213,6 +2299,7 @@ def _revise(
         belief_id,
         proposer,
         rationale=f"The methodologist's revision of {slug}, approved as designed.",
+        revision=True,
     )
     conn.execute("UPDATE research_hypotheses SET status = 'active' WHERE id = ?", [new["id"]])
     note(conn, author, "review", f"Approved: {question or old_question}", reasons, ref=new["id"])
