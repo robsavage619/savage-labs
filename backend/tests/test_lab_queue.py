@@ -12,7 +12,7 @@ from shc import lab_queue, selflab
 LIFT = "Preacher Curl (Dumbbell)"
 
 
-def _daily(conn, slug: str, *, queued: bool = False) -> str:
+def _daily(conn, slug: str, *, queued: bool = False, started_on: date | None = None) -> str:
     seed_outcome_history(conn, "hrv_next_morning")
     return selflab.preregister(
         conn,
@@ -23,7 +23,7 @@ def _daily(conn, slug: str, *, queued: bool = False) -> str:
         condition_b="earlier",
         outcome_metric="hrv_next_morning",
         min_effect=2.0,
-        started_on=date.today(),
+        started_on=started_on or date.today(),
         queued=queued,
     )
 
@@ -97,9 +97,10 @@ def test_empty_queue_raises_a_lane_idle_note(conn) -> None:
 
 
 def test_lanes_view_reports_each_state_including_block_not_started(conn) -> None:
-    _daily(conn, "run")
+    day = date(2026, 11, 25)
+    _daily(conn, "run", started_on=day)
     _daily(conn, "wait", queued=True)
-    view = lab_queue.lanes(conn, date(2026, 11, 25))
+    view = lab_queue.lanes(conn, day)
     by = {lane["lane"]: lane for lane in view["lanes"]}
     assert by["daily"]["state"] == "running" and by["daily"]["running"]["slug"] == "run"
     assert [q["slug"] for q in by["daily"]["queue"]] == ["wait"]
