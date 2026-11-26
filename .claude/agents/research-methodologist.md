@@ -46,6 +46,8 @@ A specialist can propose a designed experiment (one that changes the subject's t
 
 Then read what has been decided before, designs and verdicts only: `SELECT q.title, q.body, r.title AS verdict FROM research_notebook q JOIN research_notebook r ON r.ref = q.id AND r.kind = 'review' WHERE q.title LIKE 'Experiment proposal:%' ORDER BY q.written_at`. Reject a repeat of a design already decided, rejected or approved, unless it differs in a way that answers the earlier fault; a renamed or re-thresholded copy is a repeat.
 
+Then read `GET http://localhost:8000/api/research/roadmap`, the subject's own limits, which holds no rationale. Reject a design that needs anything in `will_not_do` or changes anything in `off_limits`; the one exception is an experiment already approved and running. With no roadmap set, skip this.
+
 Check, in order:
 
 1. **Is the design one the lab can run?** Three only. **A, per-session**: a coin fixed at registration decides the condition each time a benchmark lift is programmed. **B, left against right**: limb muscles only, never glutes or chest. **Daily**: each day is coin-assigned A or B (`randomized_alternating`), and the outcome is one of `hrv_next_morning`, `rhr_next_morning`, `recovery_score_next_day`, `deep_sleep_min` or `sleep_efficiency_pct`. Reject a before-and-after block however it is dressed, and a daily study whose condition is a medicine or its timing.

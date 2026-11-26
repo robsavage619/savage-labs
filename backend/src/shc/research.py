@@ -2538,6 +2538,49 @@ def detectable_in_120d(conn: duckdb.DuckDBPyConnection, today: date | None = Non
     return out
 
 
+_ROADMAP_FIELDS = ("id", "question", "changes", "status", "needs")
+_ROADMAP_LISTS = ("will_do", "will_not_do", "off_limits")
+_ROADMAP_STATUSES = ("open", "answered", "parked")
+
+
+def set_roadmap(conn: duckdb.DuckDBPyConnection, roadmap: dict) -> None:
+    """Replace the subject's big questions. List order is priority order.
+
+    Kept in the notebook, so earlier versions stay readable and nothing personal
+    lives in the repository.
+
+    Args:
+        conn: Write connection.
+        roadmap: ``questions`` (each with id, question, changes, status, needs) and
+            the string lists ``will_do``, ``will_not_do``, ``off_limits``.
+
+    Raises:
+        SpecError: When a field is missing, an id repeats or a status is unknown.
+    """
+    questions = roadmap.get("questions")
+    if not isinstance(questions, list) or not questions:
+        raise SpecError("roadmap needs a non-empty questions list")
+    for q in questions:
+        if not isinstance(q, dict) or any(not isinstance(q.get(f), str) for f in _ROADMAP_FIELDS):
+            raise SpecError(f"each question needs text fields: {', '.join(_ROADMAP_FIELDS)}")
+        if q["status"] not in _ROADMAP_STATUSES:
+            raise SpecError(f"status must be one of {', '.join(_ROADMAP_STATUSES)}")
+    if len({q["id"] for q in questions}) != len(questions):
+        raise SpecError("question ids must be unique")
+    for name in _ROADMAP_LISTS:
+        if not isinstance(roadmap.get(name), list):
+            raise SpecError(f"roadmap needs a list: {name}")
+    note(conn, "subject", "roadmap", "Roadmap set", data=roadmap)
+
+
+def roadmap(conn: duckdb.DuckDBPyConnection) -> dict | None:
+    """The current roadmap, or None before one is set."""
+    row = conn.execute(
+        "SELECT data FROM research_notebook WHERE kind = 'roadmap' ORDER BY written_at DESC LIMIT 1"
+    ).fetchone()
+    return json.loads(row[0]) if row else None
+
+
 def knowledge(conn: duckdb.DuckDBPyConnection) -> dict:
     """What the lab already knows, so no cycle re-tests it because it scrolled away.
 
@@ -2550,7 +2593,10 @@ def knowledge(conn: duckdb.DuckDBPyConnection) -> dict:
     Returns:
         Questions split into ``established``, ``ruled_out`` and ``not_settled``, then
         ``corrections``, ``explored``, ``design_gaps``, ``experiment_proposals`` and
-        ``next`` (live agenda leads, highest priority first).
+        ``roadmap``, ``needs_you`` (open roadmap questions stuck on something) and
+        ``next``: live agenda leads in the roadmap's order, then lead priority; a
+        lead serving no question ranks after the open ones, and one serving an
+        answered or parked question ranks last.
     """
     from shc import research_team
 
@@ -2586,8 +2632,16 @@ def knowledge(conn: duckdb.DuckDBPyConnection) -> dict:
         return found[0][:300] if found else None
 
     explored = [r for r in rows if r[3] == "exploration"]
+    plan = roadmap(conn)
+    questions = plan["questions"] if plan else []
+    order = {q["id"]: (0 if q["status"] == "open" else 2, i) for i, q in enumerate(questions)}
     live = [
-        {"researcher": m["researcher"], "priority": x["priority"], "lead": x["lead"]}
+        {
+            "researcher": m["researcher"],
+            "priority": x["priority"],
+            "lead": x["lead"],
+            "serves": x.get("serves"),
+        }
         for m in research_team.team(conn)
         for x in (m["agenda"] or {}).get("open_leads", [])
         if x["status"] in ("open", "chasing")
@@ -2605,7 +2659,9 @@ def knowledge(conn: duckdb.DuckDBPyConnection) -> dict:
             for r in rows
             if r[5].startswith("Experiment proposal:")
         ],
-        "next": sorted(live, key=lambda x: x["priority"]),
+        "roadmap": plan,
+        "needs_you": [q for q in questions if q["status"] == "open" and q["needs"]],
+        "next": sorted(live, key=lambda x: (*order.get(x["serves"], (1, 0)), x["priority"])),
     }
 
 

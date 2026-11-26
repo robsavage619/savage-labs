@@ -510,7 +510,7 @@ def _leads(raw: Any, previous: dict[str, str], today: date) -> list[dict]:
     for i, lead in enumerate(raw):
         if not isinstance(lead, dict):
             raise TeamError(f"open_leads[{i}] must be an object")
-        extra = set(lead) - {"lead", "why", "priority", "status", "opened"}
+        extra = set(lead) - {"lead", "why", "priority", "status", "opened", "serves"}
         if extra:
             raise TeamError(f"open_leads[{i}] has unknown field(s): {', '.join(sorted(extra))}")
         text, why, pri, status = (
@@ -538,6 +538,7 @@ def _leads(raw: Any, previous: dict[str, str], today: date) -> list[dict]:
             raise TeamError(f"open_leads[{i}].opened must be an ISO date") from exc
         out.append(
             {"lead": key, "why": why.strip(), "priority": pri, "status": status, "opened": opened}
+            | ({"serves": str(lead["serves"])[:60]} if lead.get("serves") else {})
         )
     return out
 

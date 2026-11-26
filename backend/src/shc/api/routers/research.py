@@ -89,6 +89,21 @@ def list_hypotheses() -> list[dict]:
     return _read(research.hypotheses)
 
 
+@router.get("/research/roadmap")
+def get_roadmap() -> dict | None:
+    return _read(research.roadmap)
+
+
+@router.put("/research/roadmap", dependencies=[Depends(require_admin_key)])
+async def put_roadmap(body: dict[str, Any]) -> dict:
+    async with write_ctx() as conn:
+        try:
+            research.set_roadmap(conn, body)
+        except research.SpecError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    return body
+
+
 @router.get("/research/notebook")
 def list_notebook(limit: int = Query(50, ge=1, le=500)) -> list[dict]:
     return _read(research.notebook, limit)
