@@ -80,7 +80,7 @@ async def _score_experiments() -> None:
 
 async def _run_research() -> None:
     """Nightly job: re-run every hypothesis, log the morning forecast, re-score the lab."""
-    from shc import research
+    from shc import research, rob_model
     from shc.db.schema import write_ctx
 
     async with write_ctx() as conn:
@@ -89,6 +89,9 @@ async def _run_research() -> None:
         for target in research.FORECAST_TARGETS:
             research.forecast_today(conn, metric=target)
             research.store_backtest(conn, research.backtest(conn, metric=target))
+        # After the run, so the model reads tonight's beliefs.
+        model = rob_model.refresh(conn)
+    log.info("nightly rob model refresh: %s", model)
     log.info(
         "nightly research run: %s",
         ", ".join(f"{r['slug']}={r['verdict']}" for r in results) or "no hypotheses",
@@ -163,7 +166,9 @@ async def _adherence_prompts(kind: str) -> None:
     from shc.notify import send_phone_alert
 
     build = (
-        adherence_prompts.evening_prompts if kind == "evening" else adherence_prompts.morning_prompts
+        adherence_prompts.evening_prompts
+        if kind == "evening"
+        else adherence_prompts.morning_prompts
     )
     async with write_ctx() as conn:
         prompts = await asyncio.to_thread(build, conn, date.today())

@@ -2451,6 +2451,77 @@ def detectable_in_120d(conn: duckdb.DuckDBPyConnection, today: date | None = Non
     return out
 
 
+def knowledge(conn: duckdb.DuckDBPyConnection) -> dict:
+    """What the lab already knows, so no cycle re-tests it because it scrolled away.
+
+    Unlike the brief's notebook window, nothing here ages out. Entries are one line
+    each; the notebook keeps the detail.
+
+    Args:
+        conn: Database connection.
+
+    Returns:
+        Questions split into ``established``, ``ruled_out`` and ``not_settled``, then
+        ``corrections``, ``explored``, ``design_gaps``, ``experiment_proposals`` and
+        ``next`` (live agenda leads, highest priority first).
+    """
+    from shc import research_team
+
+    rows = conn.execute(
+        "SELECT id, written_at, author, kind, ref, title, body FROM research_notebook "
+        "ORDER BY written_at"
+    ).fetchall()
+    why = {r[4]: (r[6] or "")[:200] for r in rows if r[3] in ("rejection", "retirement")}
+    verdicts = {r[4]: r[5].rsplit(": ", 1)[-1] for r in rows if r[3] == "review" and r[4]}
+    out: dict[str, list] = {"established": [], "ruled_out": [], "not_settled": []}
+    for q in reversed(hypotheses(conn)):
+        result = q["result"] or {}
+        verdict = result.get("verdict")
+        key = {"supported": "established", "ruled_out": "ruled_out", "against": "ruled_out"}
+        out[key.get(str(verdict), "not_settled")].append(
+            {
+                "slug": q["slug"],
+                "question": q["question"][:200],
+                "status": q["status"],
+                "verdict": verdict,
+                "effect": result.get("effect"),
+                "why": why.get(q["id"]),
+            }
+        )
+
+    def line(r: tuple) -> dict:
+        return {"date": r[1].date().isoformat(), "author": r[2], "title": r[5]}
+
+    def lead(body: str | None) -> str | None:
+        found = [
+            ln for ln in (body or "").splitlines() if ln.startswith(("Opens lead", "Closes lead"))
+        ]
+        return found[0][:300] if found else None
+
+    explored = [r for r in rows if r[3] == "exploration"]
+    live = [
+        {"researcher": m["researcher"], "priority": x["priority"], "lead": x["lead"]}
+        for m in research_team.team(conn)
+        for x in (m["agenda"] or {}).get("open_leads", [])
+        if x["status"] in ("open", "chasing")
+    ]
+    return out | {
+        "corrections": [
+            line(r) | {"body": (r[6] or "")[:400]}
+            for r in rows
+            if r[5].lower().startswith("correction") or "retract" in r[5].lower()
+        ],
+        "explored": [line(r) | {"lead": lead(r[6])} for r in explored],
+        "design_gaps": [line(r) for r in explored if r[5].startswith("Design gap:")],
+        "experiment_proposals": [
+            line(r) | {"verdict": verdicts.get(r[0], "unreviewed")}
+            for r in rows
+            if r[5].startswith("Experiment proposal:")
+        ],
+        "next": sorted(live, key=lambda x: x["priority"]),
+    }
+
+
 def brief(conn: duckdb.DuckDBPyConnection) -> dict:
     """Everything the analyst reads before proposing, rebuilt from the database on
     every call so no agent works from memory of a previous conversation."""
@@ -2497,6 +2568,7 @@ def brief(conn: duckdb.DuckDBPyConnection) -> dict:
             | {"label": t.label}
             for m, t in FORECAST_TARGETS.items()
         },
+        "knowledge": knowledge(conn),
         "misses": _misses(conn),
         "beliefs": beliefs(conn),
         "hypotheses": hypotheses(conn),

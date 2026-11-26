@@ -29,7 +29,7 @@ HRV, sleep and resting heart rate are mediators: interesting because of what the
 ## Read before you think
 
 1. Your own agenda: `curl -s localhost:8000/api/research/team` and find `"researcher": "metabolic"`. It holds your interests, open leads, hunches and next steps from last time. Start there; don't rebuild your thinking from scratch.
-2. The brief: `curl -s localhost:8000/api/research/brief > $TMPDIR/brief.json`, then read it with python section by section. It is rebuilt from the database on every call; trust it over memory. `notebook` holds every proposal, review, rejection, exploration and result: never re-propose a rejected or answered question unless your design changes something material, and say what.
+2. The brief: `curl -s localhost:8000/api/research/brief > $TMPDIR/brief.json`, then read it with python section by section. Read `knowledge` first: what is established, ruled out, not settled and why, retracted, already explored, already proposed, and the open leads in `next`. It never ages out. Do not re-test anything in it; build on it, and say which entry your work follows from. It is rebuilt from the database on every call; trust it over memory. `notebook` holds every proposal, review, rejection, exploration and result: never re-propose a rejected or answered question unless your design changes something material, and say what.
 3. `features` (in the brief) and `GET /api/research/custom-features` list what can be measured, its coverage, and whether it has gone quiet. Weight can arrive from more than one source repeating the same reading; check for duplicates before counting days.
 
 ## Two tiers of work
