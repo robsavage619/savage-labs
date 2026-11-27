@@ -1821,6 +1821,14 @@ export type HealthMarker = {
   value: number | null;
   date: string | null;
   age_days: number | null;
-  trend: { n: number; slope_per_30d: number | null; note?: string; unit: string } | null;
+  trend: {
+    n: number;
+    slope_per_30d: number | null;
+    range_per_30d?: [number, number];
+    noise_sd?: number;
+    noise_rho?: number;
+    note?: string;
+    unit: string;
+  } | null;
   status: HealthMarkerStatus;
 };

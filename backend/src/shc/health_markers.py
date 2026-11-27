@@ -14,7 +14,9 @@ from datetime import date
 from typing import Any, NamedTuple
 
 import duckdb
+from scipy.stats import t as student_t
 
+from shc import research_team
 from shc.ai import vault
 
 CLINICIAN = "set by clinician"
@@ -71,6 +73,8 @@ MARKERS: tuple[Marker, ...] = (
            "sleep_consistency_pct", "%", None, None, None, 14, "higher_better"),
     Marker("steps", "Daily steps", "activity", "measurements",
            "step_count", "steps", None, None, None, 14, "higher_better"),
+    Marker("body_weight", "Body weight", "body", "custom",
+           "weighin_lb", "lb", None, None, None, 7, "lower_better"),
 )  # fmt: skip
 
 _RECOVERY_COLS = {"rhr", "hrv"}
@@ -171,6 +175,13 @@ def _series(
             f"WHERE metric = ? AND value_num IS NOT NULL{cutoff} GROUP BY d ORDER BY d",
             params,
         ).fetchall()
+    elif table == "custom":
+        # An approved lab measurement; one not (or no longer) approved reads as no data.
+        try:
+            values = research_team.custom_series(conn, f"{research_team.CUSTOM_PREFIX}{metric}")
+        except ValueError:
+            return []
+        rows = sorted(values.items())
     else:
         raise ValueError(f"no reader for {table}.{metric}")
     return [(d, float(v)) for d, v in rows]
@@ -189,10 +200,32 @@ def _trend(series: list[tuple[date, float]], today: date) -> dict[str, Any]:
         return base | {"note": "not enough readings"}
     my = sum(v for _, v in pts) / n
     slope = sum((x - mx) * (v - my) for x, (_, v) in zip(xs, pts, strict=True)) / sxx
-    return base | {
+    out = base | {
         "slope_per_30d": round(slope * 30, 3),
         "fitted_latest": my + slope * (xs[-1] - mx),
         "slope_per_day": slope,
+    }
+    dof = n - 2
+    if dof < 1:
+        return out
+    resid = [v - my - slope * (x - mx) for x, (_, v) in zip(xs, pts, strict=True)]
+    s2 = sum(r * r for r in resid) / dof
+    # Lag-1 AR inflation with the small-sample bias in rho added back, and a t quantile on
+    # the effective n. Newey-West covered a true slope only 61-79% of the time here at 90%
+    # nominal (56 or fewer readings, rho 0.4-0.7); this covers 87-92%, 82% at 21 readings.
+    lag = sum(a * b for a, b in zip(resid, resid[1:], strict=False))
+    rho = max(0.0, lag / (s2 * dof)) if s2 > 0 else 0.0
+    rho = min(0.95, rho + (1 + 3 * rho) / n)
+    de = (1 + rho) / (1 - rho)
+    q = float(student_t.ppf(0.95, max(1.0, n / de - 2)))
+    half = q * (s2 / sxx * de) ** 0.5 * 30
+    low, high = slope * 30 - half, slope * 30 + half
+    note = "no clear trend" if low <= 0 <= high else ("rising" if low > 0 else "falling")
+    return out | {
+        "range_per_30d": [round(low, 3), round(high, 3)],
+        "noise_sd": round(s2**0.5, 3),
+        "noise_rho": round(rho, 2),
+        "note": note,
     }
 
 
@@ -252,7 +285,11 @@ def evaluate(conn: duckdb.DuckDBPyConnection, today: date | None = None) -> list
         last_day, value = series[-1]
         age = (today - last_day).days
         trend = _trend(series, today)
-        public_trend = {k: v for k, v in trend.items() if k in ("n", "slope_per_30d", "note")}
+        public_trend = {
+            k: v
+            for k, v in trend.items()
+            if k in ("n", "slope_per_30d", "range_per_30d", "noise_sd", "noise_rho", "note")
+        }
         public_trend["unit"] = f"{m['unit']} per 30 days"
         out.append(
             item

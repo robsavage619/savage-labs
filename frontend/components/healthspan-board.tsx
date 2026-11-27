@@ -69,13 +69,19 @@ function Trend({ m }: { m: HealthMarker }) {
   if (!t) return <span className="text-[var(--text-faint)]">No readings to trend</span>;
   if (t.slope_per_30d == null) return <span className="text-[var(--text-faint)]">Trend needs 3 readings ({t.n} so far)</span>;
   const s = t.slope_per_30d;
-  const flat = s === 0;
+  const flat = s === 0 || t.note === "no clear trend";
   const improving = m.target.direction === "higher_better" ? s > 0 : m.target.direction === "lower_better" ? s < 0 : null;
   const color = flat || improving == null ? "var(--text-dim)" : improving ? "var(--positive)" : COPPER;
   return (
     <span style={{ color }}>
       {flat ? "→" : s > 0 ? "↑" : "↓"} {s > 0 ? "+" : ""}
       {fmt(s)} {t.unit}
+      {t.range_per_30d && (
+        <span className="text-[var(--text-faint)]">
+          {" "}(90% range {fmt(t.range_per_30d[0])} to {fmt(t.range_per_30d[1])}
+          {t.note === "no clear trend" ? ", no clear trend" : ""})
+        </span>
+      )}
       <span className="text-[var(--text-faint)]"> · {t.n} readings</span>
     </span>
   );

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from datetime import date, datetime, timedelta
 
 import duckdb
@@ -9,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from shc.ai import vault
 from shc.api.routers import healthspan
-from shc.health_markers import MARKERS, evaluate, names_due, seed
+from shc.health_markers import MARKERS, _trend, evaluate, names_due, seed
 
 TODAY = date(2026, 6, 1)
 
@@ -165,3 +166,60 @@ def test_endpoint_returns_every_marker(conn: duckdb.DuckDBPyConnection, monkeypa
     body = TestClient(app).get("/api/healthspan").json()
     assert {r["marker"] for r in body} == {m.marker for m in MARKERS}
     assert all(r["status"] == "no data" for r in body)
+
+
+def _weigh(conn: duckdb.DuckDBPyConnection, lb: list[float], status: str = "approved") -> None:
+    conn.execute(
+        "INSERT INTO research_custom_features (name, owner, description, unit, timing, sql, "
+        "status, goal) VALUES ('custom:weighin_lb', 'metabolic', 'synthetic', 'lb', 'day', "
+        "'SELECT date, body_weight_kg FROM daily_checkin WHERE body_weight_kg IS NOT NULL', "
+        "?, 'body')",
+        [status],
+    )
+    start = TODAY - timedelta(days=len(lb) - 1)
+    conn.executemany(
+        "INSERT INTO daily_checkin (date, body_weight_kg) VALUES (?, ?)",
+        [(start + timedelta(days=i), v) for i, v in enumerate(lb)],
+    )
+
+
+def _noisy(slope_per_day: float, n: int, seed: int) -> list[float]:
+    rng = random.Random(seed)
+    return [230.0 + slope_per_day * i + rng.gauss(0, 1.0) for i in range(n)]
+
+
+def test_body_weight_reports_a_planted_loss_with_its_range(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    _weigh(conn, _noisy(-0.5 / 7, 60, seed=1))
+    t = _row(conn, "body_weight")["trend"]
+    low, high = t["range_per_30d"]
+    assert t["note"] == "falling"
+    assert low <= -0.5 / 7 * 30 <= high
+    assert 0.7 < t["noise_sd"] < 1.3
+
+
+def test_body_weight_flat_reads_as_no_clear_trend(conn: duckdb.DuckDBPyConnection) -> None:
+    _weigh(conn, _noisy(0.0, 30, seed=2))
+    assert _row(conn, "body_weight")["trend"]["note"] == "no clear trend"
+
+
+def test_body_weight_from_an_unapproved_measurement_is_no_data(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    _weigh(conn, [230.0] * 10, status="proposed")
+    assert _row(conn, "body_weight")["status"] == "no data"
+
+
+def test_trend_range_covers_the_true_slope_about_90_percent_of_the_time() -> None:
+    true = -0.05
+    hits = 0
+    for draw in range(300):
+        rng = random.Random(draw)
+        noise, series = 0.0, []
+        for i in range(56):
+            noise = 0.4 * noise + rng.gauss(0, 1.0)  # autocorrelated day-to-day water
+            series.append((TODAY - timedelta(days=55 - i), 230.0 + true * i + noise))
+        low, high = _trend(series, TODAY)["range_per_30d"]
+        hits += low <= true * 30 <= high
+    assert 0.84 <= hits / 300 <= 0.96
