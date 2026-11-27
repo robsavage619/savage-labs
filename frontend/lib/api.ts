@@ -1268,14 +1268,9 @@ export const api = {
   middayContext: () =>
     get<{ prompt: string; date: string }>("/api/midday/context"),
   syncAll: async () => {
-    const [whoop, hevy] = await Promise.allSettled([
-      fetch(`${BASE}/auth/whoop/sync`, { method: "POST", headers: mutHeaders() }).then((r) => r.json()),
-      fetch(`${BASE}/api/hevy/sync`, { method: "POST", headers: mutHeaders() }).then((r) => r.json()),
-    ]);
-    return {
-      whoop: whoop.status === "fulfilled" ? whoop.value : { error: String((whoop as PromiseRejectedResult).reason) },
-      hevy: hevy.status === "fulfilled" ? hevy.value : { error: String((hevy as PromiseRejectedResult).reason) },
-    };
+    const r = await fetch(`${BASE}/api/sync/all`, { method: "POST", headers: mutHeaders() });
+    if (!r.ok) throw new Error(`syncAll ${r.status}`);
+    return r.json() as Promise<{ results: Record<string, { ok: boolean; error?: string }> }>;
   },
   hevyPushRoutine: async (regen = false) => {
     const r = await fetch(
