@@ -23,6 +23,7 @@ const ORDER: HealthMarkerStatus[] = ["out of range", "drifting", "stale", "on ta
 const DAY = 86_400_000;
 
 function fmt(n: number): string {
+  if (n !== 0 && Math.abs(n) < 1) return String(Number(n.toPrecision(2)));
   return Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(1).replace(/\.0$/, "");
 }
 
